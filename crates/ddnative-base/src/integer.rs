@@ -103,6 +103,44 @@ impl Flags {
         );
         r
     }
+    /// RCL/RCR: a (bits + 1)-bit rotate through CF. The masked count is
+    /// taken modulo bits + 1 (SDM: tempCOUNT). SF/ZF/AF/PF keep their
+    /// values; OF is defined only for a masked count of one (RCR: MSB of
+    /// the operand XOR the old CF, before rotating; RCL: MSB of the result
+    /// XOR the new CF). A zero count changes nothing.
+    pub fn rotate_carry(&mut self, a: u32, count: u32, bits: u32, right: bool) -> u32 {
+        let count = count & 31;
+        let n = count % (bits + 1);
+        let a = a & mask(bits);
+        if count == 0 {
+            return a;
+        }
+        let old_cf = self.cf() as u64;
+        // CF sits above the operand: a (bits + 1)-bit value.
+        let wide = ((old_cf << bits) | a as u64) as u128;
+        let width = bits + 1;
+        let full = (1u128 << width) - 1;
+        let rotated = if n == 0 {
+            wide
+        } else if right {
+            ((wide >> n) | (wide << (width - n))) & full
+        } else {
+            ((wide << n) | (wide >> (width - n))) & full
+        };
+        let r = rotated as u32 & mask(bits);
+        let cf = (rotated >> bits) as u32 & 1;
+        let of = if right {
+            ((a >> (bits - 1)) ^ old_cf as u32) & 1
+        } else {
+            ((r >> (bits - 1)) ^ cf) & 1
+        };
+        let (old, valid) = self.snapshot();
+        *self = Self::partial(
+            (old & !0x801) | cf | (of << 11),
+            (valid & !0x801) | 1 | if count == 1 { 0x800 } else { 0 },
+        );
+        r
+    }
     pub fn double_shift(&mut self, a: u32, b: u32, count: u32, bits: u32, right: bool) -> u32 {
         let n = count & 31;
         let (a, b) = (a & mask(bits), b & mask(bits));
@@ -208,4 +246,50 @@ pub fn string_from(m: &mut dyn Mem, cpu: &mut Cpu, width: u32, copy: bool, repea
             cpu.ecx = count;
         }
     }
+}
+
+/// SCAS: compare AL/AX/EAX with [EDI] (ES flat) like CMP, then step EDI.
+/// `repeat`: 0 none, 1 REPE (stop when unequal), 2 REPNE (stop when equal);
+/// a repeated form with ECX = 0 does nothing and keeps the flags.
+pub fn scan(m: &mut dyn Mem, cpu: &mut Cpu, width: u32, repeat: u8) {
+    let mut count = if repeat != 0 { cpu.ecx } else { 1 };
+    let bits = width * 8;
+    while count != 0 {
+        let v = match width {
+            1 => m.u8(cpu.edi) as u32,
+            2 => m.u16(cpu.edi) as u32,
+            _ => m.u32(cpu.edi),
+        };
+        let a = cpu.eax & mask(bits);
+        cpu.fl = Flags::new(super::SUB, a, v, a.wrapping_sub(v) & mask(bits), bits);
+        cpu.edi = cpu.edi.wrapping_add(if cpu.df { 0u32.wrapping_sub(width) } else { width });
+        count -= 1;
+        if repeat != 0 {
+            cpu.ecx = count;
+            if (repeat == 1) != cpu.fl.zf() {
+                break;
+            }
+        }
+    }
+}
+
+/// EFLAGS bits besides the arithmetic flags and DF that a POPFD at CPL3
+/// changes: NT (14), AC (18), ID (21). IF, IOPL, RF, VIF and VIP keep their
+/// values (measured with research/native/probe_machine.rs, L22).
+pub const SYSTEM_FLAGS: u32 = 0x4000 | 0x4_0000 | 0x20_0000;
+
+/// The EFLAGS image PUSHFD stores: the arithmetic flags (all must be
+/// defined), DF, IF and reserved bit 1 set, and the NT/AC/ID state.
+pub fn pushfd_image(cpu: &Cpu) -> u32 {
+    let (value, defined) = cpu.fl.snapshot();
+    assert_eq!(defined & ARITH_FLAGS, ARITH_FLAGS, "pushfd of undefined x86 flags");
+    (value & ARITH_FLAGS) | ((cpu.df as u32) << 10) | 0x202 | (cpu.sys_flags & SYSTEM_FLAGS)
+}
+
+/// POPFD at CPL3. TF would single-step (a trap): unsupported.
+pub fn popfd(cpu: &mut Cpu, value: u32) {
+    assert_eq!(value & 0x100, 0, "popfd sets TF (single-step trap unsupported)");
+    cpu.fl = Flags::new(RAW, 0, 0, value & ARITH_FLAGS, 32);
+    cpu.df = value & 0x400 != 0;
+    cpu.sys_flags = value & SYSTEM_FLAGS;
 }

@@ -114,3 +114,37 @@ pub fn memcpy(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = dst;
     ret(m, cpu, 0);
 }
+
+/// The answers of instructions that report the machine rather than compute
+/// (L22): CPUID and RDTSC. The runtime installs its recorded machine profile
+/// (crates/ddruntime/src/machine.rs, consistent with the registry's CPU
+/// key); the lifted test installs the answers a vector recorded.
+pub trait Machine {
+    fn cpuid(&self, leaf: u32, subleaf: u32) -> [u32; 4];
+    fn rdtsc(&self) -> u64;
+}
+
+thread_local! {
+    static MACHINE: std::cell::RefCell<Option<std::rc::Rc<dyn Machine>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Install this thread's machine; returns the previous one.
+pub fn set_machine(machine: Option<std::rc::Rc<dyn Machine>>) -> Option<std::rc::Rc<dyn Machine>> {
+    MACHINE.with(|m| std::mem::replace(&mut *m.borrow_mut(), machine))
+}
+
+fn machine(what: &str) -> std::rc::Rc<dyn Machine> {
+    MACHINE.with(|m| m.borrow().clone()).unwrap_or_else(|| panic!("{what}: no machine installed on this thread"))
+}
+
+/// CPUID: leaf in EAX, subleaf in ECX; results in EAX, EBX, ECX, EDX.
+pub fn cpuid(cpu: &mut Cpu) {
+    let [a, b, c, d] = machine("cpuid").cpuid(cpu.eax, cpu.ecx);
+    (cpu.eax, cpu.ebx, cpu.ecx, cpu.edx) = (a, b, c, d);
+}
+
+/// RDTSC: the time-stamp counter in EDX:EAX.
+pub fn rdtsc(cpu: &mut Cpu) {
+    let t = machine("rdtsc").rdtsc();
+    (cpu.eax, cpu.edx) = (t as u32, (t >> 32) as u32);
+}

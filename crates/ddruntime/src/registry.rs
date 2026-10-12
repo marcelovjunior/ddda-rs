@@ -58,12 +58,19 @@ const CPU_KEY: &str = r"HARDWARE\DESCRIPTION\SYSTEM\CENTRALPROCESSOR\0";
 /// CentralProcessor\0 (REG_SZ and REG_DWORD values of the classic set;
 /// the vendor-specific microcode bookkeeping values are not modelled).
 const CPU_VALUES: &[(&str, Value)] = &[
-    ("Identifier", Value::Sz("AMD64 Family 25 Model 33 Stepping 2")),
-    ("ProcessorNameString", Value::Sz("AMD Ryzen 7 5700X3D 8-Core Processor           ")),
-    ("VendorIdentifier", Value::Sz("AuthenticAMD")),
+    ("Identifier", Value::Sz(IDENTIFIER)),
+    ("ProcessorNameString", Value::Sz(PROCESSOR_NAME)),
+    ("VendorIdentifier", Value::Sz(VENDOR)),
     ("FeatureSet", Value::Dword(0x383B_3DFF)),
-    ("~MHz", Value::Dword(3000)),
+    ("~MHz", Value::Dword(CPU_MHZ)),
 ];
+
+/// The recorded machine's processor name, vendor, identifier and clock;
+/// crate::machine's CPUID/RDTSC answers describe the same processor.
+pub(crate) const PROCESSOR_NAME: &str = "AMD Ryzen 7 5700X3D 8-Core Processor           ";
+pub(crate) const VENDOR: &str = "AuthenticAMD";
+pub(crate) const IDENTIFIER: &str = "AMD64 Family 25 Model 33 Stepping 2";
+pub(crate) const CPU_MHZ: u32 = 3000;
 
 /// Keys that exist, as upper-cased paths below HKLM.
 fn key_exists(path: &str) -> bool {

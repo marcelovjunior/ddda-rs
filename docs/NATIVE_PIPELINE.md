@@ -604,9 +604,10 @@ check must stay static.
 
 INT3 and UD2 terminate decoding and emit explicit traps; any fixture executing
 one is rejected by the recorder's noreturn guard. This does not model SEH.
-CPUID, RDTSC and PUSHFD explicitly reject without a platform event/state
-contract. Approximate reciprocals and segment overrides remain unsupported;
-see the L13 evaluation below for their required execution contracts.
+CPUID, RDTSC, PUSHFD/POPFD, segment-register reads and approximate
+reciprocals have explicit contracts since L22 (see "Hardware oracles and
+machine instructions (L22)" below); PUSH Sreg and other segment overrides
+remain unsupported.
 
 A platform model's own address is never lifted (`scan` skips
 `harness.PLATFORM`): `run_sparse` runs the model at that address, so the
@@ -1161,6 +1162,141 @@ every thread. Sparse vectors and default `Cpu` explicitly start at `0x037F`,
 extended precision and nearest-even rounding; that is a fixture initial state,
 not a claim about the game's live thread state.
 
+## Hardware oracles and machine instructions (L22)
+
+**x87 host oracle.** The lifted Rust runs each original x87 opcode on the
+host (L05). Unicorn 2.1.4 (QEMU 5) sets no PE, DE or C1 status bits, keeps
+the reserved bits of a loaded control word and computes some large-argument
+FSIN results differently. `research/native/probe_x87.py` runs sequences
+from the quarantined bodies natively without FSAVE/FRSTOR between
+instructions, step by step through the same FRSTOR/FNSAVE route the Rust
+takes, and in Unicorn: the two host routes agree in 23/23 cases, Unicorn
+differs in 14. `run_sparse` therefore installs `x87_host.Oracle`: the
+result of every x87 instruction (state and any stored operand) is the host
+CPU's for the same input. Its flush hook runs before every other code hook;
+the compute hook after premap and the recorder guards. FCOMI-family EFLAGS
+are compared, not rewritten inside a translation block, and a difference
+rejects. New cases carry `x87_oracle: host-v1`; existing cases are not
+re-recorded. This resolves the six L14 status-word quarantines and the
+FSIN quarantine 0x00F276C0.
+
+**CPU-dependent results.** RCPPS, RSQRTPS, RCPSS and RSQRTSS lift to the
+host instruction (`sse2.rs`); the oracle takes the host's result (Unicorn
+differs in every probed case, `probe_approx.py`). A case that ran one of
+them or an x87 transcendental (FSIN, FCOS, FSINCOS, FPTAN, FPATAN, FYL2X,
+FYL2XP1, F2XM1) records the host CPUID brand as `cpu_dependent`. The
+generated replay compares such a case only on that processor and lists
+those it could not compare; it never reports them as passed elsewhere.
+
+**x87 entry contract.** MSVC float intrinsics (`_ftol2`, `_CIsin`,
+`__cintrindisp2` ...) take their arguments on the x87 stack. In ext mode
+only, `lift.x87_deficit` counts the values read from the stack before any
+call or return (the walk `returns_float` uses after a mocked call); the
+depth check then starts from that depth. The body records `x87_entry`
+(body key `x87-entry-v1:N`); the recorder seeds N random finite doubles
+(drawn only for such bodies, recorded as 80-bit `st_in`) and the replay
+loads them with `fld m80`. A value read only after a call stays the mock's
+(one value at most) or rejects. Such bodies are never callable.
+
+**Runtime jumps and x87 depth.** A non-switch indirect jump in ext mode
+keeps every known start as a possible local destination (L11) but no
+longer propagates x87 depth to them: the destinations are walked with
+their own static depths, and the recorder's per-instruction stack-slot
+guard rejects any run whose x87 access meets an empty slot.
+
+**Open jump tables (ext).** An absolute dword table the strict recognizer
+cannot bound no longer rejects an ext body, because ext code reads the
+slot at run time and leaves the body (`call_ext` tail) for any target that
+is not a known start. `table_bound` proves `cmp index, imm`, `mov R, imm;
+cmp index, R` and `and index, imm` bounds (and a byte remap's maximum under
+its source's bound); within a proven bound invalid slots are skipped and
+inventory entries are allowed (Ghidra exports some case labels as
+`switchD_*::caseD_*` functions); otherwise the table-only rule applies.
+Without any valid forward slot (memcpy's negative index at 0x012EFF18) the
+jump is a runtime jump (`RuntimeTargets`). Closed bodies keep the strict
+rules. Both the strict recognizer and `table_bound` look past at most four
+instructions between the bound (or the byte remap) and the `jmp` when they
+neither transfer control nor write the index or remap source (`push ebx;
+push edi` at 0x0061FDB5). An ext indirect `jmp` continues locally at any
+target that is a block leader of the body, not only at the table's
+discovered slots, as the CPU and the recorder do; a non-leader interior
+target would still leave the body (a replay failure, never a false pass).
+
+**Machine instructions.** `ddnative_base::platform::Machine` answers CPUID
+and RDTSC per thread. The runtime installs `ddruntime::machine::Recorded`
+(the recorded machine's CPUID leaves, processor 0, consistent with
+`crate::registry`'s name, vendor, identifier and `~MHz`; RDTSC counts at
+that clock). The recorder answers CPUID from the host CPU and records it,
+records RDTSC's value, and the replay plays the events back. `Cpu::seg`
+holds the selectors (WOW64: CS 0x23, FS 0x53, others 0x2B) read by `mov
+r/m, sreg`; the recorder stores Unicorn's selectors in a case that read
+one. `Cpu::sys_flags` holds NT/AC/ID: PUSHFD stores the arithmetic flags,
+DF, IF and bit 1 set, and those bits; POPFD at CPL3 changes only them and
+the arithmetic flags/DF, and the recorder (CPL0) rejects values that set TF
+or change IF/IOPL/VIF/VIP. All values were measured in a 32-bit process by
+`research/native/probe_machine.rs`. PUSH Sreg stays rejected: its store
+width is processor-model specific (Intel SDM, PUSH).
+
+**Further instructions.** RCL/RCR (OF only for count one), SCAS with
+REPE/REPNE, PMAXSW/PMINSW, PSLLDQ/PSRLDQ, PAUSE, and the x87 forms FLDPI,
+FPTAN, FPATAN, FYL2X, FSCALE, FPREM, FPREM1, FRNDINT, FXAM, F2XM1, FNCLEX,
+each checked against the host in `ddnative-base`'s instruction tests.
+
+**Constant-loop instruction budget.** `run_sparse`'s 20,000-instruction cap
+stops input-dependent runaways. A loop whose trip count is a proven
+constant terminates identically on every input, so `lift.constant_loop_budget`
+grants such a body more: every back edge in the body must be a contiguous
+loop without calls, indirect jumps or overlapping back edges, with one
+counter register written once per iteration (inc/dec, add/sub imm) on every
+path to the latch, a latch jcc directly after `cmp counter, imm` (or after
+the update, for ZF/SF tests), and a start set by `xor R, R` or `mov R, imm`
+on straight-line code on every entry. Trip counts are simulated exactly;
+the budget is 20,000 plus trips x loop length for every loop, at most
+2,000,000. It is stored as `insn_budget` (body key `insn-budget-v1:N`) only
+when the static estimate exceeds the default, and passed as `max_insn`. A
+loop of the same shape with an input start or limit gets nothing; anything
+that still overruns is rejected as runaway. Examples: the sine-table
+initializer 0x00CFC150 (4096 x fsin, then a 0x4000-byte fill) and the C++
+initializer 0x0137E490 (0x2000 x 40-byte records), both on the `__cinit`
+path. `research/native/test_lift_budget.py` has the synthetic cases.
+
+**Guest MXCSR.** While lifted code runs, the guest's MXCSR is live in the
+host thread's MXCSR: the SSE helpers (`sse2.rs`, non-pure asm) and the
+scalar ones execute the original instructions under it, so rounding,
+FTZ/DAZ, masks and the sticky exception flags are the hardware's.
+STMXCSR/LDMXCSR move it (`x86::stmxcsr`/`ldmxcsr`; reserved bits and
+unmasked exceptions are rejected, as the recorder rejects them).
+`Cpu::mxcsr` (default 0x1F80) holds it outside lifted code: ddruntime's
+`Registry::call` runs every service under 0x1F80 and saves/reloads the
+guest value around it; `services::call_guest` (window procedures, thread
+starts, I/O and audio/movie callbacks) and `Session::call` load it before
+entering guest code and restore the default after (also after a panic).
+ddruntime runs one host thread per guest thread, so no switch swaps it.
+COMISS/UCOMISS/COMISD/UCOMISD use hardware compares (`comiss_hw`/
+`comisd_hw::<ORDERED>`); `gen` retargets the emulated compares of cached
+bodies from the original instruction (`lift.exact_compares`), so no record
+changes. The recorder's SSE oracle runs every flag-setting SSE instruction
+(arithmetic, conversions, comparisons, approximations) natively under the
+guest MXCSR, re-encoded with Capstone's ModRM/immediate offsets so a memory
+operand becomes `[r11]`; destination, GPR result and MXCSR are the host's,
+compare EFLAGS are checked. Unicorn 2.1.4 sets no MXCSR flags (0x1F80
+where the CPU has 0x1FA0). New cases record the final `mxcsr`; the replay
+starts each case under 0x1F80 and compares it.
+
+**NaN guards retired.** The rejection of NaN/Inf float inputs and of SSE
+operations with two NaN operands existed because Unicorn does not quiet a
+signalling NaN on x87 loads and picks the x87 NaN for SSE. Every such
+instruction now takes the hardware result through the oracles
+(`test_x87_oracle.py`: signalling-NaN load, two-NaN ADDPS), so new
+recordings keep those cases.
+
+**Still rejected.** Callees that consume x87 arguments (0x012F4E6A,
+`_ftol2`) under the push-only mock contract overflow the static depth, and
+x87 values that cross calls to unlifted functions (0x012F1C9D) have no
+proof of ownership. Address-taken and vtable admissions whose "address" is
+an ASCII tag or packed constant (e.g. 0x534658 "XFS", 0x707270 "prp") are
+not code.
+
 ## Debugging a failing lifted function
 
 For a function that cannot yet produce a vector, use
@@ -1212,7 +1348,7 @@ instruction differ on this machine (Unicorn 2.1.4). A host instruction oracle
 could compare one CPU faithfully, but would make fixtures dependent on that
 CPU's approximation behavior. It needs explicit oracle/CPU provenance and a
 cross-CPU replay policy; silently replacing Unicorn's result would hide this
-boundary. These instructions remain rejected. FS-based exception-chain
+boundary. L22 adopts the host oracle with that provenance (see below). FS-based exception-chain
 accesses (`0x00CEE947`, `0x00CEE95F`) now use the guest TEB described above;
 exception dispatch itself remains a runtime responsibility.
 

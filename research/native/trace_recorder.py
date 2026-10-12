@@ -53,7 +53,8 @@ def trace(function, closed, strategy, seed, seconds=5, limit=64, frames=None):
         c = h.run_sparse(f['addr'], (f['addr']<<8)^seed, end=f['addr']+f['size'],
                          body=f['body'], lifted=closed, x87_push=f.get('x87_push',[]),
                          noreturn_sites=f.get('noreturn_sites',[]),
-                         original_entry=f.get('original_entry',False), frame_contracts=frames,
+                         original_entry=f.get('original_entry',False), x87_entry=f.get('x87_entry',0), max_insn=f.get('insn_budget') or lift.INSN_BUDGET,
+                         frame_contracts=frames,
                          noreturn_targets=lift.noreturn_entries(), max_seconds=seconds, **kw)
         reason, calls = 'ok', c['calls']
     except h.Rejected as e:

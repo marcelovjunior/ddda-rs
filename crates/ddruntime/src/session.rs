@@ -86,7 +86,12 @@ impl Session {
         cpu.esp -= 4;
         self.mem.set_u32(cpu.esp, RETURN_SENTINEL);
         let (mem, registry) = (&mut self.mem, &self.registry);
+        // L22: the guest MXCSR is live while guest code runs; Rust resumes
+        // under the host default (also after a panic).
+        ddnative_base::x86::ldmxcsr(cpu.mxcsr.0);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| registry.call(mem, &mut cpu, target)));
+        cpu.mxcsr = ddnative_base::x86::Mxcsr(ddnative_base::x86::stmxcsr());
+        ddnative_base::x86::ldmxcsr(ddnative_base::x86::MXCSR_DEFAULT);
         match r {
             Ok(Ok(())) => Outcome::Returned(cpu),
             Ok(Err(u)) => Outcome::Unbound(u),

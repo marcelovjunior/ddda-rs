@@ -247,6 +247,16 @@ lifted or recorded. Brief L28 (claude-3) brings them through the normal
 pipeline; L22 (claude-6) handles the ones the lifter rejects (MXCSR among
 them).
 
+After L22 (2026-10-12, task/L22-lift-rejections; **expected, pending the
+train-2 replay**): RTTI-less vtables anchored by any vptr store add 210
+supplementary entries (59,500 non-thunks); on native-L28b1 plus L22's
+468 functions / 1,368 cases (59,497 entries / 177,087 cases), the private
+inventory gives **59,212 of 59,500 verified (99.5%, 98.2% of code bytes)**.
+The 288 others: 265 liftable without a fixture, 20 lift rejections (17
+non-code admissions, two x87-consuming mocked callees, one x87 value across
+mocked calls) and three own-return quarantines
+([L22 Results](tasks/L22-lift-rejections.md#results)).
+
 The L15 table above and its notes below are
 kept for history.
 

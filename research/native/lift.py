@@ -39,10 +39,16 @@ SUB8 = {"al": ("eax", 0), "cl": ("ecx", 0), "dl": ("edx", 0), "bl": ("ebx", 0),
         "ah": ("eax", 8), "ch": ("ecx", 8), "dh": ("edx", 8), "bh": ("ebx", 8)}
 SUB16 = {"ax": "eax", "cx": "ecx", "dx": "edx", "bx": "ebx", "sp": "esp", "bp": "ebp", "si": "esi", "di": "edi"}
 XMM = [f"xmm{i}" for i in range(8)]
+SEGMENTS = ("es", "cs", "ss", "ds", "fs", "gs")  # read from Cpu::seg (L22)
 
 
 class Unsupported(Exception):
     pass
+
+
+class RuntimeTargets(list):
+    """Every known start as a possible destination of a runtime jump (ext):
+    not a proof of reachability, so x87 depth does not propagate along it."""
 
 
 SAVE = ("*cpu = Cpu { eax, ecx, edx, ebx, esp, ebp, esi, edi, "
@@ -57,12 +63,16 @@ def callees(arms):
     return sorted({int(x, 16) for a in arms for x in CALLEE.findall(a)})
 
 
-X87_PUSH = {"fld", "fld1", "fldz", "fild", "fldl2e", "fldln2"}
-X87_POP = {"fstp", "fistp", "faddp", "fsubp", "fsubrp", "fmulp", "fdivp", "fdivrp", "fcomp", "fucomp", "fcompi", "fucompi"}
+X87_PUSH = {"fld", "fld1", "fldz", "fild", "fldl2e", "fldln2", "fldpi"}
+X87_POP = {"fstp", "fistp", "faddp", "fsubp", "fsubrp", "fmulp", "fdivp", "fdivrp", "fcomp", "fucomp", "fcompi", "fucompi",
+           "fyl2x", "fpatan"}
 X87_READ = {"fst", "fist", "fchs", "fabs", "fadd", "fsub", "fsubr", "fmul", "fdiv", "fdivr",
             "fiadd", "fisub", "fisubr", "fimul", "fidiv", "fidivr", "fxch", "fcom", "fucom", "ficom",
-            "fsqrt", "fsin", "fcos", "fcomi", "fucomi"}
-X87_SUPPORTED = X87_PUSH | X87_POP | X87_READ | {"fcompp", "fucompp", "ficomp", "fnstcw", "fldcw", "fnstsw", "fstsw"}
+            "fsqrt", "fsin", "fcos", "fcomi", "fucomi", "frndint", "fxam", "f2xm1", "fscale", "fprem", "fprem1"}
+# L22: fptan replaces st0 and pushes 1.0 (net +1); fnclex clears the status
+# exception flags. All execute on the host x87 like the forms above.
+X87_SUPPORTED = (X87_PUSH | X87_POP | X87_READ | {"fcompp", "fucompp", "ficomp", "fnstcw", "fldcw", "fnstsw", "fstsw",
+                                                  "fptan", "fnclex"})
 X87_CONTROL = {"fnstcw", "fldcw", "fnstsw", "fstsw", "fwait", "wait", "fninit", "fnclex", "fnstenv", "fldenv"}
 # Net x87 stack effect of each closed lifted function at its `ret` (filled by
 # lift(); a caller adds it at a direct call). None: inconsistent between rets.
@@ -182,9 +192,26 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
                                                  accept=accept, discover=True,
                                                  bounded_accept=lambda t: (t == addr or t not in entries) and is_code(t))
                     except Unsupported as error:
-                        if (not ext or mn != "jmp" or i.operands[0].size != 4
-                                or str(error) != "indirect jump (not an absolute switch table)"):
+                        if not ext or mn != "jmp" or i.operands[0].size != 4:
                             raise
+                        if str(error) != "indirect jump (not an absolute switch table)":
+                            # L22: an absolute table the strict rules cannot
+                            # bound. Ext code reads the slot at run time and
+                            # leaves the body for any unknown target, so the
+                            # discovered set decides coverage, not soundness.
+                            targets = open_table(history, len(history) - 1, read,
+                                                 accept=lambda t: ((addr <= t < upper or t in found) and
+                                                                   (t == addr or t not in entries) and is_code(t)),
+                                                 bounded_accept=is_code)
+                            if not targets:
+                                # No valid forward slot (e.g. a negative index
+                                # below T): a runtime jump over known starts.
+                                switches[pc] = None
+                                break
+                            switches[pc] = targets
+                            for target in targets:
+                                heapq.heappush(todo, target)
+                            break
                         # No speculative decode through a runtime pointer.
                         # Known instruction starts remain local destinations;
                         # every other target crosses the external boundary.
@@ -199,7 +226,7 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
     ins = sorted(found.values(), key=lambda i: i.address)
     for pc, targets in switches.items():
         if targets is None:
-            switches[pc] = sorted(found)
+            switches[pc] = RuntimeTargets(sorted(found))
     ranges = []
     for i in ins:
         if ranges and ranges[-1][1] == i.address:
@@ -219,10 +246,248 @@ def x87_effect(i):
         needed = 2
     if mn in ("fcom", "fcomp", "fucom", "fucomp", "fxch") and not i.operands:
         needed = 2
-    delta = (mn in X87_PUSH) - (mn in X87_POP or mn == "ficomp")
+    if mn in ("fyl2x", "fpatan", "fscale", "fprem", "fprem1"):
+        needed = 2  # st0 and st1 (implicit operands)
+    delta = (mn in X87_PUSH or mn == "fptan") - (mn in X87_POP or mn == "ficomp")
     if mn in ("fcompp", "fucompp"):
         delta -= 2
     return needed, delta
+
+
+INSN_BUDGET = 20000      # harness.run_sparse's default max_insn
+INSN_CEILING = 2_000_000  # hard ceiling of a constant-loop budget
+_JCC_TAKEN = {
+    # condition on the counter value c against limit l (32-bit), as the latch's
+    # jcc sees them after `cmp c, l` (or `dec/sub` setting flags from c alone)
+    "jb": lambda c, l: c < l, "jae": lambda c, l: c >= l, "jbe": lambda c, l: c <= l, "ja": lambda c, l: c > l,
+    "jl": lambda c, l: _s(c) < _s(l), "jge": lambda c, l: _s(c) >= _s(l),
+    "jle": lambda c, l: _s(c) <= _s(l), "jg": lambda c, l: _s(c) > _s(l),
+    "jne": lambda c, l: c != l, "je": lambda c, l: c == l,
+    "jns": lambda c, l: not c >> 31, "js": lambda c, l: bool(c >> 31),
+}
+
+
+def _s(v):
+    return v - (1 << 32) if v >> 31 else v
+
+
+NONVOLATILE = ("ebx", "esi", "edi", "ebp")
+
+
+def _writes(i):
+    try:
+        return {i.reg_name(r) for r in i.regs_access()[1]}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _aliases(r):
+    return {r, r[1:], r[1:] + "l", r[1] + "h"} if r in GPR32 else {r}
+
+
+def _call_cost(i, counter, callable, platform, depth=0):
+    """Instructions a direct call can execute in the recorder without
+    touching the loop counter, or None. A mocked callee (neither closed nor
+    a platform model) does not run: the call, the mock's return and an x87
+    return trampoline (4); it returns random eax/ecx/edx, so the counter
+    must be callee-saved. A platform model runs in Python and changes only
+    eax. A closed callee runs for real: it must be loop-free, write the
+    counter only by push/pop, its own calls must qualify (depth 3), and its
+    loops, if any, must be proven constant themselves (their cost is added)."""
+    from capstone.x86 import X86_OP_IMM
+    if i.operands[0].type != X86_OP_IMM:
+        return None  # an indirect call can reach closed code of any cost
+    t = i.operands[0].imm & 0xffffffff
+    if t in platform:
+        return 4 if counter != "eax" else None
+    if t not in callable:
+        return 4 if counter in NONVOLATILE else None
+    if depth >= 3:
+        return None
+    try:
+        body = cached_body(t, 1)[0]
+    except Unsupported:
+        return None
+    cost = 0
+    if any(b.mnemonic.startswith("j") and b.operands and b.operands[0].type == X86_OP_IMM
+           and (b.operands[0].imm & 0xffffffff) <= b.address for b in body):
+        inner = constant_loop_budget(body, callable, platform, depth=depth + 1)
+        if inner is None:
+            return None  # a loop in the callee without a proven constant bound
+        cost += inner - INSN_BUDGET
+    for b in body:
+        if b.mnemonic.startswith("j") and b.operands and b.operands[0].type != X86_OP_IMM:
+            return None
+        w = _writes(b)
+        if w is None or (w & _aliases(counter) and b.mnemonic not in ("push", "pop")):
+            return None
+        if b.mnemonic == "call":
+            c = _call_cost(b, counter, callable, platform, depth + 1)
+            if c is None:
+                return None
+            cost += c
+        cost += 1
+    return cost
+
+
+def _refuse(why, reason):
+    """constant_loop_budget's refusal, with its reason for diagnostics."""
+    if why is not None:
+        why.append(reason)
+    return None
+
+
+def constant_loop_budget(ins, callable=frozenset(), platform=frozenset(), why=None, depth=0):
+    """Instruction budget for a body whose every loop has a constant trip
+    count (L22). Returns None unless every back edge is proven; the recorder
+    otherwise keeps INSN_BUDGET, which exists to stop input-dependent loops.
+
+    A loop is a back edge (jcc/jmp to an earlier address) spanning a
+    contiguous range with no indirect jump or other back edge, whose direct
+    calls have a bounded cost that cannot change the counter (_call_cost). Its
+    counter R (a 32-bit GPR) is written once in the range, by inc/dec or
+    add/sub imm, on every path to the latch (no branch into the part between
+    update and latch). The latch is a jcc directly after `cmp R, imm` or
+    after the update itself. On each entry into the loop, R was last set by
+    `xor R, R` or `mov R, imm` on straight-line code with no branch target
+    or call in between. Trip counts are simulated exactly; cost = trips x
+    range length. Budget = INSN_BUDGET + sum of costs, at most INSN_CEILING.
+    """
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM
+    at = {i.address: k for k, i in enumerate(ins)}
+    targets = {}
+    for k, i in enumerate(ins):
+        if i.mnemonic.startswith("j") and i.operands and i.operands[0].type == X86_OP_IMM:
+            targets.setdefault(i.operands[0].imm & 0xffffffff, []).append(k)
+    writes, aliases = _writes, _aliases
+    total, loops, cost = 0, [], {}
+    for k, i in enumerate(ins):
+        if not i.mnemonic.startswith("j") or not i.operands:
+            continue
+        if i.operands[0].type != X86_OP_IMM:
+            continue
+        t = i.operands[0].imm & 0xffffffff
+        if t > i.address:
+            continue
+        if t not in at:
+            return _refuse(why, 'a back edge leaving the decoded body')
+        loops.append((at[t], k))
+    for start, latch in loops:
+        body = ins[start:latch + 1]
+        if any(ins[j].address + ins[j].size != ins[j + 1].address for j in range(start, latch)):
+            return _refuse(why, 'not contiguous')
+        if any(b.mnemonic in ("ret", "retn") or (b.mnemonic.startswith("j") and b.operands
+               and b.operands[0].type != X86_OP_IMM) for b in body):
+            return _refuse(why, 'return or indirect jump in the loop')
+        # Properly nested loops are allowed (an inner one's cost per entry is
+        # added to this one's per-trip cost below); any other overlap is not.
+        if any((s2, l2) != (start, latch) and s2 <= latch and start <= l2
+               and not (start <= s2 and l2 < latch) and not (s2 <= start and latch < l2) for s2, l2 in loops):
+            return _refuse(why, 'overlapping back edges that are not nested: irreducible')
+        jcc = ins[latch]
+        if jcc.mnemonic not in _JCC_TAKEN:
+            return _refuse(why, 'latch is not a counted jcc')
+        setter = ins[latch - 1]
+        counter, limit = None, None
+        if (setter.mnemonic == "cmp" and setter.operands[0].type == X86_OP_REG and setter.operands[0].size == 4
+                and setter.operands[1].type == X86_OP_IMM):
+            counter, limit = setter.reg_name(setter.operands[0].reg), setter.operands[1].imm & 0xffffffff
+        elif setter.mnemonic in ("inc", "dec", "add", "sub") and setter.operands[0].type == X86_OP_REG:
+            counter, limit = setter.reg_name(setter.operands[0].reg), 0
+            if jcc.mnemonic not in ("jne", "je", "jns", "js"):
+                return _refuse(why, 'only ZF/SF tests are defined by the result alone')
+        if counter not in GPR32:
+            return _refuse(why, 'counter is not a 32-bit register')
+        per_trip = latch - start + 1
+        inner = [(s2, l2) for s2, l2 in loops if (s2, l2) != (start, latch) and start <= s2 and l2 < latch]
+        for b in body:
+            if b.mnemonic == "call":
+                c = _call_cost(b, counter, callable, platform, depth)
+                if c is None:
+                    return _refuse(why, 'a call in the loop has no bounded, counter-safe cost')
+                per_trip += c
+        updates = []
+        for j in range(start, latch + 1):
+            w = writes(ins[j])
+            if w is None:
+                return _refuse(why, 'no register-write detail')
+            if w & aliases(counter):
+                updates.append(j)
+        if len(updates) != 1:
+            return _refuse(why, 'counter not written exactly once')
+        u = ins[updates[0]]
+        if u.mnemonic in ("inc", "dec") and len(u.operands) == 1:
+            step = 1 if u.mnemonic == "inc" else 0xffffffff
+        elif (u.mnemonic in ("add", "sub") and u.operands[0].type == X86_OP_REG and u.operands[0].size == 4
+              and u.operands[1].type == X86_OP_IMM):
+            step = (u.operands[1].imm if u.mnemonic == "add" else -u.operands[1].imm) & 0xffffffff
+        else:
+            return _refuse(why, 'counter update is not inc/dec/add/sub imm')
+        if u.operands[0].size != 4 or (setter is not u and updates[0] > latch - 1):
+            return _refuse(why, 'update after the compare or not 32-bit')
+        # every path to the latch passes the update: no branch from the loop
+        # lands between the update and the latch
+        if any(updates[0] < at[t2] <= latch for t2, srcs in targets.items() if t2 in at
+               for s in srcs if start <= s <= latch and s != latch):
+            return _refuse(why, 'a branch skips the update')
+        # entry value on every path into the loop head
+        entries = [j for j in targets.get(ins[start].address, []) if not start <= j <= latch]
+        prev = start - 1
+        if prev >= 0 and ins[prev].mnemonic not in ("jmp", "ret", "retn") and ins[prev].address + ins[prev].size == ins[start].address:
+            entries.append(prev)
+        if not entries or any(start < at[t2] <= latch for t2, srcs in targets.items() if t2 in at
+                              for s in srcs if not start <= s <= latch):
+            return _refuse(why, 'a jump into the middle of the loop')
+        values = set()
+        for e in entries:
+            value, j = None, e
+            while j >= 0 and value is None:
+                b = ins[j]
+                if b.mnemonic == "call" and _call_cost(b, counter, callable, platform, depth) is None:
+                    return _refuse(why, 'a call on the entry path can change the counter')
+                w = writes(b)
+                if w is None:
+                    return _refuse(why, 'no register-write detail on the entry path')
+                if w & aliases(counter):
+                    if b.mnemonic == "xor" and len(b.operands) == 2 and all(o.type == X86_OP_REG and b.reg_name(o.reg) == counter for o in b.operands):
+                        value = 0
+                    elif (b.mnemonic == "mov" and b.operands[0].type == X86_OP_REG and b.reg_name(b.operands[0].reg) == counter
+                          and b.operands[1].type == X86_OP_IMM):
+                        value = b.operands[1].imm & 0xffffffff
+                    else:
+                        return _refuse(why, 'counter start is not xor/mov imm')
+                    break
+                if b.address in targets or j == 0 or ins[j - 1].address + ins[j - 1].size != b.address \
+                        or ins[j - 1].mnemonic in ("jmp", "ret", "retn"):
+                    return _refuse(why, 'a merge point or the body start: no single straight path')
+                j -= 1
+            if value is None:
+                return _refuse(why, 'no counter start found')
+            values.add(value)
+        if len(values) != 1:
+            return _refuse(why, 'entries disagree on the start')
+        c, trips, taken = values.pop(), 0, _JCC_TAKEN[jcc.mnemonic]
+        while True:
+            trips += 1
+            c = (c + step) & 0xffffffff
+            if trips * per_trip > INSN_CEILING:
+                return _refuse(why, 'trip count beyond the ceiling')
+            if not taken(c, limit):
+                break
+        cost[(start, latch)] = (trips, per_trip, inner)
+    def loop_cost(key):
+        trips, per_trip, inner = cost[key]
+        # each inner loop runs completely once per outer trip
+        return trips * (per_trip + sum(loop_cost(k) for k in inner
+                                       if not any(k != j and j in inner and j[0] <= k[0] and k[1] < j[1] for j in inner)))
+    outermost = [k for k in cost if not any(k != j and j[0] <= k[0] and k[1] < j[1] for j in cost)]
+    total = sum(loop_cost(k) for k in outermost)
+    if total > INSN_CEILING:
+        return _refuse(why, 'total beyond the ceiling')
+    if not loops:
+        return _refuse(why, 'no loop')
+    budget = INSN_BUDGET + total
+    return budget if budget <= INSN_CEILING else None
 
 
 def returns_float(ins, k, depth=0):
@@ -232,8 +497,15 @@ def returns_float(ins, k, depth=0):
     an unknown jump, trap or return. Never supply entry-stack arguments or
     guess across intervening callees. One mock can return only one value.
     """
+    return x87_deficit(ins, ins[k].address + ins[k].size, depth, 1) == 1
+
+
+def x87_deficit(ins, start, depth, limit):
+    """Values missing below `depth` on the x87 paths from `start` up to the
+    next call, unknown jump, trap or return; None if more than `limit`,
+    on overflow or an unsupported x87 instruction."""
     at = {i.address: i for i in ins}
-    todo = [(ins[k].address + ins[k].size, depth, 0)]
+    todo = [(start, depth, 0)]
     seen, required = set(), 0
     while todo:
         pc, current, added = todo.pop()
@@ -248,14 +520,14 @@ def returns_float(ins, k, depth=0):
             needed, delta = x87_effect(i)
             missing = max(0, needed - current)
             added += missing
-            if added > 1:
-                return False
+            if added > limit:
+                return None
             required = max(required, added)
             current += missing + delta
             if current > 8:
-                return False
+                return None
         elif mn.startswith('f') and mn not in X87_CONTROL:
-            return False
+            return None
         if mn.startswith('j'):
             if i.operands[0].type != 2:
                 continue
@@ -263,19 +535,32 @@ def returns_float(ins, k, depth=0):
             if mn == 'jmp':
                 continue
         todo.append((pc + i.size, current, added))
-    return required == 1
+    return required
 
 
-def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=None, stops=frozenset()):
+def runtime_jump(i):
+    """An indirect jump that is not an absolute dword switch table: in ext
+    mode its target is a runtime value (decode_body keeps every known start
+    as a possible local destination, then the external boundary)."""
+    from capstone.x86 import X86_OP_IMM, X86_OP_MEM
+    op = i.operands[0] if i.operands else None
+    if i.mnemonic != "jmp" or op is None or op.type == X86_OP_IMM:
+        return False
+    return not (op.type == X86_OP_MEM and op.size == 4 and not op.mem.segment and not op.mem.base
+                and op.mem.index and op.mem.scale == 4)
+
+
+def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=None, stops=frozenset(), entry=0):
     """Every x87 read or pop must find a value on the stack: walk the
-    control flow from depth 0. A direct call to a closed lifted function adds
+    control flow from depth `entry` (values the caller left on the x87
+    stack; 0 except for an ext entry contract). A direct call to a closed lifted function adds
     its net effect (X87_NET); a mocked call adds 1 where its result is
     consumed (returns_float: the recorder's mock and the replay push a
     value there) and 0 elsewhere. Anything else read at depth 0 rejects.
     Returns (set of depths at the function's rets, push sites)."""
     from capstone.x86 import X86_OP_IMM
     at = {i.address: k for k, i in enumerate(ins)}
-    seen, todo = {}, [(at[addr], 0)]
+    seen, todo = {}, [(at[addr], entry)]
     exits, push_sites = set(), set()
     # blocks only reachable through a switch table are walked afterwards
     # from depth 0 (conservative: a switch inside x87 code is rare)
@@ -322,12 +607,121 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                 t = i.operands[0].imm if i.operands and i.operands[0].type == 2 else None
                 if t in at and (t == addr or t not in function_entries()):
                     todo.append((at[t], depth))
-                for target in (switches or {}).get(i.address, []):
-                    todo.append((at[target], depth))
+                # A runtime jump's local destinations are all statically
+                # reachable starts, walked with their own static depths;
+                # its value is not a proof of the depth there. The recorder
+                # rejects any run whose x87 access meets an empty slot.
+                targets = (switches or {}).get(i.address, [])
+                if not runtime_jump(i) and not isinstance(targets, RuntimeTargets):
+                    for target in targets:
+                        todo.append((at[target], depth))
                 if mn == "jmp":
                     break
             k = at.get(i.address + i.size, len(ins))
     return exits, sorted(push_sites)
+
+
+def skip_neutral(ins, j, registers):
+    """Step back over at most four instructions that neither transfer
+    control nor write one of `registers` (e.g. `push ebx; push edi` between
+    a switch's `ja` bound and its `jmp`, 0x0061FDB5). Returns the index of
+    the first instruction that is not skipped."""
+    names = set()
+    for r in registers:
+        names |= {r, r[1:], r[1:] + "l", r[1] + "h"} if r in GPR32 else {r}
+    for _ in range(4):
+        if j < 0:
+            break
+        i = ins[j]
+        if (i.mnemonic.startswith("j") or i.mnemonic in ("call", "ret", "retn", "int3", "ud2", "hlt")
+                or i.mnemonic.startswith("loop")):
+            break
+        try:
+            written = {i.reg_name(r) for r in i.regs_access()[1]}
+        except Exception:  # noqa: BLE001  (no access detail: not neutral)
+            break
+        if written & names:
+            break
+        j -= 1
+    return j
+
+
+def table_bound(ins, k, index):
+    """Slots a dword table indexed by `index` at ins[k] can select, when the
+    linear path proves it: an adjacent `cmp index, imm` (or `mov R, imm;
+    cmp index, R`) with ja/jae, or an `and index, imm` with no later write
+    to the index register. None if unproven."""
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM
+    j = skip_neutral(ins, k - 1, {ins[k].reg_name(index)})
+    if j >= 1 and ins[j].mnemonic in ("ja", "jae"):
+        cmp = ins[j - 1]
+        if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2 and cmp.operands[0].type == X86_OP_REG
+                and cmp.operands[0].reg == index and cmp.operands[0].size == 4):
+            limit = None
+            if cmp.operands[1].type == X86_OP_IMM:
+                limit = cmp.operands[1].imm & 0xffffffff
+            elif cmp.operands[1].type == X86_OP_REG and j >= 2:
+                mov = ins[j - 2]
+                if (mov.mnemonic == "mov" and mov.operands[0].type == X86_OP_REG
+                        and mov.operands[0].reg == cmp.operands[1].reg and mov.operands[1].type == X86_OP_IMM):
+                    limit = mov.operands[1].imm & 0xffffffff
+            if limit is not None and limit + (ins[j].mnemonic == "ja") <= 4096:
+                return limit + (ins[j].mnemonic == "ja")
+    name = ins[k].reg_name(index)
+    for i in reversed(ins[max(0, k - 32):k]):
+        if (i.mnemonic == "and" and i.operands[0].type == X86_OP_REG and i.operands[0].reg == index
+                and i.operands[1].type == X86_OP_IMM and 0 <= i.operands[1].imm < 4096):
+            return i.operands[1].imm + 1
+        try:
+            written = {i.reg_name(r) for r in i.regs_access()[1]}
+        except Exception:  # noqa: BLE001  (no access detail: not proven)
+            return None
+        if written & {name, name[1:], name[1:] + "l", name[1] + "h"} or i.mnemonic in ("call", "ret"):
+            return None
+    return None
+
+
+def open_table(ins, k, read, accept, bounded_accept):
+    """Ext only: targets of an absolute dword table (`jmp [index*4 + T]`,
+    optionally after `movzx index, byte [src + R]`) that the strict rules
+    cannot bound. With a proven bound (table_bound; for a byte remap, the
+    largest remap byte under the source's bound) every valid slot in range
+    is a case and invalid slots are skipped; otherwise slots are read until
+    the first one `accept` refuses (the table-only rule). Slot values stay
+    runtime reads in the generated code."""
+    from capstone.x86 import X86_OP_REG, X86_OP_MEM
+    op = ins[k].operands[0]
+    if op.type != X86_OP_MEM or op.mem.segment or op.mem.base or not op.mem.index or op.mem.scale != 4:
+        return []
+    table, bound = op.mem.disp & 0xffffffff, None
+    prev = ins[k - 1] if k else None
+    if (prev is not None and prev.mnemonic == "movzx" and prev.operands[0].type == X86_OP_REG
+            and prev.operands[0].reg == op.mem.index and prev.operands[1].type == X86_OP_MEM
+            and prev.operands[1].size == 1 and prev.operands[1].mem.base and not prev.operands[1].mem.index
+            and not prev.operands[1].mem.segment):
+        source = table_bound(ins, k - 1, prev.operands[1].mem.base)
+        if source is not None:
+            try:
+                remap = read(prev.operands[1].mem.disp & 0xffffffff, source)
+            except KeyError:
+                remap = b""
+            bound = max(remap) + 1 if len(remap) == source and source else None
+    else:
+        bound = table_bound(ins, k, op.mem.index)
+    targets = []
+    for n in range(bound if bound is not None else 4096):
+        try:
+            data = read(table + 4 * n, 4)
+        except KeyError:
+            break
+        if len(data) != 4:
+            break
+        target, = struct.unpack("<I", data)
+        if (bounded_accept if bound is not None else accept)(target):
+            targets.append(target)
+        elif bound is None:
+            break
+    return sorted(set(targets))
 
 
 def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded_accept=None):
@@ -349,7 +743,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
     # the case code is outside the entry's inventory band.
     bound, remap_addr = None, None
     bound_index = op.mem.index
-    prev_bound = k - 1
+    prev_bound = skip_neutral(ins, k - 1, {jump.reg_name(op.mem.index)})
     if prev_bound >= 0 and ins[prev_bound].mnemonic == "movzx":
         dst, src = ins[prev_bound].operands
         if (dst.type == X86_OP_REG and dst.reg == op.mem.index and dst.size == 4
@@ -358,7 +752,8 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
                 and ins[prev_bound].reg_name(src.mem.base) in GPR32):
             remap_addr = src.mem.disp & 0xffffffff
             bound_index = src.mem.base
-            prev_bound -= 1
+            prev_bound = skip_neutral(ins, prev_bound - 1,
+                                      {jump.reg_name(op.mem.index), ins[prev_bound].reg_name(bound_index)})
     if prev_bound >= 1 and ins[prev_bound].mnemonic in ("ja", "jae"):
         cmp = ins[prev_bound - 1]
         if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2
@@ -409,7 +804,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
     # before the jump. The cmp bounds that lookup, not the dword table.
     index = op.mem.index
     remap = None
-    prev = k - 1
+    prev = skip_neutral(ins, k - 1, {jump.reg_name(index)})
     if prev >= 0 and ins[prev].mnemonic == "movzx":
         dst, src = ins[prev].operands
         if dst.type == X86_OP_REG and dst.reg == index:
@@ -417,7 +812,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
                     or src.mem.segment or src.mem.index or src.mem.base != bound_index):
                 raise Unsupported("indirect jump (unrecognised switch remapping)")
             remap = src.mem.disp & 0xFFFFFFFF
-            prev -= 1
+            prev = skip_neutral(ins, prev - 1, {jump.reg_name(index), ins[prev].reg_name(bound_index)})
     if prev >= 1 and ins[prev].mnemonic in ("ja", "jae"):
         cmp = ins[prev - 1]
         if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2
@@ -469,10 +864,21 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 leaders.add(i.address + i.size)
         if (i.mnemonic in ("ret", "retn", "repz ret") or i.address in stops) and k + 1 < len(ins):
             leaders.add(ins[k + 1].address)
-    exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops)
+    # x87 entry contract (ext only, never callable): the minimal number of
+    # values the caller must have left on the x87 stack (MSVC's float
+    # intrinsics such as _ftol2 and _CIsin take their argument in st0). The
+    # recorder seeds that many random finite values; the replay loads them.
+    # Only reads before any call or return count, so a value is never
+    # attributed to the caller when a callee could have returned it.
+    entry = (x87_deficit(ins, addr, 0, 8) or 0) if ext else 0
+    exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
     X87_PUSH_SITES[addr] = push_sites
+    # Constant-trip loops that need more than the recorder's default budget.
+    budget = constant_loop_budget(ins, callable, h.PLATFORM)
+    budget = budget if budget is not None and budget - INSN_BUDGET + len(ins) > INSN_BUDGET else None
     BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
-                       "noreturn_sites": sorted(stops)}
+                       "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {}),
+                       **({"insn_budget": budget} if budget else {})}
     if not ext:
         X87_NET[addr] = exits.pop() if len(exits) == 1 else (0 if not exits else None)
 
@@ -485,6 +891,9 @@ def lift(addr, size, callable=frozenset(), ext=False):
             return f"(({r} >> {sh}) & 0xFF)"
         if name in SUB16:
             return f"({SUB16[name]} & 0xFFFF)"
+        if name in SEGMENTS:
+            # MOV r32, Sreg zero-extends on P6 and later (Intel SDM, MOV).
+            return f"(cpu.seg.{name} as u32)"
         raise Unsupported(f"register {name}")
 
     def set_reg(name, v):
@@ -607,6 +1016,29 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(set_reg("ax", "q | (r << 8)") if bits == 8 else
                             set_reg("ax" if bits == 16 else "eax", "q") + set_reg("dx" if bits == 16 else "edx", "r"))
                 body.append("fl = Flags::partial(0, 0); }")
+            elif mn in ("rcl", "rcr"):
+                body.append(f"{{ let a = {load(i, ops[0])}; let n = {load(i, ops[1]) if len(ops) == 2 else '1u32'}; "
+                            f"let r = fl.rotate_carry(a, n, {bits}, {str(mn == 'rcr').lower()}); {store(i, ops[0], 'r')} }}")
+            elif mn.split()[-1] in ("scasb", "scasw", "scasd") and mn.split()[0] in ("scasb", "scasw", "scasd", "repe", "repne"):
+                if i.addr_size != 4 or any(o.type == X86_OP_MEM and o.mem.segment and i.reg_name(o.mem.segment) != "es" for o in ops):
+                    raise Unsupported("string address/segment override")
+                repeat = {"repe": 1, "repne": 2}.get(mn.split()[0], 0)
+                body.append(f"x86::scan(m, cpu, {dict(b=1, w=2, d=4)[mn[-1]]}, {repeat});")
+            elif mn == "xlatb":
+                if i.addr_size != 4 or any(p in (0x26, 0x2E, 0x36, 0x64, 0x65) for p in i.prefix):
+                    raise Unsupported("xlatb address/segment override")
+                # AL = [EBX + zero-extended AL] (Intel SDM, XLAT)
+                body.append(set_reg("al", "(m.u8(ebx.wrapping_add(eax & 0xFF)) as u32)"))
+            elif mn in ("stmxcsr", "ldmxcsr"):
+                # The guest MXCSR is live in the host register while lifted
+                # code runs (sse2.rs); these move it exactly.
+                a = mem_addr(i, ops[0])
+                body.append(f"m.set_u32({a}, x86::stmxcsr());" if mn == "stmxcsr" else f"x86::ldmxcsr(m.u32({a}));")
+            elif mn == "pause":
+                body.append("std::hint::spin_loop();")  # a spin-wait hint: no architectural effect
+            elif mn in ("pslldq", "psrldq") and len(ops) == 2 and ops[1].type == X86_OP_IMM:
+                d = xmm(i, ops[0])
+                body.append(f"{d} = x86::{mn}::<{ops[1].imm & 255}>({d});")
             elif mn in ("rol", "ror", "shld", "shrd"):
                 right = str(mn in ("ror", "shrd")).lower()
                 expression = (f"fl.rotate(a, n, {bits}, {right})" if len(ops) == 2 else
@@ -724,6 +1156,10 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append("edx = if (eax as i32) < 0 { u32::MAX } else { 0 };")
             elif mn.startswith("set"):
                 body.append(store(i, ops[0], f"fl.cond(\"{mn[3:]}\") as u32"))
+            elif mn == "push" and ops[0].type == X86_OP_REG and i.reg_name(ops[0].reg) in SEGMENTS:
+                # A 32-bit PUSH Sreg writes 2 or 4 bytes depending on the
+                # processor model (Intel SDM, PUSH): no single semantics.
+                raise Unsupported("push segment register (model-specific width)")
             elif mn == "push":
                 body.append(f"{{ let v = {load(i, ops[0])}; esp = esp.wrapping_sub(4); m.set_u32(esp, v); }}")
             elif mn == "pop":
@@ -736,8 +1172,14 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 body.append(f'panic!("guest {mn} trap at 0x{i.address:08X}");')
                 terminated = True
                 break
-            elif mn in ("cpuid", "rdtsc", "pushfd"):
-                raise Unsupported(f"platform-dependent {mn} (no event/state contract)")
+            elif mn in ("cpuid", "rdtsc"):
+                # The machine answers (platform::Machine): the runtime's
+                # recorded profile, or the events a vector recorded.
+                body.append(f"crate::platform::{mn}(cpu);")
+            elif mn == "pushfd":
+                body.append("{ let v = x86::pushfd_image(cpu); esp = esp.wrapping_sub(4); m.set_u32(esp, v); }")
+            elif mn == "popfd":
+                body.append("{ let v = m.u32(esp); esp = esp.wrapping_add(4); x86::popfd(cpu, v); }")
             elif mn in ("ret", "retn", "repz ret"):
                 extra = ops[0].imm if ops else 0
                 body.append(f"esp = esp.wrapping_add(4 + {extra}); {SAVE} return;")
@@ -748,7 +1190,13 @@ def lift(addr, size, callable=frozenset(), ext=False):
                     # Targets outside known local destinations leave the body
                     # (switch overflow or a non-switch function pointer).
                     # The recorder and replay share this tail-call boundary.
-                    cases = " | ".join(f"0x{t:X}" for t in sorted(set(switches[i.address])))
+                    # L22: a target that is a block start of this body (any
+                    # leader, not only the table's discovered slots) is local
+                    # code, as on the CPU and in the recorder (0x0061FDA0:
+                    # slot 3 0x0062019C is a known start past the table-only
+                    # discovery). A non-leader interior start would still
+                    # leave the body here; the recorder continues locally.
+                    cases = " | ".join(f"0x{t:X}" for t in sorted(set(switches[i.address]) | leaders))
                     body.append(f"{{ let t = {load(i, ops[0])}; if matches!(t, {cases}) {{ pc = t; continue; }} "
                                 f"{SAVE} x86::call_ext(m, cpu, t); return; }}")
                 else:
@@ -849,14 +1297,15 @@ def lift(addr, size, callable=frozenset(), ext=False):
             elif mn in ("comisd", "ucomisd"):
                 # Capstone 5 labels this memory operand m128, but COMISD
                 # and UCOMISD consume only a scalar m64 (Intel SDM).
-                body.append(f"fl = x86::comisd({vector(i, ops[0])}, {vector(i, ops[1], 8)});")
+                body.append(f"fl = x86::comisd_hw::<{str(mn == 'comisd').lower()}>({vector(i, ops[0])}, {vector(i, ops[1], 8)});")
             elif mn in ("divps", "minps", "maxps", "sqrtps", "addpd", "subpd", "mulpd", "divpd", "minpd", "maxpd", "sqrtpd",
                         "addsd", "subsd", "mulsd", "divsd", "minsd", "maxsd", "sqrtsd", "cvtps2pd", "cvtpd2ps", "cvtss2sd", "cvtsd2ss",
                         "cvtdq2ps", "cvttps2dq", "cvtps2dq", "cvtdq2pd", "cvttpd2dq", "cvtpd2dq", "unpcklps", "unpckhps", "unpcklpd", "unpckhpd",
                         "paddb", "paddw", "paddd", "paddq", "psubb", "psubw", "psubd", "psubq", "pcmpeqb", "pcmpeqw", "pcmpeqd", "pcmpgtb", "pcmpgtw", "pcmpgtd",
                         "pslld", "psllw", "psllq", "psrld", "psrlw", "psrlq", "psrad", "psraw", "pmullw", "pmulhw", "pmulhuw", "pmuludq", "pmaddwd",
                         "punpcklbw", "punpcklwd", "punpckldq", "punpcklqdq", "punpckhbw", "punpckhwd", "punpckhdq", "punpckhqdq",
-                        "packsswb", "packssdw", "packuswb", "paddusb", "paddusw", "paddsb", "paddsw", "psubusb", "psubusw", "psubsb", "psubsw"):
+                        "packsswb", "packssdw", "packuswb", "paddusb", "paddusw", "paddsb", "paddsw", "psubusb", "psubusw", "psubsb", "psubsw",
+                        "pmaxsw", "pminsw", "rcpps", "rsqrtps", "rcpss", "rsqrtss"):
                 d = xmm(i, ops[0])
                 body.append(f"{d} = x86::{mn}({d}, {vector(i, ops[1])});")
             elif mn in ("pshufd", "pshuflw", "pshufhw", "shufpd"):
@@ -934,7 +1383,7 @@ def lift(addr, size, callable=frozenset(), ext=False):
             elif mn in ("comiss", "ucomiss"):
                 d = xmm(i, ops[0])
                 s = f"{xmm(i, ops[1])}[0]" if ops[1].type == X86_OP_REG else f"m.u32({mem_addr(i, ops[1])})"
-                body.append(f"fl = x86::comiss({d}[0], {s});")
+                body.append(f"fl = x86::comiss_hw::<{str(mn == 'comiss').lower()}>({d}[0], {s});")
             elif mn == "cvttss2si":
                 s = f"{xmm(i, ops[1])}[0]" if ops[1].type == X86_OP_REG else f"m.u32({mem_addr(i, ops[1])})"
                 body.append(store(i, ops[0], f"x86::cvttss2si({s})"))
@@ -1010,7 +1459,7 @@ def compact_alu(arm):
     return ALU_BLOCK.sub(replace, arm)
 
 
-def cpu_arm(arm):
+def cpu_arm(arm, start=None):
     """Lower cached local-register IR onto the shared Cpu in place.
 
     SAVE/LOAD delimit calls in patterns/lift.json; removing them is valid
@@ -1018,7 +1467,7 @@ def cpu_arm(arm):
     the cache representation (and thus scan/callee discovery) unchanged.
     Substitute whole identifiers, leaving Rust strings untouched.
     """
-    arm = compact_alu(arm).replace(SAVE, "").replace(LOAD, "")
+    arm = compact_alu(exact_compares(arm, start=start)).replace(SAVE, "").replace(LOAD, "")
     # Prepared pre-DF caches use the old state-transfer markers.
     arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}
@@ -1054,6 +1503,43 @@ def straight_line(addr, arms):
     return body
 
 
+def exact_compares(arm, read=None, start=None):
+    """L22: cached arms emitted COMISS/UCOMISS as x86::comiss and COMISD/
+    UCOMISD as x86::comisd (emulated compares that set no MXCSR flags, or
+    the wrong ones). Retarget each call, in order, to the hardware helper
+    of the original instruction at the same position in the block."""
+    if "x86::comiss(" not in arm and "x86::comisd(" not in arm:
+        return arm
+    import harness as h
+    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
+    read = read or h.code
+    head = re.match(r"\s*0x([0-9A-Fa-f]+) =>", arm)
+    pc = int(head[1], 16) if head else start  # a straight-line body has no arm prefix
+    if pc is None:
+        raise ValueError("compare retargeting: no block address")
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    wanted = arm.count("x86::comiss(") + arm.count("x86::comisd(")
+    found = []
+    for _ in range(4096):
+        if len(found) == wanted:
+            break
+        i = next(md.disasm(read(pc, 15), pc, count=1))
+        if i.mnemonic in ("comiss", "ucomiss", "comisd", "ucomisd"):
+            found.append(i.mnemonic)
+        pc += i.size
+    if len(found) != wanted:
+        raise ValueError(f"compare retargeting: {wanted} calls, {len(found)} instructions")
+    out, k = [], 0
+    for part in re.split(r"(x86::comis[sd]\()", arm):
+        if part in ("x86::comiss(", "x86::comisd("):
+            mn = found[k]; k += 1
+            if part[-2] != mn[-1]:
+                raise ValueError(f"compare retargeting: {part} at a {mn}")
+            part = f"x86::comis{mn[-1]}_hw::<{str(not mn.startswith('u')).lower()}>("
+        out.append(part)
+    return "".join(out)
+
+
 def rust_fn(addr, name, arms):
     header = [
         f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
@@ -1064,7 +1550,7 @@ def rust_fn(addr, name, arms):
     traced = os.environ.get("LIFT_TRACE", "").lower() in (f"0x{addr:x}", f"{addr:x}")
     body = None if traced else straight_line(addr, arms)  # a trace needs the block loop
     if body is not None:
-        return "\n".join([*header, "    " + cpu_arm(body), "}", ""])
+        return "\n".join([*header, "    " + cpu_arm(body, start=addr), "}", ""])
     return "\n".join([*header,
         f"    let mut pc: u32 = 0x{addr:X};",
         "    loop {",
@@ -1273,6 +1759,10 @@ def vector_key(f):
     fields = [f.get(k) for k in ("body", "noreturn_sites", "calls", "ext", "x87_push")]
     if f.get('original_entry'):
         fields.append('original-entry-v1')
+    if f.get('x87_entry'):
+        fields.append(f"x87-entry-v1:{f['x87_entry']}")
+    if f.get('insn_budget'):
+        fields.append(f"insn-budget-v1:{f['insn_budget']}")
     return "body-v1:" + hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -1293,6 +1783,10 @@ def _vectors_for(args):
     inputs = {"zero_inputs": True} if os.environ.get("LIFT_ZERO_INPUTS") == "1" else {}
     if len(args) > 8 and args[8]:
         inputs['original_entry'] = True
+    if len(args) > 9 and args[9]:
+        inputs['x87_entry'] = args[9]
+    if len(args) > 10 and args[10]:
+        inputs['max_insn'] = args[10]
     if body is not None:
         inputs.update(body=body, noreturn_sites=stops, noreturn_targets=noreturn_entries())
     if _FRAMES:
@@ -1370,7 +1864,7 @@ def vectors(per=3):
     nov_keys = json.load(open(nov_keys_path)) if os.path.exists(nov_keys_path) else {}
     novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
     novector = {a for a in novector if a in failed or keys.get(a) is None or nov_keys.get(str(a)) == keys[a]}
-    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False))
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False), f.get('x87_entry', 0), f.get('insn_budget'))
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)
@@ -1459,7 +1953,7 @@ type Dispatch = std::collections::HashMap<u32, fn(&mut dyn Mem, &mut Cpu)>;
 
 /// State at a terminal call (harness.run_sparse terminal-v1): the case ends
 /// at a noreturn callee's entry.
-struct Terminal {{ exit: x86::Exit, control: u32, depth: u32, ext: Option<(u64, u16)> }}
+struct Terminal {{ exit: x86::Exit, control: u32, depth: u32, ext: Option<(u64, u16)>, mxcsr: u32 }}
 
 /// Replays the calls to untranslated code a vector recorded: checks the
 /// target and every register at the call, then returns what the mock did.
@@ -1478,7 +1972,7 @@ fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::
         if ev.get("terminal").and_then(|v| v.as_bool()) == Some(true) {{
             // the original never returns from here: end the case (no panic hook)
             std::panic::resume_unwind(Box::new(Terminal {{ exit: cpu.exit(), control: cpu.st.control() as u32,
-                depth: cpu.st.depth(), ext: cpu.st.top_extended() }}));
+                depth: cpu.st.depth(), ext: cpu.st.top_extended(), mxcsr: x86::stmxcsr() }}));
         }}
         let ret = m.u32(cpu.esp);
         let _ = ret;
@@ -1494,6 +1988,21 @@ fn replay(calls: Rc<RefCell<VecDeque<Value>>>, table: Rc<Dispatch>) -> Box<x86::
     }})
 }}
 
+/// The CPUID/RDTSC answers a vector recorded, in order (platform::Machine).
+struct Recorded(RefCell<VecDeque<Value>>);
+impl ddnative::platform::Machine for Recorded {{
+    fn cpuid(&self, leaf: u32, subleaf: u32) -> [u32; 4] {{
+        let e = self.0.borrow_mut().pop_front().expect("unrecorded cpuid");
+        assert_eq!((e[0].as_str(), u(&e[1]), u(&e[2])), (Some("cpuid"), leaf, subleaf), "cpuid leaf/subleaf");
+        [u(&e[3]), u(&e[4]), u(&e[5]), u(&e[6])]
+    }}
+    fn rdtsc(&self) -> u64 {{
+        let e = self.0.borrow_mut().pop_front().expect("unrecorded rdtsc");
+        assert_eq!(e[0].as_str(), Some("rdtsc"), "machine event");
+        u(&e[1]) as u64 | (u(&e[2]) as u64) << 32
+    }}
+}}
+
 {decl}
 #[test]
 fn every_lifted_function_matches_the_original() {{
@@ -1504,8 +2013,19 @@ fn every_lifted_function_matches_the_original() {{
     let mut failures = Vec::new();
     // LIFT_DEBUG=0xADDR prints what differs for that function's vectors
     let debug = std::env::var("LIFT_DEBUG").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+    // Cases that ran a CPU-dependent instruction (x87_host.CPU_DEPENDENT,
+    // approximations) are compared on the processor that recorded them.
+    let brand: String = unsafe {{
+        (0x8000_0002u32..=0x8000_0004).flat_map(|l| {{ let r = std::arch::x86_64::__cpuid(l);
+            [r.eax, r.ebx, r.ecx, r.edx] }}).flat_map(|w| w.to_le_bytes()).map(|b| b as char).collect()
+    }};
+    let brand = brand.trim_end_matches('\\0');
+    let mut other_cpu = Vec::new();
     for c in &cases {{
         let addr = u(&c["addr"]);
+        if let Some(cpu) = c.get("cpu_dependent").and_then(|v| v.as_str()) {{
+            if cpu != brand {{ other_cpu.push(format!("{{addr:#010x}}")); seen.insert(addr); continue; }}
+        }}
         let f = all.iter().find(|e| e.0 == addr).expect("lifted function").1;
         let mut m = Sparse::default();
         for run in c["reads"].as_array().unwrap() {{
@@ -1520,10 +2040,28 @@ fn every_lifted_function_matches_the_original() {{
         let calls = Rc::new(RefCell::new(c.get("calls").and_then(|v| v.as_array()).cloned()
             .unwrap_or_default().into_iter().collect::<VecDeque<Value>>()));
         x86::set_ext_calls(Some(replay(calls.clone(), table.clone())));
+        let machine = Rc::new(Recorded(RefCell::new(c.get("machine").and_then(|v| v.as_array()).cloned()
+            .unwrap_or_default().into_iter().collect())));
+        ddnative::platform::set_machine(Some(machine.clone()));
+        x86::ldmxcsr(x86::MXCSR_DEFAULT); // the recorder's initial MXCSR, live while lifted code runs
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{
             let mut cpu = Cpu::from(entry);
             cpu.fs_base = 0x7FFD_E000; // harness.TEB_BASE (fixed recorder thread)
+            if let Some(s) = c.get("segments") {{
+                let k = |n: &str| u(&s[n]) as u16;
+                cpu.seg = x86::Segments {{ es: k("es"), cs: k("cs"), ss: k("ss"), ds: k("ds"), fs: k("fs"), gs: k("gs") }};
+            }}
+            // x87 entry contract: the values the recorder left on the stack, deepest first
+            for v in c.get("st_in").and_then(|v| v.as_array()).into_iter().flatten().rev() {{
+                let mut data = [0u8; 10];
+                data[..8].copy_from_slice(&v[0].as_u64().unwrap().to_le_bytes());
+                data[8..].copy_from_slice(&(u(&v[1]) as u16).to_le_bytes());
+                cpu.st.exec::<0x28db>(&mut data); // fld m80real
+            }}
             f(&mut m, &mut cpu);
+            if let Some(v) = c.get("mxcsr") {{
+                assert_eq!(x86::stmxcsr(), u(v), "MXCSR");
+            }}
             if c.get("x87_control").is_some() {{
                 assert_eq!(cpu.st.control() as u32, u(&c["x87_control"]), "x87 control");
                 assert_eq!(cpu.st.depth(), u(&c["x87_depth"]), "x87 depth");
@@ -1538,11 +2076,13 @@ fn every_lifted_function_matches_the_original() {{
                 let t = e.downcast::<Terminal>().unwrap();
                 let x87 = c.get("x87_control").is_none() || (t.control == u(&c["x87_control"]) && t.depth == u(&c["x87_depth"])
                     && t.ext == c["st0_ext"].as_array().map(|v| (v[0].as_u64().unwrap(), u(&v[1]) as u16)));
+                let x87 = x87 && c.get("mxcsr").map_or(true, |v| t.mxcsr == u(v));
                 if x87 {{ Ok(t.exit) }} else {{ Err(Box::new("terminal x87 state") as Box<dyn std::any::Any + Send>) }}
             }}
             r => r,
         }};
-        let all_calls_made = calls.borrow().is_empty();
+        x86::ldmxcsr(x86::MXCSR_DEFAULT);
+        let all_calls_made = calls.borrow().is_empty() && machine.0.borrow().is_empty();
         let ok = match result {{
             Err(e) => {{
                 if debug == Some(addr) {{
@@ -1577,6 +2117,10 @@ fn every_lifted_function_matches_the_original() {{
         }};
         if !ok {{ failures.push(format!("{{addr:#010x}}")); }}
         seen.insert(addr);
+    }}
+    if !other_cpu.is_empty() {{
+        eprintln!("{{}} CPU-dependent cases recorded on another processor were not compared: {{:?}}",
+            other_cpu.len(), &other_cpu[..other_cpu.len().min(40)]);
     }}
     failures.sort(); failures.dedup();
     assert!(failures.is_empty(), "{{}} lifted functions differ: {{:?}}", failures.len(), &failures[..failures.len().min(40)]);

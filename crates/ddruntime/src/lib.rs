@@ -25,6 +25,7 @@ pub mod dispatch;
 pub mod files;
 pub mod image;
 pub mod interfaces;
+pub mod machine;
 pub mod memory;
 pub mod profile;
 pub mod registry;

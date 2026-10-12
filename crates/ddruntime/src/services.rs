@@ -149,7 +149,12 @@ pub fn call_guest(m: &mut dyn Mem, cpu: &mut Cpu, target: u32, args: &[u32]) -> 
     }
     cpu.esp = cpu.esp.wrapping_sub(4);
     m.set_u32(cpu.esp, CALLBACK_RETURN);
+    // L22: guest code runs with the guest MXCSR live (saved in cpu.mxcsr
+    // when the calling service was entered); back in Rust, the default.
+    ddnative_base::x86::ldmxcsr(cpu.mxcsr.0);
     ddnative_base::x86::call_ext(m, cpu, target);
+    cpu.mxcsr = ddnative_base::x86::Mxcsr(ddnative_base::x86::stmxcsr());
+    ddnative_base::x86::ldmxcsr(ddnative_base::x86::MXCSR_DEFAULT);
     assert_eq!(cpu.esp, esp, "guest callback {target:#010x} did not return with stdcall cleanup of {} argument(s)", args.len());
     assert_eq!((cpu.ebx, cpu.ebp, cpu.esi, cpu.edi), (ebx, ebp, esi, edi), "guest callback {target:#010x} clobbered a callee-saved register");
     cpu.eax

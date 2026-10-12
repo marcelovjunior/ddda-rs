@@ -260,8 +260,10 @@ fn sse_lanes_nan_order_rounding_and_host_state() {
     unsafe {
         asm!("stmxcsr [{after}]","ldmxcsr [{old}]",after=in(reg)&mut after,old=in(reg)&old,options(nostack));
     }
-    assert_eq!(r, [2; 4]);
-    assert_eq!(after, changed);
+    // L22: helpers run under the live (guest) MXCSR: round down, and the
+    // inexact conversion sets PE.
+    assert_eq!(r, [1; 4]);
+    assert_eq!(after, changed | 0x20);
     let r = cvtss2sd([11, 22, 33, 44], [1.5f32.to_bits(), 55, 66, 77]);
     assert_eq!(&r[2..], &[33, 44]);
     assert_eq!(r[0] as u64 | ((r[1] as u64) << 32), 1.5f64.to_bits());
@@ -325,4 +327,231 @@ fn string_df_overlap_and_zero_count() {
     assert_eq!((cpu.esi, cpu.edi, cpu.ecx), (112, 117, 0));
     string(&mut m, &mut cpu, 4, false, true);
     assert_eq!(cpu.edi, 117);
+}
+
+fn rotate_carry_cpu(mut a: u32, n: u32, carry: bool, bits: u32, right: bool) -> (u32, u32) {
+    let flags: u64;
+    macro_rules! op {($op:literal)=>{unsafe {
+        asm!("bt {carry}, 0",$op,"pushfq","pop {flags}",
+             inout("eax") a,in("ecx") n,carry=in(reg) carry as u64,flags=lateout(reg) flags);
+    }}}
+    match (bits, right) {
+        (8, false) => op!("rcl al, cl"),
+        (8, true) => op!("rcr al, cl"),
+        (16, false) => op!("rcl ax, cl"),
+        (16, true) => op!("rcr ax, cl"),
+        (32, false) => op!("rcl eax, cl"),
+        (32, true) => op!("rcr eax, cl"),
+        _ => unreachable!(),
+    }
+    (a & (u32::MAX >> (32 - bits)), flags as u32)
+}
+
+#[test]
+fn rotate_through_carry_matches_cpu() {
+    // L22: RCR/RCL (the CRT's 64-bit divide helpers use rcr r32, 1).
+    for bits in [8, 16, 32] {
+        for a in [0u32, 1, 0x80, 0x81, 0x7fff, 0x8000, 0x8001, 0x7fffffff, 0x80000000, 0xdeadbeef, u32::MAX] {
+            for n in 0..40 {
+                for carry in [false, true] {
+                    for right in [false, true] {
+                        let mut f = Flags::new(RAW, 0, 0, carry as u32 | 0x40, 32);
+                        let r = f.rotate_carry(a, n, bits, right);
+                        let (want, flags) = rotate_carry_cpu(a, n, carry, bits, right);
+                        let (got, valid) = f.snapshot();
+                        let check = if n & 31 == 1 { 0x801 } else { 1 };
+                        assert_eq!(r, want, "a={a:x} n={n} bits={bits} cf={carry} right={right}");
+                        assert_eq!(got & check, flags & check, "flags a={a:x} n={n} bits={bits} cf={carry} right={right}");
+                        assert_eq!(valid & check, check);
+                        assert!(got & 0x40 != 0, "ZF is kept");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn scan_matches_cpu() {
+    use ddnative_base::mem::{Mem, Sparse};
+    let data: Vec<u8> = b"abcxabcy\0zz".to_vec();
+    for (needle, repeat, count, df) in [(b'x', 2u8, 11u32, false), (b'\0', 2, 11, false), (b'q', 2, 11, false),
+                                        (b'a', 1, 11, false), (b'a', 2, 0, false), (b'c', 2, 3, true), (b'y', 0, 5, false)] {
+        let mut m = Sparse::default();
+        for (k, b) in data.iter().enumerate() {
+            m.set_u8(0x1000 + k as u32, *b);
+        }
+        let start = if df { 0x1000 + 6 } else { 0x1000 };
+        let mut cpu = Cpu::default();
+        cpu.fl = Flags::new(RAW, 0, 0, 0x44, 32);
+        cpu.eax = 0x12345600 | needle as u32;
+        cpu.edi = start;
+        cpu.ecx = count;
+        cpu.df = df;
+        scan(&mut m, &mut cpu, 1, repeat);
+        // the host, over the same bytes
+        let base = data.as_ptr() as u64;
+        let mut rdi = base + (start - 0x1000) as u64;
+        let mut rcx = count as u64;
+        let flags: u64;
+        unsafe {
+            macro_rules! op {($op:literal)=>{asm!("xor {f:e}, {f:e}", "cmp {f:e}, 0", // ZF set as in the model
+                 "test {df}, 1", "jz 2f", "std", "2:", $op, "pushfq", "pop {f}", "cld",
+                 df=in(reg) df as u64, f=out(reg) flags, inout("rdi") rdi, inout("rcx") rcx, in("al") needle)}}
+            match repeat { 0 => op!("scasb"), 1 => op!("repe scasb"), _ => op!("repne scasb") }
+        }
+        let host_edi = start.wrapping_add((rdi as i64 - (base + (start - 0x1000) as u64) as i64) as u32);
+        assert_eq!((cpu.edi, cpu.ecx), (host_edi, if repeat == 0 { count } else { rcx as u32 }), "{needle} {repeat} {count} {df}");
+        assert_eq!(cpu.fl.snapshot().0 & ARITH_FLAGS, flags as u32 & ARITH_FLAGS, "{needle} {repeat} {count} {df}");
+    }
+}
+
+#[test]
+fn word_max_min_and_byte_shifts_match_cpu() {
+    use std::arch::x86_64::*;
+    let a = [0x8000_7fffu32, 0x0001_ffff, 0x1234_5678, 0xffff_0000];
+    let b = [0x7fff_8000u32, 0xffff_0001, 0x5678_1234, 0x0000_ffff];
+    let (av, bv): (__m128i, __m128i) = unsafe { (std::mem::transmute(a), std::mem::transmute(b)) };
+    let host = |v: __m128i| -> [u32; 4] { unsafe { std::mem::transmute(v) } };
+    unsafe {
+        assert_eq!(pmaxsw(a, b), host(_mm_max_epi16(av, bv)));
+        assert_eq!(pminsw(a, b), host(_mm_min_epi16(av, bv)));
+        assert_eq!(pslldq::<8>(a), host(_mm_slli_si128::<8>(av)));
+        assert_eq!(psrldq::<3>(a), host(_mm_srli_si128::<3>(av)));
+        assert_eq!(pslldq::<16>(a), [0; 4]);
+    }
+}
+
+#[test]
+fn added_x87_forms_match_cpu() {
+    use ddnative_base::x87::X87;
+    // fldpi; fld1; fpatan; fstp m64  vs the host
+    let mut st = X87::default();
+    let mut data = [0u8; 10];
+    st.register::<0xebd9>(); // fldpi
+    st.register::<0xe8d9>(); // fld1
+    st.register::<0xf3d9>(); // fpatan: atan(st1 / st0)
+    st.exec::<0x18dd>(&mut data); // fstp m64
+    let mut host = 0f64;
+    unsafe { asm!("fldpi", "fld1", "fpatan", "fstp qword ptr [{p}]", p = in(reg) &mut host); }
+    assert_eq!(f64::from_le_bytes(data[..8].try_into().unwrap()).to_bits(), host.to_bits());
+    assert_eq!(st.depth(), 0);
+    // fptan pushes 1.0 above tan(x); fxam and fnclex keep the depth
+    let mut st = X87::default();
+    st.register::<0xebd9>();
+    st.register::<0xf2d9>();
+    assert_eq!(st.depth(), 2);
+    st.register::<0xe5d9>();
+    st.register::<0xe2db>();
+    assert_eq!(st.status() & 0x3f, 0);
+    st.exec::<0x18dd>(&mut data);
+    assert_eq!(f64::from_le_bytes(data[..8].try_into().unwrap()), 1.0);
+}
+
+#[test]
+fn pushfd_popfd_follow_cpl3() {
+    // L22: measured in a 32-bit Windows process (research/native/probe_machine.rs):
+    // IF and bit 1 read as set; POPFD changes the arithmetic flags, DF, NT, AC, ID only.
+    let mut cpu = Cpu::default();
+    cpu.fl = Flags::new(RAW, 0, 0, 0x44, 32); // ZF, PF
+    assert_eq!(pushfd_image(&cpu), 0x246);
+    popfd(&mut cpu, 0x0020_0000 | 0x4_0000 | 0x4000 | 0x400 | 0x3000 | 0x8d5);
+    assert_eq!(pushfd_image(&cpu), 0x0020_0000 | 0x4_0000 | 0x4000 | 0x400 | 0x202 | 0x8d5, "IOPL is kept");
+    assert!(cpu.df);
+    assert_eq!(cpu.fl.snapshot().0 & ARITH_FLAGS, 0x8d5);
+    assert_eq!(Cpu::default().seg, Segments { es: 0x2b, cs: 0x23, ss: 0x2b, ds: 0x2b, fs: 0x53, gs: 0x2b });
+}
+
+#[test]
+#[should_panic(expected = "undefined x86 flags")]
+fn pushfd_of_undefined_flags_traps() {
+    let mut cpu = Cpu::default();
+    cpu.fl = Flags::partial(0, 0x40);
+    pushfd_image(&cpu);
+}
+
+#[test]
+fn machine_answers_cpuid_and_rdtsc() {
+    use ddnative_base::platform::{self, Machine};
+    struct Fixed;
+    impl Machine for Fixed {
+        fn cpuid(&self, leaf: u32, subleaf: u32) -> [u32; 4] { [leaf, subleaf, 3, 4] }
+        fn rdtsc(&self) -> u64 { 0x1122_3344_5566_7788 }
+    }
+    platform::set_machine(Some(std::rc::Rc::new(Fixed)));
+    let mut cpu = Cpu::default();
+    (cpu.eax, cpu.ecx) = (7, 1);
+    platform::cpuid(&mut cpu);
+    assert_eq!((cpu.eax, cpu.ebx, cpu.ecx, cpu.edx), (7, 1, 3, 4));
+    platform::rdtsc(&mut cpu);
+    assert_eq!((cpu.eax, cpu.edx), (0x5566_7788, 0x1122_3344));
+    platform::set_machine(None);
+}
+
+#[test]
+fn approximations_are_the_host_instructions() {
+    use std::arch::x86_64::*;
+    let a = [0x4040_0000u32, 0x3f33_3333, 0x42f6_8000, 0x3a83_126f];
+    let b = [0x40b0_0000u32, 7, 8, 9];
+    let (av, bv): (__m128, __m128) = unsafe { (std::mem::transmute(a), std::mem::transmute(b)) };
+    let host = |v: __m128| -> [u32; 4] { unsafe { std::mem::transmute(v) } };
+    unsafe {
+        assert_eq!(rcpps(b, a), host(_mm_rcp_ps(av)));
+        assert_eq!(rsqrtps(b, a), host(_mm_rsqrt_ps(av)));
+        assert_eq!(rcpss(b, a), host(_mm_rcp_ss(_mm_move_ss(bv, av))));
+        assert_eq!(rsqrtss(a, b), host(_mm_rsqrt_ss(_mm_move_ss(av, bv))));
+    }
+}
+
+#[test]
+fn guest_mxcsr_is_live_in_the_helpers() {
+    // L22: rounding control and sticky flags follow the live MXCSR.
+    let one_third = |round: u32| {
+        ldmxcsr(MXCSR_DEFAULT | round << 13);
+        let r = divps([0x3f80_0000; 4], [0x4040_0000; 4])[0]; // 1/3
+        let flags = stmxcsr() & 0x3f;
+        ldmxcsr(MXCSR_DEFAULT);
+        (r, flags)
+    };
+    // the scalar helpers follow it as well
+    ldmxcsr(MXCSR_DEFAULT | 1 << 13);
+    assert_eq!(divss(0x3f80_0000, 0x4040_0000), 0x3eaa_aaaa);
+    assert_eq!(cvtsi2ss(16_777_217), 0x4b80_0000); // rounds down to 2^24
+    assert_eq!(stmxcsr() & 0x3f, 0x20);
+    ldmxcsr(MXCSR_DEFAULT);
+    assert_eq!(divss(0x3f80_0000, 0x4040_0000), 0x3eaa_aaab);
+    let (nearest, pe) = one_third(0);
+    let (down, _) = one_third(1);
+    assert_eq!(nearest, 0x3eaa_aaab);
+    assert_eq!(down, 0x3eaa_aaaa);
+    assert_eq!(pe, 0x20, "precision flag");
+    ldmxcsr(MXCSR_DEFAULT);
+    let _ = divsd([0, 0x3ff0_0000, 0, 0], [0; 4]); // 1.0 / 0.0
+    assert_eq!(stmxcsr() & 0x3f, 0x04, "zero-divide flag");
+    ldmxcsr(MXCSR_DEFAULT);
+    assert_eq!(stmxcsr(), MXCSR_DEFAULT);
+    assert_eq!(Cpu::default().mxcsr, Mxcsr(0x1F80));
+}
+
+#[test]
+fn hardware_compares_set_flags_like_the_cpu() {
+    let qnan = 0x7fc0_0000u32;
+    ldmxcsr(MXCSR_DEFAULT);
+    let f = comiss_hw::<false>(qnan, 0x3f80_0000);
+    assert_eq!(stmxcsr() & 1, 0, "ucomiss: no IE for a quiet NaN");
+    assert!(f.zf() && f.pf() && f.cf());
+    let f = comiss_hw::<true>(qnan, 0x3f80_0000);
+    assert_eq!(stmxcsr() & 1, 1, "comiss: IE for any NaN");
+    assert!(f.zf() && f.pf() && f.cf());
+    ldmxcsr(MXCSR_DEFAULT);
+    assert!(comiss_hw::<true>(0x3f80_0000, 0x4000_0000).cf()); // 1 < 2
+    assert!(!comiss_hw::<true>(0x4000_0000, 0x3f80_0000).cf());
+    assert!(comisd_hw::<false>([0, 0x3ff0_0000, 0, 0], [0, 0x3ff0_0000, 0, 0]).zf());
+    assert_eq!(stmxcsr(), MXCSR_DEFAULT);
+}
+
+#[test]
+#[should_panic(expected = "unmasked")]
+fn ldmxcsr_rejects_unmasked_exceptions() {
+    ldmxcsr(0x1F00);
 }
