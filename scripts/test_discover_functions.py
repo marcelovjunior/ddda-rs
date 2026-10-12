@@ -99,6 +99,34 @@ class DiscoveryTests(unittest.TestCase):
         p.word_at(0x5100, 0x1300)
         self.assertEqual(list(d.vtables(p, m, set(), known={0x1300}, stores={0x5100: {0x1400}})), [])
 
+    def test_l54_callback_table_and_runtime_evidence(self):
+        # known 0x1100; 0x1200 and 0x1300 after int3 padding; a callback table
+        # [0x1100, 0x1200, 0, 0x1300] at 0x3100 (a NULL slot is an unused callback)
+        p = FakeImage(); m = d.decoder()
+        p.put(0x1100, b'\xc3')
+        for a in (0x1200, 0x1300, 0x1400):
+            p.put(a - 8, b'\xcc' * 8); p.put(a, b'\x31\xc0\xc3')
+        for k, v in enumerate((0x1100, 0x1200, 0, 0x1300)):
+            p.word_at(0x3100 + 4 * k, v)
+        p.word_at(0x3110, 0x7777)  # data ends the run
+        found = lambda: {v: ev['table'] for v, ev in d.callback_tables(p, m, {0x1100})}
+        self.assertEqual(found(), {})  # nothing refers to the table
+        p.word_at(0x5000, 0x3100)
+        self.assertEqual(found(), {0x1200: 0x3100, 0x1300: 0x3100})
+        # a member that is no function boundary: the run is not a table
+        p.put(0x12F8, b'\x90\x90\x90\x90\xb0\x0b\x83\xc0'); p.put(0x1300, b'\x04\x50\xc3')
+        self.assertEqual(found(), {})
+        # a table in writable data counts too, and says so
+        p.word_at(0x5100, 0x1100); p.word_at(0x5104, 0x1400); p.word_at(0x3200, 0x5100)
+        self.assertEqual([(v, ev.get('writable')) for v, ev in d.callback_tables(p, m, {0x1100})], [(0x1400, True)])
+        self.assertTrue(d.text_like(0x00706873))  # "shp\0"
+        self.assertFalse(d.text_like(0x01325580))
+        # runtime evidence: an indirect-call target the emulator saw
+        with patch.object(d, 'initializers', return_value=[]):
+            rows, _ = d.discover(p, {0x1100}, [], runtime=[(0x1400, dict(source='runtime', caller=0x1100,
+                                                                             instruction=0x1100))])
+        self.assertEqual([(r['address'], r['sources']) for r in rows], [('0x00001400', 'runtime')])
+
     def test_msvc_requires_matching_hierarchy(self):
         p = FakeImage();m=d.decoder();p.put(0x1200,b'\xc3')
         for a,v in [(0x3100,0x3200),(0x3104,0x1200),(0x320C,0x3500),(0x3210,0x3300),
