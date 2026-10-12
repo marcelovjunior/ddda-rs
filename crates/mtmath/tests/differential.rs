@@ -61,7 +61,9 @@ fn replay_lift_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
 /// vectors_math.py CALLOUTS): at the callee's entry (return address
 /// pushed) every general register and all xmm lanes must be as the
 /// original had them at its call; the callee's return state (registers,
-/// xmm, stack window) is then restored.
+/// xmm, stack window) is then restored. The stack window must be the
+/// original's at the call too: the restore would hide a wrong push or
+/// spill before it.
 fn replay_edge_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
     let calls = Rc::new(RefCell::new(c["calls"].as_array().cloned().unwrap_or_default()
         .into_iter().collect::<VecDeque<Value>>()));
@@ -75,6 +77,15 @@ fn replay_edge_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
         assert_eq!(at_call, regs(&ev["in"]["regs"]), "registers at the call");
         let xmm: [[u32; 4]; 8] = std::array::from_fn(|k| std::array::from_fn(|l| u(&ev["in"]["xmm"][k][l])));
         assert_eq!(cpu.xmm, xmm, "xmm at the call");
+        // the stack window as at the call (recorded before the return
+        // address was pushed, so that slot is skipped)
+        let entry_stack: Vec<u8> = hex_bytes(ev["in"]["stack"].as_str().unwrap()).collect();
+        for (k, want) in entry_stack.iter().enumerate() {
+            let a = base + k as u32;
+            if a.wrapping_sub(cpu.esp) >= 4 {
+                assert_eq!(m.u8(a), *want, "stack byte {a:#x} at the call to {target:#x}");
+            }
+        }
         let o = &ev["out"];
         let r = regs(&o["regs"]);
         [cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi] = r;

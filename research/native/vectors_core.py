@@ -19,8 +19,9 @@ windows on entry and exit.
 
 Callees:
 - virtual functions and imports point at tiny stubs in scratch (`ret 4`,
-  `mov eax, X; ret 8`); each call is recorded with the machine at the
-  stub's entry and at its return, and the Rust test replays it;
+  `mov eax, X; ret 8`); each call is recorded with the machine and the
+  stack window at the stub's entry and at its return; the Rust test checks
+  the entry state and replays the return;
 - the platform models (node pool, memset, memcpy) run as in
   harness.run_sparse, allocating from mem::HEAP_BASE as the Rust models do;
 - ported callees run as the original (the replay runs their ports).
@@ -188,7 +189,7 @@ def run(addr, regs, xmm, scratch, args, globals_):
             return
         if STUBS <= a < STUBS + STUBS_LEN:
             back = struct.unpack("<I", uc_.mem_read(esp, 4))[0]
-            calls.append({"target": a, "in": machine()})
+            calls.append({"target": a, "in": {**machine(), "stack": bytes(uc_.mem_read(*stack_window)).hex()}})
             inside.append((back, esp))
             return
         if a in MODELS:

@@ -45,7 +45,7 @@ from its records) name the timing fields [exe]:
 | `mTimer` | +0x20 | u64 | elapsed milliseconds (QPC-based) |
 | `mFrameTimer` | +0x30 | u32 | `mTimer` × `mFps` / 1000: elapsed frames at the base rate |
 | `mFps` | +0x38 | f32 | the **base rate**: **30.0 in the game** (`sBbsRpgMain`'s constructor stores it at 0x0041CEC9 over `sMain`'s default 60.0), so one unit of `mDeltaTime` is 1/30 s |
-| `mMaxFps` | +0x3c | f32 | the **cap**, 3000.0 at construction; the `MaxFPS` option sets it (range 30-1000) |
+| `mMaxFps` | +0x3c | f32 | the **cap**, 3000.0 at construction; the `MaxFPS` option sets it (range 30-999) |
 | `mFrameWait` | +0x40 | bool | fixed-step mode (accessor 0x00DBD0A0) |
 | `mActualFps` | +0x44 | f32 | measured rate |
 | `mPause` | +0x6c | bool | capture/benchmark pause (section 3) |
@@ -58,7 +58,7 @@ from its records) name the timing fields [exe]:
 
 Defaults come from the constructor (0x00DBE810) [exe]. It sets `+0x48` = 30.0
 (not yet named), registers the application option **`MaxFPS`**
-(0x0142A8D0, f32, range 30.0-1000.0, setter 0x00F5BB60) and the job-thread
+(0x0142A8D0, f32, range 30.0-999.0 (`0x4479C000`); getter 0x00F5BB60, setter 0x00DBE120) and the job-thread
 count option. `FrameRate`, `Time` and `System` are property groups. `ResetFrame`
 (0x00DBD710) and `ResetTimer` (0x00DBE210) are property actions.
 
@@ -94,7 +94,7 @@ not yet checked live; the per-system audit is [FRAME_RATE.md](FRAME_RATE.md), L3
   `mDeltaTime` (section 3), and the saved clock uses `mDeltaTime / mFps`
   (section 6.1).
 - The rate is capped only by `mMaxFps`. The user-facing `MaxFPS` option
-  allows 30-1000, and RECORDINGS.md measured 150 live.
+  allows 30-999, and RECORDINGS.md measured 150 live.
 - In the rebuild, an unlocked or higher frame rate is a data change:
   `mMaxFps` (and `mFrameWait` = 0). It is not a code change. The base
   rate `mFps` = 30 only sets the unit of `mDeltaTime`. Changing it would

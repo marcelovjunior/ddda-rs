@@ -6,10 +6,12 @@ use std::arch::{asm, x86_64::__m128i};
 /// Intel SDM SFENCE: order prior stores before subsequent stores.
 /// Keep a compiler memory barrier and execute the actual host instruction;
 /// guest Mem writes are synchronous, but this is not a concurrency model.
+#[inline]
 pub fn sfence() {
     unsafe { asm!("sfence", options(nostack, preserves_flags)); }
 }
 
+#[inline]
 pub fn comisd(a: [u32; 4], b: [u32; 4]) -> super::Flags {
     let x = a[0] as u64 | ((a[1] as u64) << 32);
     let y = b[0] as u64 | ((b[1] as u64) << 32);
@@ -99,6 +101,7 @@ macro_rules! to_int {
 }
 to_int!(cvtss2si, cvtsd2si, cvttsd2si);
 
+#[inline]
 pub fn cvtsi2sd(a: [u32; 4], b: u32) -> [u32; 4] {
     let mut a: __m128i = unsafe { std::mem::transmute(a) };
     unsafe {

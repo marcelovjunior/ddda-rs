@@ -180,3 +180,29 @@ fn the_displacement_map_sampler_and_implicit_objects() {
     assert_eq!(refs(chain), None);
     assert_eq!(com(&mut s, dev, 15, &[]), 1, "GetNumberOfSwapChains");
 }
+
+/// Clear hands the backend the viewport, the scissor rectangle when the
+/// scissor test is on, and SRGBWRITEENABLE (D3D9's Clear honours them; brief
+/// L29, ddgpu tests/targets.rs).
+#[test]
+fn a_clear_carries_the_viewport_scissor_and_srgb_write() {
+    let Some((mut s, dev, _)) = device_session() else { return };
+    let (vp, rect) = (DATA, DATA + 0x40);
+    for (k, v) in [10u32, 20, 300, 200, 0, 1f32.to_bits()].into_iter().enumerate() {
+        s.mem.set_u32(vp + 4 * k as u32, v);
+    }
+    for (k, v) in [5i32, 6, 100, 120].into_iter().enumerate() {
+        s.mem.set_u32(rect + 4 * k as u32, v as u32);
+    }
+    com(&mut s, dev, 47, &[vp]); // SetViewport
+    com(&mut s, dev, 75, &[rect]); // SetScissorRect
+    assert_eq!(com(&mut s, dev, 43, &[0, 0, 1, 0xFF00_00FF, 1f32.to_bits(), 0]), 0, "Clear, test off");
+    com(&mut s, dev, 57, &[174, 1]); // SCISSORTESTENABLE
+    com(&mut s, dev, 57, &[194, 1]); // SRGBWRITEENABLE
+    assert_eq!(com(&mut s, dev, 43, &[0, 0, 1, 0xFF00_00FF, 1f32.to_bits(), 0]), 0, "Clear, test on");
+    let clears = recorded(|r| r.clears.clone()).unwrap();
+    let (a, b) = (&clears[clears.len() - 2], &clears[clears.len() - 1]);
+    assert_eq!(a.viewport[..4], [10, 20, 300, 200]);
+    assert_eq!((a.scissor, a.srgb), (None, false));
+    assert_eq!((b.scissor, b.srgb), (Some([5, 6, 100, 120]), true));
+}
