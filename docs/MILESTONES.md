@@ -1487,3 +1487,14 @@ opening (codex-31), route perf (codex-29).
   apart from mock arguments. Boot stop 15 (0x00DC7D00, a sound-object
   reset) is among its 10 functions.
 - **One next action:** claude-2's boot past stop 15.
+
+## Batch 2026-10-12 (train 10: boot stop 16; the boot runs on)
+
+- **Train 10 landed on main 3f3ca505: 59,293 of 59,440 verified (99.8%).**
+  Codex's recipe records the sound engine reset (boot stop 16,
+  0x00DC8270, ~100K instructions; its budget comes from the loop proof).
+- With it, `Session::start` no longer stopped within the runtime test:
+  the boot now runs on past stop 16. `Session::start_through` ends after
+  a named CRT step, and the start-up test now asserts all eight CRT steps.
+- **One next action:** claude-2 runs the boot with a wall-clock limit and
+  reports where it stops or what it loops on.
