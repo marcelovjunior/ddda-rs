@@ -165,6 +165,7 @@ impl GuestLock {
     fn release_locked(&self, s: &mut LockState) {
         debug_assert!(s.held && s.holder == current_tid());
         s.held = false;
+        stats::released();
         self.cv.notify_all();
     }
 
@@ -172,10 +173,14 @@ impl GuestLock {
     /// with `depth` nested entries.
     fn acquire_locked<'a>(&'a self, mut s: std::sync::MutexGuard<'a, LockState>, depth: u32) {
         let me = current_tid();
+        let asked = stats::on().then(Instant::now);
         s.waiting += 1;
         signal_preempt(&s);
         while s.held || s.suspended.get(&me).copied().unwrap_or(0) > 0 {
             s = self.cv.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+        if let Some(t) = asked {
+            stats::acquired(t);
         }
         s.waiting -= 1;
         signal_preempt(&s);
@@ -185,6 +190,162 @@ impl GuestLock {
         s.acquisitions += 1;
         SLICE_START.with(|t| t.set(Some(Instant::now())));
     }
+}
+
+/// Run host-only work without the guest lock (parallel mode): work that
+/// touches neither the runtime's state nor anything the guest can see
+/// (GPU submission and presentation, reads from host files into host
+/// buffers). Only the outermost service gives the lock up (a nested one may
+/// run inside an outer service that holds runtime state borrowed), and `f`
+/// must not borrow runtime state itself. In the serial mode, or nested,
+/// `f` just runs.
+pub(crate) fn unlocked<R>(f: impl FnOnce() -> R) -> R {
+    let rt = runtime::current();
+    if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
+        return f();
+    }
+    {
+        let mut s = rt.lock.lock();
+        if !(s.held && s.holder == current_tid() && s.depth == 1) {
+            drop(s);
+            return f();
+        }
+        s.depth = 0;
+        rt.lock.release_locked(&mut s);
+    }
+    struct Again(Arc<Runtime>);
+    impl Drop for Again {
+        fn drop(&mut self) {
+            let s = self.0.lock.lock();
+            self.0.lock.acquire_locked(s, 1);
+            adopt_context(&self.0);
+        }
+    }
+    let _again = Again(rt);
+    f()
+}
+
+/// Per-service guest-lock statistics (L64), on with `DDRUNTIME_LOCK_STATS=1`:
+/// for each service, its calls, how long it held the guest lock and how long
+/// it waited to take it (lock contention; not the time a wait function
+/// spends waiting for its object). Nested services count in their callers
+/// too. [`lock_stats`] formats them; ddplay and the drivers print them at
+/// exit.
+pub(crate) mod stats {
+    use std::cell::Cell;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    #[derive(Default, Clone, Copy)]
+    pub(crate) struct Stat {
+        pub calls: u64,
+        pub hold: Duration,
+        pub max_hold: Duration,
+        pub wait: Duration,
+        pub max_wait: Duration,
+    }
+
+    /// 0: not read yet, 1: off, 2: on.
+    static ON: AtomicU8 = AtomicU8::new(0);
+
+    pub(crate) fn on() -> bool {
+        match ON.load(Ordering::Relaxed) {
+            0 => {
+                let on = std::env::var("DDRUNTIME_LOCK_STATS").is_ok_and(|v| v == "1");
+                ON.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+                on
+            }
+            v => v == 2,
+        }
+    }
+
+    /// Turn the statistics on, from zero (tests).
+    #[cfg(test)]
+    pub(crate) fn force_on() {
+        ON.store(2, Ordering::Relaxed);
+        table().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    pub(crate) fn table() -> &'static Mutex<HashMap<String, Stat>> {
+        static T: OnceLock<Mutex<HashMap<String, Stat>>> = OnceLock::new();
+        T.get_or_init(Default::default)
+    }
+
+    thread_local! {
+        static HELD_SINCE: Cell<Option<Instant>> = const { Cell::new(None) };
+        static HELD: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+        static WAITED: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    }
+
+    /// This thread took the lock after asking at `asked`.
+    pub(super) fn acquired(asked: Instant) {
+        let now = Instant::now();
+        WAITED.with(|w| w.set(w.get() + (now - asked)));
+        HELD_SINCE.with(|h| h.set(Some(now)));
+    }
+
+    /// This thread gave the lock up.
+    pub(super) fn released() {
+        if let Some(t) = HELD_SINCE.with(|h| h.take()) {
+            HELD.with(|d| d.set(d.get() + t.elapsed()));
+        }
+    }
+
+    /// (held, waited) by this thread so far.
+    pub(crate) fn totals() -> (Duration, Duration) {
+        let held = HELD.with(Cell::get) + HELD_SINCE.with(Cell::get).map_or(Duration::ZERO, |t| t.elapsed());
+        (held, WAITED.with(Cell::get))
+    }
+
+    /// Add one service call that started at `before` (totals()).
+    pub(crate) fn record(name: String, before: (Duration, Duration)) {
+        let (held, waited) = totals();
+        let (hold, wait) = (held - before.0, waited - before.1);
+        let mut t = table().lock().unwrap_or_else(|e| e.into_inner());
+        let s = t.entry(name).or_default();
+        s.calls += 1;
+        s.hold += hold;
+        s.max_hold = s.max_hold.max(hold);
+        s.wait += wait;
+        s.max_wait = s.max_wait.max(wait);
+    }
+}
+
+/// The lock statistics so far (`DDRUNTIME_LOCK_STATS=1`), the services
+/// holding the lock longest first; None when they are off.
+pub fn lock_stats() -> Option<String> {
+    if !stats::on() {
+        return None;
+    }
+    let t = stats::table().lock().unwrap_or_else(|e| e.into_inner());
+    let mut rows: Vec<_> = t.iter().collect();
+    rows.sort_by(|a, b| b.1.hold.cmp(&a.1.hold));
+    let ms = |d: Duration| d.as_secs_f64() * 1e3;
+    let mut out = String::from("guest lock by service: calls, held ms (total, mean, max), waited ms (total, mean, max)
+");
+    for (name, s) in rows {
+        let n = s.calls.max(1) as f64;
+        out += &format!("{:>9} {:>10.1} {:>8.3} {:>8.2}  {:>10.1} {:>8.3} {:>8.2}  {name}
+",
+                        s.calls, ms(s.hold), ms(s.hold) / n, ms(s.max_hold), ms(s.wait), ms(s.wait) / n, ms(s.max_wait));
+    }
+    Some(out)
+}
+
+/// Whether this host thread holds the guest lock.
+#[cfg(test)]
+pub(crate) fn holds_lock() -> bool {
+    let rt = runtime::current();
+    let s = rt.lock.lock();
+    s.held && s.holder == current_tid()
+}
+
+/// Whether this thread is running a service (crate::dispatch).
+#[cfg(test)]
+pub(crate) fn in_service() -> bool {
+    IN_SERVICE.with(Cell::get) > 0
 }
 
 /// Holds the guest lock for one service call (parallel mode); in the
@@ -1019,3 +1180,128 @@ pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
     ("KERNEL32.dll", "Sleep", sleep),
     ("KERNEL32.dll", "SleepEx", sleep_ex),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dispatch::{Binding, Registry};
+    use crate::memory::{GuestMemory, READ, WRITE};
+    use d3d9cmd::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A backend whose Present takes `PRESENT` (a display waiting for its
+    /// refresh); everything else does nothing.
+    struct Slow;
+    const PRESENT: Duration = Duration::from_millis(4);
+    impl GraphicsBackend for Slow {
+        fn upload(&mut self, _: Upload) {}
+        fn draw(&mut self, _: &DrawCall) {}
+        fn clear(&mut self, _: &ClearCall) {}
+        fn present(&mut self, _: &Target) {
+            std::thread::sleep(PRESENT);
+        }
+        fn copy(&mut self, _: &CopyCall) {}
+        fn fill(&mut self, _: &FillCall) {}
+        fn read_back(&mut self, _: &Target) -> Option<Vec<u8>> {
+            None
+        }
+        fn query_begin(&mut self, _: u32) {}
+        fn query_end(&mut self, _: u32) {}
+        fn query_result(&mut self, _: u32) -> Option<u64> {
+            None
+        }
+        fn gamma(&mut self, _: Option<&GammaRamp>) {}
+        fn release(&mut self, _: u32) {}
+    }
+
+    fn target() -> Target {
+        Target { surface: 1, format: 21, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 }
+    }
+    /// Present as before L64: the backend's work under the guest lock.
+    fn present_locked(m: &mut dyn Mem, c: &mut Cpu) {
+        crate::d3d9draw::backend(|b| b.present(&target()));
+        crate::services::ret(m, c, 0);
+    }
+    /// Present as d3d9draw::present_back_buffer does it now.
+    fn present_unlocked(m: &mut dyn Mem, c: &mut Cpu) {
+        crate::d3d9draw::backend_unlocked(|b| b.present(&target()));
+        crate::services::ret(m, c, 0);
+    }
+    fn noop(m: &mut dyn Mem, c: &mut Cpu) {
+        crate::services::ret(m, c, 0);
+    }
+
+    /// One guest thread calls the service at `target` `calls` times, or
+    /// (calls == 0) until `done`, pausing `pause` between calls; the
+    /// duration of each call.
+    fn guest_thread(rt: Arc<Runtime>, r: Arc<Registry>, tid: u32, target: u32, calls: u32,
+                    done: Arc<AtomicBool>, pause: Duration) -> std::thread::JoinHandle<Vec<Duration>> {
+        std::thread::spawn(move || {
+            runtime::enter(rt);
+            CURRENT_TID.with(|c| c.set(tid));
+            let mut m = GuestMemory::new();
+            m.map(0x10000, 0x10000, READ | WRITE).unwrap();
+            let mut c = Cpu { esp: 0x1F000, ..Cpu::default() };
+            let Some(Binding::Service(f)) = r.get(target) else { unreachable!() };
+            let mut took = Vec::new();
+            while if calls == 0 { !done.load(Ordering::SeqCst) } else { took.len() < calls as usize } {
+                c.esp = 0x1F000;
+                m.set_u32(c.esp, 0xFFFF_0000);
+                let t = Instant::now();
+                r.run_service(f, &mut m, &mut c, target);
+                took.push(t.elapsed());
+                std::thread::sleep(pause);
+            }
+            done.store(true, Ordering::SeqCst);
+            took
+        })
+    }
+
+    /// Thread 1 presents `frames` times with `present`; thread 2 calls a
+    /// cheap service meanwhile. Thread 2's mean and longest call (µs) and
+    /// its number of calls.
+    fn scenario(present: fn(&mut dyn Mem, &mut Cpu), frames: u32) -> (f64, f64, usize) {
+        let rt = Arc::new(Runtime::default());
+        runtime::enter(rt.clone());
+        set_parallel(true);
+        crate::d3d9draw::set_backend(Box::new(Slow));
+        let mut r = Registry::new();
+        r.insert(0x7000_0010, Binding::Service(present)).unwrap();
+        r.name(0x7000_0010, "TEST.dll!Present");
+        r.insert(0x7000_0020, Binding::Service(noop)).unwrap();
+        r.name(0x7000_0020, "TEST.dll!Noop");
+        let r = Arc::new(r);
+        let done = Arc::new(AtomicBool::new(false));
+        // guest code runs without the lock in parallel mode
+        without_lock(|| {
+            let presenter = guest_thread(rt.clone(), r.clone(), 0x3000, 0x7000_0010, frames, done.clone(), Duration::ZERO);
+            let other = guest_thread(rt.clone(), r.clone(), 0x3004, 0x7000_0020, 0, done.clone(), Duration::from_micros(200));
+            presenter.join().unwrap();
+            let took = other.join().unwrap();
+            let us = |d: &Duration| d.as_secs_f64() * 1e6;
+            let mean = took.iter().map(us).sum::<f64>() / took.len().max(1) as f64;
+            let max = took.iter().map(us).fold(0.0, f64::max);
+            (mean, max, took.len())
+        })
+    }
+
+    /// L64 B: Present's backend work (the display wait) no longer holds the
+    /// guest lock in parallel mode, so the other threads' services do not
+    /// wait for it. The numbers are in the test output
+    /// (`cargo test -p ddruntime --no-default-features --lib present_ -- --nocapture`).
+    #[test]
+    fn present_runs_without_the_guest_lock_in_parallel_mode() {
+        stats::force_on();
+        let before = scenario(present_locked, 50);
+        let before_stats = lock_stats().unwrap();
+        stats::force_on();
+        let after = scenario(present_unlocked, 50);
+        let after_stats = lock_stats().unwrap();
+        eprintln!("another thread's service call while one presents (4 ms per Present, 50 Presents):");
+        eprintln!("  before (Present under the lock): mean {:8.1} us, max {:8.1} us, {} calls", before.0, before.1, before.2);
+        eprintln!("  after  (Present unlocked):       mean {:8.1} us, max {:8.1} us, {} calls", after.0, after.1, after.2);
+        eprintln!("before, {before_stats}after, {after_stats}");
+        assert!(after.0 * 4.0 < before.0, "the other thread no longer waits for Present: {before:?} -> {after:?}");
+        assert!(after.2 > before.2, "and gets more calls done: {before:?} -> {after:?}");
+    }
+}

@@ -195,8 +195,11 @@ pub(crate) fn run(registry: &crate::dispatch::Registry, m: &mut dyn Mem, cpu: &m
             let slot = cpu.esp;
             let flow = if let Some(Binding::Service(f)) = registry.get(ip) {
                 let target = m.u32(slot);
-                crate::threads::maybe_yield();
-                f(m, cpu);
+                // L64: as Registry::call runs it (in parallel mode with the
+                // guest lock; it had run without, so file services of the
+                // CRT's stepped I/O functions raced other threads' services
+                // on the runtime's cells: "RefCell already borrowed")
+                registry.run_service(f, m, cpu, ip);
                 Flow::Return(target)
             } else if let Some(step) = registry.instruction(ip) {
                 match instruction(m, cpu, ip, |m, cpu| step(m, cpu, ip)) {
@@ -316,5 +319,68 @@ impl Executor {
             }
         }
         Err(Stop::Budget { ip })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::dispatch::{Binding, Registry};
+    use crate::memory::{GuestMemory, READ, WRITE};
+    use ddnative_base::{mem::Mem, x86::Cpu};
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    const ENTRY: u32 = 0x5000;
+    const SERVICE: u32 = 0x7000_0100;
+    const RETURN: u32 = 0xFFFF_0000;
+    /// What the service saw: bit 0 the guest lock held, bit 1 in a service.
+    static SEEN: AtomicU32 = AtomicU32::new(0);
+
+    fn service(m: &mut dyn Mem, c: &mut Cpu) {
+        let seen = crate::threads::holds_lock() as u32 | (crate::threads::in_service() as u32) << 1;
+        SEEN.store(seen | 4, Ordering::SeqCst);
+        crate::services::ret(m, c, 0);
+    }
+    /// A stepped function: `call SERVICE` at ENTRY, `ret` after it.
+    fn lookup(ip: u32) -> Option<ddnative_base::execution::Step> {
+        match ip {
+            ENTRY => Some(|m, c, _| {
+                c.esp -= 4;
+                m.set_u32(c.esp, ENTRY + 5);
+                super::Flow::Next(SERVICE)
+            }),
+            0x5005 => Some(|m, c, _| {
+                let t = m.u32(c.esp);
+                c.esp += 4;
+                super::Flow::Return(t)
+            }),
+            _ => None,
+        }
+    }
+
+    /// L64: a service called from a stepped function (the CRT's SEH-scoped
+    /// I/O functions have instruction steps) runs as Registry::call runs
+    /// one. In parallel mode translated code runs without the guest lock;
+    /// the step executor called services directly, so they ran without it
+    /// and raced other threads' services on the runtime's GuestCells
+    /// ("guest thread N stopped: RefCell already borrowed").
+    #[test]
+    fn a_service_called_from_steps_holds_the_guest_lock_in_parallel_mode() {
+        crate::runtime::enter(std::sync::Arc::new(crate::runtime::Runtime::default()));
+        crate::threads::set_parallel(true);
+        let mut m = GuestMemory::new();
+        m.map(0x10000, 0x10000, READ | WRITE).unwrap();
+        let mut r = Registry::new();
+        r.set_instruction_lookup(lookup);
+        r.insert(SERVICE, Binding::Service(service)).unwrap();
+        let mut c = Cpu { esp: 0x1F000, ..Cpu::default() };
+        m.set_u32(c.esp, RETURN);
+        // translated code in parallel mode: outside any service, unlocked
+        crate::threads::without_lock(|| {
+            assert!(!crate::threads::holds_lock());
+            r.call(&mut m, &mut c, ENTRY).unwrap();
+            assert!(!crate::threads::holds_lock(), "the service gave the lock back");
+        });
+        assert_eq!(c.esp, 0x1F004, "returned through the ret step (it pops the return address)");
+        assert_eq!(SEEN.load(Ordering::SeqCst), 7, "ran holding the guest lock, inside a service scope");
     }
 }

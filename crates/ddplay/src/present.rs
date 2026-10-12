@@ -223,8 +223,9 @@ impl Sink {
 impl PresentSink for Sink {
     fn present(&mut self, frame: &Presented) {
         if let Some(follow) = self.follow.as_mut() {
-            // the session's state is this (guest) thread's
-            let p = ddruntime::d3d9dev::presentation();
+            // read by the runtime under the guest lock for this Present
+            // (the sink runs without it in parallel mode)
+            let p = ddruntime::d3d9dev::presented();
             if p != self.last {
                 self.last = p;
                 if let Some(p) = p {

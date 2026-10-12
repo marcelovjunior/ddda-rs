@@ -33,6 +33,10 @@ fn main() {
     for (tid, fault) in ddruntime::threads::faults() {
         println!("guest thread {tid:#x} ended with: {fault}");
     }
+    // DDRUNTIME_LOCK_STATS=1: the guest lock per service (L64)
+    if let Some(stats) = ddruntime::threads::lock_stats() {
+        print!("{stats}");
+    }
     // guest threads the game started keep running on host threads; the
     // report is complete, so end the process with them
     use std::io::Write;

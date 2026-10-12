@@ -55,7 +55,10 @@ pub struct Runtime {
     pub(crate) d3d: GuestCell<crate::d3d9dev::Objects>,
     /// The display the adapter answers from (crate::d3d9::display).
     pub(crate) display: GuestCell<Option<crate::d3d9::Display>>,
-    pub(crate) graphics: GuestCell<crate::d3d9draw::Graphics>,
+    /// The graphics backend, behind its own lock (not a GuestCell): draws
+    /// and Presents run their backend work without the guest lock in
+    /// parallel mode (crate::d3d9draw::backend_unlocked, L64).
+    pub(crate) graphics: std::sync::Mutex<crate::d3d9draw::Graphics>,
 }
 
 thread_local! {
