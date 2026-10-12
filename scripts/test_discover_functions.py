@@ -79,6 +79,12 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(list(d.vtables(p, m, set(), stores={0x3100: {0x1400}})), [])  # no known slot
         r = list(d.vtables(p, m, set(), known={0x1310}, stores={0x3100: {0x1400}}))
         self.assertEqual([a for a, _ in r], [0x1300, 0x1310, 0x1320])               # cut at data
+        # L45: a slot naming code mid-instruction (text after the table) ends it
+        p.put(0x1328, b'\x90\x90\x90\x90\xb0\x0b\x83\xc0\x04\x50\xc3')
+        p.word_at(0x3100+4*3, 0x1330)
+        r = list(d.vtables(p, m, set(), known={0x1310}, stores={0x3100: {0x1400}}))
+        self.assertEqual([a for a, _ in r], [0x1300, 0x1310, 0x1320])
+        p.word_at(0x3100+4*3, 0x5000)
         self.assertEqual(r[0][1]['rtti'], 'none')
         self.assertEqual(r[0][1]['stores'], [0x1400])
         # A secondary vptr store (object + 4) anchors as well; the MT rule's

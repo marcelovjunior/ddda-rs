@@ -218,6 +218,10 @@ def vtables(pe, md, roots, known=frozenset(), stores=None, vptr_stores=None):
                     break
             if not code_entry(pe, md, a):
                 break
+            # L45: text after a table (the extension tags "xml", "pcf" or the
+            # UTF-16 "config" after 0x01407180) names code mid-instruction
+            if a not in known and not function_boundary(pe, md, a):
+                break
             yield a, dict(source='vtable', table=start, slot=slot, index=k, **tables[start])
 
 
