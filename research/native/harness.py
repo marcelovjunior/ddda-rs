@@ -1327,17 +1327,34 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if known_pop is not None:
             pop = known_pop
         elif not direct and i.mnemonic == "call":
-            after = i.address + i.size
-            for _ in range(16):
+            # Caller cleanup of this call's arguments: right after it, or (L28)
+            # merged into a later `add esp` past pushes and direct calls known
+            # to leave their arguments (0x00E0E495: push ebx; push edi; call
+            # eax; push x3; call sprintf; add esp, 0x10 -> 4 bytes are ours).
+            after, later = i.address + i.size, 0
+            for _ in range(24):
                 if not is_own(after):
                     break
                 cleanup = next(dmd.disasm(code(after, 15), after, count=1), None)
-                if (cleanup is not None and cleanup.mnemonic == "add"
+                if cleanup is None:
+                    break
+                writes_esp = any(cleanup.reg_name(r) == 'esp' for r in cleanup.regs_access()[1])
+                if (cleanup.mnemonic == "add"
                         and cleanup.op_str.startswith("esp, ") and cleanup.operands[1].type == 2):
-                    pop = max(0, pop - max(0, cleanup.operands[1].imm))
-                elif (cleanup is not None and cleanup.mnemonic == 'pop'
+                    pop = max(0, pop - max(0, cleanup.operands[1].imm - later))
+                    if later:
+                        break
+                elif (not later and cleanup.mnemonic == 'pop'
                       and cleanup.op_str in ('eax','ecx','edx')):
                     pop = max(0, pop - 4)
+                elif cleanup.mnemonic == 'push':
+                    later += 4
+                elif (later and cleanup.mnemonic == 'call' and cleanup.operands[0].type == 2
+                      and (cleanup.operands[0].imm & 0xffffffff) not in noreturn_targets
+                      and static_pop(cleanup.operands[0].imm & 0xffffffff) == 0):
+                    pass  # a callee that leaves its arguments to us
+                elif later and not writes_esp and not cleanup.mnemonic.startswith('j')                         and cleanup.mnemonic not in ('call', 'ret', 'retn', 'repz ret', 'int3', 'ud2'):
+                    pass
                 else:
                     break
                 after += cleanup.size

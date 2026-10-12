@@ -210,4 +210,14 @@ class FrameContractTests(unittest.TestCase):
         self.assertEqual(self.sites('83ec08 85c9 7409 e8f2000000 83c408 c3 c7042400000000 e8e5000000 83c408 c3'),set())
 
 
+    def test_merged_caller_cleanup_after_an_indirect_call(self):
+        # mov eax,[ecx]; push ebx; push edi; call eax; push eax; push 1; push ecx;
+        # call cdecl; add esp,0x10; ret  -> the indirect callee pops 4, not 8
+        code=bytes.fromhex('8b01 53 57 ffd0 50 6a01 51 e8f1000000 83c410 c3'.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=0):
+            c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[4,0])
+
+
 if __name__=='__main__':unittest.main()
