@@ -53,6 +53,8 @@ pub struct Runtime {
     pub(crate) steam: GuestCell<crate::steam::Steam>,
     pub(crate) desktop: GuestCell<crate::user32::Desktop>,
     pub(crate) d3d: GuestCell<crate::d3d9dev::Objects>,
+    /// The display the adapter answers from (crate::d3d9::display).
+    pub(crate) display: GuestCell<Option<crate::d3d9::Display>>,
     pub(crate) graphics: GuestCell<crate::d3d9draw::Graphics>,
 }
 

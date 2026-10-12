@@ -185,6 +185,38 @@ pub(crate) struct Audio {
     /// None when it cannot run (QueryInterface failed, or its code is not
     /// lifted yet).
     xapos: BTreeMap<(u32, usize, u32), Option<u32>>,
+    /// A clock the session advances itself ([`use_test_clock`]); None:
+    /// real time.
+    test_clock: Option<Duration>,
+    /// With the test clock: the quanta each running worker has processed.
+    test_quanta: BTreeMap<u32, u64>,
+}
+
+/// Run every engine created from now on in this session on a clock the
+/// caller advances ([`advance_test_clock`]) instead of real time, so that
+/// the quanta processed (and the callbacks and samples they produce) are
+/// exact. For tests; the game always runs on real time.
+pub fn use_test_clock() {
+    state(|s| s.test_clock = Some(Duration::ZERO));
+}
+
+/// Advance the test clock and wake the audio workers, which process every
+/// quantum that has now elapsed.
+pub fn advance_test_clock(by: Duration) {
+    state(|s| {
+        let c = s.test_clock.as_mut().expect("advance_test_clock without use_test_clock");
+        *c += by;
+    });
+    crate::threads::signal();
+}
+
+/// Whether every audio worker has processed all quanta the test clock has
+/// reached.
+pub fn test_clock_settled() -> bool {
+    state(|s| {
+        let target = s.test_clock.map_or(0, |c| (c.as_nanos() / QUANTUM.as_nanos()) as u64);
+        s.test_quanta.values().all(|&q| q >= target)
+    })
 }
 
 const ENGINE_NAMES: &[&str] = &[
@@ -530,6 +562,10 @@ fn start_worker(m: &mut dyn Mem, c: &mut Cpu, engine: u32) {
             return None;
         }
         e.worker = true;
+        if let Some(clock) = s.test_clock {
+            // counted from the start, before the worker thread first runs
+            s.test_quanta.insert(engine, (clock.as_nanos() / QUANTUM.as_nanos()) as u64);
+        }
         Some(s.worker_entry)
     });
     if let Some(start) = start {
@@ -547,6 +583,9 @@ fn start_worker(m: &mut dyn Mem, c: &mut Cpu, engine: u32) {
 }
 fn worker(m: &mut dyn Mem, c: &mut Cpu) {
     let engine = arg(m, c, 0);
+    if state(|s| s.test_clock.is_some()) {
+        return test_worker(m, c, engine);
+    }
     let mut next = Instant::now() + QUANTUM;
     loop {
         crate::threads::block(Some(next));
@@ -566,6 +605,30 @@ fn worker(m: &mut dyn Mem, c: &mut Cpu) {
             }
         }
     }
+    c.eax = 0;
+    ret(m, c, 4);
+}
+
+/// The worker on the test clock: the quanta come from the clock the test
+/// advances, one at a time as on real time; between advances it waits
+/// (and rechecks the engine every quantum of real time, so it ends when
+/// the engine goes).
+fn test_worker(m: &mut dyn Mem, c: &mut Cpu, engine: u32) {
+    let mut done = state(|s| s.test_quanta[&engine]);
+    loop {
+        if !state(|s| s.engines.contains_key(&engine)) {
+            break;
+        }
+        let target = state(|s| (s.test_clock.unwrap().as_nanos() / QUANTUM.as_nanos()) as u64);
+        if done < target {
+            process(m, c, engine);
+            done += 1;
+            state(|s| s.test_quanta.insert(engine, done));
+            continue;
+        }
+        crate::threads::block(Some(Instant::now() + QUANTUM));
+    }
+    state(|s| s.test_quanta.remove(&engine));
     c.eax = 0;
     ret(m, c, 4);
 }

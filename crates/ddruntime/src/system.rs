@@ -49,10 +49,6 @@ fn set_error(e: u32) {
     with_state(|s| s.last_error = e);
 }
 
-fn caller(m: &dyn Mem, cpu: &Cpu) -> u32 {
-    m.u32(cpu.esp)
-}
-
 // --- time ---------------------------------------------------------------
 
 /// The runtime's time zone: Coordinated Universal Time, fixed, so the
@@ -611,37 +607,18 @@ pub fn verify_version_info_a(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 // --- debugging and exceptions ----------------------------------------------
 
-/// KERNEL32 `DebugBreak()`: raises a breakpoint exception, which the
-/// runtime does not dispatch (no SEH yet, docs/RUNTIME.md): the session
-/// stops with a report naming the caller. The game's only call is the
+/// KERNEL32 `DebugBreak()`: dispatch a breakpoint at the software API
+/// boundary (see `seh` for continuation limitations). The game's call is the
 /// reference-count check in 0x00DB9740 (a count below 1).
 pub fn debug_break(m: &mut dyn Mem, cpu: &mut Cpu) {
-    panic!("DebugBreak called from {:#010x}: a breakpoint exception (0x80000003); exception dispatch is not modelled",
-           caller(m, cpu));
+    crate::seh::debug_break(m, cpu);
 }
 
-/// KERNEL32 `RaiseException(dwExceptionCode, dwExceptionFlags,
-/// nNumberOfArguments, lpArguments)`: the runtime does not dispatch
-/// exceptions yet, so the session stops with a report naming the code,
-/// flags, arguments and caller. Callers: `__CxxThrowException@8`
-/// 0x012F530B (C++ throw, 0xE06D7363), `__raise_exc_ex`, the delay-load
-/// helper (0xC06D007E/0xC06D007F).
+/// KERNEL32 RaiseException: the software exception boundary is dispatched
+/// through the guest SEH chain. See `seh` for continuation limitations.
 pub fn raise_exception(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let (code, flags, n, args) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
-    // EXCEPTION_MAXIMUM_PARAMETERS is 15
-    let values: Vec<String> = if args == 0 { Vec::new() } else {
-        (0..n.min(15)).map(|k| format!("{:#x}", m.u32(args + 4 * k))).collect()
-    };
-    let what = match code {
-        0xE06D_7363 => " (a C++ exception, msc)",
-        0xC06D_007E => " (delay load: module not found)",
-        0xC06D_007F => " (delay load: procedure not found)",
-        _ => "",
-    };
-    panic!("RaiseException(code {code:#010x}{what}, flags {flags:#x}, arguments [{}]) called from {:#010x}; exception dispatch is not modelled",
-           values.join(", "), caller(m, cpu));
+    crate::seh::raise_exception(m, cpu);
 }
-
 // --- PSAPI and WININET --------------------------------------------------------
 
 /// PSAPI `GetModuleFileNameExA(hProcess, hModule, lpFilename, nSize)`
@@ -687,7 +664,30 @@ pub fn internet_get_connected_state(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 8);
 }
 
+/// ole32 `StringFromGUID2(rguid, lpsz, cchMax)` (Microsoft Learn
+/// "StringFromGUID2 function (combaseapi.h)"): the GUID as
+/// "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}" (upper-case hex, Data1..Data3
+/// as numbers, Data4 as bytes) and a NUL, returning 39; a buffer shorter
+/// than 39 characters gets nothing and the result is 0 (measured,
+/// research/runtime/windows/Guid.cs). Caller: the DirectInput device
+/// enumeration callback around 0x00DF599C (a pad's product GUID).
+pub fn string_from_guid2(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (g, out, cch) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2) as i32);
+    cpu.eax = if cch < 39 {
+        0
+    } else {
+        let d4: String = (0..8).map(|k| format!("{:02X}", m.u8(g + 8 + k))).collect();
+        let text = format!("{{{:08X}-{:04X}-{:04X}-{}-{}}}", m.u32(g), m.u16(g + 4), m.u16(g + 6), &d4[..4], &d4[4..]);
+        for (k, u) in text.encode_utf16().chain([0]).enumerate() {
+            m.set_u16(out + 2 * k as u32, u);
+        }
+        39
+    };
+    ret(m, cpu, 12);
+}
+
 pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
+    ("ole32.dll", "StringFromGUID2", string_from_guid2),
     ("KERNEL32.dll", "GetTimeZoneInformation", get_time_zone_information),
     ("KERNEL32.dll", "FileTimeToSystemTime", file_time_to_system_time),
     ("KERNEL32.dll", "FileTimeToLocalFileTime", file_time_to_local_file_time),

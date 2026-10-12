@@ -2299,6 +2299,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "d3dxref"
+version = "0.1.0"
+dependencies = [
+ "d3d9shader",
+ "mtarc",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2497,6 +2505,8 @@ name = "ddlift-00"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2505,6 +2515,8 @@ name = "ddlift-01"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2513,6 +2525,8 @@ name = "ddlift-02"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2521,6 +2535,8 @@ name = "ddlift-03"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2529,6 +2545,8 @@ name = "ddlift-04"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2537,6 +2555,8 @@ name = "ddlift-05"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2545,6 +2565,8 @@ name = "ddlift-06"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2553,6 +2575,8 @@ name = "ddlift-07"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2561,6 +2585,8 @@ name = "ddlift-08"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2569,6 +2595,8 @@ name = "ddlift-09"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2577,6 +2605,8 @@ name = "ddlift-10"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2585,6 +2615,8 @@ name = "ddlift-11"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2593,6 +2625,8 @@ name = "ddlift-12"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2601,6 +2635,8 @@ name = "ddlift-13"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2609,6 +2645,8 @@ name = "ddlift-14"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2617,6 +2655,8 @@ name = "ddlift-15"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2823,11 +2863,14 @@ version = "0.1.0"
 dependencies = [
  "d3d9cmd",
  "d3d9shader",
+ "d3dxref",
  "ddaudio",
  "ddexe",
  "ddnative",
  "ddnative-base",
  "ddsave",
+ "hostdisplay",
+ "mtarc",
  "windows",
  "windows-core",
 ]
@@ -3662,6 +3705,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
+name = "hostdisplay"
+version = "0.1.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4172,12 +4222,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtcore"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "serde_json",
+]
+
+[[package]]
 name = "mteffect"
 version = "0.1.0"
 dependencies = [
  "ddvfs",
  "mtarc",
  "mtlmt",
+]
+
+[[package]]
+name = "mtframe"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "mtcore",
+ "mtmath",
+ "serde_json",
 ]
 
 [[package]]

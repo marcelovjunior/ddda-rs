@@ -611,15 +611,25 @@ pub fn f_00cfc1d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u32(f.wrapping_sub(4), esi);
     m.set_u32(f.wrapping_sub(8), edi);
     (cpu.ebp, cpu.esp, cpu.esi, cpu.edi) = (entry_esp.wrapping_sub(4), f.wrapping_sub(8), this, pa);
-    for (off, v) in [(0x14, angles.x), (0x18, angles.y), (0x1C, angles.z)] {
-        spill(m, local(off), v);
-    }
+    spill(m, local(0x14), angles.x);
     // return addresses and spill slots of the six calls, in order
     const CALLS: [(u32, u32); 6] = [(0x00CF_C1EF, 0x20), (0x00CF_C205, 0x24), (0x00CF_C21B, 0x28),
                                     (0x00CF_C22C, 0x30), (0x00CF_C23D, 0x34), (0x00CF_C24E, 0)];
+    // the original reads y and z just before their sines and spills each
+    // angle there; the cosines take the spilled angles
+    const ANGLE_SPILLS: [u32; 3] = [0x14, 0x18, 0x1C];
     let mut k = 0;
     let mat = matrix::from_euler(angles, Vec3::default(), |which, a| {
         let target = if which == matrix::Trig::Sin { CRT_SINF } else { CRT_COSF };
+        let a = match k {
+            0 => a,
+            1 | 2 => {
+                let v = F32::from_bits(m.u32(pa.wrapping_add(4 * k as u32)));
+                spill(m, local(ANGLE_SPILLS[k]), v);
+                v
+            }
+            _ => F32::from_bits(m.u32(local(ANGLE_SPILLS[k - 3]))),
+        };
         cpu.xmm[0] = scalar(a);
         call_out(m, cpu, target, CALLS[k].0);
         let v = F32::from_bits(cpu.xmm[0][0]);

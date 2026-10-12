@@ -41,7 +41,7 @@ impl PresentSink for Offscreen {
 }
 
 fn run(gpu: &mut WgpuBackend, w: u32, h: u32, frames: u32) -> f64 {
-    let bb = Target { surface: 0x100, format: 21, width: w, height: h, texture: None, level: 0 };
+    let bb = Target { surface: 0x100, format: 21, width: w, height: h, texture: None, level: 0, samples: 0, quality: 0 };
     let frame = |gpu: &mut WgpuBackend, k: u32| {
         gpu.clear(&ClearCall {
             rects: vec![], flags: 1, colour: 0xFF00_0000 | (k & 0xFF), z: 1.0, stencil: 0,

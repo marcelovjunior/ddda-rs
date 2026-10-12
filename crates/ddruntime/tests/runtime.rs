@@ -292,7 +292,8 @@ fn direct3d_create9_and_a_com_call_through_its_vtable() {
     let mode = 0x7EFF_0000; // a scratch spot on the session stack
     let ddruntime::session::Outcome::Returned(cpu) = s.call(get_mode, 0, &[d3d, 0, mode]) else { panic!("GetAdapterDisplayMode") };
     assert_eq!(cpu.eax, 0, "D3D_OK");
-    assert_eq!([s.mem.u32(mode), s.mem.u32(mode + 4), s.mem.u32(mode + 8), s.mem.u32(mode + 12)], [1920, 1080, 60, 22]);
+    let d = ddruntime::d3d9::display().desktop; // the host's desktop (L34)
+    assert_eq!([s.mem.u32(mode), s.mem.u32(mode + 4), s.mem.u32(mode + 8), s.mem.u32(mode + 12)], [d.width, d.height, d.refresh, 22]);
     assert_eq!(cpu.esp, ddruntime::session::STACK_TOP - 0x100, "stdcall: this + 2 arguments popped");
 }
 
@@ -369,8 +370,8 @@ fn a_window_gets_windows_creation_show_and_paint_messages_in_order() {
     assert_eq!(messages(), [0x81, 0x01], "WM_NCCREATE, WM_CREATE");
 
     assert_eq!(call_service(user32::show_window, &mut m, &[hwnd, 1]).eax, 0, "was hidden");
-    assert_eq!(messages(), [0x18, 0x1C, 0x86, 0x06, 0x07, 0x47, 0x05, 0x03],
-               "SHOWWINDOW, ACTIVATEAPP, NCACTIVATE, ACTIVATE, SETFOCUS, WINDOWPOSCHANGED -> SIZE, MOVE");
+    assert_eq!(messages(), [0x18, 0x1C, 0x86, 0x06, 0x281, 0x282, 0x07, 0x47, 0x05, 0x03],
+               "SHOWWINDOW, ACTIVATEAPP, NCACTIVATE, ACTIVATE, IME_SETCONTEXT, IME_NOTIFY (L43), SETFOCUS, WINDOWPOSCHANGED -> SIZE, MOVE");
     call_service(user32::update_window, &mut m, &[hwnd]);
     assert_eq!(messages(), [0x0F], "WM_PAINT");
     call_service(user32::update_window, &mut m, &[hwnd]);
@@ -1415,15 +1416,25 @@ fn version_checks_answer_as_windows_does_for_an_exe_without_supported_os() {
 #[test]
 fn debug_break_and_raise_exception_stop_with_a_report() {
     let mut m = guest();
-    let msg = stops(system::debug_break, &mut m, &[]);
-    assert!(msg.contains("DebugBreak called from 0x00405678"), "{msg}");
+    ddruntime::runtime::enter(std::sync::Arc::new(ddruntime::runtime::Runtime::default()));
+    let fs = ddruntime::seh::initialize_teb(&mut m, services::MAIN_THREAD_ID, 0x0010_0000, 0x0011_0000);
+    let stop = |m: &mut GuestMemory, f: fn(&mut dyn Mem, &mut Cpu), args: &[u32]| {
+        let mut cpu = Cpu { esp: 0x0011_0000, fs_base: fs, ..Cpu::default() };
+        for &a in args.iter().rev() { cpu.esp -= 4; m.set_u32(cpu.esp, a); }
+        cpu.esp -= 4; m.set_u32(cpu.esp, 0x0040_5678);
+        let e = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(m, &mut cpu))).expect_err("unhandled exception must stop");
+        e.downcast::<ddruntime::seh::Stop>().expect("structured SEH report")
+    };
+    assert_eq!(*stop(&mut m, system::debug_break, &[]), ddruntime::seh::Stop::Unhandled {
+        code: 0x8000_0003, address: 0x0040_5678, flags: 0, parameters: vec![],
+    });
     let args = 0x0030_0000;
     for (k, v) in [0x1993_0520u32, 0x0012_3456, 0x0140_0000].into_iter().enumerate() {
         m.set_u32(args + 4 * k as u32, v);
     }
-    let msg = stops(system::raise_exception, &mut m, &[0xE06D_7363, 1, 3, args]);
-    assert!(msg.contains("code 0xe06d7363 (a C++ exception, msc), flags 0x1, arguments [0x19930520, 0x123456, 0x1400000]"), "{msg}");
-    assert!(msg.contains("from 0x00405678"), "{msg}");
+    assert_eq!(*stop(&mut m, system::raise_exception, &[0xE06D_7363, 1, 3, args]), ddruntime::seh::Stop::Unhandled {
+        code: 0xE06D_7363, address: 0x0040_5678, flags: 1, parameters: vec![0x1993_0520, 0x0012_3456, 0x0140_0000],
+    });
 }
 
 #[test]
@@ -1525,7 +1536,7 @@ fn file_roots(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::
 fn profile_files_read_and_write_as_windows_does() {
     let mut m = guest();
     let (root, _install, sandbox) = file_roots("profile");
-    let docs = sandbox.join(r"csidl-0x0005\CAPCOM\DRAGONS DOGMA DARK ARISEN");
+    let docs = sandbox.join(r"csidl-0x001c\CAPCOM\DRAGONS DOGMA DARK ARISEN");
     std::fs::create_dir_all(&docs).unwrap();
     let ini = docs.join("p.ini");
     std::fs::write(&ini, b"[Display]\r\nWidth = 1280 \r\n  Name=\"quoted\"  \r\nSingle='q'\r\nEmpty=\r\nNoEq\r\n;comment=1\r\n[ other ]\r\nk=v\r\nk=second\r\n[Display]\r\nLater=x\r\n").unwrap();
@@ -1704,8 +1715,17 @@ fn delete_move_copy_and_truncate_never_touch_the_install() {
     let outs = [0x0030_0610, 0x0030_0614, 0x0030_0618, 0x0030_061C];
     assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, outs[0], outs[1], outs[2], outs[3]], 20).0, 1);
     assert_eq!(outs.map(|p| m.u32(p)), files::VOLUME);
+    // MtFile::vf05's question (overlapped mode): the file's own path fails
+    m.set_u32(free, 0x55);
+    path(&mut m, a, &install.join(r"nativePC\orig.arc").to_string_lossy());
+    assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, 0, 0, free, 0], 20), (0, 267), "ERROR_DIRECTORY");
+    assert_eq!(m.u32(free), 0x55, "untouched");
+    path(&mut m, a, &install.join(r"nativePC\nope.arc").to_string_lossy());
+    assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, 0, 0, free, 0], 20), (0, 2));
+    path(&mut m, a, &install.join("nativePC").to_string_lossy());
+    assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, 0, 0, free, 0], 20).0, 1, "a directory");
     // SHCreateDirectoryExW in the home
-    let home = sandbox.join(r"csidl-0x0005\CAPCOM\DRAGONS DOGMA DARK ARISEN");
+    let home = sandbox.join(r"csidl-0x001c\CAPCOM\DRAGONS DOGMA DARK ARISEN");
     let shc = |m: &mut GuestMemory, p: &str| {
         put_w(m, a, p);
         let cpu = call_service(files::sh_create_directory_ex_w, m, &[0, a, 0]);
@@ -1747,4 +1767,175 @@ fn every_l17_import_is_bound_to_a_service() {
         let i = imports.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("{name} is not imported"));
         assert!(matches!(registry.get(i.token), Some(Binding::Service(_))), "{} has no service", i.full_name());
     }
+}
+
+// --- L21: thread information blocks -----------------------------------------
+
+/// A start routine that records its FS base and the NT_TIB it points at
+/// (ExceptionList, StackBase, StackLimit, Self) at 0x300400.
+fn record_tib(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let fs = cpu.fs_base;
+    let out = 0x0030_0400;
+    for (k, v) in [fs, m.u32(fs), m.u32(fs + 4), m.u32(fs + 8), m.u32(fs + 0x18), cpu.esp].into_iter().enumerate() {
+        m.set_u32(out + 4 * k as u32, v);
+    }
+    cpu.eax = 0;
+    let _ = m.u32(cpu.esp);
+    cpu.esp += 8;
+}
+
+#[test]
+fn every_guest_thread_gets_a_thread_information_block() {
+    let mut m = GuestMemory::new();
+    m.map(0x0010_0000, 0x10000, READ | WRITE).unwrap();
+    m.map(0x0030_0000, 0x1000, READ | WRITE).unwrap();
+    m.map_lazy(threads::STACKS_BASE, threads::STACKS_SIZE, READ | WRITE).unwrap();
+    let mut r = Registry::new();
+    r.insert(0x0060_0000, Binding::Lifted(record_tib)).unwrap();
+    let r = Rc::new(r);
+    r.install();
+    threads::set_machine(m.share(), r.clone());
+    // the main thread's block, as Session::new sets it up
+    let main = ddruntime::seh::initialize_teb(&mut m, services::MAIN_THREAD_ID, 0x7EF0_0000, 0x7F00_0000);
+    assert_eq!(main, ddruntime::seh::TEB_BASE);
+    assert_eq!([m.u32(main), m.u32(main + 4), m.u32(main + 8), m.u32(main + 0x18)], [0xFFFF_FFFF, 0x7F00_0000, 0x7EF0_0000, main]);
+    let mut cpu = Cpu { esp: 0x0011_0000, ..Cpu::default() };
+    let tid_out = 0x0030_0200;
+    let h = call_from_guest(&mut m, &mut cpu, threads::create_thread, &[0, 0, 0x0060_0000, 0, 0, tid_out]);
+    assert_eq!(call_from_guest(&mut m, &mut cpu, threads::wait_for_single_object, &[h, threads::INFINITE]), threads::WAIT_OBJECT_0);
+    let tid = m.u32(tid_out);
+    let got: Vec<u32> = (0..6).map(|k| m.u32(0x0030_0400 + 4 * k)).collect();
+    let teb = got[0];
+    assert_eq!(teb, ddruntime::seh::TEB_BASE + 0x1000 * ((tid - services::MAIN_THREAD_ID) / 4), "its own page");
+    assert_ne!(teb, main);
+    assert_eq!(&got[..5], &[teb, 0xFFFF_FFFF, got[2], got[2] - 0x0010_0000, teb], "FS: ExceptionList end marker, 1 MB stack, Self");
+    assert!(got[5] < got[2] && got[5] > got[3], "the thread runs on the stack its block describes");
+    assert!(threads::faults().is_empty(), "{:?}", threads::faults());
+    x86::set_ext_calls(None);
+}
+
+#[test]
+fn code_page_queries_answer_as_windows_measured() {
+    let mut m = guest();
+    let info = 0x0030_0000;
+    for (cp, ok, valid, max, leads) in [
+        (0u32, true, false, 1u32, vec![]), (1, true, false, 1, vec![]), (2, true, false, 1, vec![]), (3, true, false, 1, vec![]),
+        (437, true, true, 1, vec![]), (1252, true, true, 1, vec![]), (932, true, true, 2, vec![0x81u8, 0x9F, 0xE0, 0xFC]),
+        (65000, true, true, 5, vec![]), (65001, true, true, 4, vec![]), (42, false, false, 0, vec![]), (12345, false, false, 0, vec![]),
+    ] {
+        fill(&mut m, info, 20, 0xEE);
+        let cpu = call_service(win32::get_cp_info, &mut m, &[cp, info]);
+        assert_eq!((cpu.eax, cpu.esp), (ok as u32, 0x0011_0000), "GetCPInfo({cp})");
+        if ok {
+            let mut want = vec![0u8; 18];
+            want[..4].copy_from_slice(&max.to_le_bytes());
+            want[4] = b'?';
+            want[6..6 + leads.len()].copy_from_slice(&leads);
+            assert_eq!(m.read(info, 20).unwrap(), [want, vec![0xEE, 0xEE]].concat(), "GetCPInfo({cp})");
+        } else {
+            assert_eq!((last_error(&mut m), m.u8(info)), (87, 0xEE), "GetCPInfo({cp})");
+        }
+        assert_eq!(call_service(win32::is_valid_code_page, &mut m, &[cp]).eax, valid as u32, "IsValidCodePage({cp})");
+    }
+    assert!(stops(win32::get_cp_info, &mut m, &[1250, info]).contains("not modelled"));
+}
+
+#[test]
+fn module_file_names_truncate_as_windows_does() {
+    let mut m = guest();
+    services::set_exe_path(r"E:\Games\DDDA\DDDA.exe");
+    let buf = 0x0030_0000;
+    for (wide, f) in [(false, win32::get_module_file_name_a as fn(&mut dyn Mem, &mut Cpu)), (true, win32::get_module_file_name_w)] {
+        let text = |m: &GuestMemory, n: u32| -> Vec<u16> { (0..n).map(|k| if wide { m.u16(buf + 2 * k) } else { m.u8(buf + k) as u16 }).collect() };
+        fill(&mut m, buf, 100, 0xEE);
+        set_last_error(&mut m, 0x77);
+        let cpu = call_service(f, &mut m, &[0, buf, 260]);
+        assert_eq!((cpu.eax, cpu.esp, last_error(&mut m)), (22, 0x0011_0000, 0), "wide {wide}");
+        assert_eq!(text(&m, 23), "E:\\Games\\DDDA\\DDDA.exe\0".encode_utf16().collect::<Vec<_>>());
+        fill(&mut m, buf, 100, 0xEE);
+        assert_eq!(call_service(f, &mut m, &[win32::IMAGE_BASE, buf, 5]).eax, 5, "truncated: nSize");
+        assert_eq!(last_error(&mut m), 122);
+        assert_eq!(text(&m, 5), [b'E' as u16, b':' as u16, b'\\' as u16, b'G' as u16, 0]);
+        fill(&mut m, buf, 100, 0xEE);
+        assert_eq!(call_service(f, &mut m, &[0, buf, 0]).eax, 0);
+        assert_eq!((last_error(&mut m), m.u8(buf)), (122, 0xEE));
+        assert_eq!(call_service(f, &mut m, &[0x1234_0000, buf, 260]).eax, 0);
+        assert_eq!(last_error(&mut m), 126, "not a module");
+    }
+}
+
+#[test]
+fn virtual_memory_reserves_commits_and_frees_as_windows_measured() {
+    let mut m = guest();
+    let r = Rc::new(Registry::new());
+    threads::set_machine(m.share(), r);
+    let va = |m: &mut GuestMemory, a: u32, n: u32, t: u32, p: u32| {
+        set_last_error(m, 0x77);
+        let cpu = call_service(win32::virtual_alloc, m, &[a, n, t, p]);
+        assert_eq!(cpu.esp, 0x0011_0000, "16 bytes");
+        (cpu.eax, last_error(m))
+    };
+    let vf = |m: &mut GuestMemory, a: u32, n: u32, t: u32| {
+        set_last_error(m, 0x77);
+        let cpu = call_service(win32::virtual_free, m, &[a, n, t]);
+        assert_eq!(cpu.esp, 0x0011_0000, "12 bytes");
+        (cpu.eax, last_error(m))
+    };
+    // the MtVirtualAllocator's 512 MB reservation: 64 KB-aligned, not accessible
+    let (base, err) = va(&mut m, 0, 0x2000_0000, 0x2000, 4);
+    assert_eq!(err, 0x77, "success leaves the last error");
+    assert!(base != 0 && base % 0x1_0000 == 0);
+    assert!(!m.is_mapped(base), "reserved pages fault");
+    // commits inside it return the page address and read as zero
+    assert_eq!(va(&mut m, base + 0x1_0000, 0x3_0000, 0x1000, 4), (base + 0x1_0000, 0x77));
+    assert!(m.is_mapped(base + 0x1_0000) && m.is_mapped(base + 0x3_F000) && !m.is_mapped(base + 0x4_0000));
+    assert_eq!(m.u32(base + 0x1_0000), 0);
+    m.set_u32(base + 0x1_0000, 0x1234);
+    assert_eq!(va(&mut m, base + 0x1_2345, 0x10, 0x1000, 4).0, base + 0x1_2000, "rounded down to the page");
+    assert_eq!(va(&mut m, base + 0x4_1FF0, 0x20, 0x1000, 4).0, base + 0x4_1000, "two pages");
+    assert!(m.is_mapped(base + 0x4_2000));
+    assert_eq!(va(&mut m, base + 0x1_0000, 0x1000, 0x1000, 4).0, base + 0x1_0000, "recommit");
+    assert_eq!(m.u32(base + 0x1_0000), 0x1234, "a recommitted page keeps its contents");
+    // errors
+    for (a, n, t, p, e) in [(base + 0x2000_0000, 0x1000, 0x1000, 4, 487), (base + 0x1FFF_F000, 0x2000, 0x1000, 4, 487),
+                            (base + 0x10_0000, 0x1_0000, 0x2000, 4, 487), (base + 0x10_0000, 0x1_0000, 0x3000, 4, 487),
+                            (0, 0, 0x2000, 4, 87), (0, 0x1000, 0, 4, 87), (0, 0x1000, 0x2000, 0, 87), (base + 0x20_0000, 0x1000, 0x1000, 0, 87)] {
+        assert_eq!(va(&mut m, a, n, t, p), (0, e), "VirtualAlloc({a:#x}, {n:#x}, {t:#x}, {p:#x})");
+    }
+    // commit with NULL: a new committed region elsewhere
+    let (c, _) = va(&mut m, 0, 0x5000, 0x1000, 4);
+    assert!(c % 0x1_0000 == 0 && !(base..base + 0x2000_0000).contains(&c) && m.is_mapped(c + 0x4000));
+    // decommit, release
+    assert_eq!(vf(&mut m, base + 0x1_0000, 0x1_0000, 0x4000), (1, 0x77));
+    assert!(!m.is_mapped(base + 0x1_0000) && !m.is_mapped(base + 0x1_F000) && m.is_mapped(base + 0x2_0000));
+    assert_eq!(vf(&mut m, base + 0x4_0010, 0x10, 0x4000).0, 1);
+    assert_eq!(vf(&mut m, base + 0x1_0000, 0x1000, 0x4000).0, 1, "decommitting decommitted pages succeeds");
+    for (a, n, t, e) in [(base, 0x1000, 0x8000, 87), (base + 0x1_0000, 0, 0x8000, 487), (base, 0, 0xC000, 87), (base, 0, 0, 87), (0, 0, 0x8000, 487)] {
+        assert_eq!(vf(&mut m, a, n, t), (0, e), "VirtualFree({a:#x}, {n:#x}, {t:#x})");
+    }
+    assert_eq!(vf(&mut m, base, 0, 0x4000).0, 1, "decommit all");
+    assert!(!m.is_mapped(base + 0x2_0000) && !m.is_mapped(base + 0x4_1000));
+    assert_eq!(vf(&mut m, base, 0, 0x8000), (1, 0x77));
+    assert_eq!(vf(&mut m, base, 0, 0x8000), (0, 487), "released");
+    assert_eq!(vf(&mut m, c, 0, 0x8000).0, 1);
+    assert!(!m.is_mapped(c));
+    // the freed space is reused bottom-up
+    assert_eq!(va(&mut m, 0, 0x2000_0000, 0x2000, 4).0, base);
+}
+
+#[test]
+fn string_from_guid2_formats_as_windows_measured() {
+    let mut m = guest();
+    let (g, out) = (0x0030_0000, 0x0030_0100);
+    for k in 0..16u32 {
+        m.set_u8(g + k, (0x10 * k + 0xA + k) as u8);
+    }
+    fill(&mut m, out, 100, 0xEE);
+    let cpu = call_service(system::string_from_guid2, &mut m, &[g, out, 40]);
+    assert_eq!((cpu.eax, cpu.esp), (39, 0x0011_0000));
+    let text: Vec<u16> = units(&m, out, 39);
+    assert_eq!(String::from_utf16(&text).unwrap(), "{3D2C1B0A-5F4E-8170-92A3-B4C5D6E7F809}\0");
+    fill(&mut m, out, 100, 0xEE);
+    assert_eq!(call_service(system::string_from_guid2, &mut m, &[g, out, 38]).eax, 0);
+    assert_eq!(m.u16(out), 0xEEEE, "nothing written");
 }

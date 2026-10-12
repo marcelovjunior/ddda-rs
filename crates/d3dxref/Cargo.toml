@@ -1,0 +1,13 @@
+[package]
+name = "d3dxref"
+version = "0.1.0"
+description = "The real d3dx9_43.dll shader reflection (constant tables, output semantics) as the test oracle for the runtime's D3DX imports"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+d3d9shader = { path = "../d3d9shader" }
+mtarc = { path = "../mtarc" }

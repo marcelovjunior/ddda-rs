@@ -15,7 +15,7 @@ import harness as h
 import lift
 
 
-def trace(function, closed, strategy, seed, seconds=5, limit=64):
+def trace(function, closed, strategy, seed, seconds=5, limit=64, frames=None):
     """Wrap the ext hook for diagnostics only; never change its decision."""
     original = h.Uc.hook_add
     recent, transfers = deque(maxlen=limit), deque(maxlen=limit)
@@ -53,7 +53,8 @@ def trace(function, closed, strategy, seed, seconds=5, limit=64):
         c = h.run_sparse(f['addr'], (f['addr']<<8)^seed, end=f['addr']+f['size'],
                          body=f['body'], lifted=closed, x87_push=f.get('x87_push',[]),
                          noreturn_sites=f.get('noreturn_sites',[]),
-                         original_entry=f.get('original_entry',False),
+                         original_entry=f.get('original_entry',False), x87_entry=f.get('x87_entry',0), max_insn=f.get('insn_budget') or lift.INSN_BUDGET,
+                         frame_contracts=frames,
                          noreturn_targets=lift.noreturn_entries(), max_seconds=seconds, **kw)
         reason, calls = 'ok', c['calls']
     except h.Rejected as e:
@@ -79,4 +80,6 @@ if __name__ == '__main__':
         with path.open() as stream: functions.update((f['addr'],f) for f in json.load(stream))
     if args.address not in functions: ap.error('address absent from selected/candidate lists; prepare first')
     print(json.dumps(trace(functions[args.address],{f['addr'] for f in selected if not f.get('ext')},
-                           args.strategy,args.seed,args.seconds)))
+                           args.strategy,args.seed,args.seconds,
+                           frames={f['addr']:f['frame_exit'] for f in selected
+                                   if not f.get('ext') and f.get('frame_exit')})))

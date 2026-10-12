@@ -60,16 +60,16 @@ const W: u32 = 16;
 const H: u32 = 16;
 
 fn back_buffer() -> Target {
-    Target { surface: 0x100, format: 21, width: W, height: H, texture: None, level: 0 }
+    Target { surface: 0x100, format: 21, width: W, height: H, texture: None, level: 0, samples: 0, quality: 0 }
 }
 
 fn depth_target() -> Target {
-    Target { surface: 0x101, format: 75, width: W, height: H, texture: None, level: 0 }
+    Target { surface: 0x101, format: 75, width: W, height: H, texture: None, level: 0, samples: 0, quality: 0 }
 }
 
 /// The second render target of MRT draws; its format varies by frame.
 fn second_target(format: u32) -> Target {
-    Target { surface: 0x102, format, width: W, height: H, texture: None, level: 0 }
+    Target { surface: 0x102, format, width: W, height: H, texture: None, level: 0, samples: 0, quality: 0 }
 }
 
 /// A random vertex (position float4, texcoord float2).

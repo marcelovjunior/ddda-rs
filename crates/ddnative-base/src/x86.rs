@@ -72,6 +72,16 @@ pub struct Cpu {
     pub df: bool,
     /// Guest thread's FS segment base (TEB); other supported segments are flat.
     pub fs_base: u32,
+    /// Segment selectors, read by `mov r/m, sreg` (L22).
+    pub seg: Segments,
+    /// EFLAGS bits outside `fl` and `df` that POPFD can change at CPL3:
+    /// NT, AC and ID (L22; IF and reserved bit 1 read as set).
+    pub sys_flags: u32,
+    /// The guest's MXCSR while control is outside lifted code (L22). Lifted
+    /// code runs with it live in the host MXCSR (crate::sse2), so the SSE
+    /// instructions round and set sticky flags exactly as on hardware; the
+    /// runtime saves it here at service boundaries and loads it on entry.
+    pub mxcsr: Mxcsr,
     /// Full x87 state, including 80-bit stack values and control/status words.
     pub st: crate::x87::X87,
 }
@@ -81,7 +91,9 @@ impl From<Entry> for Cpu {
         let mut xmm = [[0u32; 4]; 8];
         xmm[0][0] = r.xmm0;
         Cpu { eax: r.eax, ecx: r.ecx, edx: r.edx, ebx: r.ebx, esp: r.esp, ebp: r.ebp, esi: r.esi, edi: r.edi,
-              xmm, fl: Flags::default(), df: false, fs_base: 0, st: Default::default() }
+              xmm, fl: Flags::default(), df: false, fs_base: 0, seg: Segments::default(), sys_flags: 0,
+              mxcsr: Mxcsr::default(),
+              st: Default::default() }
     }
 }
 
@@ -89,6 +101,31 @@ impl Cpu {
     pub fn exit(&self) -> Exit {
         Exit { eax: self.eax, ecx: self.ecx, edx: self.edx, ebx: self.ebx, esp: self.esp, ebp: self.ebp,
                esi: self.esi, edi: self.edi, xmm0: self.xmm[0][0], st0: self.st.top_f32() }
+    }
+}
+
+/// A guest MXCSR value; the power-on and Windows thread default is 0x1F80
+/// (all exceptions masked, round to nearest; Intel SDM vol. 1, 10.2.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mxcsr(pub u32);
+
+impl Default for Mxcsr {
+    fn default() -> Self {
+        Mxcsr(crate::x86::MXCSR_DEFAULT)
+    }
+}
+
+/// The segment selectors of a 32-bit Windows thread (WOW64): CS 0x23, FS
+/// 0x53 (its base is `Cpu::fs_base`), the others 0x2B. Measured on Windows
+/// 11 26200 with research/native/probe_machine.rs (L22).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Segments {
+    pub es: u16, pub cs: u16, pub ss: u16, pub ds: u16, pub fs: u16, pub gs: u16,
+}
+
+impl Default for Segments {
+    fn default() -> Self {
+        Segments { es: 0x2b, cs: 0x23, ss: 0x2b, ds: 0x2b, fs: 0x53, gs: 0x2b }
     }
 }
 
@@ -115,9 +152,42 @@ pub fn set_lifted_lookup(lookup: LiftLookup) {
 /// Copy the function pointer before calling, so nested calls are reentrant.
 #[inline]
 pub fn call_lifted(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
-    let lookup = LIFTED.get().expect("initialize the lifted program before entering a raw shard");
-    let f = lookup(target).unwrap_or_else(|| panic!("missing lifted target {target:#010x}"));
+    let f = lifted_target(target);
     f(m, cpu);
+}
+
+/// Slots of the per-thread cache of resolved lifted targets.
+const RESOLVED_SLOTS: usize = 4096;
+
+thread_local! {
+    /// Lifted targets already resolved on this thread, direct-mapped by
+    /// address: a cross-shard call resolves its target once instead of
+    /// searching the shard's table every time. The program's lookup never
+    /// changes once installed (set_lifted_lookup), so entries never go stale.
+    static RESOLVED: [std::cell::Cell<(u32, Option<LiftFn>)>; RESOLVED_SLOTS] =
+        const { [const { std::cell::Cell::new((0, None)) }; RESOLVED_SLOTS] };
+}
+
+/// The lifted function at `target` (what `call_lifted` calls).
+#[inline]
+pub fn lifted_target(target: u32) -> LiftFn {
+    // functions are mostly 16-byte aligned: drop those bits, fold the high ones in
+    let slot = ((target >> 4) ^ (target >> 16)) as usize & (RESOLVED_SLOTS - 1);
+    let hit = RESOLVED.with(|r| match r[slot].get() {
+        (t, Some(f)) if t == target => Some(f),
+        _ => None,
+    });
+    hit.unwrap_or_else(|| {
+        let f = lifted_target_uncached(target);
+        RESOLVED.with(|r| r[slot].set((target, Some(f))));
+        f
+    })
+}
+
+/// The lifted function at `target`, from the program's lookup (no cache).
+pub fn lifted_target_uncached(target: u32) -> LiftFn {
+    let lookup = LIFTED.get().expect("initialize the lifted program before entering a raw shard");
+    lookup(target).unwrap_or_else(|| panic!("missing lifted target {target:#010x}"))
 }
 
 thread_local! {
@@ -297,32 +367,56 @@ pub fn comiss(a: u32, b: u32) -> Flags {
 
 #[cfg(target_arch = "x86_64")]
 mod sse {
-    use std::arch::x86_64::*;
+    //! Scalar SSE as the original instructions in non-pure asm (L22): they
+    //! run under the guest MXCSR live in the host register (crate::sse2), so
+    //! rounding and the sticky flags are the hardware's, and the compiler
+    //! can neither fold nor drop them (an intrinsic may be).
+    use std::arch::asm;
+    macro_rules! binary {
+        ($($op:ident),*) => {$(
+            /// `op a, b` with a as the destination: the original's operand order.
+            #[inline]
+            pub fn $op(a: u32, b: u32) -> u32 {
+                let r: u32;
+                unsafe {
+                    asm!("movd {x}, {a:e}", "movd {y}, {b:e}", concat!(stringify!($op), " {x}, {y}"), "movd {r:e}, {x}",
+                         a = in(reg) a, b = in(reg) b, r = lateout(reg) r, x = out(xmm_reg) _, y = out(xmm_reg) _,
+                         options(nostack, preserves_flags));
+                }
+                r
+            }
+        )*};
+    }
+    binary!(addss, subss, mulss, divss, minss, maxss);
     #[inline]
-    fn set(v: u32) -> __m128 { unsafe { _mm_castsi128_ps(_mm_cvtsi32_si128(v as i32)) } }
-    #[inline]
-    fn get(v: __m128) -> u32 { unsafe { _mm_cvtsi128_si32(_mm_castps_si128(v)) as u32 } }
-    /// `op a, b` with a as the destination: the original's operand order.
-    #[inline]
-    pub fn addss(a: u32, b: u32) -> u32 { unsafe { get(_mm_add_ss(set(a), set(b))) } }
-    #[inline]
-    pub fn subss(a: u32, b: u32) -> u32 { unsafe { get(_mm_sub_ss(set(a), set(b))) } }
-    #[inline]
-    pub fn mulss(a: u32, b: u32) -> u32 { unsafe { get(_mm_mul_ss(set(a), set(b))) } }
-    #[inline]
-    pub fn divss(a: u32, b: u32) -> u32 { unsafe { get(_mm_div_ss(set(a), set(b))) } }
-    #[inline]
-    pub fn minss(a: u32, b: u32) -> u32 { unsafe { get(_mm_min_ss(set(a), set(b))) } }
-    #[inline]
-    pub fn maxss(a: u32, b: u32) -> u32 { unsafe { get(_mm_max_ss(set(a), set(b))) } }
-    #[inline]
-    pub fn sqrtss(b: u32) -> u32 { unsafe { get(_mm_sqrt_ss(set(b))) } }
+    pub fn sqrtss(b: u32) -> u32 {
+        let r: u32;
+        unsafe {
+            asm!("movd {x}, {b:e}", "sqrtss {x}, {x}", "movd {r:e}, {x}",
+                 b = in(reg) b, r = lateout(reg) r, x = out(xmm_reg) _, options(nostack, preserves_flags));
+        }
+        r
+    }
     /// cvttss2si (truncation; out of range gives 0x80000000).
     #[inline]
-    pub fn cvttss2si(a: u32) -> u32 { unsafe { _mm_cvttss_si32(set(a)) as u32 } }
-    /// cvtsi2ss with the current (round-to-nearest) mode.
+    pub fn cvttss2si(a: u32) -> u32 {
+        let r: u32;
+        unsafe {
+            asm!("movd {x}, {a:e}", "cvttss2si {r:e}, {x}",
+                 a = in(reg) a, r = lateout(reg) r, x = out(xmm_reg) _, options(nostack, preserves_flags));
+        }
+        r
+    }
+    /// cvtsi2ss under the live MXCSR rounding mode.
     #[inline]
-    pub fn cvtsi2ss(v: u32) -> u32 { unsafe { get(_mm_cvtsi32_ss(_mm_setzero_ps(), v as i32)) } }
+    pub fn cvtsi2ss(v: u32) -> u32 {
+        let r: u32;
+        unsafe {
+            asm!("xorps {x}, {x}", "cvtsi2ss {x}, {v:e}", "movd {r:e}, {x}",
+                 v = in(reg) v, r = lateout(reg) r, x = out(xmm_reg) _, options(nostack, preserves_flags));
+        }
+        r
+    }
 }
 #[cfg(target_arch = "x86_64")]
 pub use sse::*;

@@ -197,7 +197,7 @@ def run(addr, regs, xmm, obj, args, globals_=()):
                 bad.append(f"call at {a:#x}")
                 uc_.emu_stop()
                 return
-            calls.append({"target": target, "in": machine()})
+            calls.append({"target": target, "in": {**machine(), "stack": bytes(uc_.mem_read(*stack_window)).hex()}})
             inside.append((a + size, uc_.reg_read(xc.UC_X86_REG_ESP)))
             return
         if i.mnemonic[:3] in ("add", "sub", "mul", "div") and i.mnemonic.endswith(("ss", "ps")):

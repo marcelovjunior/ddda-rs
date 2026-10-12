@@ -128,6 +128,9 @@ pub fn update_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn get_render_target_data(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (rt, dst) = (arg(m, cpu, 1), arg(m, cpu, 2));
     cpu.eax = match target(rt) {
+        // a multisampled target cannot be read (Microsoft Learn,
+        // GetRenderTargetData); it is resolved with StretchRect first
+        Some(t) if t.samples != 0 => D3DERR_INVALIDCALL,
         Some(t) => {
             if let (Some(bytes), Some((dp, dpitch, _, _, h, _))) = (backend(|b| b.read_back(&t)), surface_shadow(m, dst)) {
                 let row = bytes.len() / t.height.max(1) as usize;

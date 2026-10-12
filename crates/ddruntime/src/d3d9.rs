@@ -8,9 +8,9 @@
 //! The adapter answers from a capability profile recorded from a real
 //! Direct3D 9 driver (scripts/d3d9_profile.py -> data/d3d9_profile.txt):
 //! identifier, caps and every format, multisample, depth-stencil and
-//! conversion check the game's start-up makes (0x00DA9EC0). The display is
-//! the runtime's 1920x1080, 60 Hz X8R8G8B8 desktop; its mode list is the
-//! fixed one below. Device creation and resources come next; the
+//! conversion check the game's start-up makes (0x00DA9EC0). The display
+//! (desktop and mode list) is the host's, asked from its own Direct3D 9
+//! ([`display`]). Device creation and resources come next; the
 //! presentation backend (wgpu) after that.
 use crate::dispatch::{Conflict, Registry};
 use crate::interfaces::{self, Spec, Tokens};
@@ -130,14 +130,57 @@ pub fn profile() -> &'static Profile {
     P.get_or_init(|| Profile::parse(include_str!("../data/d3d9_profile.txt")))
 }
 
-/// The display modes of the runtime's desktop for X8R8G8B8, in
-/// EnumAdapterModes order: common 4:3, 16:10 and 16:9 modes up to the
-/// 1920x1080 desktop, all at 60 Hz.
-pub const MODES: &[(u32, u32)] = &[
-    (640, 480), (720, 480), (720, 576), (800, 600), (1024, 768), (1152, 864), (1176, 664),
-    (1280, 720), (1280, 768), (1280, 800), (1280, 960), (1280, 1024), (1360, 768), (1366, 768),
-    (1440, 900), (1600, 900), (1600, 1024), (1600, 1200), (1680, 1050), (1920, 1080),
-];
+// --- the display ------------------------------------------------------------
+
+pub use hostdisplay::{Display, Mode};
+
+/// The session's display: the one [`set_display`] gave, else the one a
+/// `DDRUNTIME_DISPLAY` file records (hostdisplay's text form), else the
+/// host's own Direct3D 9 asked once (hostdisplay::query): the player's
+/// monitor's desktop and modes, in the driver's order (brief L34). A
+/// session without any stops: the game's resolution list would be made up.
+pub fn display() -> Display {
+    crate::runtime::with(|rt| rt.display.with(|d| {
+        d.get_or_insert_with(|| {
+            if let Some(path) = std::env::var_os("DDRUNTIME_DISPLAY") {
+                let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("DDRUNTIME_DISPLAY {}: {e}", path.to_string_lossy()));
+                return Display::parse(&text).unwrap_or_else(|| panic!("DDRUNTIME_DISPLAY {}: not a display record", path.to_string_lossy()));
+            }
+            hostdisplay::query().expect("the host's display modes (Direct3D 9 adapter 0); set DDRUNTIME_DISPLAY to a recorded display")
+        }).clone()
+    }))
+}
+
+/// Use this display for the session (tests, replays).
+pub fn set_display(d: Display) {
+    crate::runtime::with(|rt| rt.display.with(|x| *x = Some(d)));
+}
+
+/// The adapter's current display mode: the full-screen swap chain's mode
+/// while the game's device is full screen (D3D9 changes the display mode),
+/// else the desktop's.
+pub fn current_mode() -> Mode {
+    let d = display();
+    match crate::d3d9dev::presentation() {
+        Some(p) if !p.windowed => Mode { width: p.width, height: p.height, refresh: full_screen_refresh(&d, p.width, p.height, p.refresh), format: D3DFMT_X8R8G8B8 },
+        _ => d.desktop,
+    }
+}
+
+/// The refresh rate a full-screen mode runs at: the one asked for, or for
+/// D3DPRESENT_RATE_DEFAULT (0) the desktop's when that mode has it, else
+/// the first listed rate for the size (runtime choice: D3D9 leaves the
+/// default rate to the driver).
+pub fn full_screen_refresh(d: &Display, width: u32, height: u32, asked: u32) -> u32 {
+    if asked != 0 {
+        return asked;
+    }
+    let sized = |m: &&Mode| m.width == width && m.height == height;
+    if d.modes.iter().filter(sized).any(|m| m.refresh == d.desktop.refresh) {
+        return d.desktop.refresh;
+    }
+    d.modes.iter().find(sized).map_or(d.desktop.refresh, |m| m.refresh)
+}
 
 pub const IDIRECT3D9: &[&str] = &[
     "QueryInterface", "AddRef", "Release", "RegisterSoftwareDevice", "GetAdapterCount",
@@ -212,19 +255,22 @@ fn get_adapter_count(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 4);
 }
 /// GetAdapterDisplayMode(this, adapter, D3DDISPLAYMODE*): Width, Height,
-/// RefreshRate, Format.
+/// RefreshRate, Format of the current mode.
 fn get_adapter_display_mode(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (adapter, mode) = (arg(m, cpu, 1), arg(m, cpu, 2));
     cpu.eax = if adapter == 0 {
-        m.set_u32(mode, crate::win32::SCREEN_W);
-        m.set_u32(mode + 4, crate::win32::SCREEN_H);
-        m.set_u32(mode + 8, 60);
-        m.set_u32(mode + 12, D3DFMT_X8R8G8B8);
+        write_mode(m, mode, current_mode());
         D3D_OK
     } else {
         D3DERR_INVALIDCALL
     };
     ret(m, cpu, 12);
+}
+
+pub(crate) fn write_mode(m: &mut dyn Mem, at: u32, d: Mode) {
+    for (k, v) in [d.width, d.height, d.refresh, d.format].into_iter().enumerate() {
+        m.set_u32(at + 4 * k as u32, v);
+    }
 }
 
 fn write_bytes(m: &mut dyn Mem, at: u32, data: &[u8]) {
@@ -263,17 +309,15 @@ fn get_adapter_identifier(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// GetAdapterModeCount(this, adapter, format).
 fn get_adapter_mode_count(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (adapter, format) = (arg(m, cpu, 1), arg(m, cpu, 2));
-    cpu.eax = if adapter == 0 && format == D3DFMT_X8R8G8B8 { MODES.len() as u32 } else { 0 };
+    cpu.eax = if adapter == 0 && format == D3DFMT_X8R8G8B8 { display().modes.len() as u32 } else { 0 };
     ret(m, cpu, 12);
 }
 /// EnumAdapterModes(this, adapter, format, index, D3DDISPLAYMODE*).
 fn enum_adapter_modes(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (adapter, format, index, out) = (arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
-    cpu.eax = match MODES.get(index as usize) {
-        Some(&(w, h)) if adapter == 0 && format == D3DFMT_X8R8G8B8 => {
-            for (k, v) in [w, h, 60, format].into_iter().enumerate() {
-                m.set_u32(out + 4 * k as u32, v);
-            }
+    cpu.eax = match display().modes.get(index as usize) {
+        Some(&mode) if adapter == 0 && format == D3DFMT_X8R8G8B8 => {
+            write_mode(m, out, mode);
             D3D_OK
         }
         _ => D3DERR_INVALIDCALL,
