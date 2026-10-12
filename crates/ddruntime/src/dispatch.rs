@@ -156,8 +156,10 @@ impl Registry {
                 // rounding or sticky flags.
                 cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
                 x86::ldmxcsr(x86::MXCSR_DEFAULT);
-                // an API call: where a guest thread's time slice may end
-                crate::threads::maybe_yield();
+                // a service runs holding the guest lock in parallel mode
+                // (crate::threads); an API call is also where a guest
+                // thread's time slice may end
+                let _lock = crate::threads::service();
                 f(m, cpu);
                 x86::ldmxcsr(cpu.mxcsr.0);
                 Ok(())

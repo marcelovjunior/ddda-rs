@@ -102,11 +102,17 @@ pub fn get_system_time_as_file_time(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 4);
 }
 
-/// GetSystemInfo(SYSTEM_INFO*), 36 bytes. One processor: one guest
-/// thread runs at a time (crate::threads); the game sizes its worker pool
-/// from this.
+/// GetSystemInfo(SYSTEM_INFO*), 36 bytes. The game sizes its worker pool
+/// from the processor count. Serial mode: one processor, since one guest
+/// thread runs at a time (crate::threads). Parallel mode: the host's
+/// logical processors (at most 32, the width of the 32-bit mask).
 pub fn get_system_info(m: &mut dyn Mem, cpu: &mut Cpu) {
     let p = arg(m, cpu, 0);
+    let n = if crate::threads::parallel() {
+        std::thread::available_parallelism().map_or(1, |n| n.get()).min(32) as u32
+    } else {
+        1
+    };
     zero(m, p, 36);
     m.set_u16(p, 0); // PROCESSOR_ARCHITECTURE_INTEL
     m.set_u32(p + 4, 0x1000); // dwPageSize
@@ -115,50 +121,83 @@ pub fn get_system_info(m: &mut dyn Mem, cpu: &mut Cpu) {
     // 64-bit Windows its user space is 4 GB (Microsoft Learn, "Memory Limits
     // for Windows and Windows Server Releases"); VIRTUAL_RANGES uses it.
     m.set_u32(p + 12, 0xFFFE_FFFF);
-    m.set_u32(p + 16, 1); // dwActiveProcessorMask
-    m.set_u32(p + 20, 1); // dwNumberOfProcessors
+    m.set_u32(p + 16, (1u64 << n).wrapping_sub(1) as u32); // dwActiveProcessorMask
+    m.set_u32(p + 20, n); // dwNumberOfProcessors
     m.set_u32(p + 24, 586); // dwProcessorType PROCESSOR_INTEL_PENTIUM
     m.set_u32(p + 28, 0x1_0000); // dwAllocationGranularity
     m.set_u16(p + 32, 6); // wProcessorLevel
     ret(m, cpu, 4);
 }
 
-// --- interlocked (one guest thread: plain read-modify-write) --------------
+// --- interlocked ----------------------------------------------------------
 
+// The Interlocked functions are atomic read-modify-writes with a full
+// barrier (a lock-prefixed instruction on x86): host atomics on the guest
+// word (SeqCst), so they stay atomic while other guest threads run
+// translated code at the same time (crate::threads' parallel mode).
+// Windows requires the operand to be 32-bit aligned; an unaligned or
+// faulting operand takes the ordinary accessors.
+use std::sync::atomic::Ordering::SeqCst;
 pub fn interlocked_increment(m: &mut dyn Mem, cpu: &mut Cpu) {
     let p = arg(m, cpu, 0);
-    let v = m.u32(p).wrapping_add(1);
-    m.set_u32(p, v);
-    cpu.eax = v;
+    cpu.eax = match m.atomic_u32(p) {
+        Some(a) => a.fetch_add(1, SeqCst).wrapping_add(1),
+        None => {
+            let v = m.u32(p).wrapping_add(1);
+            m.set_u32(p, v);
+            v
+        }
+    };
     ret(m, cpu, 4);
 }
 pub fn interlocked_decrement(m: &mut dyn Mem, cpu: &mut Cpu) {
     let p = arg(m, cpu, 0);
-    let v = m.u32(p).wrapping_sub(1);
-    m.set_u32(p, v);
-    cpu.eax = v;
+    cpu.eax = match m.atomic_u32(p) {
+        Some(a) => a.fetch_sub(1, SeqCst).wrapping_sub(1),
+        None => {
+            let v = m.u32(p).wrapping_sub(1);
+            m.set_u32(p, v);
+            v
+        }
+    };
     ret(m, cpu, 4);
 }
 pub fn interlocked_exchange(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (p, v) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    cpu.eax = m.u32(p);
-    m.set_u32(p, v);
+    cpu.eax = match m.atomic_u32(p) {
+        Some(a) => a.swap(v, SeqCst),
+        None => {
+            let old = m.u32(p);
+            m.set_u32(p, v);
+            old
+        }
+    };
     ret(m, cpu, 8);
 }
 pub fn interlocked_exchange_add(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (p, v) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    let old = m.u32(p);
-    m.set_u32(p, old.wrapping_add(v));
-    cpu.eax = old;
+    cpu.eax = match m.atomic_u32(p) {
+        Some(a) => a.fetch_add(v, SeqCst),
+        None => {
+            let old = m.u32(p);
+            m.set_u32(p, old.wrapping_add(v));
+            old
+        }
+    };
     ret(m, cpu, 8);
 }
 pub fn interlocked_compare_exchange(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (p, exchange, comparand) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    let old = m.u32(p);
-    if old == comparand {
-        m.set_u32(p, exchange);
-    }
-    cpu.eax = old;
+    cpu.eax = match m.atomic_u32(p) {
+        Some(a) => a.compare_exchange(comparand, exchange, SeqCst, SeqCst).unwrap_or_else(|old| old),
+        None => {
+            let old = m.u32(p);
+            if old == comparand {
+                m.set_u32(p, exchange);
+            }
+            old
+        }
+    };
     ret(m, cpu, 12);
 }
 
