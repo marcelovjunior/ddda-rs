@@ -1801,3 +1801,49 @@ opening (codex-31), route perf (codex-29).
 - Rendering: DrawPrimitive no longer draws with the device's index buffer
   (24eaf3bb, claude-2), and indexed strips carry their index format on the
   pipeline (b392b767, head; equals the D3D9 driver).
+
+## Batch 2026-10-12 (trains 14-18: 59,450 of 59,469 verified)
+
+- Trains 14-18 adopted:
+  - L50, functions Ghidra split in two (boot stop 17, the archive
+    loader);
+  - L52, 32 smaller shards (`shard = (addr >> 19) % 32`; release shards
+    at opt-level 1);
+  - L54, the libvorbis backend table and 0x012F4E74;
+  - L57, a preemption point in `call_lifted`.
+  Main 0cd11f67: 59,450 of 59,469 (99.97%).
+- Runtime-only fixes merged directly, with ddruntime tests:
+  - L57b: serial-mode preemption at every lifted function entry, through
+    `GuestMemory::page_table`;
+  - L57c: no preemption inside services (`ServiceScope`);
+  - L59: ddgpu copies a texture that a draw both samples and renders
+    into, as the D3D9 driver tolerates.
+- The `play` cargo profile:
+  - shards at opt-level 1, no LTO and no debug info, codegen-units 64;
+  - one warm target, C:/ddda-targets/play;
+  - runtime-only changes rebuild in 15-20 s.
+
+## Milestone 2026-10-12: the main menu
+
+- ddplay in the play build, parallel mode (`DDRUNTIME_PARALLEL=1`, the
+  17:55 exe with L59), reaches the main menu at t of about 380 s:
+  - the dragon-relief background and the ornamented banner;
+  - "Main Menu" (highlighted), "Manual", "Exit Game";
+  - the help box "Go to Main Menu.".
+  It ran at 2-16 FPS (claude-2).
+- Open: in parallel mode a worker thread sometimes stops with "RefCell
+  already borrowed" while the game runs on (claude-2, L64).
+- Frame rate is now the bottleneck for every test run, and the next
+  focus:
+  - **L61**, memcpy/memset services: the game's copies of video frames
+    (about 1.4 MB per 720p frame) went through byte-wise models; they are
+    now page-wise services. Serial title movie: about 1 to 4 FPS.
+  - **L62**, the x87 state stays live in the host FPU. Each x87
+    instruction had saved and restored the whole FPU state twice; the
+    sound decoder thread spent most of its time there. The guest state now
+    stays loaded between instructions and is parked at service calls.
+  - **L63**, bulk copies in ReadFile, movie samples, audio mixing and
+    surface copies, which had moved one byte per Mem call.
+  - `scripts/sample_profile.py`, a sampling profiler for the running
+    game: per thread, its leaf functions and the nearest lifted game
+    function.
