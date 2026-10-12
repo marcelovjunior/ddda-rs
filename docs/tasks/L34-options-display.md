@@ -196,7 +196,9 @@ the modes, each mode once).
 
 ### Verification and what is left
 
-- **Verified on the branch** (pause rules: no builds):
+- **Verified on the branch:**
+  - `cargo test -p hostdisplay`: 2 passed, including the host query on
+    this machine;
   - the census (unicorn emulation, cross-checked against Ghidra's
     decompilation for every site);
   - the display probe (ran on this host);
@@ -213,9 +215,8 @@ the modes, each mode once).
 - **Test edits in other agents' files:**
   - `tests/runtime.rs:295` (codex agreed, #9319) now expects the host's
     desktop;
-  - `tests/d3d9_device.rs:133` (claude-5) still Resets full screen to
-    1920x1080 at 60 Hz. That fails on a host without that mode. I asked
-    claude-5 (#9304); waiting for an answer.
+  - `tests/d3d9_device.rs:133` (claude-5 agreed, #9330) now Resets full
+    screen at the host's desktop mode (419fd70).
 - **Not done:**
   - ddplay following the game's mode (waiting on L25);
   - the 0x018D0158 flag's writer;
