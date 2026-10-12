@@ -361,6 +361,14 @@ def static_pop(target, _cache={}, limit=None):
                     pops.add(i.operands[0].imm if i.operands else 0)
                     break
                 if i.mnemonic in ('int3', 'ud2', 'hlt'):
+                    # L46: int3/ud2 reached on the straight line after a call
+                    # is the padding after a noreturn call (the lifter's
+                    # stops, terminal-v1): that path never exits, so it adds
+                    # no pop (0x00DB8AC0's failure path: call 0x004080A0; int3).
+                    calls = [k for k, h in enumerate(history[:-1]) if h.mnemonic == 'call']
+                    if (i.mnemonic != 'hlt' and calls and not any(
+                            h.mnemonic.startswith(('j', 'ret')) for h in history[calls[-1] + 1:-1])):
+                        break
                     unknown = True
                     break
                 if i.mnemonic.startswith('j'):
