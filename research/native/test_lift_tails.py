@@ -110,6 +110,15 @@ class EdgeBoundTests(unittest.TestCase):
         code = bytes.fromhex("b901000000" "21c8" "ff248500200000") + b"\xc3" * 2
         self.assertEqual(self.slots(code, {0x2000: dwords(0x100E, 0x100F, 0)}, 0x1007), [0, 1])
 
+    def test_l49_compare_of_the_register_the_index_was_copied_from(self):
+        # mov eax,esi; cmp esi,3; ja default; jmp [eax*4+0x2000] (0x00FA01FD)
+        code = bytes.fromhex("89f0" "83fe03" "7707" "ff248500200000") + b"\xc3" * 6
+        tables = {0x2000: dwords(0x100F, 0x1010, 0x1011, 0x1012, 0)}
+        self.assertEqual(self.slots(code, tables, 0x1007), [0, 1, 2, 3])
+        # inc esi between the copy and the compare: esi no longer equals eax
+        code = bytes.fromhex("89f0" "46" "83fe03" "7707" "ff248500200000") + b"\xc3" * 6
+        self.assertIsNone(self.slots(code, {0x2000: dwords(0x1010, 0x1011, 0x1012, 0x1013, 0)}, 0x1008))
+
     def test_register_bound_set_on_one_path_only_is_unproven(self):
         # test ecx,ecx; je skip; mov edx,3; skip: cmp eax,edx; ja default; jmp [eax*4+0x2000]
         code = bytes.fromhex("85c9" "7405" "ba03000000" "39d0" "7707" "ff248500200000") + b"\xc3" * 5
@@ -267,6 +276,39 @@ class SlotSweepTests(unittest.TestCase):
             full = lift.verification_gaps([dict(record, slot_coverage={"0x00400004": [0, 1, 2]})])
         self.assertEqual(partial, {0x400000: ["unproven table at 0x00400004"]})
         self.assertEqual(full, {})
+
+
+class CallerBoundTests(unittest.TestCase):
+    """L49: a switch whose index register its callers bound (0x004593E0)."""
+    # callee 0x1000: movzx ecx,byte [eax+0x3000]; jmp [ecx*4+0x2000]; ret...
+    # caller 0x1020: cmp eax,3; ja +5; call 0x1000; ret
+    CALLEE = bytes.fromhex("0fb68800300000" "ff248d00200000") + b"\xc3" * 0x12
+    CALLER = bytes.fromhex("83f803" "7705" "e8") + struct.pack("<i", 0x1000 - 0x102A) + b"\xc3"
+
+    def proof(self, extra_code=b"", extra_sections=(), entries=(0x1000, 0x1020)):
+        code = self.CALLEE + self.CALLER + b"\xc3" * 5 + extra_code
+        sections = [(0x1000, code), (0x2000, dwords(0x100E, 0x100F, 0x1010)),
+                    (0x3000, bytes((1, 0, 1, 0, 2))), *extra_sections]
+        read, is_code = image_fixture(code, dict(sections[1:]))
+        with patch.object(h, "image", return_value=(0, sections)), patch.object(h, "executable", is_code), \
+             patch.object(lift, "function_entries", return_value=frozenset(entries)), \
+             patch.object(lift, "noreturn_entries", return_value=frozenset()), \
+             patch.object(lift, "_BRANCHES", None), patch.dict(lift.CALLER_BOUND, clear=True):
+            _, switches, _, _ = lift.decode_body(0x1000, 0x20, entries=frozenset(entries), noreturn=frozenset(),
+                                                 read=read, is_code=is_code, ext=True)
+            return lift.TABLE_PROOF[0x1000], switches[0x1007]
+
+    def test_callers_bound_the_input_of_a_byte_remap(self):
+        # eax in [0, 3] at every call: the bytes T[0..3] = 1,0,1,0 are the slots
+        proof, targets = self.proof()
+        self.assertEqual(proof, {0x1007: True})
+        self.assertTrue({0x100E, 0x100F} <= set(targets))
+
+    def test_an_address_taken_entry_or_an_unbounded_caller_is_unproven(self):
+        self.assertEqual(self.proof(extra_sections=[(0x5000, dwords(0x1000))])[0], {0x1007: False})
+        # 0x1030: call 0x1000 with eax unchecked
+        unbounded = b"\xe8" + struct.pack("<i", 0x1000 - 0x1035) + b"\xc3"
+        self.assertEqual(self.proof(unbounded, entries=(0x1000, 0x1020, 0x1030))[0], {0x1007: False})
 
 
 class FragmentTests(unittest.TestCase):
