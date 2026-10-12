@@ -35,6 +35,30 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Exact setup/input pages (2026-10-12)
+
+Opt-in `guarded-state-v1` requires checked setup state. Its proof reads
+captured pages and lazily generated pages from the recorder's same immutable
+input generator, capped at 256 pages. Known stores replace those values;
+unknown writers must pass existing protected-read alias checks. Changed
+instruction bytes refuse a proof. Entry registers remain unknown unless
+explicitly bound. **151 light tests pass**, including lazy-page equality,
+overwrite invalidation, alias checks and changed-code rejection.
+
+0x00494D80 with checked 0x004980F0 remains **0/3**, but proof advances
+from the flag test at 0x00494D90 (7 instructions) to **0x00494EA5, CDQ,
+69,197 instructions**. The flag's page was untouched by the constructor;
+its method input comes from the normal deterministic page generator.
+`L28c/manager-state-audit.json` confirms **59,592 / 177,370 unchanged**.
+**Next:** general CDQ/double-shift proof semantics, then repeat this recipe.
+
+**0x00493AA0 set aside per head:** manager-first changes destination
+producer 0x004915A0 reads, writes and MXCSR. Destination-first reproduces
+0x004915A0, then changes save-manager 0x00437BE0 reads, writes, ECX/EDX
+outputs and recorded calls. Neither sequence passed exact replay; no
+accepted record was changed. Evidence: `bound-output-compare.log` and
+`output-first-compare.log`. No general composition rule was established.
+
 ### Earlier-phase method bindings (2026-10-12)
 
 `constructed_inputs.py --bind edi=0.regs_out.eax` selects an earlier

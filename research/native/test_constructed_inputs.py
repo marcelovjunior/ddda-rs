@@ -160,6 +160,28 @@ class ConstructedTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'differs from captured'):
             c.validate_state({**state, 'writes': {address: 1}})
 
+    def test_captured_unchanged_setup_bytes_are_opt_in_proof_inputs(self):
+        self.fixture('8b4104 c3','83790400 750a b9401f0000 31c0 40 49 75fc c3')
+        state,_,_=self.build()
+        method=dict(addr=0x400100)
+        with self.assertRaisesRegex(h.Rejected,'runaway'):
+            self.run_body(method,2,initial_state=state,input_strategy='guarded-stores-v1')
+        result=self.run_body(method,2,initial_state=state,input_strategy='guarded-state-v1')
+        self.assertEqual(result['regs_out']['eax'],8000)
+        self.assertIn('image_budget',result)
+        with self.assertRaisesRegex(ValueError,'checked setup state'):
+            self.run_body(method,2,input_strategy='guarded-state-v1')
+
+    def test_checked_state_proof_uses_same_lazy_input_pages_as_execution(self):
+        self.fixture('c3','803d0000002000 750a b9401f0000 31c0 40 49 75fc c3')
+        state,_,_=self.build()
+        self.assertNotIn(0x20000000,state['pages'])
+        result=self.run_body(dict(addr=0x400100),2,initial_state=state,
+                             input_strategy='guarded-state-v1')
+        self.assertEqual(result['regs_out']['eax'],8000)
+        self.assertIn('image_budget',result)
+        self.assertIn([0x20000000,'00'],result['reads'])
+
     def test_explicit_setup_return_binding_is_a_proof_value(self):
         self.fixture('b8401f0000 c3','31c0 40 49 75fc c3')
         f=dict(addr=0x400000)

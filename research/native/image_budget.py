@@ -55,7 +55,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 deadline=None, max_bytes=256*4096, guarded=False, decode=None,
                 closed=frozenset(), models=None, pop_for=None, initial_direction=None,
                 caller_stack=None, entry_pointers=None, initial_writes=None,
-                entry_values=None):
+                entry_values=None, initial_pages=None, read_initial=None):
     """Return a strict count or guarded bound certificate; None if unproven.
 
     `read_image(address, size)` must return original image bytes only and
@@ -85,6 +85,11 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     values through 32-bit copies, sums/differences, LEA and saved words. Only
     cancellation of every symbolic term creates an integer fact. Arithmetic
     flags remain unknown when the operands were unknown.
+    Opt-in `initial_pages` supplies complete captured setup input pages,
+    including bytes the setup did not write. Reads receive the same alias
+    guards; changed instruction bytes refuse the proof. `read_initial` may
+    supply lazily generated input bytes only when it uses the exact same
+    immutable input generator as execution. Its caller must cap cached pages.
     """
     # Only the bounded caller-argument window is an input fact. The saved
     # return address and uninitialized callee locals are deliberately absent.
@@ -109,6 +114,15 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             or any(type(a) is not int or not 0 <= a <= MASK or type(v) is not int or not 0 <= v <= 255
                    for a,v in initial_writes.items())):
         raise ValueError('setup writes require guarded pointer witnesses and bounded bytes')
+    if initial_pages is not None and (entry_pointers is None
+            or len(initial_pages)*4096 > max_bytes
+            or any(type(p) is not int or not 0 <= p <= 0xfffff000 or p % 4096
+                   or type(data) is not bytes or len(data) != 4096
+                   for p,data in initial_pages.items())):
+        raise ValueError('setup pages require guarded pointer witnesses and bounded pages')
+    if read_initial is not None and (entry_pointers is None or not callable(read_initial)):
+        raise ValueError('initial input reader requires guarded pointer witnesses')
+    initial_pages = initial_pages or {}
     prior = dict(initial_writes or {})
     if not instructions:
         return None
@@ -187,8 +201,10 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
         return value & MASK
 
     def stored_load(a, size):
-        # Only this trace's stores or checked setup writes supply object facts.
-        if a is None or any((a+k)&MASK not in stores and (a+k)&MASK not in prior for k in range(size)):
+        # Trace stores, checked writes, or opt-in captured pages supply facts.
+        if a is None or any((a+k)&MASK not in stores and (a+k)&MASK not in prior
+                            and read_initial is None and (((a+k)&MASK & ~4095) not in initial_pages
+                                 or stack <= (a+k)&MASK < stack+4) for k in range(size)):
             return None
         return load(a, size)
 
@@ -227,11 +243,14 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 v = stores[p]
             elif p in prior:
                 v = prior[p]
+            elif p & ~4095 in initial_pages and not stack <= p < stack+4:
+                v = initial_pages[p & ~4095][p & 4095]
             elif 0 <= p-(stack+4) < len(caller_stack):
                 v = caller_stack[p-(stack+4)]
             else:
                 try:
-                    raw = read_image(p, 1)
+                    raw = (read_initial(p, 1) if read_initial is not None and not stack <= p < stack+4
+                           else read_image(p, 1))
                     v = raw[0] if len(raw) == 1 else None
                 except KeyError:
                     v = None
@@ -369,6 +388,9 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 return None
             if any(a in prior for a in range(i.address,i.address+i.size)):
                 return None  # setup may not change the instructions being proved
+            if any((a & ~4095) in initial_pages and initial_pages[a & ~4095][a & 4095] != b
+                   for a,b in zip(range(i.address,i.address+i.size),i.bytes)):
+                return None  # initial pages must retain the decoded instructions
             mn, op = i.mnemonic, i.operands
             before_esp, was_root = regs['esp'], not frames
             pc += i.size

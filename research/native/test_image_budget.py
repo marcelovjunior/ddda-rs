@@ -51,6 +51,29 @@ class ImageBudgetTests(unittest.TestCase):
         writer=next(i.address for i in ins if i.op_str=='dword ptr [edx], 0')
         self.assertTrue(WriteGuard(proof).conflicts(writer,witnesses['esp']-4,4))
 
+    def test_setup_page_reads_keep_alias_and_instruction_guards(self):
+        ins,read,_=self.fixture(bytes.fromhex('8b32 8906 8b0b 85c9 7501 c3 cc'))
+        witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}
+        witnesses['esp']=0xf008000
+        kw=dict(guarded=True,entry_pointers=witnesses)
+        # ESI reads an uncaptured pointer and is unknown; [ESI] must not alias
+        # the captured input word read later through EBX.
+        witnesses['edx']=0x30000000
+        witnesses['esi']=0x40000000
+        proof=image_bound(ins,read,witnesses['esp'],initial_pages={0x20000000:bytes(4096)},**kw)
+        self.assertIsNotNone(proof)
+        writer=next(i.address for i in ins if i.mnemonic=='mov' and i.op_str.startswith('dword ptr [esi]'))
+        self.assertTrue(WriteGuard(proof).conflicts(writer,0x20000000,4))
+        # A known-address unknown-value store replaces the captured byte.
+        overwritten,read2,_=self.fixture(bytes.fromhex('890500000020 8b0d00000020 85c9 7501 c3 cc'))
+        self.assertIsNone(image_bound(overwritten,read2,witnesses['esp'],
+                                     initial_pages={0x20000000:bytes(4096)},**kw))
+        changed=bytearray(4096);changed[0]=0x90
+        self.assertIsNone(image_bound(ins,read,witnesses['esp'],initial_pages={0x400000:bytes(changed)},**kw))
+        for pages in ({1:bytes(4096)},{0x20000000:b''}):
+            with self.assertRaises(ValueError):
+                image_bound(ins,read,witnesses['esp'],initial_pages=pages,**kw)
+
     def test_only_explicit_matching_entry_bindings_are_known(self):
         ins,read,_=self.fixture(bytes.fromhex('85c9 7401 c3 cc'))
         witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}

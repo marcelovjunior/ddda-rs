@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'record-range-v1',
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'guarded-state-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'record-range-v1',
                     'slot-sweep-v1', *RETURN_STRATEGIES)
 # Strategies that take an evidence-derived input_layout (record_inputs.py,
 # L48 slot_sweep_layout).
@@ -819,6 +819,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     with the case; its stack arguments are part of the initial memory image.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
 
+    `guarded-state-v1` additionally admits exact initial memory as proof
+    inputs: captured setup pages and bounded lazy input pages from fill().
+    Alias checks and unchanged decoded instruction bytes remain required.
+    It requires checked constructor state; it supplies no invented fields.
     `guarded-stores-v1` also tracks exact entry pointer identities for alias
     checks in the bound proof. Unknown-base loads can use only bytes written
     by the traced code, not initial object memory. This lets a constructor's
@@ -885,7 +889,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # Opt in: preserve every old distribution and every return guard.
     # __alloca_probe_16/_8 (0x012F4E90/0x012F4EA6) align ESP+4; with
     # zero EAX this input exercises their zero-allocation return path.
-    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1')
+    if input_strategy == 'guarded-state-v1' and initial_state is None:
+        raise ValueError('guarded-state-v1 requires checked setup state')
+    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -1617,7 +1623,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
-        if input_strategy in ('bulk-call-v1','wrapper-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and name != 'esp':
+        if input_strategy in ('bulk-call-v1','wrapper-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1') and name != 'esp':
             # Register-passed objects must not all alias zero-return mocks
             # at address zero. Reuse the existing register-pointer palette.
             v = SparseInputs('zero-objects-v1').register(rnd,name)
@@ -1658,7 +1664,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     image_budget = None
-    if (initial_state is None or input_strategy != 'image-bounded-v1') and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and body is not None and max_insn < 2_000_000:
+    if (initial_state is None or input_strategy != 'image-bounded-v1') and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1') and body is not None and max_insn < 2_000_000:
         # Opt-in only. A finite abstract trace with unknown entry GPRs and
         # original image bytes must establish the entire path. Guarded mode
         # additionally traces closed calls and checks unknown output aliases.
@@ -1681,7 +1687,19 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 break
             proof_body.append(decoded_proof)
         if len(proof_body) == len(body):
-            guarded = input_strategy in ('guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1')
+            guarded = input_strategy in ('guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1')
+            proof_inputs = {}
+            def read_initial(a, size):
+                data = bytearray()
+                for p in range(a, a+size):
+                    page = p & ~4095
+                    if page not in proof_inputs:
+                        if len(proof_inputs) >= MAX_PAGES:
+                            raise KeyError(p)
+                        # Same immutable input generator used by on_unmapped.
+                        proof_inputs[page] = fill(page)
+                    data.append(proof_inputs[page][p & 4095])
+                return bytes(data)
             certificate = image_bound(proof_body, code, regs_in['esp'], entry=address,
                                 ceiling=2_000_000-max_insn, deadline=deadline,
                                 max_bytes=MAX_PAGES*4096,guarded=guarded,
@@ -1690,14 +1708,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                 # Exact already-mapped input, not inferred game state.
                                 # Unknown writes still cannot alias these read facts.
                                 caller_stack=(bytes(uc.mem_read(regs_in['esp']+4,128))
-                                              if input_strategy in ('guarded-stack-v1','guarded-stores-v1') else None),
-                                entry_pointers=regs_in if initial_state is not None or input_strategy == 'guarded-stores-v1' else None,
+                                              if input_strategy in ('guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1') else None),
+                                entry_pointers=regs_in if initial_state is not None or input_strategy in ('guarded-stores-v1', 'guarded-state-v1') else None,
                                 initial_writes=({a:v for a,v in initial_state.get('writes',{}).items()
                                                  if not regs_in['esp'] <= a < regs_in['esp']+4}
                                                 if initial_state is not None else None),
                                 # Only explicit bindings from checked setup
                                 # cases are values; other entry GPRs remain unknown.
-                                entry_values=initial_state['registers'] if initial_state is not None else None)
+                                entry_values=initial_state['registers'] if initial_state is not None else None,
+                                initial_pages=initial_state['pages'] if input_strategy == 'guarded-state-v1' else None,
+                                read_initial=read_initial if input_strategy == 'guarded-state-v1' else None)
             bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:
                 max_insn += bound  # keep the ordinary overhead allowance

@@ -1,5 +1,13 @@
 # Milestones
 
+### L28c exact input-page proofs (2026-10-12)
+
+- Opt-in checked-state proof uses the recorder's exact initial page bytes
+  with existing alias guards. **151 tests pass; 59,592 / 177,370 unchanged.**
+- 0x00494D80 reaches 69,197 proof instructions; CDQ is unsupported.
+  **Next action:** general integer proof semantics. 0x00493AA0 set aside
+  with both setup-order mismatches documented, per head.
+
 ### L28c earlier producer bindings (2026-10-12)
 
 - Method inputs can select any checked setup phase without rebinding later
