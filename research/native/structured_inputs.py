@@ -152,11 +152,13 @@ def trial_log(root, strategy, terminal=False):
 
 
 def record(root, strategy, seeds, seconds, limit, retry=None, terminal=False, layout=None, addresses=None):
-    if (strategy == 'record-range-v1') != (layout is not None):
-        raise ValueError('record-range-v1 requires a layout; other strategies do not use one')
+    if (strategy in ('record-range-v1', 'sentinel-records-v1')) != (layout is not None):
+        raise ValueError('record-range-v1 and sentinel-records-v1 require a layout')
     if layout is not None:
         from record_inputs import RecordRangeInputs
-        RecordRangeInputs(layout, 1)  # reject malformed layouts before opening a trial log
+        from sentinel_inputs import SentinelInputs
+        factory = SentinelInputs if strategy == 'sentinel-records-v1' else RecordRangeInputs
+        factory(layout, 1)  # reject malformed layouts before opening a trial log
     selected = read(root/'patterns/lift.json')
     check_boundary(root, selected)
     have = {f['addr'] for f in selected}
@@ -235,7 +237,7 @@ def _inputs(cases):
     strategy = strategies.pop() if len(strategies) == 1 else 'random'
     if strategy == 'zero':
         return dict(zero_inputs=True)
-    if strategy == 'record-range-v1':
+    if strategy in ('record-range-v1', 'sentinel-records-v1'):
         layouts = {json.dumps(c.get('input_layout'),sort_keys=True) for c in cases}
         if len(layouts) != 1 or None in [c.get('input_layout') for c in cases]:
             raise ValueError('inconsistent recorded range layouts')
@@ -623,7 +625,7 @@ if __name__ == '__main__':
     ap.add_argument('--seeds',type=int,default=3)
     ap.add_argument('--seconds',type=float,default=20)
     ap.add_argument('--limit',type=int)
-    ap.add_argument('--layout',type=Path,help='JSON record-range layout with evidence-derived bindings/stride/fields')
+    ap.add_argument('--layout',type=Path,help='JSON record layout with evidence-derived bindings/stride/fields')
     ap.add_argument('--address',type=lambda s:int(s,0),action='append',help='record: only these candidate addresses; promote: consider these entries (repeatable)')
     ap.add_argument('--retry',help='regex: re-run functions whose logged attempts failed with a matching reason')
     ap.add_argument('--terminal',action='store_true',help='accept terminal-v1 cases (end at a root noreturn call)')

@@ -3,6 +3,18 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00CC2580 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00CC2580.
+pub fn f_00cc2580(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x12C)); { let r = cpu.fl.alu_and(cpu.eax, 0x1Fu32, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x00CC2590 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00CC2590.
+pub fn f_00cc2590(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } { let r = cpu.fl.alu_sub((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), ((cpu.eax >> 0) & 0xFF), 8); } cpu.eax = (cpu.eax & !(0xFF << 0)) | (((cpu.fl.cond("ne") as u32) & 0xFF) << 0); { let r = cpu.fl.alu_xor(cpu.eax, m.fast_u32(pt, cpu.ecx.wrapping_add(0x20)), 32); cpu.eax = r; } { let r = cpu.fl.alu_and(cpu.eax, 0x1u32, 32); cpu.eax = r; } { let r = cpu.fl.alu_xor(m.fast_u32(pt, cpu.ecx.wrapping_add(0x20)), cpu.eax, 32); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x20), r); } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return;
+}
+
 // Translated from 0x00CC25B0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00CC25B0.
 pub fn f_00cc25b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -4973,16 +4985,4 @@ pub fn f_00cd7990(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn f_00cd7a00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     cpu.eax = 0x19A8F4Cu32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00CD7A10 (DDDA.exe 2017-12-13 Steam), rQuestInfinity::getDTI.
-pub fn f_00cd7a10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = 0x19A8F6Cu32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00CD7A20 (DDDA.exe 2017-12-13 Steam), rQuestInfinity::vf06.
-pub fn f_00cd7a20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = 0x1619C74u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
