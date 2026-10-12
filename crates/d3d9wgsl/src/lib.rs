@@ -121,6 +121,11 @@ pub struct Options {
     /// if present, else after `alpha`). Hardware depth bias scales the
     /// constant by an implementation-defined step, so it is done here.
     pub depth_bias: bool,
+    /// Pixel shaders: channels each sampler reads as 1 (bits 4n..4n+3 for
+    /// sampler n, bit k = channel k of RGBA), for textures stored in a
+    /// format without them (render-target textures; D3D9 samples a missing
+    /// channel as 1).
+    pub sampler_ones: u64,
 }
 
 /// The class of a vertex attribute format.
@@ -149,6 +154,7 @@ struct Ctx<'a> {
     out: String,
     indent: usize,
     lod_bias: bool,
+    sampler_ones: u64,
 }
 
 const COMPONENTS: [char; 4] = ['x', 'y', 'z', 'w'];
@@ -213,6 +219,7 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         out: String::new(),
         indent: 1,
         lod_bias: options.lod_bias && !vertex,
+        sampler_ones: if vertex { 0 } else { options.sampler_ones },
     };
     let mut iface = Interface::default();
     for ins in &shader.instructions {
@@ -684,6 +691,14 @@ impl Ctx<'_> {
             Sampling::Bias(b) if self.lod_bias => format!("textureSampleBias(t{n}, s{n}, {c}, {b} + {sampler_bias})"),
             Sampling::Bias(b) => format!("textureSampleBias(t{n}, s{n}, {c}, {b})"),
             Sampling::Grad(x, y) => format!("textureSampleGrad(t{n}, s{n}, {c}, {}, {})", grad(&x), grad(&y)),
+        };
+        // channels the texture's storage lacks read as 1
+        let ones = if n < 16 { (self.sampler_ones >> (4 * n)) & 0xF } else { 0 };
+        let call = if ones != 0 {
+            let b = |k: u32| if ones & (1 << k) != 0 { "true" } else { "false" };
+            format!("select({call}, vec4<f32>(1.0), vec4<bool>({}, {}, {}, {}))", b(0), b(1), b(2), b(3))
+        } else {
+            call
         };
         // the sampler's swizzle applies to the result
         Ok(format!("{call}{}", swizzle(sampler.mask_or_swizzle)))

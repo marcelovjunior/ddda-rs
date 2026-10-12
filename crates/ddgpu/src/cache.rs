@@ -70,8 +70,8 @@ pub(crate) type SamplerKinds = Vec<(u32, u8)>;
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct PipelineKey {
     /// the vertex and pixel shader module keys
-    pub vs: (u64, u64, bool),
-    pub ps: (u64, u64, bool),
+    pub vs: ModuleKey,
+    pub ps: ModuleKey,
     pub buffers: Vec<BufferLayout>,
     pub topology: wgpu::PrimitiveTopology,
     pub cull: Option<wgpu::Face>,
@@ -89,6 +89,10 @@ pub(crate) struct PipelineKey {
 pub(crate) type TexGroupKey = (bool, Vec<(u32, u8, u32, bool, [u32; 14])>);
 
 /// A target view: surface, texture, level, D3D format, sRGB view.
+/// A translated shader: (token hash, linked vertex shader hash, depth bias,
+/// channels sampled as 1 per sampler).
+pub(crate) type ModuleKey = (u64, u64, bool, u64);
+
 pub(crate) type TargetKey = (u32, Option<u32>, u32, u32, bool);
 
 /// Bytes of the vertex and pixel constant blocks: 256 (vertex) or 224
