@@ -22,6 +22,7 @@ pub mod d3d9res;
 pub mod d3d9state;
 pub mod d3dx;
 pub mod dispatch;
+pub mod executor;
 pub mod files;
 pub mod image;
 pub mod interfaces;

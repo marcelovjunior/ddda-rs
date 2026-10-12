@@ -14,8 +14,10 @@ demand, every byte read and written recorded).
     python lift.py relift       # after a codegen change: re-translate the current list
     python lift.py one ADDR     # print the Rust for one function
 
-Run scan/vectors/one with E:/ddda-re/tools/pyenv/Scripts/python.exe;
-gen needs only the system Python. docs/NATIVE_PIPELINE.md, "The lifter".
+Run with E:/ddda-re/tools/pyenv/Scripts/python.exe. Production gen also
+decodes the original image for restartable instruction entries (L27b);
+gen(instructions=False) is only for synthetic legacy-IR generator tests.
+docs/NATIVE_PIPELINE.md, "The lifter".
 """
 import json
 import os
@@ -44,6 +46,19 @@ SEGMENTS = ("es", "cs", "ss", "ds", "fs", "gs")  # read from Cpu::seg (L22)
 
 class Unsupported(Exception):
     pass
+
+
+class TableTargets(list):
+    """A table jump's discovered targets; `proven` when a bound proves the
+    set complete (adjacent cmp, byte remap, AND mask or the L45 edge rule).
+    Table-only discovery is not a proof: other slots may be reachable."""
+    def __init__(self, targets, proven):
+        super().__init__(targets)
+        self.proven = proven
+
+
+# Per decoded entry: {table jump pc: proven complete} (L45 verification gate).
+TABLE_PROOF = {}
 
 
 class RuntimeTargets(list):
@@ -118,12 +133,128 @@ def ordered_entries(entries):
 
 
 @lru_cache(maxsize=1)
+def eh4_helpers():
+    """(__SEH_prolog4 entries, __except_handler4 entries) by inventory name."""
+    with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
+        rows = db.execute("SELECT address, name FROM functions").fetchall()
+    return (frozenset(a for a, n in rows if n == "__SEH_prolog4"),
+            frozenset(a for a, n in rows if n == "__except_handler4"))
+
+
+def eh4_scope_targets(found, read, is_code):
+    """Filter and handler code of the EH4 scope table a body registers
+    (L45/L27b): reached only through `_except_handler4` dispatch, never by a
+    branch, yet code of this function. A body registers a table by pushing
+    its address next to a call to `__SEH_prolog4` or a push of
+    `__except_handler4`. Records are read for the try levels the body stores
+    (`mov dword ptr [ebp-4], N`, N < 64, or `and dword ptr [ebp-4], 0`;
+    a level stored from a register reads records in order instead;
+    -2 is "no try"), each 12 bytes
+    after the 16-byte cookie header: enclosing level (-2 or below N),
+    filter (0 for __finally, else code), handler (code). Invalid records
+    give nothing."""
+    from capstone.x86 import X86_OP_IMM, X86_OP_MEM
+    prologs, handlers = eh4_helpers()
+    ordered = sorted(found.values(), key=lambda i: i.address)
+    tables, levels = set(), set()
+    for k, i in enumerate(ordered):
+        ops = i.operands
+        if (i.mnemonic in ("mov", "and") and len(ops) == 2 and ops[0].type == X86_OP_MEM and ops[0].size == 4
+                and i.reg_name(ops[0].mem.base) == "ebp" and not ops[0].mem.index and ops[0].mem.disp == -4
+                and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 64
+                and (i.mnemonic == "mov" or ops[1].imm == 0)):
+            levels.add(ops[1].imm & 0xffffffff)  # `and [ebp-4], 0` enters level 0
+        elif (i.mnemonic == "mov" and len(ops) == 2 and ops[0].type == X86_OP_MEM and ops[0].size == 4
+                and i.reg_name(ops[0].mem.base) == "ebp" and not ops[0].mem.index and ops[0].mem.disp == -4
+                and ops[1].type != X86_OP_IMM):
+            levels.add(None)  # a level from a register (`xor esi, esi ... mov [ebp-4], esi`)
+        if i.mnemonic != "push" or not ops or ops[0].type != X86_OP_IMM:
+            continue
+        table = ops[0].imm & 0xffffffff
+        if is_code(table):
+            continue
+        near = ordered[k + 1:k + 4]
+        if any((n.mnemonic == "call" and n.operands[0].type == X86_OP_IMM
+                and (n.operands[0].imm & 0xffffffff) in prologs)
+               or (n.mnemonic == "push" and n.operands[0].type == X86_OP_IMM
+                   and (n.operands[0].imm & 0xffffffff) in handlers) for n in near):
+            tables.add(table)
+    def record(table, level):
+        try:
+            enclosing, filter_, handler = struct.unpack("<III", read(table + 16 + 12 * level, 12))
+        except (KeyError, struct.error):
+            return None
+        if not (enclosing == 0xFFFFFFFE or enclosing < level):
+            return None
+        if not is_code(handler) or (filter_ and not is_code(filter_)):
+            return None
+        return {handler, filter_} - {0}
+
+    targets = set()
+    for table in tables:
+        for level in sorted(l for l in levels if l is not None):
+            targets |= record(table, level) or set()
+        if None in levels:
+            # levels set from registers: the records in order up to the
+            # first invalid one (the next table's cookie header is invalid)
+            for level in range(64):
+                found_record = record(table, level)
+                if found_record is None:
+                    break
+                targets |= found_record
+    return targets
+
+
+@lru_cache(maxsize=1)
 def noreturn_entries():
     # These inventory symbols name CRT routines with a non-returning contract.
     # Addresses come from the player's inventory, not a copied address table.
     names = {"_abort", "_exit", "__exit", "__amsg_exit"}
     with closing(sqlite3.connect(f"file:{DB}?mode=ro", uri=True)) as db:
         return frozenset(a for a, name in db.execute("SELECT address, name FROM functions") if name in names)
+
+
+_FRAME_TAILS = {}
+
+
+def frame_tail(target, entries, noreturn, read, is_code):
+    """Whether the inventory entry `target` is a shared tail of the code
+    that jumps to it rather than a function (L45): its derived exit
+    (harness.frame_exit) is entry ESP plus more than its `ret` pops, so
+    it pops registers its jumper saved and returns to the jumper's caller.
+    `__VEC_memcpy` 0x012F9D82, entered by `jmp` from the memcpy variants,
+    ends `pop eax; pop esi; pop edi; pop ebp; ret` (exit ESP + 16). A
+    direct jump there is local code, decoded inline, not a tail call."""
+    import harness as h
+    key = (target, read, is_code, frozenset(entries) if not isinstance(entries, frozenset) else entries)
+    if key not in _FRAME_TAILS:
+        _FRAME_TAILS[key] = result = False  # a cycle of tail checks is not evidence
+        try:
+            ins = decode_body(target, 1, entries, noreturn, read, is_code, ext=True)[0]
+            TABLE_PROOF.pop(target, None)
+            rets = {(i.operands[0].imm if i.operands else 0) for i in ins if i.mnemonic in ("ret", "retn")}
+            if len(rets) == 1 and not any(i.mnemonic == "call" for i in ins):
+                with _patched_code(h, read):
+                    exit_ = h.frame_exit(target, {i.address for i in ins})
+                result = (exit_ is not None and exit_[0] == "esp" and not exit_[2]
+                          and exit_[1] > 4 + rets.pop())
+        except Unsupported:
+            result = False
+        _FRAME_TAILS[key] = result
+    return _FRAME_TAILS[key]
+
+
+class _patched_code:
+    """harness.frame_exit reads harness.code; decode with the same reader."""
+    def __init__(self, h, read):
+        self.h, self.read = h, read
+
+    def __enter__(self):
+        self.saved = self.h.code
+        self.h.code = self.read
+
+    def __exit__(self, *_):
+        self.h.code = self.saved
 
 
 def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None, ext=False):
@@ -151,79 +282,95 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
     upper = ordered[band] if band < len(ordered) else 0x100000000
     found, owners, switches, stops = {}, {}, {}, set()
     todo = [addr]
-    while todo:
-        pc = heapq.heappop(todo)
-        history = []
-        while pc not in found:
-            if pc in owners:
-                raise Unsupported("disassembly branch into instruction interior")
-            if len(found) >= 20000:
-                raise Unsupported("body instruction limit")
-            if not is_code(pc):
-                raise Unsupported("disassembly outside executable sections")
-            try:
-                i = next(md.disasm(read(pc, 15), pc, count=1))
-            except (KeyError, StopIteration):
-                raise Unsupported("disassembly undecodable reachable instruction") from None
-            if not is_code(pc, i.size) or any(a in owners for a in range(pc, pc + i.size)):
-                raise Unsupported("disassembly overlapping instruction")
-            found[pc] = i
-            owners.update((a, pc) for a in range(pc, pc + i.size))
-            history.append(i)
-            mn = i.mnemonic
-            if mn in ("int3", "ud2"):
-                stops.add(pc)
-                break
-            if mn in ("ret", "retn", "repz ret", "hlt"):
-                break
-            if mn == "call" and i.operands[0].type == 2 and i.operands[0].imm in noreturn:
-                stops.add(pc)
-                break
-            if mn.startswith("j"):
-                if i.operands[0].type == 2:
-                    target = i.operands[0].imm & 0xffffffff
-                    if target == addr or target not in entries:
-                        heapq.heappush(todo, target)
-                else:
-                    accept = lambda t: ((addr <= t < upper or t in found) and
-                                        (t == addr or t not in entries) and is_code(t))
-                    try:
-                        targets = switch_targets(history, len(history) - 1, addr, upper, read,
-                                                 accept=accept, discover=True,
-                                                 bounded_accept=lambda t: (t == addr or t not in entries) and is_code(t))
-                    except Unsupported as error:
-                        if not ext or mn != "jmp" or i.operands[0].size != 4:
-                            raise
-                        if str(error) != "indirect jump (not an absolute switch table)":
-                            # L22: an absolute table the strict rules cannot
-                            # bound. Ext code reads the slot at run time and
-                            # leaves the body for any unknown target, so the
-                            # discovered set decides coverage, not soundness.
-                            targets = open_table(history, len(history) - 1, read,
-                                                 accept=lambda t: ((addr <= t < upper or t in found) and
-                                                                   (t == addr or t not in entries) and is_code(t)),
-                                                 bounded_accept=is_code)
-                            if not targets:
-                                # No valid forward slot (e.g. a negative index
-                                # below T): a runtime jump over known starts.
-                                switches[pc] = None
-                                break
-                            switches[pc] = targets
-                            for target in targets:
-                                heapq.heappush(todo, target)
-                            break
-                        # No speculative decode through a runtime pointer.
-                        # Known instruction starts remain local destinations;
-                        # every other target crosses the external boundary.
-                        switches[pc] = None
-                        break
-                    switches[pc] = targets
-                    for target in targets:
-                        heapq.heappush(todo, target)
-                if mn == "jmp":
-                    break
-            pc += i.size
+    while True:
+      while todo:
+          pc = heapq.heappop(todo)
+          history = []
+          while pc not in found:
+              if pc in owners:
+                  raise Unsupported("disassembly branch into instruction interior")
+              if len(found) >= 20000:
+                  raise Unsupported("body instruction limit")
+              if not is_code(pc):
+                  raise Unsupported("disassembly outside executable sections")
+              try:
+                  i = next(md.disasm(read(pc, 15), pc, count=1))
+              except (KeyError, StopIteration):
+                  raise Unsupported("disassembly undecodable reachable instruction") from None
+              if not is_code(pc, i.size) or any(a in owners for a in range(pc, pc + i.size)):
+                  raise Unsupported("disassembly overlapping instruction")
+              found[pc] = i
+              owners.update((a, pc) for a in range(pc, pc + i.size))
+              history.append(i)
+              mn = i.mnemonic
+              if mn in ("int3", "ud2"):
+                  stops.add(pc)
+                  break
+              if mn in ("ret", "retn", "repz ret", "hlt"):
+                  break
+              if mn == "call" and i.operands[0].type == 2 and i.operands[0].imm in noreturn:
+                  stops.add(pc)
+                  break
+              if mn.startswith("j"):
+                  if i.operands[0].type == 2:
+                      target = i.operands[0].imm & 0xffffffff
+                      if (target == addr or target not in entries
+                              or (target != addr and frame_tail(target, entries, noreturn, read, is_code))):
+                          heapq.heappush(todo, target)
+                  else:
+                      accept = lambda t: ((addr <= t < upper or t in found) and
+                                          (t == addr or t not in entries) and is_code(t))
+                      try:
+                          targets = switch_targets(history, len(history) - 1, addr, upper, read,
+                                                   accept=accept, discover=True,
+                                                   bounded_accept=lambda t: (t == addr or t not in entries) and is_code(t))
+                      except Unsupported as error:
+                          if not ext or mn != "jmp" or i.operands[0].size != 4:
+                              raise
+                          if str(error) != "indirect jump (not an absolute switch table)":
+                              # L22: an absolute table the strict rules cannot
+                              # bound. Ext code reads the slot at run time and
+                              # leaves the body for any unknown target, so the
+                              # discovered set decides coverage, not soundness.
+                              targets = open_table(history, len(history) - 1, read,
+                                                   accept=lambda t: ((addr <= t < upper or t in found) and
+                                                                     (t == addr or t not in entries) and is_code(t)),
+                                                   bounded_accept=is_code)
+                              if not targets:
+                                  # No valid forward slot (e.g. a negative index
+                                  # below T): a runtime jump over known starts.
+                                  switches[pc] = None
+                                  break
+                              switches[pc] = targets
+                              for target in targets:
+                                  heapq.heappush(todo, target)
+                              break
+                          # No speculative decode through a runtime pointer.
+                          # Known instruction starts remain local destinations;
+                          # every other target crosses the external boundary.
+                          switches[pc] = None
+                          break
+                      switches[pc] = targets
+                      for target in targets:
+                          heapq.heappush(todo, target)
+                  if mn == "jmp":
+                      break
+              pc += i.size
+      # L45: table jumps whose index is bounded on the edges into their
+      # block (`cmp R, imm; jb L` ... `L: neg R; jmp [R*4 + T]`) gain the
+      # proven slots, which may lie past Ghidra's end of the function.
+      added = edge_bounded_tables(found, switches, addr, entries, read, is_code)
+      added |= {t for t in eh4_scope_targets(found, read, is_code) if t not in found and t not in entries}
+      if not added:
+          # every edge-proven table is complete even when nothing new was added
+          for pc in found:
+              if isinstance(switches.get(pc), TableTargets) and edge_slots(found, pc, addr, switches) is not None:
+                  switches[pc].proven = True
+          break
+      for target in added:
+          heapq.heappush(todo, target)
     ins = sorted(found.values(), key=lambda i: i.address)
+    TABLE_PROOF[addr] = {pc: t.proven for pc, t in switches.items() if isinstance(t, TableTargets)}
     for pc, targets in switches.items():
         if targets is None:
             switches[pc] = RuntimeTargets(sorted(found))
@@ -234,6 +381,233 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
         else:
             ranges.append([i.address, i.address + i.size])
     return ins, switches, stops, ranges
+
+
+def edge_slots(found, pc, entry=None, switches=None):
+    """Slot indices a dword table jump at `pc` (`jmp [R*4 + T]`) can select,
+    proven on every path into it (L45). Walking back from the jump (past an
+    optional `neg R` directly before it), each path must reach, before any
+    other write to R, the function entry or a call that clobbers R:
+    `and R, imm` ([0, imm]), `mov R, imm`, `xor R, R`, or an edge bound -
+    and `and R, x` passes through (the result is at most R's value before) -
+    the taken edge of `jb`/`jbe` or the fall-through of `ja`/`jae` directly
+    after `cmp R, imm` ([0, bound]), or the taken `jb` after `sub R, imm`
+    ([-imm, -1]); the immediate may also be a register that holds one
+    constant on every path (constant_before). The union over all paths is used; None if any path is
+    unproven or the walk exceeds 512 instructions."""
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
+    jump = found[pc]
+    if jump.mnemonic != "jmp" or not jump.operands:
+        return None
+    op = jump.operands[0]
+    if (op.type != X86_OP_MEM or op.size != 4 or op.mem.segment
+            or op.mem.base or not op.mem.index or op.mem.scale != 4):
+        return None
+    index = op.mem.index
+    name = jump.reg_name(index)
+    aliases = _aliases(name)
+    by_end = {i.address + i.size: i for i in found.values()}
+    sources = {}
+    for i in found.values():
+        if (i.mnemonic.startswith("j") and i.operands and i.operands[0].type == X86_OP_IMM):
+            sources.setdefault(i.operands[0].imm & 0xffffffff, []).append(i)
+    for jpc, targets in (switches or {}).items():
+        # table-jump edges (a runtime jump's targets are not edges of proof)
+        if targets is not None and not isinstance(targets, RuntimeTargets) and jpc in found:
+            for t in set(targets):
+                sources.setdefault(t, []).append(found[jpc])
+    start, negate = pc, False
+    prev = by_end.get(pc)
+    if (prev is not None and prev.mnemonic == "neg" and prev.operands[0].type == X86_OP_REG
+            and prev.operands[0].reg == index and prev.operands[0].size == 4):
+        start, negate = prev.address, True
+
+    def constant_before(at, reg):
+        """The value 32-bit register `reg` holds before the instruction at
+        `at` on every path into it: each path must set it with `mov reg, imm`
+        or `xor reg, reg` (one value for all) before any other write, call
+        clobber or the function entry; None otherwise (512 steps at most)."""
+        names = _aliases(found[at].reg_name(reg))
+        values, seen, todo, steps = set(), set(), [at], 0
+        while todo:
+            here = todo.pop()
+            if here in seen:
+                continue
+            seen.add(here)
+            if here == entry:
+                return None
+            preds = list(sources.get(here, []))
+            before = by_end.get(here)
+            if before is not None and before.mnemonic not in ("jmp", "ret", "retn", "repz ret", "int3", "ud2"):
+                preds.append(before)
+            if not preds:
+                return None
+            for b in preds:
+                steps += 1
+                if steps > 512:
+                    return None
+                if b.mnemonic == "call":
+                    if names & {"eax", "ecx", "edx"}:
+                        return None
+                    todo.append(b.address)
+                    continue
+                written = _writes(b)
+                if written is None:
+                    return None
+                if not written & names:
+                    todo.append(b.address)
+                    continue
+                ops = b.operands
+                if b.mnemonic == "mov" and ops[0].type == X86_OP_REG and ops[0].reg == reg and ops[1].type == X86_OP_IMM:
+                    values.add(ops[1].imm & 0xffffffff)
+                elif b.mnemonic == "xor" and len(ops) == 2 and all(o.type == X86_OP_REG and o.reg == reg for o in ops):
+                    values.add(0)
+                elif b.mnemonic == "pop" and ops[0].type == X86_OP_REG and ops[0].reg == reg:
+                    pushed = pushed_constant(b)
+                    if pushed is None:
+                        return None
+                    values.add(pushed)
+                else:
+                    return None
+        return values.pop() if len(values) == 1 else None
+
+    def pushed_constant(pop):
+        """`push imm ... pop reg` (printf's `push 7; sar eax, 4; pop ecx`):
+        the value a pop takes from a push of an immediate on the straight
+        line before it, with no other entry and no stack use between."""
+        at = pop.address
+        for _ in range(8):
+            if sources.get(at):
+                return None
+            b = by_end.get(at)
+            if b is None:
+                return None
+            if b.mnemonic == "push":
+                return b.operands[0].imm & 0xffffffff if b.operands[0].type == X86_OP_IMM else None
+            written = _writes(b)
+            if (written is None or "esp" in written or b.mnemonic in ("pop", "call", "pushfd", "popfd")
+                    or b.mnemonic.startswith(("j", "ret"))
+                    or any(o.type == X86_OP_MEM and b.reg_name(o.mem.base) == "esp" for o in b.operands)):
+                return None
+            at = b.address
+        return None
+
+    def edge_range(branch, taken):
+        """The bound a predecessor branch proves on the edge, or None. The
+        compared bound is an immediate or a register holding a constant on
+        every path (`mov edx, 3; cmp eax, edx; ja default`)."""
+        setter = by_end.get(branch.address)
+        if (setter is None or setter.mnemonic not in ("cmp", "sub") or setter.operands[0].type != X86_OP_REG
+                or setter.operands[0].reg != index or setter.operands[0].size != 4):
+            return None
+        bound_op = setter.operands[1]
+        if bound_op.type == X86_OP_IMM:
+            imm = bound_op.imm & 0xffffffff
+        elif bound_op.type == X86_OP_REG and bound_op.size == 4 and bound_op.reg != index:
+            imm = constant_before(setter.address, bound_op.reg)
+            if imm is None or imm >= 4096:
+                return None
+        else:
+            return None
+        if setter.mnemonic == "cmp":
+            bound = {("jb", True): imm - 1, ("jbe", True): imm,
+                     ("ja", False): imm, ("jae", False): imm - 1}.get((branch.mnemonic, taken))
+            return (0, bound) if bound is not None and bound >= 0 else None
+        return (-imm, -1) if (branch.mnemonic, taken) == ("jb", True) and 0 < imm <= 4096 else None
+
+    lo = hi = None
+    # A path state is (address, masked): masked once an `and R, x` was
+    # passed, whose result never exceeds the value R had before it.
+    seen, todo, steps = set(), [(start, False)], 0
+    while todo:
+        at, masked = todo.pop()
+        if (at, masked) in seen:
+            continue
+        seen.add((at, masked))
+        if at == entry:
+            return None  # R is an input of the function
+        preds = [(b, True) for b in sources.get(at, [])]
+        before = by_end.get(at)
+        if before is not None and before.mnemonic not in ("jmp", "ret", "retn", "repz ret", "int3", "ud2"):
+            preds.append((before, False))
+        if not preds:
+            return None
+        for b, taken in preds:
+            steps += 1
+            if steps > 512:
+                return None
+            rng = None
+            if b.mnemonic.startswith("j") and b.mnemonic != "jmp":
+                rng = edge_range(b, taken)
+            if rng is None:
+                # walk through the predecessor instruction itself
+                if b.mnemonic == "call":
+                    if name in ("eax", "ecx", "edx"):
+                        return None  # a callee may clobber a volatile register
+                    todo.append((b.address, masked))
+                    continue
+                written = _writes(b)
+                if written is None:
+                    return None
+                if written & aliases:
+                    ops = b.operands
+                    if (b.mnemonic == "and" and ops[0].type == X86_OP_REG and ops[0].reg == index
+                            and ops[0].size == 4 and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 4096):
+                        rng = (0, ops[1].imm & 0xffffffff)
+                    elif (b.mnemonic == "mov" and ops[0].type == X86_OP_REG and ops[0].reg == index
+                          and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 4096):
+                        rng = (ops[1].imm & 0xffffffff,) * 2
+                    elif (b.mnemonic == "xor" and len(ops) == 2 and all(o.type == X86_OP_REG and o.reg == index for o in ops)):
+                        rng = (0, 0)
+                    elif b.mnemonic == "and" and ops[0].type == X86_OP_REG and ops[0].reg == index and ops[0].size == 4:
+                        todo.append((b.address, True))  # R & x <= R (unsigned)
+                        continue
+                    else:
+                        return None
+                else:
+                    todo.append((b.address, masked))
+                    continue
+            if masked:
+                if rng[0] < 0:
+                    return None  # a negative (wrapped) range has no small unsigned mask bound
+                rng = (0, rng[1])
+            lo = rng[0] if lo is None else min(lo, rng[0])
+            hi = rng[1] if hi is None else max(hi, rng[1])
+    if lo is None or hi - lo >= 4096:
+        return None
+    if negate:
+        lo, hi = -hi, -lo
+    return list(range(lo, hi + 1))
+
+
+def edge_bounded_tables(found, switches, addr, entries, read, is_code):
+    """Add the edge-proven slots (edge_slots) of every table jump in the
+    decoded body; returns the new targets not yet decoded."""
+    added = set()
+    for pc in list(found):
+        slots = edge_slots(found, pc, addr, switches)
+        if slots is None:
+            continue
+        table = found[pc].operands[0].mem.disp & 0xffffffff
+        targets = []
+        for k in slots:
+            try:
+                data = read((table + 4 * k) & 0xffffffff, 4)
+            except KeyError:
+                return set()
+            target, = struct.unpack("<I", data)
+            # A proven range can over-approximate (a mask also admits a
+            # value an earlier test excludes): a slot that is not code is
+            # not a destination; reaching it would fault the original too.
+            if is_code(target):
+                targets.append(target)
+        current = switches.get(pc)
+        if isinstance(current, list) and set(targets) <= set(current):
+            continue
+        # a former runtime jump (None) gets its proven slots as its table
+        switches[pc] = TableTargets(sorted(set(current or []) | set(targets)), True)
+        added |= {t for t in targets if t not in found}
+    return added
 
 
 def x87_effect(i):
@@ -721,7 +1095,7 @@ def open_table(ins, k, read, accept, bounded_accept):
             targets.append(target)
         elif bound is None:
             break
-    return sorted(set(targets))
+    return TableTargets(sorted(set(targets)), bound is not None)
 
 
 def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded_accept=None):
@@ -830,14 +1204,16 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
                     indices = b""
                 if not count or len(indices) != count or max(indices) >= len(targets):
                     raise Unsupported("indirect jump (switch remapping exceeds table)")
-    return targets
+    return TableTargets(targets, bound is not None)
 
 
-def lift(addr, size, callable=frozenset(), ext=False):
+def lift(addr, size, callable=frozenset(), ext=False, step=False):
     """Rust match arms for the function, or raise Unsupported. `callable`
     holds the lifted functions a `call` or an outward (tail) jump may go to.
     With `ext`, any other call or outward jump (direct, indirect, imports)
-    goes through x86::call_ext, which the vectors replay."""
+    goes through x86::call_ext, which the vectors replay. `step` instead
+    emits one restartable instruction per arm and explicit guest successors;
+    no callees or services run inside an instruction transaction."""
     sys.path.insert(0, os.path.dirname(__file__))
     import harness as h
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
@@ -864,22 +1240,30 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 leaders.add(i.address + i.size)
         if (i.mnemonic in ("ret", "retn", "repz ret") or i.address in stops) and k + 1 < len(ins):
             leaders.add(ins[k + 1].address)
+    if step:
+        leaders = starts
     # x87 entry contract (ext only, never callable): the minimal number of
     # values the caller must have left on the x87 stack (MSVC's float
     # intrinsics such as _ftol2 and _CIsin take their argument in st0). The
     # recorder seeds that many random finite values; the replay loads them.
     # Only reads before any call or return count, so a value is never
     # attributed to the caller when a callee could have returned it.
-    entry = (x87_deficit(ins, addr, 0, 8) or 0) if ext else 0
-    exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
-    X87_PUSH_SITES[addr] = push_sites
+    # Step mode (L27b) runs the actual callees and the live x87 stack, so
+    # neither the entry contract nor the recorder's x87 return pushes nor
+    # the recorder's instruction budget apply there.
+    entry = (x87_deficit(ins, addr, 0, 8) or 0) if ext and not step else 0
+    # The selected list already passed scan's stack analysis. Runtime calls
+    # execute actual callees, not the recorder's synthetic x87 return pushes.
+    exits, push_sites = (set(), []) if step else x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
+    if not step:
+        X87_PUSH_SITES[addr] = push_sites
     # Constant-trip loops that need more than the recorder's default budget.
-    budget = constant_loop_budget(ins, callable, h.PLATFORM)
+    budget = None if step else constant_loop_budget(ins, callable, h.PLATFORM)
     budget = budget if budget is not None and budget - INSN_BUDGET + len(ins) > INSN_BUDGET else None
     BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
                        "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {}),
                        **({"insn_budget": budget} if budget else {})}
-    if not ext:
+    if not ext and not step:
         X87_NET[addr] = exits.pop() if len(exits) == 1 else (0 if not exits else None)
 
     def reg(name):
@@ -985,9 +1369,10 @@ def lift(addr, size, callable=frozenset(), ext=False):
 
     lines = []
     blocks = sorted(leaders)
+    positions = {i.address: k for k, i in enumerate(ins)}
     for b in blocks:
         body = []
-        k = next(j for j, i in enumerate(ins) if i.address == b)
+        k = positions[b]
         terminated = False
         while k < len(ins):
             i = ins[k]
@@ -999,7 +1384,24 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 break
             bits = ops[0].size * 8 if ops else 32
             mask = "u32::MAX" if bits == 32 else f"0x{(1 << bits) - 1:X}"
-            if mn in ("sbb", "adc"):
+            if step and mn in ("call", "jmp", "ret", "retn", "repz ret"):
+                if mn in ("ret", "retn", "repz ret"):
+                    extra = ops[0].imm if ops else 0
+                    body.append(f"let t = m.u32(esp); esp = esp.wrapping_add(4 + {extra}); return Flow::Return(t);")
+                else:
+                    body.append(f"let t = {load(i, ops[0])};")
+                    if mn == "call":
+                        body.append(f"esp = esp.wrapping_sub(4); m.set_u32(esp, 0x{i.address + i.size:X});")
+                    body.append(f"return Flow::{'Next' if mn == 'call' else 'Jump'}(t);")
+                terminated = True
+                break
+            elif step and mn.startswith("j"):
+                if nxt is None:
+                    raise Unsupported("falls off the end (conditional jump last)")
+                body.append(f'return if fl.cond("{mn[1:]}") {{ Flow::Jump(0x{ops[0].imm:X}) }} else {{ Flow::Next(0x{nxt:X}) }};')
+                terminated = True
+                break
+            elif mn in ("sbb", "adc"):
                 body.append(f"{{ let (a, b) = ({load(i, ops[0])}, {load(i, ops[1])}); "
                             f"let r = fl.alu_carry(a, b, {bits}, {str(mn == 'sbb').lower()}); {store(i, ops[0], 'r')} }}")
             elif mn in ("mul", "imul") and len(ops) == 1:
@@ -1012,7 +1414,9 @@ def lift(addr, size, callable=frozenset(), ext=False):
             elif mn in ("div", "idiv"):
                 if bits not in (8, 16, 32):
                     raise Unsupported("divide width")
-                body.append(f"{{ let d = {load(i, ops[0])}; let (q, r) = x86::divide(eax, {'eax >> 8' if bits == 8 else 'edx'}, d, {bits}, {str(mn == 'idiv').lower()}).expect(\"x86 divide error\");")
+                helper = 'ddnative_base::execution::divide' if step else 'x86::divide'
+                checked = '' if step else '.expect("x86 divide error")'
+                body.append(f"{{ let d = {load(i, ops[0])}; let (q, r) = {helper}(eax, {'eax >> 8' if bits == 8 else 'edx'}, d, {bits}, {str(mn == 'idiv').lower()}){checked};")
                 body.append(set_reg("ax", "q | (r << 8)") if bits == 8 else
                             set_reg("ax" if bits == 16 else "eax", "q") + set_reg("dx" if bits == 16 else "edx", "r"))
                 body.append("fl = Flags::partial(0, 0); }")
@@ -1094,9 +1498,20 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 if fs:
                     body.append('{ let source_base = cpu.fs_base;')
                 helper, segment = ('string_from', ', source_base') if fs else ('string', '')
-                body.append(f"x86::{helper}(m, cpu, {dict(b=1,w=2,d=4)[op[-1]]}, {str(op.startswith('movs')).lower()}, {str(mn.startswith('rep ')).lower()}{segment});")
+                repeat = mn.startswith('rep ')
+                if step and repeat:
+                    body.append('if ecx != 0 {')
+                body.append(f"x86::{helper}(m, cpu, {dict(b=1,w=2,d=4)[op[-1]]}, {str(op.startswith('movs')).lower()}, {str(repeat and not step).lower()}{segment});")
+                if step and repeat:
+                    body.append('ecx = ecx.wrapping_sub(1); }')
                 if fs:
                     body.append('}')
+                if step and repeat:
+                    if nxt is None:
+                        raise Unsupported('falls off the end (REP last)')
+                    body.append(f'return Flow::Next(if ecx != 0 {{ 0x{i.address:X} }} else {{ 0x{nxt:X} }});')
+                    terminated = True
+                    break
             elif mn.startswith("prefetch"):
                 pass  # an architectural hint, not a demand memory read
             elif mn == "sfence":
@@ -1421,6 +1836,12 @@ def lift(addr, size, callable=frozenset(), ext=False):
                 pass  # masked x87 exceptions: wait has no effect
             else:
                 raise Unsupported(f"{mn} {i.op_str}")
+            if step:
+                if nxt is None:
+                    raise Unsupported("falls off the end")
+                body.append(f"return Flow::Next(0x{nxt:X});")
+                terminated = True
+                break
             k += 1
         if not terminated:
             if k >= len(ins):
@@ -1459,13 +1880,16 @@ def compact_alu(arm):
     return ALU_BLOCK.sub(replace, arm)
 
 
-def cpu_arm(arm, start=None):
+def cpu_arm(arm, start=None, fast=True):
     """Lower cached local-register IR onto the shared Cpu in place.
 
     SAVE/LOAD delimit calls in patterns/lift.json; removing them is valid
     because every preceding assignment already updated the same Cpu. Keep
     the cache representation (and thus scan/callee discovery) unchanged.
-    Substitute whole identifiers, leaving Rust strings untouched.
+    Substitute whole identifiers, leaving Rust strings untouched. `fast`
+    lowers memory accesses to the page-table fast path (whole functions);
+    step functions keep the plain Mem calls, so a transactional Mem sees
+    every access of a restartable instruction.
     """
     arm = compact_alu(exact_compares(arm, start=start)).replace(SAVE, "").replace(LOAD, "")
     # Prepared pre-DF caches use the old state-transfer markers.
@@ -1474,7 +1898,7 @@ def cpu_arm(arm, start=None):
     fields.update({r: f"cpu.xmm[{i}]" for i, r in enumerate(XMM)})
     arm = re.sub(r'"(?:\\.|[^"\\])*"|\b(?:' + "|".join(fields) + r')\b',
                  lambda m: fields.get(m[0], m[0]), arm)
-    return fast_memory(arm)
+    return fast_memory(arm) if fast else arm
 
 
 # The six Mem accessors the templates emit, lowered to the inline fast path
@@ -1563,6 +1987,31 @@ def rust_fn(addr, name, arms):
         "        }",
         "    }",
         "}", ""])
+
+
+def rust_step(addr, name, arms):
+    """One instruction per arm, no host guest-call stack or hidden PC."""
+    return "\n".join([
+        f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
+        f"pub fn s_{addr:08x}(m: &mut dyn Mem, cpu: &mut Cpu, ip: u32) -> Flow {{",
+        "    match ip {", *(cpu_arm(a, fast=False) for a in arms),
+        '        _ => panic!("invalid instruction entry {ip:#x}"),', "    }", "}", ""])
+
+
+def step_source(f, addresses):
+    """Decode original bytes; cached whole-function arms are not checkpoints.
+
+    Released per function to avoid retaining the full Capstone body graph.
+    A generation failure is fatal, never a silent fast-function fallback.
+    """
+    try:
+        arms = lift(f['addr'], f['size'], addresses, f.get('ext', False), step=True)
+        ips = list(BODY_INFO[f['addr']]['body'])
+        return rust_step(f['addr'], f['name'], arms), ips
+    except Unsupported as e:
+        raise Unsupported(f"instruction generation at 0x{f['addr']:08X}: {e}") from e
+    finally:
+        release_body(f['addr'], f['size'])
 
 
 def scan(limit=None):
@@ -2162,7 +2611,52 @@ def wired_lines(selected, ported, chunk):
     return text
 
 
-def gen(chunk=400):
+TABLE_DISPATCH = re.compile(r"pc = m\.u32\(|let t = m\.u32\([^;]*\); if matches!")
+EXT_CONSTANT = re.compile(r"x86::call_ext\(m, cpu, 0x([0-9A-F]+)\)")
+LIFTED_CALLEE = re.compile(r"super::lifted::f_([0-9a-f]{8})")
+
+
+def verification_gaps(lifted):
+    """{entry: [reasons]} of the lifted functions that must not count as
+    verified (L45): a direct transfer to an address that is not a known
+    function, import or platform model (nothing is bound there at run
+    time), a table jump the current lifter cannot prove complete
+    (TABLE_PROOF: other slots may reach code the vectors never ran), or a
+    stale body. Only records whose arms dispatch through a table or name
+    a frame tail (frame_tail: now local code) or registering an EH4 scope
+    table (eh4_scope_targets) are re-decoded."""
+    import harness as h
+    entries, noreturn = function_entries(), noreturn_entries()
+    prologs, handlers = eh4_helpers()  # EH4 registrations own their scope code
+    bound = entries | set(h.import_pops()[1]) | set(h.PLATFORM)
+    gaps = {}
+    for f in lifted:
+        constants = {int(t, 16) for arm in f["arms"] for t in EXT_CONSTANT.findall(arm)}
+        unbound = sorted(constants - bound)
+        reasons = [f"unbound target 0x{t:08X}" for t in unbound]
+        named = constants | {int(t, 16) for arm in f["arms"] for t in LIFTED_CALLEE.findall(arm)}
+        if (any(TABLE_DISPATCH.search(arm) for arm in f["arms"])
+                or any(t in entries and t != f["addr"] and frame_tail(t, entries, noreturn, h.code, h.executable)
+                       for t in named)
+                or named & prologs
+                or any(f"0x{x:X}" in arm for x in handlers for arm in f["arms"])):
+            try:
+                ins = decode_body(f["addr"], f["size"], ext=bool(f.get("ext")))[0]
+                proof = TABLE_PROOF.pop(f["addr"], {})
+                reasons += [f"unproven table at 0x{pc:08X}" for pc, ok in sorted(proof.items()) if not ok]
+                # a record lifted before its tables were proven (or its
+                # frame tails inlined) lacks that code (0x012EDE40 before L45)
+                missing = {i.address for i in ins} - set(f.get("body") or [i.address for i in ins])
+                if missing:
+                    reasons.append(f"stale body: {len(missing)} instructions from 0x{min(missing):08X} not lifted")
+            except Unsupported as e:
+                reasons.append(f"rejected by the current lifter: {e}")
+        if reasons:
+            gaps[f["addr"]] = reasons
+    return gaps
+
+
+def gen(chunk=400, instructions=True):
     from pathlib import Path
     lifted = sorted(json.loads(Path(N, "patterns/lift.json").read_text()), key=lambda f: f["addr"])
     addresses = {f["addr"] for f in lifted}
@@ -2181,6 +2675,7 @@ def gen(chunk=400):
         selected = [f for f in lifted if shard(f["addr"]) == index]
         folder = os.path.join(R, f"crates/ddlift/lift_{index:02}/src")
         names = []
+        instruction_owners = {}
         for k in range(0, len(selected), chunk):
             name = f"lifted_{k // chunk:03}"
             names.append(name)
@@ -2188,6 +2683,13 @@ def gen(chunk=400):
                      "#![allow(warnings, clippy::all)]",
                      "use crate::mem::Mem;", "use crate::x86::{self, Cpu, Flags};", ""]
             lines += [shard_fn(f) for f in selected[k:k + chunk]]
+            if instructions:
+                lines.append('use ddnative_base::execution::Flow;')
+                for f in selected[k:k + chunk]:
+                    source, ips = step_source(f, addresses)
+                    lines.append(source)
+                    for ip in ips:
+                        instruction_owners.setdefault(ip, f['addr'])
             write_changed(os.path.join(folder, "generated", name + ".rs"), "\n".join(lines))
         mods += names
         index_text = "//! Generated by research/native/lift.py: do not edit.\n"
@@ -2204,6 +2706,11 @@ def gen(chunk=400):
         index_text += "".join(f"(0x{f['addr']:08X}, f_{f['addr']:08x}),\n" for f in selected)
         index_text += "];\npub fn lookup(addr: u32) -> Option<LiftFn> {\n"
         index_text += "    FUNCTIONS.binary_search_by_key(&addr, |e| e.0).ok().map(|i| FUNCTIONS[i].1)\n}\n"
+        index_text += "use ddnative_base::execution::Step;\n"
+        index_text += "pub const INSTRUCTIONS: &[(u32, Step)] = &[\n"
+        index_text += "".join(f"(0x{ip:08X}, s_{owner:08x}),\n" for ip, owner in sorted(instruction_owners.items()))
+        index_text += "];\npub fn instruction(ip: u32) -> Option<Step> {\n"
+        index_text += "INSTRUCTIONS.binary_search_by_key(&ip, |e| e.0).ok().map(|i| INSTRUCTIONS[i].1)\n}\n"
         write_changed(os.path.join(folder, "generated", "mod.rs"), index_text)
         # Remove obsolete generated modules, never unrelated source files.
         for old in Path(folder, "generated").glob("lifted_*.rs"):
@@ -2223,6 +2730,11 @@ def gen(chunk=400):
     lookup += "fn lookup(addr: u32) -> Option<LiftFn> { match (addr >> 20) % 16 {\n"
     lookup += "".join(f"{i} => ddlift_{i:02}::lookup(addr),\n" for i in range(SHARDS))
     lookup += "_ => unreachable!(), } }\n"
+    # Bodies can cross address-shard boundaries, or share an epilogue.
+    # Exact instruction keys (not ranges) avoid accepting mid-instruction IPs.
+    lookup += "pub fn instruction(ip: u32) -> Option<ddnative_base::execution::Step> {\n"
+    lookup += "".join(f"if let Some(s) = ddlift_{i:02}::instruction(ip) {{ return Some(s); }}\n" for i in range(SHARDS))
+    lookup += "None }\n"
     lookup += "pub fn init() { x86::set_lifted_lookup(lookup); }\n"
     # Preserve public f_ADDRESS entry points, including callers that do not
     # use all()/dispatch_table(). Raw shard entry points require init().
@@ -2239,8 +2751,13 @@ def gen(chunk=400):
     lookup += "let mut t: std::collections::HashMap<u32, LiftFn> = all().into_iter().filter(|(a, _)| !ext.contains(a)).collect();\n"
     lookup += "for &(a, _, f) in crate::platform::MODELS { t.insert(a, f); } t }\n"
     write_changed(os.path.join(out_dir, "lifted.rs"), lookup)
-    # the test declares every address it verifies, 16 per line
-    addrs = [f"0x{f['addr']:08X}" for f in lifted]
+    # the test declares every address it verifies, 16 per line; a function
+    # with a verification gap (L45) is replayed but not declared; the list
+    # and its reasons go next to the private records
+    gaps = verification_gaps(lifted)
+    Path(N, "patterns/verification_gaps.json").write_text(json.dumps(
+        {f"0x{a:08X}": reasons for a, reasons in sorted(gaps.items())}, indent=1))
+    addrs = [f"0x{f['addr']:08X}" for f in lifted if f["addr"] not in gaps]
     decl = "\n".join("// verifies " + " ".join(addrs[i:i + 16]) for i in range(0, len(addrs), 16))
     test = lifted_test_source(decl)
     write_changed(os.path.join(R, "crates/ddnative/tests/lifted.rs"), test)
