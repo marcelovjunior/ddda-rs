@@ -64,6 +64,27 @@ class CallerStateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stack pointer"):
                 c.validate_state(dict(state, esp=esp))
 
+    def test_legacy_caller_seed_is_identified_then_replayed_exactly(self):
+        caller=dict(addr=0x400000)
+        seed=(caller['addr'] << 8)^3
+        case=dict(addr=caller['addr'],body_key='test',**self.run_body(caller,seed))
+        state,recipe=cs.capture(caller,case,0x400100,self.run_body,'test')
+        self.assertEqual(recipe['seed'],seed)
+        result=self.run_body(dict(addr=0x400100),2,initial_state=state)
+        self.assertEqual(result['regs_out']['eax'],0x1234)
+        case['regs_out']['eax']^=1
+        with self.assertRaisesRegex(h.Rejected,'replay differs'):
+            cs.capture(caller,case,0x400100,self.run_body,'test')
+
+    def test_legacy_seed_does_not_guess_other_input_distributions(self):
+        case=self.accepted()
+        del case['seed']
+        with self.assertRaisesRegex(ValueError,'cannot identify legacy setup seed'):
+            cs.capture(dict(addr=0x400000),case,0x400100,self.run_body,'test')
+        case['input_strategy']='zero-call-v1'
+        with self.assertRaisesRegex(ValueError,'lacks seed for its input distribution'):
+            cs.capture(dict(addr=0x400000),case,0x400100,self.run_body,'test')
+
 
 if __name__ == "__main__":
     unittest.main()

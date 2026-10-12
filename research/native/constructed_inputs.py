@@ -49,13 +49,8 @@ def validate_state(state):
             raise ValueError('setup-written byte differs from captured state')
 
 
-def construct(setup, accepted, bindings, run, key, initial_state=None):
-    """`run(f, seed, **inputs)` must use the selected recording boundary."""
-    import structured_inputs as s
-    if accepted['addr'] != setup['addr'] or accepted.get('body_key') != key:
-        raise ValueError('setup case/body mismatch')
-    if accepted.get('terminal') or accepted.get('construction'):
-        raise ValueError('setup must be a returning, independently recorded case')
+def case_seed(setup, accepted):
+    """Identify a recorded seed; callers must still replay every observation."""
     seed = accepted.get('seed')
     if seed is None:
         # Early lift.py vectors did not serialize their seed. The first GPR
@@ -68,6 +63,17 @@ def construct(setup, accepted, bindings, run, key, initial_state=None):
         if len(matches) != 1:
             raise ValueError('cannot identify legacy setup seed')
         seed = matches[0]
+    return seed
+
+
+def construct(setup, accepted, bindings, run, key, initial_state=None):
+    """`run(f, seed, **inputs)` must use the selected recording boundary."""
+    import structured_inputs as s
+    if accepted['addr'] != setup['addr'] or accepted.get('body_key') != key:
+        raise ValueError('setup case/body mismatch')
+    if accepted.get('terminal') or accepted.get('construction'):
+        raise ValueError('setup must be a returning, independently recorded case')
+    seed = case_seed(setup, accepted)
     state = {}
     if initial_state is not None:
         validate_state(initial_state)

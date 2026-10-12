@@ -10,6 +10,8 @@ check: every recorded field must match) up to the call; the pages, heap
 cursor, registers and ESP there (harness.run_sparse capture_call) start the
 helper in its caller's frame. Other inputs keep the random distribution,
 and the helper records its own reads and writes as any case does.
+Legacy random cases use constructed_inputs' seed identification, followed
+by the same complete replay comparison. Other unseeded policies are refused.
 
     python caller_state.py 0x01304753 [--adopt]
 
@@ -21,7 +23,7 @@ import json
 from pathlib import Path
 
 import harness as h
-from constructed_inputs import digest, validate_state
+from constructed_inputs import digest, validate_state, case_seed
 
 
 def capture(caller, accepted, target, run, key):
@@ -30,12 +32,13 @@ def capture(caller, accepted, target, run, key):
     import structured_inputs as s
     if accepted['addr'] != caller['addr'] or accepted.get('body_key') != key:
         raise ValueError('caller case/body mismatch')
-    if accepted.get('terminal') or accepted.get('construction') or accepted.get('seed') is None:
-        raise ValueError('caller case must be a returning, seeded, independently recorded case')
+    if accepted.get('terminal') or accepted.get('construction'):
+        raise ValueError('caller case must be a returning, independently recorded case')
     if not any(e.get('target') == target for e in accepted.get('calls') or ()):
         raise ValueError('caller case does not mock the target')
+    seed = case_seed(caller, accepted)
     box = {'target': target}
-    actual = run(caller, accepted['seed'], capture_call=box, **s._inputs([accepted]))
+    actual = run(caller, seed, capture_call=box, **s._inputs([accepted]))
     expected = {k: v for k, v in accepted.items() if k not in ('addr', 'seed', 'body_key')}
     if digest({k: actual.get(k) for k in expected}) != digest(expected):
         raise h.Rejected('caller state: caller replay differs from accepted case')
@@ -43,7 +46,7 @@ def capture(caller, accepted, target, run, key):
     if state is None:
         raise h.Rejected('caller state: the replay does not reach the call')
     validate_state(state)
-    provenance = dict(rule='caller-state-v1', caller=caller['addr'], seed=accepted['seed'], target=target,
+    provenance = dict(rule='caller-state-v1', caller=caller['addr'], seed=seed, target=target,
                       body_key=key, case_hash=digest(accepted))
     return state, provenance
 
@@ -83,8 +86,12 @@ def main():
         # one case per caller in turn, so that several callers' states are used
         by_caller = {}
         for c in sorted(cases, key=lambda c: (c['addr'], c.get('seed') or 0)):
-            if (c['addr'] in fs and c.get('seed') is not None
+            if (c['addr'] in fs
                     and any(e.get('target') == target for e in c.get('calls') or ())):
+                try:
+                    case_seed(fs[c['addr']], c)
+                except ValueError:
+                    continue
                 by_caller.setdefault(c['addr'], []).append(c)
         order = [c for k in range(max(map(len, by_caller.values()), default=0))
                  for a in sorted(by_caller) for c in by_caller[a][k:k + 1]]
@@ -101,7 +108,7 @@ def main():
             finally:
                 gc.collect()
             attempts.append(dict(seed=seed, reason=reason, caller=case['addr']))
-            print(f'{target:#010x} from {case["addr"]:#010x} seed {case["seed"]}: {reason}', flush=True)
+            print(f'{target:#010x} from {case["addr"]:#010x} seed {case.get("seed", "legacy")}: {reason}', flush=True)
         if not order:
             print(f'{target:#010x}: no verified case mocks it', flush=True)
         row = dict(addr=target, body_key=lift.vector_key(helper), strategy='caller-state-v1',
