@@ -69,6 +69,7 @@ PORTS = {
     0x00FB64D0: ("effect_update", 110),
     0x011E48E0: ("element_time", 58),
     0x00E6C260: ("emitter_time", 75),
+    0x00A36DF0: ("lunge", 346),
 }
 # ports of other crates run as the original when called (their ports run in the replay)
 FOREIGN_PORTS = {0x00402530, 0x004025C0, 0x00402620, 0x00CF5E20}
@@ -371,6 +372,17 @@ def s_main(sc, rnd):
     return obj
 
 
+def far_object(sc, rnd, base, ranges):
+    """An object at `base` (above the main window) of which only `ranges`
+    ((offset, length) pairs) are mapped as windows."""
+    for off, n in ranges:
+        sc.window(base + off, n)
+    return base
+
+
+FAR = SCRATCH + 0x10000  # big objects (their used ranges are windows)
+
+
 def build(kind, rnd):
     """(regs, scratch, args, globals) for one case of `kind`."""
     sc = Scratch(rnd)
@@ -400,6 +412,26 @@ def build(kind, rnd):
             sc.u32(unit + 0x1D0, 0 if rnd.random() < 0.4 else sc.alloc(0x110))
             args = [param, sc.alloc(0x90)]
         regs["ecx"] = unit
+    elif kind == "lunge":
+        action = sc.alloc(0x80)
+        regs["ecx"] = action
+        matrix = sc.alloc(0x40, 16)
+        for k in range(16):
+            sc.u32(matrix + 4 * k, floats(rnd))
+        if rnd.random() < 0.15:
+            sc.u32(matrix + 0x20, rnd.choice([0, 0x80000000]))
+            sc.u32(matrix + 0x28, rnd.choice([0, 0x80000000]))
+        sc.u32(action + 0x44, sc.vtable_object({0x58 // 4: sc.value_stub(matrix, 4)}))
+        enemy = far_object(sc, rnd, FAR, [(0x40, 0x10), (0x380 + 0x4C, 4), (0xF0C, 4), (0x2360, 0x18),
+                                         (0x74D0, 0x14), (0x7590, 8)])
+        sc.u32(action + 0x74, 0 if rnd.random() < 0.1 else enemy)
+        frame = rnd.choice([0x41EFFFFF, 0x41F00000, 0x41F00001, 0x42340000, 0x426FFFFF, 0x42700000,
+                            0x42700001, 0x40000000, 0x7FC00000, floats(rnd)])
+        sc.u32(enemy + 0x380 + 0x4C, frame if rnd.random() < 0.9 else f2b(rnd.uniform(30, 60)))
+        for off in (0x40, 0x44, 0x48, 0x74E0, 0x7590, 0x7594):
+            sc.u32(enemy + off, floats(rnd))
+        sc.fake(0x00A00BF0, 4)
+        sc.fake(0x010570F0, 0, eax=rnd.choice([0, 1, 0x100, 0xFFFFFF00, rnd.getrandbits(32)]))
     return regs, sc, args, g
 
 

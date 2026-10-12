@@ -14,6 +14,7 @@
 //! shards this crate cannot depend on).
 
 use crate::effect::{self, Effects};
+use crate::lunge::{self, Step};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::{self, Cpu, LiftFn};
 use mtcore::machine::{arg, call_out, pop, push, ret};
@@ -113,9 +114,90 @@ pub fn f_00e6c260(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 8);
 }
 
+/// The lunge's calls, made on the machine as the original makes them.
+struct LungeMachine<'a> {
+    cpu: &'a mut Cpu,
+    action: u32,
+}
+
+impl lunge::Calls for LungeMachine<'_> {
+    fn ramp(&mut self, m: &mut dyn Mem, enemy: u32) {
+        let cpu = &mut *self.cpu;
+        let ramp_time = m.u32(enemy.wrapping_add(lunge::RAMP_TIME));
+        cpu.xmm[0] = [ramp_time, 0, 0, 0];
+        cpu.xmm[3] = [m.u32(enemy.wrapping_add(lunge::TOP_SPEED)), 0, 0, 0];
+        // eax = the enemy, xmm3 = the top speed; push ecx (the motion)
+        // makes room for the ramp time
+        let ecx = cpu.ecx;
+        push(m, cpu, ecx);
+        m.set_u32(cpu.esp, ramp_time);
+        call_body(m, cpu, 0x00A0_0BF0, 0x00A3_6E56);
+    }
+    fn facing(&mut self, m: &mut dyn Mem, owner: u32) -> u32 {
+        let cpu = &mut *self.cpu;
+        cpu.ecx = owner;
+        cpu.eax = m.u32(owner);
+        cpu.edx = m.u32(cpu.eax.wrapping_add(0x58));
+        push(m, cpu, 0xFFFF_FFFF);
+        let target = cpu.edx;
+        call_out(m, cpu, target, 0x00A3_6E62);
+        cpu.eax
+    }
+    fn lunged(&mut self, step: &Step) {
+        let vz = step.velocity[2];
+        let [x, y, z] = step.position.map(|c| c.to_bits());
+        let cpu = &mut *self.cpu;
+        cpu.xmm[0] = [x, 0, 0, 0];
+        cpu.xmm[1] = [y, 0, 0, 0];
+        cpu.xmm[2] = [vz.to_bits(), 0, 0, 0];
+        cpu.xmm[3] = [z, 0, 0, 0];
+        cpu.xmm[4] = [0; 4];
+    }
+    fn motion_ended(&mut self, m: &mut dyn Mem, motion: u32) -> bool {
+        let cpu = &mut *self.cpu;
+        cpu.eax = m.u32(self.action.wrapping_add(lunge::ENEMY));
+        cpu.ecx = motion;
+        call_body(m, cpu, 0x0105_70F0, 0x00A3_6F11);
+        cpu.eax & 0xFF != 0
+    }
+}
+
+/// cEm5501ActAtckRushBite::vf06 (`this` in ecx).
+pub fn f_00a36df0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let action = cpu.ecx;
+    enter_aligned(m, cpu, 8, 0);
+    let (ecx, esi) = (cpu.ecx, cpu.esi);
+    push(m, cpu, ecx);
+    push(m, cpu, esi);
+    cpu.esi = action;
+    let enemy = m.u32(action.wrapping_add(lunge::ENEMY));
+    cpu.eax = enemy;
+    if enemy != 0 {
+        // the window test leaves its operands in ecx, xmm0 and xmm1
+        cpu.ecx = enemy.wrapping_add(lunge::MOTION);
+        if cpu.ecx != 0 {
+            let frame = m.u32(cpu.ecx.wrapping_add(lunge::MOTION_FRAME));
+            cpu.xmm[0] = [frame, 0, 0, 0];
+            if f32::from_bits(frame) > lunge::WINDOW.0 {
+                cpu.xmm[1] = [lunge::WINDOW.1.to_bits(), 0, 0, 0];
+            }
+        }
+    }
+    lunge::update(m, action, &mut LungeMachine { cpu: &mut *cpu, action });
+    if enemy != 0 {
+        let enemy = m.u32(action.wrapping_add(lunge::ENEMY));
+        cpu.eax = 0x101;
+        cpu.ecx = m.u32(enemy.wrapping_add(lunge::FLAGS[0] + 4));
+        cpu.edx = m.u32(enemy.wrapping_add(lunge::FLAGS[1] + 4));
+    }
+    cpu.esi = pop(m, cpu);
+    leave(m, cpu, 0);
+}
+
 /// The ports the lifted program calls instead of the lifted bodies, with
 /// the mask of xmm registers each reproduces exactly (all of them).
 pub const PORTS: &[(u32, LiftFn, u8)] = &[
+    (0x00A3_6DF0, f_00a36df0, 0b1111_1111),
     (0x00E6_C260, f_00e6c260, 0b1111_1111),
     (0x00FB_64D0, f_00fb64d0, 0b1111_1111),
     (0x011E_48E0, f_011e48e0, 0b1111_1111),

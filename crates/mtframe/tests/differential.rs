@@ -65,7 +65,7 @@ macro_rules! forwarded {
         }
     };
 }
-forwarded!(0x00FB_5E90);
+forwarded!(0x00A0_0BF0, 0x00FB_5E90, 0x0105_70F0);
 
 const REGS: [&str; 8] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"];
 
@@ -145,7 +145,7 @@ fn replay_lift_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
 
 /// The lifted program's vectors for each ported address, under the lifted
 /// test's contract (registers, xmm0, written bytes, x87 result).
-// verifies 0x00E6C260 0x00FB64D0 0x011E48E0
+// verifies 0x00A36DF0 0x00E6C260 0x00FB64D0 0x011E48E0
 #[test]
 fn ports_replay_the_lifted_vectors() {
     let Some(cases) = vectors("frame_lift") else { return };
@@ -315,7 +315,7 @@ fn set_fpcw(cpu: &mut Cpu, cw: u16) {
 /// Edge cases recorded from the original: built objects, every general
 /// register and xmm lane, and every byte of the object, stack, heap and
 /// global windows.
-// verifies 0x00E6C260 0x00FB64D0 0x011E48E0
+// verifies 0x00A36DF0 0x00E6C260 0x00FB64D0 0x011E48E0
 #[test]
 fn ports_match_the_original_on_edge_cases() {
     let Some(cases) = vectors("frame_edge") else { return };
