@@ -38,7 +38,7 @@ fn = {a: (n, s, st) for a, n, s, st in c.execute('select address, name, size, st
 callees = collections.defaultdict(list)
 for a, b in c.execute('select caller, callee from calls'):
     callees[a].append(b)
-P = 'E:/ddda-re/notes/native/patterns'
+P = os.environ.get('LIFT_DATA', 'E:/ddda-re/notes/native') + '/patterns'
 novector = set(json.load(open(f'{P}/lift_novector.json')))
 
 def reason(a):
@@ -123,3 +123,15 @@ print(dict(cnt))
 for h, a, via, how in rows:
     n, s, st = fn[a]
     print(f'h{h} {a:#010x} {n:32.32} {s or 0:6} {reason(a):45.45} <- {via:#010x} ({how})' if via else f'h{h} {a:#010x} {n} root')
+
+# L21 stop 11: functions the inventory counts as verified whose record still
+# has a verification gap (written by `lift.py gen`), e.g. a stale body cut
+# at a Ghidra function split, on the same routes.
+gap_path = f'{P}/verification_gaps.json'
+if os.path.exists(gap_path):
+    gaps = {int(k, 16): v for k, v in json.load(open(gap_path)).items()}
+    hit = sorted((seen[a][0], a) for a in seen if a in gaps)
+    print(f'\n{len(hit)} reached functions with verification gaps (of {len(gaps)})')
+    for h, a in hit:
+        _, via, how = seen[a]
+        print(f'h{h} {a:#010x} {fn[a][0]:32.32} {"; ".join(gaps[a])[:70]:70} <- {via or 0:#010x} ({how})')

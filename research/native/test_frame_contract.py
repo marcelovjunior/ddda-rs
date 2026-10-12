@@ -132,6 +132,16 @@ class FrameContractTests(unittest.TestCase):
             self.memset_run('6800000800 c7042400000800 6a00 6800000030 e8e8000000 83c40c c3')
 
 
+    def test_static_pop_skips_noreturn_paths(self):
+        # L46: test eax,eax; je fail; ret 4; fail: call 0x400100; pop esi; int3
+        # -- the int3 after the call marks a noreturn path, which adds no pop.
+        # A bare int3 reached without a call stays unknown (zero fallback).
+        for text, want in (('85c07403c20400e8f80000005ecc', 4), ('85c07403c20400cc', 0)):
+            code = bytes.fromhex(text)
+            body, (p1, p2) = self.image(code)
+            with p1, p2:
+                self.assertEqual(h.static_pop(0x400000, limit=64), want, text)
+
     def test_cleanup_search_uses_the_decode_limit(self):
         # 600 x `inc eax` then `ret 4`: past the old 512-instruction bound
         code=bytes([0x40])*600+bytes.fromhex('c20400')

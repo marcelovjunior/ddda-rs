@@ -91,6 +91,10 @@ X87_READ = {"fst", "fist", "fchs", "fabs", "fadd", "fsub", "fsubr", "fmul", "fdi
 # exception flags. All execute on the host x87 like the forms above.
 X87_SUPPORTED = (X87_PUSH | X87_POP | X87_READ | {"fcompp", "fucompp", "ficomp", "fnstcw", "fldcw", "fnstsw", "fstsw",
                                                   "fptan", "fnclex"})
+# FNSAVE/FSAVE store the whole x87 state and empty the stack; FRSTOR loads it
+# back (L46: Intel SDM vol. 1 8.1.10, measured by research/runtime/x87_state_oracle.c).
+X87_SAVE = {"fnsave", "fsave"}
+X87_RESTORE = {"frstor"}
 X87_CONTROL = {"fnstcw", "fldcw", "fnstsw", "fstsw", "fwait", "wait", "fninit", "fnclex", "fnstenv", "fldenv"}
 # Net x87 stack effect of each closed lifted function at its `ret` (filled by
 # lift(); a caller adds it at a direct call). None: inconsistent between rets.
@@ -241,15 +245,25 @@ def frame_tail(target, entries, noreturn, read, is_code):
             ins = decode_body(target, 1, entries, noreturn, read, is_code, ext=True)[0]
             TABLE_PROOF.pop(target, None)
             rets = {(i.operands[0].imm if i.operands else 0) for i in ins if i.mnemonic in ("ret", "retn")}
-            if len(rets) == 1 and not any(i.mnemonic == "call" for i in ins):
+            if len(rets) == 1:
+                # calls are stepped over with their proven pops (L46: the CRT
+                # x87 tail 0x01300749 reports errors through calls)
                 with _patched_code(h, read):
-                    exit_ = h.frame_exit(target, {i.address for i in ins})
+                    exit_ = h.frame_exit(target, {i.address for i in ins}, calls=True)
                 result = (exit_ is not None and exit_[0] == "esp" and not exit_[2]
-                          and exit_[1] > 4 + rets.pop())
+                          and _s(exit_[1]) > 4 + rets.pop())  # signed: an underestimated callee pop is negative
         except Unsupported:
             result = False
         _FRAME_TAILS[key] = result
     return _FRAME_TAILS[key]
+
+
+def inlined_tail(t):
+    """Whether entry `t`, met in a decoded body, is a frame tail decode_body
+    inlined (L46: the emitter and the x87 walk must then treat a jump to it
+    as local, or memcpy's `jmp __VEC_memcpy` leaves for untranslated code)."""
+    import harness as h
+    return frame_tail(t, function_entries(), noreturn_entries(), h.code, h.executable)
 
 
 class _patched_code:
@@ -890,15 +904,21 @@ def x87_deficit(ins, start, depth, limit, callable=frozenset()):
     is walked through like an x87 instruction (L45): its values cannot
     come from a mock."""
     at = {i.address: i for i in ins}
-    todo = [(start, depth, 0)]
+    todo = [(start, depth, 0, None)]
     seen, required = set(), 0
     while todo:
-        pc, current, added = todo.pop()
-        if pc not in at or (pc, current, added) in seen:
+        pc, current, added, saved = todo.pop()
+        if pc not in at or (pc, current, added, saved) in seen:
             continue
-        seen.add((pc, current, added))
+        seen.add((pc, current, added, saved))
         i = at[pc]
         mn = i.mnemonic
+        if mn in X87_SAVE:
+            saved, current = current, 0
+        elif mn in X87_RESTORE:
+            if saved is None:
+                return None
+            current, saved = saved, None
         closed = (mn == "call" and i.operands[0].type == 2 and (i.operands[0].imm & 0xffffffff) in callable
                   and X87_NET.get(i.operands[0].imm & 0xffffffff) is not None)
         if mn in ("call", "ret", "retn", "repz ret", "int3", "ud2", "hlt") and not closed:
@@ -907,6 +927,8 @@ def x87_deficit(ins, start, depth, limit, callable=frozenset()):
             t = i.operands[0].imm & 0xffffffff if closed else None
             needed, delta = (X87_NEED.get(t, 0), X87_NET[t]) if closed else x87_effect(i)
             missing = max(0, needed - current)
+            if missing and saved is not None:
+                return None  # after FNSAVE the caller's values are in memory, not on the stack
             added += missing
             if added > limit:
                 return None
@@ -914,15 +936,15 @@ def x87_deficit(ins, start, depth, limit, callable=frozenset()):
             current += missing + delta
             if current > 8:
                 return None
-        elif mn.startswith('f') and mn not in X87_CONTROL:
+        elif mn.startswith('f') and mn not in X87_CONTROL | X87_SAVE | X87_RESTORE:
             return None
         if mn.startswith('j'):
             if i.operands[0].type != 2:
                 continue
-            todo.append((i.operands[0].imm & 0xffffffff, current, added))
+            todo.append((i.operands[0].imm & 0xffffffff, current, added, saved))
             if mn == 'jmp':
                 continue
-        todo.append((pc + i.size, current, added))
+        todo.append((pc + i.size, current, added, saved))
     return required
 
 
@@ -948,7 +970,9 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
     Returns (set of depths at the function's rets, push sites)."""
     from capstone.x86 import X86_OP_IMM
     at = {i.address: k for k, i in enumerate(ins)}
-    seen, todo = {}, [(at[addr], entry)]
+    # a path state is (index, depth, saved): `saved` is the depth an
+    # FNSAVE emptied the stack from, which the matching FRSTOR restores (L46)
+    seen, todo = {}, [(at[addr], entry, None)]
     exits, push_sites = set(), set()
     # blocks only reachable through a switch table are walked afterwards
     # from depth 0 (conservative: a switch inside x87 code is rare)
@@ -956,17 +980,23 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
     while todo or pending:
         if not todo:
             k = pending.pop(0)
-            if ins[k].address not in seen:
-                todo.append((k, 0))
+            if not any(key[0] == ins[k].address for key in seen):
+                todo.append((k, 0, None))
             continue
-        k, depth = todo.pop()
+        k, depth, saved = todo.pop()
         while k < len(ins):
             i = ins[k]
-            if seen.get(i.address, 99) <= depth:
+            if seen.get((i.address, saved), 99) <= depth:
                 break  # already walked with this depth or less
-            seen[i.address] = depth
+            seen[(i.address, saved)] = depth
             mn = i.mnemonic
-            if mn in X87_SUPPORTED and mn not in X87_CONTROL:
+            if mn in X87_SAVE:
+                saved, depth = depth, 0
+            elif mn in X87_RESTORE:
+                if saved is None:
+                    raise Unsupported(f"x87-frstor without an fnsave on the path at {i.address:#x}")
+                depth, saved = saved, None
+            elif mn in X87_SUPPORTED and mn not in X87_CONTROL:
                 needed, delta = x87_effect(i)
                 if depth < needed:
                     raise Unsupported(f"x87-return (needs {needed} values at {i.address:#x}, has {depth})")
@@ -995,8 +1025,8 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                 break
             if mn.startswith("j"):
                 t = i.operands[0].imm if i.operands and i.operands[0].type == 2 else None
-                if t in at and (t == addr or t not in function_entries()):
-                    todo.append((at[t], depth))
+                if t in at and (t == addr or t not in function_entries() or inlined_tail(t)):
+                    todo.append((at[t], depth, saved))
                 # A runtime jump's local destinations are all statically
                 # reachable starts, walked with their own static depths;
                 # its value is not a proof of the depth there. The recorder
@@ -1004,7 +1034,7 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
                 targets = (switches or {}).get(i.address, [])
                 if not runtime_jump(i) and not isinstance(targets, RuntimeTargets):
                     for target in targets:
-                        todo.append((at[target], depth))
+                        todo.append((at[target], depth, saved))
                 if mn == "jmp":
                     break
             k = at.get(i.address + i.size, len(ins))
@@ -1223,7 +1253,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
     return TableTargets(targets, bound is not None)
 
 
-def lift(addr, size, callable=frozenset(), ext=False, step=False):
+def lift(addr, size, callable=frozenset(), ext=False, step=False, x87_inputs=False):
     """Rust match arms for the function, or raise Unsupported. `callable`
     holds the lifted functions a `call` or an outward (tail) jump may go to.
     With `ext`, any other call or outward jump (direct, indirect, imports)
@@ -1237,7 +1267,8 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
     ins, switches, stops, ranges = cached_body(addr, size, ext)
     starts = {i.address for i in ins}
     entries = function_entries()
-    inside = lambda t: t in starts and (t == addr or t not in entries)
+    # a jump into an inlined frame tail (decode_body, L45) stays local
+    inside = lambda t: t in starts and (t == addr or t not in entries or inlined_tail(t))
     leaders = {addr}
     for k, i in enumerate(ins):
         if k and ins[k-1].address + ins[k-1].size != i.address:
@@ -1256,6 +1287,7 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
                 leaders.add(i.address + i.size)
         if (i.mnemonic in ("ret", "retn", "repz ret") or i.address in stops) and k + 1 < len(ins):
             leaders.add(ins[k + 1].address)
+    flow_leaders = set(leaders)  # block starts of the control flow (step mode splits every instruction)
     if step:
         leaders = starts
     # x87 entry contract (ext only, never callable): the minimal number of
@@ -1268,7 +1300,9 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
     # Step mode (L27b) runs the actual callees and the live x87 stack, so
     # neither the entry contract nor the recorder's x87 return pushes nor
     # the recorder's instruction budget apply there.
-    entry = (x87_deficit(ins, addr, 0, 8, callable) or 0) if ext and not step else 0
+    # A closed body takes x87 inputs only when asked (x87_inputs: a promoted
+    # x87 helper such as 0x01300660, L46); its X87_NEED is checked at every call.
+    entry = (x87_deficit(ins, addr, 0, 8, callable) or 0) if (ext or x87_inputs) and not step else 0
     # The selected list already passed scan's stack analysis. Runtime calls
     # execute actual callees, not the recorder's synthetic x87 return pushes.
     exits, push_sites = (set(), []) if step else x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
@@ -1386,6 +1420,41 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
 
     def sx(v, bits):
         return f"(({v}) as i{bits} as i32 as u32)" if bits in (8, 16) else v
+
+    def fnsave_pointers(k):
+        """FIP, FOP and the FDP expression an FNSAVE at ins[k] stores (L46):
+        those of the last non-control x87 instruction, which must lie on the
+        same straight line (no branch target, call or FRSTOR in between) and
+        have a memory operand whose registers are unchanged since. The
+        hardware rules (x87_state_oracle.c): control instructions keep FIP;
+        FDP is the last memory operand; FOP is the opcode's low 3 bits and
+        ModRM."""
+        written = set()
+        for j in range(k, 0, -1):
+            p, cur = ins[j - 1], ins[j]
+            if p.address + p.size != cur.address or cur.address in flow_leaders:
+                break
+            if p.mnemonic == "call" or p.mnemonic.startswith(("j", "ret")) or p.mnemonic in X87_RESTORE | {"fninit", "finit"}:
+                break
+            if p.mnemonic.startswith("f") and p.mnemonic not in X87_CONTROL | X87_SAVE:
+                mem = next((o for o in p.operands if o.type == X86_OP_MEM), None)
+                if mem is None or (mem.mem.segment and p.reg_name(mem.mem.segment) in ("fs", "gs")):
+                    break
+                used = set()
+                for r in (mem.mem.base, mem.mem.index):
+                    if r:
+                        used |= _aliases(p.reg_name(r))
+                if used & written:
+                    break
+                raw = bytes(p.bytes)
+                while raw and raw[0] in (0x26, 0x2e, 0x36, 0x3e, 0x9b):
+                    raw = raw[1:]
+                return p.address, ((raw[0] & 7) << 8) | raw[1], mem_addr(p, mem)
+            w = _writes(p)
+            if w is None:
+                break
+            written |= w
+        raise Unsupported(f"x87-fnsave pointers not proven at {ins[k].address:#x}")
 
     lines = []
     blocks = sorted(leaders)
@@ -1567,8 +1636,8 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
                                 f"fl = Flags::new(x86::SUB, 0, a, r, {bits}); {store(i, ops[0], 'r')} }}")
                 else:
                     op, kind = ("wrapping_add", "INC") if mn == "inc" else ("wrapping_sub", "DEC")
-                    body.append(f"{{ let a = {a} & {mask}; let r = a.{op}(1) & {mask}; let cf = fl.cf(); "
-                                f"fl = Flags::new(x86::{kind}, a, 1, r, {bits}); fl.cf_in = cf; {store(i, ops[0], 'r')} }}")
+                    body.append(f"{{ let a = {a} & {mask}; let r = a.{op}(1) & {mask}; "
+                                f"fl.inc_dec(x86::{kind}, a, r, {bits}); {store(i, ops[0], 'r')} }}")
             elif mn in ("shl", "shr", "sar", "sal"):
                 a = load(i, ops[0])
                 cnt = "1u32" if len(ops) == 1 else load(i, ops[1])
@@ -1824,6 +1893,15 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False):
                 body.append(store(i, ops[0], f"x86::cvttss2si({s})"))
             elif mn == "cvtsi2ss":
                 body.append(f"{xmm(i, ops[0])}[0] = x86::cvtsi2ss({load(i, ops[1])});")
+            elif mn in X87_SAVE | X87_RESTORE:
+                mem = next((o for o in ops if o.type == X86_OP_MEM), None)
+                if mem is None or mem.size not in (0, 108) and mem.size != 4:
+                    raise Unsupported(f"x87-state operand {mn} {i.op_str}")
+                if mn in X87_RESTORE:
+                    body.append(f"st.frstor(m, {mem_addr(i, mem)});")
+                else:
+                    fip, fop, fdp = fnsave_pointers(k)
+                    body.append(f"st.fnsave(m, {mem_addr(i, mem)}, 0x{fip:X}, 0x{fop:X}, {fdp});")
             # Hardware x87 over saved 80-bit state. Keep original opcode and
             # register operands; memory ModRM becomes [rax] in the helper.
             elif mn in X87_SUPPORTED:
@@ -1900,6 +1978,17 @@ def compact_alu(arm):
     return ALU_BLOCK.sub(replace, arm)
 
 
+# Cached INC/DEC templates read CF eagerly to carry it over; after DIV that
+# CF is undefined (L46: _qsort 0x012EEBC6 `div ebx; inc eax; cmp eax, 8`).
+INC_DEC = re.compile(r"let cf = fl\.cf\(\); fl = Flags::new\(x86::(INC|DEC), a, 1, r, (8|16|32)\); fl\.cf_in = cf;")
+
+
+def lazy_inc_dec(arm):
+    """Lower the cached INC/DEC template to Flags::inc_dec, which carries an
+    undefined CF over instead of reading it (gen-time only)."""
+    return INC_DEC.sub(lambda m: f"fl.inc_dec(x86::{m[1]}, a, r, {m[2]});", arm)
+
+
 def cpu_arm(arm, start=None, fast=True):
     """Lower cached local-register IR onto the shared Cpu in place.
 
@@ -1911,7 +2000,7 @@ def cpu_arm(arm, start=None, fast=True):
     step functions keep the plain Mem calls, so a transactional Mem sees
     every access of a restartable instruction.
     """
-    arm = compact_alu(exact_compares(arm, start=start)).replace(SAVE, "").replace(LOAD, "")
+    arm = lazy_inc_dec(compact_alu(exact_compares(arm, start=start))).replace(SAVE, "").replace(LOAD, "")
     # Prepared pre-DF caches use the old state-transfer markers.
     arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}
@@ -2153,7 +2242,7 @@ def seed_closed_contracts(selected):
             a, size = f['addr'], f['size']
             try:
                 if any('st.' in arm for arm in f['arms']) or any(X87_NET[x] for x in f.get('calls', [])):
-                    lift(a, size, closed)
+                    lift(a, size, closed, x87_inputs=bool(f.get('x87_entry')))
                 else:
                     X87_NET[a] = 0
             finally:
@@ -2655,6 +2744,10 @@ def verification_gaps(lifted):
         unbound = sorted(constants - bound)
         reasons = [f"unbound target 0x{t:08X}" for t in unbound]
         named = constants | {int(t, 16) for arm in f["arms"] for t in LIFTED_CALLEE.findall(arm)}
+        # L46: arms that still leave for a frame tail the body itself holds
+        # (a record emitted before jumps into inlined tails stayed local)
+        reasons += [f"tail call into its own inlined code 0x{t:08X}" for t in sorted(named)
+                    if t in set(f.get("body") or ()) and t != f["addr"] and inlined_tail(t)]
         if (any(TABLE_DISPATCH.search(arm) for arm in f["arms"])
                 or any(t in entries and t != f["addr"] and frame_tail(t, entries, noreturn, h.code, h.executable)
                        for t in named)
@@ -2676,9 +2769,26 @@ def verification_gaps(lifted):
     return gaps
 
 
+def resumable(lifted):
+    """Entries whose bodies execution can enter mid-body (L47): the L27b
+    executor resumes there at a single instruction, so they need step
+    functions; every other function runs as its whole-function lift. These
+    are the bodies that register an EH4 scope table (they own its filter,
+    __finally and __except code, which _except_handler4 calls or resumes
+    to: L45 eh4_scope_targets decodes it into them), found from the arms
+    by the helpers' inventory names."""
+    prologs, handlers = eh4_helpers()
+    names = {f"f_{a:08x}" for a in prologs} | {f"0x{a:X}" for a in prologs | handlers}
+    return {f["addr"] for f in lifted if any(n in arm for arm in f["arms"] for n in names)}
+
+
 def gen(chunk=400, instructions=None):
+    """`instructions`: 'scoped' (default: steps for `resumable` bodies),
+    'all' (LIFT_INSTRUCTIONS=1) or 'none' (LIFT_INSTRUCTIONS=0)."""
     if instructions is None:
-        instructions = os.environ.get('LIFT_INSTRUCTIONS') == '1'
+        instructions = {'1': 'all', '0': 'none'}.get(os.environ.get('LIFT_INSTRUCTIONS'), 'scoped')
+    elif instructions is True or instructions is False:
+        instructions = 'all' if instructions else 'none'
     from pathlib import Path
     lifted = sorted(json.loads(Path(N, "patterns/lift.json").read_text()), key=lambda f: f["addr"])
     addresses = {f["addr"] for f in lifted}
@@ -2689,6 +2799,8 @@ def gen(chunk=400, instructions=None):
         if missing:
             raise ValueError(f"0x{f['addr']:08X}: missing lifted callees {sorted(missing)}")
     out_dir = os.path.join(R, "crates/ddnative/src/generated")
+    steps = addresses if instructions == 'all' else set() if instructions == 'none' else resumable(lifted)
+    print(len(steps), "functions with instruction steps", f"({instructions})", flush=True)
     ported = wired_ports()
     if set(ported) - addresses:
         raise ValueError(f"ports without a lifted body: {sorted(hex(a) for a in set(ported) - addresses)}")
@@ -2705,9 +2817,10 @@ def gen(chunk=400, instructions=None):
                      "#![allow(warnings, clippy::all)]",
                      "use crate::mem::Mem;", "use crate::x86::{self, Cpu, Flags};", ""]
             lines += [shard_fn(f) for f in selected[k:k + chunk]]
-            if instructions:
+            stepped = [f for f in selected[k:k + chunk] if f['addr'] in steps]
+            if stepped:
                 lines.append('use ddnative_base::execution::Flow;')
-                for f in selected[k:k + chunk]:
+                for f in stepped:
                     source, ips = step_source(f, addresses)
                     lines.append(source)
                     for ip in ips:

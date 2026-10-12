@@ -20,6 +20,23 @@ impl Flags {
     pub fn partial(value: u32, defined: u32) -> Self {
         Self::new(PARTIAL, defined, 0, value, 32)
     }
+    /// INC/DEC (Intel SDM vol. 2): OF, SF, ZF, AF and PF from the operation,
+    /// CF kept. A CF that is undefined (after DIV, MUL or a partial SAHF)
+    /// stays undefined instead of being read: the CRT `_qsort` runs
+    /// `div ebx; inc eax; cmp eax, 8` (0x012EEBC6), so that CF is never
+    /// observed (L46).
+    #[inline]
+    pub fn inc_dec(&mut self, kind: u8, a: u32, r: u32, bits: u32) {
+        let cf_defined = self.kind != PARTIAL || self.a & 1 != 0;
+        if cf_defined {
+            let cf = self.cf();
+            *self = Self::new(kind, a, 1, r, bits);
+            self.cf_in = cf;
+        } else {
+            let (value, _) = Self::new(kind, a, 1, r, bits).snapshot();
+            *self = Self::partial(value & ARITH_FLAGS & !1, ARITH_FLAGS & !1);
+        }
+    }
     #[inline]
     pub fn snapshot(&self) -> (u32, u32) {
         if self.kind == PARTIAL {

@@ -97,6 +97,59 @@ impl X87 {
         panic!("exact lifted x87 requires an x86-64 host (opcode {OP:#x})");
     }
 
+    /// FNSAVE m108 in the 32-bit protected-mode format (Intel SDM vol. 1
+    /// 8.1.10), as measured on the hardware (L46, research/runtime/
+    /// x87_state_oracle.c): reserved words read FFFFh; CS 23h and DS 2Bh are
+    /// the WOW64 selectors; FIP, FOP and FDP belong to the last non-control
+    /// x87 instruction and its last memory operand (the emitter proves
+    /// them). The tag word is the full one the hardware keeps for the
+    /// image. Afterwards the unit is in the FNINIT state.
+    pub fn fnsave(&mut self, m: &mut dyn crate::mem::Mem, addr: u32, fip: u32, fop: u16, fdp: u32) {
+        let mut image = self.state;
+        for k in [2, 6, 10, 26] {
+            image[k..k + 2].copy_from_slice(&0xffffu16.to_le_bytes());
+        }
+        image[12..16].copy_from_slice(&fip.to_le_bytes());
+        image[16..18].copy_from_slice(&0x23u16.to_le_bytes());
+        image[18..20].copy_from_slice(&(fop & 0x7ff).to_le_bytes());
+        image[20..24].copy_from_slice(&fdp.to_le_bytes());
+        image[24..26].copy_from_slice(&0x2bu16.to_le_bytes());
+        for (k, byte) in image.iter().enumerate() {
+            m.set_u8(addr.wrapping_add(k as u32), *byte);
+        }
+        *self = Self::default();
+    }
+
+    /// FRSTOR m108: the hardware keeps the loaded control and status words
+    /// and registers, and recomputes the tag of every non-empty register
+    /// from its contents (L46); the host FPU does that round trip. Guest
+    /// instruction and data pointers are not part of the model (see exec).
+    pub fn frstor(&mut self, m: &dyn crate::mem::Mem, addr: u32) {
+        let mut image = [0u8; 108];
+        for (k, byte) in image.iter_mut().enumerate() {
+            *byte = m.u8(addr.wrapping_add(k as u32));
+        }
+        self.state = Self::normalized(image);
+        self.state[12..28].fill(0);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn normalized(mut image: [u8; 108]) -> [u8; 108] {
+        let mut host = [0u8; 108];
+        unsafe {
+            std::arch::asm!(
+                "fnsave [{host}]", "frstor [{guest}]", "fnsave [{guest}]", "frstor [{host}]",
+                host = in(reg) host.as_mut_ptr(), guest = in(reg) image.as_mut_ptr(),
+            );
+        }
+        image
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn normalized(_image: [u8; 108]) -> [u8; 108] {
+        panic!("exact lifted x87 requires an x86-64 host (frstor)");
+    }
+
     /// Load the float returned by an external-call vector, without rounding
     /// any other stack values. Kept as push for the existing replay contract.
     pub fn push(&mut self, bits: u32) {
