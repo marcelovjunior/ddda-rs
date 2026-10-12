@@ -16,9 +16,11 @@ fn zsp(r: u32, bits: u32) -> u32 {
         | (((r as u8).count_ones() % 2 == 0) as u32 * 4)
 }
 impl Flags {
+    #[inline]
     pub fn partial(value: u32, defined: u32) -> Self {
         Self::new(PARTIAL, defined, 0, value, 32)
     }
+    #[inline]
     pub fn snapshot(&self) -> (u32, u32) {
         if self.kind == PARTIAL {
             return (self.r, self.a);
@@ -28,6 +30,7 @@ impl Flags {
         }
         (self.lahf() as u32 | ((self.of() as u32) << 11), ARITH_FLAGS)
     }
+    #[inline]
     pub fn alu_carry(&mut self, a: u32, b: u32, bits: u32, subtract: bool) -> u32 {
         let carry = self.cf() as u64;
         let (a, b) = (a & mask(bits), b & mask(bits));

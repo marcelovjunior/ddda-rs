@@ -47,9 +47,18 @@ pub struct Overlap {
     pub page: u32,
 }
 
+/// One page of guest memory.
+type Page = Box<[u8; PAGE as usize]>;
+
+fn zero_page() -> Page {
+    vec![0u8; PAGE as usize].into_boxed_slice().try_into().expect("a page")
+}
+
+/// Fixed-size tables: a page index (`addr / PAGE`, below 2^20) needs no
+/// bounds check, and a page is one thin pointer.
 struct Space {
-    pages: Vec<Option<Box<[u8]>>>,
-    perms: Vec<u8>,
+    pages: Box<[Option<Page>; PAGES]>,
+    perms: Box<[u8; PAGES]>,
 }
 
 struct SharedSpace(std::cell::UnsafeCell<Space>);
@@ -66,7 +75,12 @@ pub struct GuestMemory {
 
 impl Default for GuestMemory {
     fn default() -> Self {
-        let space = Space { pages: (0..PAGES).map(|_| None).collect(), perms: vec![0; PAGES] };
+        let pages: Box<[Option<Page>]> = (0..PAGES).map(|_| None).collect();
+        let perms: Box<[u8]> = vec![0; PAGES].into_boxed_slice();
+        let space = Space {
+            pages: pages.try_into().unwrap_or_else(|_| unreachable!()),
+            perms: perms.try_into().unwrap_or_else(|_| unreachable!()),
+        };
         GuestMemory { space: std::sync::Arc::new(SharedSpace(std::cell::UnsafeCell::new(space))) }
     }
 }
@@ -101,7 +115,7 @@ impl GuestMemory {
             return Err(Overlap { page: (p as u32) * PAGE });
         }
         for p in pages {
-            self.s_mut().pages[p] = Some(vec![0u8; PAGE as usize].into_boxed_slice());
+            self.s_mut().pages[p] = Some(zero_page());
             self.s_mut().perms[p] = perm;
         }
         Ok(())
@@ -190,11 +204,33 @@ impl GuestMemory {
     }
 
     fn byte_mut(&mut self, a: u32) -> &mut u8 {
-        let page = self.s_mut().pages[(a / PAGE) as usize].get_or_insert_with(|| vec![0u8; PAGE as usize].into_boxed_slice());
+        let page = self.s_mut().pages[(a / PAGE) as usize].get_or_insert_with(zero_page);
         &mut page[(a % PAGE) as usize]
     }
 
+    /// A load of `width` (1, 2 or 4) bytes. Within one page that is
+    /// readable: one permission test and one slice read. Everything else
+    /// (page-crossing, faults) takes the checked byte-wise path.
+    #[inline(always)]
     fn load(&self, addr: u32, width: u32) -> u32 {
+        let off = (addr % PAGE) as usize;
+        if off + width as usize <= PAGE as usize {
+            let p = (addr / PAGE) as usize;
+            let s = self.s();
+            // READ is only ever set on mapped pages (map, map_lazy, protect)
+            if s.perms[p] & READ != 0 {
+                let Some(page) = s.pages[p].as_ref() else { return 0 }; // lazy: zero until written
+                let mut v = [0u8; 4];
+                v[..width as usize].copy_from_slice(&page[off..off + width as usize]);
+                return u32::from_le_bytes(v);
+            }
+        }
+        self.load_checked(addr, width)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn load_checked(&self, addr: u32, width: u32) -> u32 {
         if let Err(f) = self.check(addr, width, false) {
             panic!("{f}");
         }
@@ -210,7 +246,26 @@ impl GuestMemory {
         }
     }
 
+    /// A store of `width` bytes; the fast path as for [`load`](Self::load).
+    #[inline(always)]
     fn store(&mut self, addr: u32, width: u32, v: u32) {
+        let off = (addr % PAGE) as usize;
+        if off + width as usize <= PAGE as usize {
+            let p = (addr / PAGE) as usize;
+            let s = self.s_mut();
+            // WRITE is only ever set on mapped pages
+            if s.perms[p] & WRITE != 0 {
+                let page = s.pages[p].get_or_insert_with(zero_page);
+                page[off..off + width as usize].copy_from_slice(&v.to_le_bytes()[..width as usize]);
+                return;
+            }
+        }
+        self.store_checked(addr, width, v)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn store_checked(&mut self, addr: u32, width: u32, v: u32) {
         if let Err(f) = self.check(addr, width, true) {
             panic!("{f}");
         }
@@ -248,6 +303,28 @@ impl Mem for GuestMemory {
     }
     fn set_u32(&mut self, addr: u32, v: u32) {
         self.store(addr, 4, v)
+    }
+    /// Page by page: one permission test and one copy per page; a page
+    /// that is not readable faults like the byte-wise reads would (at the
+    /// first byte of that page the read touches).
+    fn read_bytes(&self, addr: u32, out: &mut [u8]) {
+        let mut k = 0usize;
+        while k < out.len() {
+            let a = addr.wrapping_add(k as u32);
+            let (p, off) = ((a / PAGE) as usize, (a % PAGE) as usize);
+            let n = (PAGE as usize - off).min(out.len() - k);
+            let s = self.s();
+            if s.perms[p] & READ == 0 {
+                out[k] = self.load_checked(a, 1) as u8; // faults
+                k += 1;
+                continue;
+            }
+            match s.pages[p].as_ref() {
+                Some(page) => out[k..k + n].copy_from_slice(&page[off..off + n]),
+                None => out[k..k + n].fill(0),
+            }
+            k += n;
+        }
     }
     // `alloc` keeps the trait's default (panic): the fixture bump allocator
     // must not become the production allocator (RUNTIME.md, "Dispatcher").

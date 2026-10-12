@@ -113,7 +113,10 @@ pub fn recorded<R>(f: impl FnOnce(&Recorder) -> R) -> Option<R> {
 // --- uploads -------------------------------------------------------------------
 
 fn read_bytes(m: &dyn Mem, at: u32, len: u32) -> Vec<u8> {
-    (0..len).map(|k| m.u8(at.wrapping_add(k))).collect()
+    // the same bytes as reading each with m.u8, copied page by page
+    let mut v = vec![0; len as usize];
+    m.read_bytes(at, &mut v);
+    v
 }
 
 fn image_upload(m: &dyn Mem, resource: u32, index: u32, format: u32, img: &Image) -> Upload {
@@ -377,10 +380,14 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
     let dev = a[0];
     let rects: Vec<[i32; 4]> = (0..if a[2] != 0 { a[1] } else { 0 })
         .map(|k| std::array::from_fn(|c| m.u32(a[2] + 16 * k + 4 * c as u32) as i32)).collect();
-    let (rts, ds, viewport) = with_device(dev, |d| (d.render_targets, d.depth_stencil, d.state.viewport));
+    let (rts, ds, viewport, scissor, srgb) = with_device(dev, |d| {
+        let s = &d.state;
+        let on = |k: u32| s.render.get(&k).copied().unwrap_or(0) != 0;
+        (d.render_targets, d.depth_stencil, s.viewport, on(174).then_some(s.scissor), on(194))
+    });
     let c = ClearCall {
         rects, flags: a[3], colour: a[4], z: f32::from_bits(a[5]), stencil: a[6],
-        targets: std::array::from_fn(|k| target(rts[k])), depth: target(ds), viewport,
+        targets: std::array::from_fn(|k| target(rts[k])), depth: target(ds), viewport, scissor, srgb,
     };
     backend(|b| b.clear(&c));
     cpu.eax = D3D_OK;

@@ -74,9 +74,31 @@ pub struct Conflict {
     pub new: &'static str,
 }
 
+/// Hashes a guest address: a multiply by 2^64/phi with the high half
+/// folded into the low bits (the table's bucket index), so 16-byte aligned
+/// function addresses spread over the buckets.
+#[derive(Default)]
+struct AddrHasher(u64);
+
+impl std::hash::Hasher for AddrHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u32(self.0 as u32 ^ b as u32);
+        }
+    }
+    #[inline]
+    fn write_u32(&mut self, v: u32) {
+        let h = (v as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.0 = h ^ (h >> 32);
+    }
+}
+
 #[derive(Default)]
 pub struct Registry {
-    bindings: HashMap<u32, Binding>,
+    bindings: HashMap<u32, Binding, std::hash::BuildHasherDefault<AddrHasher>>,
     names: HashMap<u32, String>,
 }
 
@@ -85,9 +107,12 @@ impl Registry {
         Self::default()
     }
 
-    /// Every lifted function of the generated program.
+    /// Every lifted function of the generated program (none without the
+    /// `game` feature: then every original address is unbound).
     pub fn with_lifted_program() -> Self {
+        #[allow(unused_mut)]
         let mut r = Self::new();
+        #[cfg(feature = "game")]
         for (addr, f) in ddnative::generated::lifted::all() {
             r.insert(addr, Binding::Lifted(f)).expect("the lifted list has one entry per address");
         }
