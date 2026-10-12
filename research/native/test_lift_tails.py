@@ -110,6 +110,38 @@ class EdgeBoundTests(unittest.TestCase):
         code = bytes.fromhex("b901000000" "21c8" "ff248500200000") + b"\xc3" * 2
         self.assertEqual(self.slots(code, {0x2000: dwords(0x100E, 0x100F, 0)}, 0x1007), [0, 1])
 
+    def test_l49_compare_of_the_register_the_index_was_copied_from(self):
+        # mov eax,esi; cmp esi,3; ja default; jmp [eax*4+0x2000] (0x00FA01FD)
+        code = bytes.fromhex("89f0" "83fe03" "7707" "ff248500200000") + b"\xc3" * 6
+        tables = {0x2000: dwords(0x100F, 0x1010, 0x1011, 0x1012, 0)}
+        self.assertEqual(self.slots(code, tables, 0x1007), [0, 1, 2, 3])
+        # inc esi between the copy and the compare: esi no longer equals eax
+        code = bytes.fromhex("89f0" "46" "83fe03" "7707" "ff248500200000") + b"\xc3" * 6
+        self.assertIsNone(self.slots(code, {0x2000: dwords(0x1010, 0x1011, 0x1012, 0x1013, 0)}, 0x1008))
+
+    def test_l49_compare_of_a_register_loaded_from_the_slot(self):
+        # mov eax,[esp+4]; test ecx,ecx; jz out; cmp eax,2; ja out; mov ecx,[esp+4];
+        # jmp [ecx*4+0x2000] (0x00CC0FC2: the conditional exit keeps eax = the slot)
+        code = bytes.fromhex("8b442404" "85c9" "7410" "83f802" "770b" "8b4c2404" "ff248d00200000") + b"\xc3" * 5
+        tables = {0x2000: dwords(0x1019, 0x101A, 0x101B, 0)}
+        self.assertEqual(self.slots(code, tables, 0x1011), [0, 1, 2])
+        # a store to the slot after the load: eax no longer equals it
+        code = bytes.fromhex("8b442404" "894c2404" "83f802" "770b" "8b4c2404" "ff248d00200000") + b"\xc3" * 5
+        self.assertIsNone(self.slots(code, tables, 0x1011))
+
+    def test_l49_zero_and_equal_edges(self):
+        # add edx,ecx; jne other; jmp [edx*4+0x2000]; other: mov edx,1; jmp back
+        # (0x007113F2: the fall-through of jne has the result edx = 0)
+        code = bytes.fromhex("01ca" "7507" "ff249500200000" "ba01000000" "ebf2") + b"\xc3" * 3
+        tables = {0x2000: dwords(0x1012, 0x1013, 0)}
+        self.assertEqual(self.slots(code, tables, 0x1004), [0, 1])
+        # je instead: its fall-through has edx != 0, nothing bounds it
+        code = bytes.fromhex("01ca" "7407" "ff249500200000" "ba01000000" "ebf2") + b"\xc3" * 3
+        self.assertIsNone(self.slots(code, tables, 0x1004))
+        # cmp edx,2; je taken: edx = 2 (and 1 from the other path)
+        code = bytes.fromhex("83fa02" "7407" "ba01000000" "eb00" "ff249500200000") + b"\xc3" * 3
+        self.assertEqual(self.slots(code, {0x2000: dwords(0, 0x1013, 0x1014, 0)}, 0x100C), [1, 2])
+
     def test_register_bound_set_on_one_path_only_is_unproven(self):
         # test ecx,ecx; je skip; mov edx,3; skip: cmp eax,edx; ja default; jmp [eax*4+0x2000]
         code = bytes.fromhex("85c9" "7405" "ba03000000" "39d0" "7707" "ff248500200000") + b"\xc3" * 5
@@ -267,6 +299,86 @@ class SlotSweepTests(unittest.TestCase):
             full = lift.verification_gaps([dict(record, slot_coverage={"0x00400004": [0, 1, 2]})])
         self.assertEqual(partial, {0x400000: ["unproven table at 0x00400004"]})
         self.assertEqual(full, {})
+
+
+class CallerBoundTests(unittest.TestCase):
+    """L49: a switch whose index register its callers bound (0x004593E0)."""
+    # callee 0x1000: movzx ecx,byte [eax+0x3000]; jmp [ecx*4+0x2000]; ret...
+    # caller 0x1020: cmp eax,3; ja +5; call 0x1000; ret
+    CALLEE = bytes.fromhex("0fb68800300000" "ff248d00200000") + b"\xc3" * 0x12
+    CALLER = bytes.fromhex("83f803" "7705" "e8") + struct.pack("<i", 0x1000 - 0x102A) + b"\xc3"
+
+    def proof(self, extra_code=b"", extra_sections=(), entries=(0x1000, 0x1020)):
+        code = self.CALLEE + self.CALLER + b"\xc3" * 5 + extra_code
+        sections = [(0x1000, code), (0x2000, dwords(0x100E, 0x100F, 0x1010)),
+                    (0x3000, bytes((1, 0, 1, 0, 2))), *extra_sections]
+        read, is_code = image_fixture(code, dict(sections[1:]))
+        with patch.object(h, "image", return_value=(0, sections)), patch.object(h, "executable", is_code), \
+             patch.object(lift, "function_entries", return_value=frozenset(entries)), \
+             patch.object(lift, "noreturn_entries", return_value=frozenset()), \
+             patch.object(lift, "_BRANCHES", None), patch.dict(lift.CALLER_BOUND, clear=True):
+            _, switches, _, _ = lift.decode_body(0x1000, 0x20, entries=frozenset(entries), noreturn=frozenset(),
+                                                 read=read, is_code=is_code, ext=True)
+            return lift.TABLE_PROOF[0x1000], switches[0x1007]
+
+    def test_callers_bound_the_input_of_a_byte_remap(self):
+        # eax in [0, 3] at every call: the bytes T[0..3] = 1,0,1,0 are the slots
+        proof, targets = self.proof()
+        self.assertEqual(proof, {0x1007: True})
+        self.assertTrue({0x100E, 0x100F} <= set(targets))
+
+    def test_a_stack_argument_pushed_after_a_bound(self):
+        # callee 0x1000: push esi; mov ecx,[esp+8]; pop esi; jmp [ecx*4+0x2000]
+        # caller 0x1020: cmp eax,1; ja out; push eax; mov eax,[esp+8]; call 0x1000;
+        # add esp,4; out: ret (0x009C4216)
+        callee = bytes.fromhex("56" "8b4c2408" "5e" "ff248d00200000") + b"\xc3" * 0x13
+        caller = (bytes.fromhex("83f801" "770d" "50" "8b442408" "e8") + struct.pack("<i", 0x1000 - 0x102F)
+                  + bytes.fromhex("83c404" "c3"))
+        for check, want in ((caller, True), (b"\x90" * 5 + caller[5:], False)):
+            code = callee + check + b"\xc3" * 5
+            sections = [(0x1000, code), (0x2000, dwords(0x100D, 0x100E, 0x100F))]
+            read, is_code = image_fixture(code, dict(sections[1:]))
+            with patch.object(h, "image", return_value=(0, sections)), patch.object(h, "executable", is_code), \
+                 patch.object(lift, "function_entries", return_value=frozenset({0x1000, 0x1020})), \
+                 patch.object(lift, "noreturn_entries", return_value=frozenset()), \
+                 patch.object(lift, "_BRANCHES", None), patch.dict(lift.CALLER_BOUND, clear=True):
+                lift.decode_body(0x1000, 0x20, entries=frozenset({0x1000, 0x1020}), noreturn=frozenset(),
+                                 read=read, is_code=is_code, ext=True)
+                self.assertEqual(lift.TABLE_PROOF[0x1000], {0x1006: want})
+
+    def test_an_address_taken_entry_or_an_unbounded_caller_is_unproven(self):
+        self.assertEqual(self.proof(extra_sections=[(0x5000, dwords(0x1000))])[0], {0x1007: False})
+        # 0x1030: call 0x1000 with eax unchecked
+        unbounded = b"\xe8" + struct.pack("<i", 0x1000 - 0x1035) + b"\xc3"
+        self.assertEqual(self.proof(unbounded, entries=(0x1000, 0x1020, 0x1030))[0], {0x1007: False})
+
+
+class FragmentTests(unittest.TestCase):
+    def test_case_labels_and_frame_tails_inside_lifted_bodies(self):
+        # 0x1000: push ebp; push edi; jmp 0x1010; 0x1010: pop edi; pop ebp; ret
+        # -- the entry 0x1010 is a frame tail inside 0x1000's body: a fragment
+        # even though its jumper counts as a caller
+        code = bytearray(b"\xcc" * 0x20)
+        code[0x00:0x04] = bytes.fromhex("5557eb0c")
+        code[0x10:0x13] = bytes.fromhex("5f5dc3")
+        read, is_code = image_fixture(bytes(code), {})
+        entries = frozenset({0x1000, 0x1010})
+        owner = dict(addr=0x1000, body=[0x1000, 0x1001, 0x1002, 0x1010, 0x1011, 0x1012])
+        decode = lift.decode_body
+        with patch.object(h, "code", read), patch.object(h, "executable", is_code), \
+                patch.object(lift, "function_entries", lambda: entries), \
+                patch.object(lift, "noreturn_entries", lambda: frozenset()), \
+                patch.object(lift, "decode_body", lambda a, s, *x, ext=False: decode(
+                    a, s, entries, frozenset(), read, is_code, ext=ext)):
+            got = lift.fragments([owner], callers={0x1010: 1})
+            self.assertEqual(got, {0x1010: {"owners": [0x1000], "evidence": "frame tail"}})
+            # an entry with callers that is no frame tail is not a fragment
+            code[0x10:0x13] = bytes.fromhex("90c3cc")
+            read2, _ = image_fixture(bytes(code), {})
+            with patch.object(h, "code", read2):
+                lift._FRAME_TAILS.clear()
+                self.assertEqual(lift.fragments([dict(owner, body=[0x1000, 0x1001, 0x1002, 0x1010, 0x1011])],
+                                                callers={0x1010: 1}), {})
 
 
 class VerificationGapTests(unittest.TestCase):

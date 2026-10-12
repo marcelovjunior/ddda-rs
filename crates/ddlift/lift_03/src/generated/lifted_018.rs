@@ -3,6 +3,24 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x0138EC90 (DDDA.exe 2017-12-13 Steam), Global::FUN_0138ec90.
+pub fn f_0138ec90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0u32.wrapping_add(0x19923D0), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x0138ECA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_0138eca0.
+pub fn f_0138eca0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0u32.wrapping_add(0x19923F8), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x0138ECB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_0138ecb0.
+pub fn f_0138ecb0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0u32.wrapping_add(0x1992418), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x0138ECC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_0138ecc0.
 pub fn f_0138ecc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -2391,22 +2409,4 @@ pub fn f_01390590(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn f_013905a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     m.fast_set_u32(pt, 0u32.wrapping_add(0x1995818), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013905B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013905b0.
-pub fn f_013905b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0u32.wrapping_add(0x1995BA0), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013905C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013905c0.
-pub fn f_013905c0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0u32.wrapping_add(0x1995960), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013905D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013905d0.
-pub fn f_013905d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0u32.wrapping_add(0x1995A40), 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

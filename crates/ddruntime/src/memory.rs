@@ -248,6 +248,54 @@ impl GuestMemory {
         self.store_checked(addr, width, v)
     }
 
+    /// [`Mem::read_bytes`] with the access mode given: `atomic` as
+    /// ddnative-base's `ATOMIC_ACCESSES` (parallel mode). Page by page:
+    /// one permission test per page, then the page's bytes in one copy, or
+    /// in parallel mode as aligned 4-byte atomic loads (Acquire, like every
+    /// guest load) with byte loads at the unaligned ends. Each word is read
+    /// atomically, as each byte was by the byte-wise copy; the snapshot is
+    /// not atomic as a whole either way. A page that is not readable faults
+    /// at the first byte the read touches in it, as byte-wise reads would;
+    /// a lazy page not written yet reads zero.
+    pub(crate) fn read_into(&self, addr: u32, out: &mut [u8], atomic: bool) {
+        let mut k = 0usize;
+        while k < out.len() {
+            let a = addr.wrapping_add(k as u32);
+            let (p, off) = ((a / PAGE) as usize, (a % PAGE) as usize);
+            let n = (PAGE as usize - off).min(out.len() - k);
+            let s = self.s();
+            if s.perm(p) & READ == 0 {
+                out[k] = self.load_checked(a, 1) as u8; // faults
+                k += 1;
+                continue;
+            }
+            let page = s.page(p);
+            let dst = &mut out[k..k + n];
+            if page.is_null() {
+                dst.fill(0);
+            } else if !atomic {
+                // SAFETY: off + n <= PAGE inside a backed page; serial mode
+                // has no other guest thread running
+                unsafe { std::ptr::copy_nonoverlapping(page.add(off), dst.as_mut_ptr(), n) };
+            } else {
+                let mut j = 0;
+                while j < n {
+                    // SAFETY: inside a backed page; 4-byte loads only aligned
+                    // and wholly inside it
+                    let at = unsafe { page.add(off + j) };
+                    if at as usize % 4 == 0 && j + 4 <= n {
+                        dst[j..j + 4].copy_from_slice(&unsafe { load_at(at, 4) }.to_le_bytes());
+                        j += 4;
+                    } else {
+                        dst[j] = unsafe { load_at(at, 1) } as u8;
+                        j += 1;
+                    }
+                }
+            }
+            k += n;
+        }
+    }
+
     #[cold]
     #[inline(never)]
     fn store_checked(&mut self, addr: u32, width: u32, v: u32) {
@@ -296,32 +344,12 @@ impl Mem for GuestMemory {
     fn set_u32(&mut self, addr: u32, v: u32) {
         self.store(addr, 4, v)
     }
-    /// Page by page: one permission test and one copy per page; a page
-    /// that is not readable faults like the byte-wise reads would (at the
-    /// first byte of that page the read touches).
+    /// Page by page ([`GuestMemory::read_into`]). L21: the byte-wise copy
+    /// this replaces took most of the boot's main-loop time (the draws'
+    /// resource uploads, d3d9draw::flush).
     fn read_bytes(&self, addr: u32, out: &mut [u8]) {
-        let mut k = 0usize;
-        while k < out.len() {
-            let a = addr.wrapping_add(k as u32);
-            let (p, off) = ((a / PAGE) as usize, (a % PAGE) as usize);
-            let n = (PAGE as usize - off).min(out.len() - k);
-            let s = self.s();
-            if s.perm(p) & READ == 0 {
-                out[k] = self.load_checked(a, 1) as u8; // faults
-                k += 1;
-                continue;
-            }
-            let page = s.page(p);
-            if page.is_null() {
-                out[k..k + n].fill(0);
-            } else {
-                for (j, b) in out[k..k + n].iter_mut().enumerate() {
-                    // SAFETY: inside a backed page
-                    *b = unsafe { load_at(page.add(off + j), 1) as u8 };
-                }
-            }
-            k += n;
-        }
+        let atomic = ddnative_base::mem::ATOMIC_ACCESSES.load(std::sync::atomic::Ordering::Relaxed);
+        self.read_into(addr, out, atomic)
     }
     /// The table itself: an access it allows (backed page, permission set)
     /// is exactly what load/store do; READ and WRITE are only ever set on
@@ -333,4 +361,67 @@ impl Mem for GuestMemory {
     }
     // `alloc` keeps the trait's default (panic): the fixture bump allocator
     // must not become the production allocator (RUNTIME.md, "Dispatcher").
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Byte-wise reads through `Mem::u8`: what read_bytes must equal.
+    fn bytewise(m: &GuestMemory, addr: u32, len: usize) -> Vec<u8> {
+        (0..len).map(|k| m.u8(addr.wrapping_add(k as u32))).collect()
+    }
+
+    fn fault_of(f: impl FnOnce()) -> String {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let e = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).expect_err("a fault");
+        std::panic::set_hook(hook);
+        e.downcast_ref::<String>().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn read_bytes_copies_page_wise_exactly_as_byte_wise_reads() {
+        // backed pages 0x10000..0x13000, a lazy page after them (one byte
+        // written, so backed), another lazy page never written, then a gap
+        let mut m = GuestMemory::new();
+        m.map(0x10000, 0x3000, READ | WRITE).unwrap();
+        m.map_lazy(0x13000, 0x2000, READ | WRITE).unwrap();
+        let pattern: Vec<u8> = (0..0x3000u32).map(|k| (k.wrapping_mul(0x9E37_79B1) >> 13) as u8).collect();
+        m.poke(0x10000, &pattern).unwrap();
+        m.set_u8(0x13FFF, 0xA5);
+        assert_eq!(m.u8(0x14000), 0, "the second lazy page stays unbacked");
+        let cases = [
+            (0x10000, 0x3000),   // whole pages
+            (0x10FFD, 7),        // across a page boundary, unaligned both ends
+            (0x10001, 0x2FFE),   // unaligned start, two boundaries
+            (0x11002, 2),        // within a word
+            (0x12FFE, 0x1004),   // backed into the written lazy page
+            (0x13FFC, 0x1004),   // written lazy page into the unbacked one
+            (0x14000, 0x1000),   // only the unbacked lazy page
+            (0x10003, 0),        // nothing
+        ];
+        for (addr, len) in cases {
+            let want = bytewise(&m, addr, len);
+            for atomic in [false, true] {
+                let mut got = vec![0xEE; len];
+                m.read_into(addr, &mut got, atomic);
+                assert_eq!(got, want, "{addr:#x}+{len:#x} atomic {atomic}");
+            }
+        }
+        // a read reaching an unmapped page faults at its first byte there,
+        // as the byte-wise read does
+        let want = fault_of(|| { bytewise(&m, 0x14FFE, 4); });
+        assert!(want.contains("0x00015000") && want.contains("unmapped"), "{want}");
+        for atomic in [false, true] {
+            assert_eq!(fault_of(|| m.read_into(0x14FFE, &mut [0; 4], atomic)), want, "atomic {atomic}");
+        }
+        // and one not readable likewise
+        m.protect(0x11000, 0x1000, WRITE);
+        let want = fault_of(|| { bytewise(&m, 0x10FFF, 2); });
+        assert!(want.contains("0x00011000") && want.contains("not readable"), "{want}");
+        for atomic in [false, true] {
+            assert_eq!(fault_of(|| m.read_into(0x10FFF, &mut [0; 2], atomic)), want, "atomic {atomic}");
+        }
+    }
 }

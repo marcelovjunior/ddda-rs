@@ -57,6 +57,12 @@ def code_entry(pe, md, a):
     This is corroboration of an independently identified entry, NOT a code
     scanner: x86 data often decodes. No arbitrary byte offsets are admitted.
     """
+    # L49: three leading dwords that are code addresses within 64 KB are a
+    # switch's case table, not code (0x00736370, read past the end of
+    # rAIPresetCharaInfo's vtable; the only such admission of 8,962)
+    if pe.executable(a, 12) and all(pe.executable(w) and abs(w - a) < 0x10000
+                                    for w in struct.unpack('<III', pe.read(a, 12))):
+        return False
     pc = a
     for _ in range(20000):
         if not pe.executable(pc):
