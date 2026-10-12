@@ -630,7 +630,7 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
     std::thread::Builder::new()
         .name(format!("guest thread {tid:#x}"))
         .stack_size(64 << 20)
-        .spawn(move || run_thread(rt2, memory, registry, tid, start, param, stack_top))
+        .spawn(move || run_thread(rt2, memory, registry, tid, start, param, stack_top, reserve))
         .expect("host thread for a guest thread");
     if tid_out != 0 {
         m.set_u32(tid_out, tid);
@@ -639,7 +639,7 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 24);
 }
 
-fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>, tid: u32, start: u32, param: u32, stack_top: u32) {
+fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>, tid: u32, start: u32, param: u32, stack_top: u32, stack_size: u32) {
     runtime::enter(rt.clone());
     CURRENT_TID.with(|c| c.set(tid));
     registry.install();
@@ -647,7 +647,8 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
     let s = rt.lock.lock();
     rt.lock.acquire_locked(s);
     load_context(&rt);
-    let mut cpu = Cpu { esp: stack_top - 16, ..Cpu::default() };
+    let fs_base = crate::seh::initialize_teb(&mut memory, tid, stack_top-stack_size, stack_top);
+    let mut cpu = Cpu { esp: stack_top - 16, fs_base, ..Cpu::default() };
     cpu.esp -= 4;
     memory.set_u32(cpu.esp, param);
     cpu.esp -= 4;
@@ -661,6 +662,7 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
         }
         Err(e) => {
             let msg = e.downcast_ref::<String>().cloned()
+                .or_else(|| e.downcast_ref::<crate::seh::Stop>().map(ToString::to_string))
                 .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                 .or_else(|| e.downcast_ref::<crate::dispatch::Unbound>().map(|u| u.to_string()))
                 .unwrap_or_else(|| "panic".into());

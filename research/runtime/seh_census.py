@@ -136,11 +136,13 @@ def main():
                 if not harness.executable(body):
                     break
                 item["scopes"].append({"level":level,"enclosing":enclosing,"filter":filter_,"handler":body})
-    # Direct-call closure is only a lower bound: indirect/virtual edges
-    # are deliberately not invented. Retain roots separately.
+    # Use exported Ghidra call edges for reachability, not linear decoding
+    # (which may cross non-code gaps in a noncontiguous function extent).
+    # Indirect/virtual edges are deliberately not invented.
     edges={}
-    for target, callers in refs.items():
-        for caller,_ in callers: edges.setdefault(caller,set()).add(target)
+    with (Path(args.inventory)/"calls.tsv").open(encoding="utf-8") as call_file:
+        for row in csv.DictReader(call_file,delimiter="\t"):
+            edges.setdefault(int(row["caller"],0),set()).add(int(row["callee"],0))
     for name,root in (("startup",0x12efa14),("winmain",0x4079e0)):
         seen=set(); pending=[root]
         while pending:
@@ -154,6 +156,17 @@ def main():
     raw = Path(harness.EXE).read_bytes()
     opt = struct.unpack_from("<I", raw, 0x3c)[0] + 24
     base = struct.unpack_from("<I", raw, opt + 28)[0]
+    load_rva,load_directory_size=struct.unpack_from("<II",raw,opt+96+10*8)
+    if load_rva:
+        load=base+load_rva
+        load_size=struct.unpack("<I",harness.code(load,4))[0]
+        # This image's directory says 64, but its own structure size is 72.
+        # The SafeSEH fields are present at +64/+68; don't silently drop them.
+        if load_size>=72:
+            table,count=struct.unpack("<II",harness.code(load+64,8))
+            entries=struct.unpack("<%dI"%count,harness.code(table,count*4)) if count else ()
+            out["safe_seh"]={"load_config":load,"directory_size":load_directory_size,"structure_size":load_size,
+                             "table":table,"handlers":[base+x for x in entries]}
     desc = base + struct.unpack_from("<I", raw, opt + 104)[0]
     while True:
         lookup, _, _, dll, iat = struct.unpack("<5I", harness.code(desc, 20))
@@ -171,7 +184,8 @@ def main():
         desc += 20
     out["direct_references"] = {hex(a): refs.get(a, []) for a in (prolog, handler, throw, cxx)}
     Path(args.output).write_text(json.dumps(out, indent=2), encoding="utf-8")
-    print({k: len(v) for k, v in out.items()})
+    print({k:len(out[k]) for k in ("seh4","cxx_frames","throws","imports","unresolved")},
+          "SafeSEH handlers:",len(out.get("safe_seh",{}).get("handlers",[])))
 
 
 if __name__ == "__main__":

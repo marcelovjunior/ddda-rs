@@ -1414,15 +1414,25 @@ fn version_checks_answer_as_windows_does_for_an_exe_without_supported_os() {
 #[test]
 fn debug_break_and_raise_exception_stop_with_a_report() {
     let mut m = guest();
-    let msg = stops(system::debug_break, &mut m, &[]);
-    assert!(msg.contains("DebugBreak called from 0x00405678"), "{msg}");
+    ddruntime::runtime::enter(std::sync::Arc::new(ddruntime::runtime::Runtime::default()));
+    let fs = ddruntime::seh::initialize_teb(&mut m, services::MAIN_THREAD_ID, 0x0010_0000, 0x0011_0000);
+    let stop = |m: &mut GuestMemory, f: fn(&mut dyn Mem, &mut Cpu), args: &[u32]| {
+        let mut cpu = Cpu { esp: 0x0011_0000, fs_base: fs, ..Cpu::default() };
+        for &a in args.iter().rev() { cpu.esp -= 4; m.set_u32(cpu.esp, a); }
+        cpu.esp -= 4; m.set_u32(cpu.esp, 0x0040_5678);
+        let e = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(m, &mut cpu))).expect_err("unhandled exception must stop");
+        e.downcast::<ddruntime::seh::Stop>().expect("structured SEH report")
+    };
+    assert_eq!(*stop(&mut m, system::debug_break, &[]), ddruntime::seh::Stop::Unhandled {
+        code: 0x8000_0003, address: 0x0040_5678, flags: 0, parameters: vec![],
+    });
     let args = 0x0030_0000;
     for (k, v) in [0x1993_0520u32, 0x0012_3456, 0x0140_0000].into_iter().enumerate() {
         m.set_u32(args + 4 * k as u32, v);
     }
-    let msg = stops(system::raise_exception, &mut m, &[0xE06D_7363, 1, 3, args]);
-    assert!(msg.contains("code 0xe06d7363 (a C++ exception, msc), flags 0x1, arguments [0x19930520, 0x123456, 0x1400000]"), "{msg}");
-    assert!(msg.contains("from 0x00405678"), "{msg}");
+    assert_eq!(*stop(&mut m, system::raise_exception, &[0xE06D_7363, 1, 3, args]), ddruntime::seh::Stop::Unhandled {
+        code: 0xE06D_7363, address: 0x0040_5678, flags: 1, parameters: vec![0x1993_0520, 0x0012_3456, 0x0140_0000],
+    });
 }
 
 #[test]

@@ -29,6 +29,7 @@ pub mod profile;
 pub mod registry;
 pub mod runtime;
 pub mod services;
+pub mod seh;
 pub mod session;
 pub mod steam;
 pub mod system;

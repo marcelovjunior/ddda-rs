@@ -50,6 +50,7 @@ impl Session {
         let mut mem = GuestMemory::new();
         crate::image::load(&mut mem, &exe).map_err(|e| e.to_string())?;
         mem.map_lazy(STACK_TOP - STACK_SIZE, STACK_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
+        crate::seh::initialize_teb(&mut mem, crate::services::MAIN_THREAD_ID, STACK_TOP - STACK_SIZE, STACK_TOP);
         let mut registry = Registry::with_lifted_program();
         crate::services::install(&mut mem, &mut registry).map_err(|e| format!("{e:?}"))?;
         crate::services::set_exe_path(exe_path);
@@ -77,7 +78,7 @@ impl Session {
     /// right to left (stdcall/cdecl; `ecx` for thiscall), on a fresh frame
     /// of the session stack.
     pub fn call(&mut self, target: u32, ecx: u32, args: &[u32]) -> Outcome {
-        let mut cpu = Cpu { esp: STACK_TOP - 0x100, ecx, ..Cpu::default() };
+        let mut cpu = Cpu { esp: STACK_TOP - 0x100, ecx, fs_base: crate::seh::TEB_BASE, ..Cpu::default() };
         for &a in args.iter().rev() {
             cpu.esp -= 4;
             self.mem.set_u32(cpu.esp, a);
@@ -96,6 +97,7 @@ impl Session {
                     Outcome::Exit(*code)
                 } else {
                     let msg = e.downcast_ref::<String>().cloned()
+                        .or_else(|| e.downcast_ref::<crate::seh::Stop>().map(ToString::to_string))
                         .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                         .unwrap_or_else(|| "panic".into());
                     let regs = [cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi];
