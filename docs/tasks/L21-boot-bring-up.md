@@ -520,3 +520,17 @@ claude-6 (15):
    `__amsg_exit`), reached through the `__cfltcvt_tab` slots that
    `_FPinit` replaces (claude-6). The probe skips `_FPinit`, so it is not
    a real-boot issue.
+9. Preview on native-L28c (59,547 records, with Codex's 0x00DA9EC0,
+   0x01129030, 0x01129460, 0x01104470; generated locally and restored).
+   Runtime game tests 46/46. The boot passes all of `sRender`'s set-up.
+   Stop: untranslated 0x00419100, called from just before 0x00417AF6 (the
+   archive manager set-up 0x00417AF0 in `sBbsRpgMain`'s constructor). It
+   is a 50-byte loop that registers ten tables of (id, entry) pairs at
+   0x018D9288. Cause 2: no fixture in native-L28c. Owner: Codex.
+   - Ten more constructor-route functions from the look-ahead are also
+     still without fixtures there: 0x00475400, 0x00478600, 0x0049F990,
+     0x00480240, 0x00490E80, 0x004915A0, 0x00DD5ED0, 0x0075BAD0,
+     0x00DB8B90 and 0x00480950.
+   - claude-6's not-lifted group on the same route is unchanged:
+     0x004AB440, 0x00DFECF0, 0x00E0E470, 0x00F9FBA0, 0x012E1A13,
+     0x012F9D82, 0x012F1C9D.
