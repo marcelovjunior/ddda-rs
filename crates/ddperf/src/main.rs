@@ -483,4 +483,9 @@ fn main() {
         }
         _ => eprintln!("usage: ddperf init [exe] [--count] | ddperf micro | ddperf replay [--limit N] [--passes P] [--count] [--vectors FILE]"),
     }
+    // guest threads a session started keep the process alive: exit after
+    // the report (like the runtime's examples)
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    std::process::exit(0);
 }

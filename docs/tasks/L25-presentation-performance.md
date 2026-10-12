@@ -44,8 +44,8 @@ side.
 
 ## Results
 
-Status: ready for the merge train (claude-9), with step 2 unmeasured (see
-"Unverified" at the end). Machine: the maintainer's (Ryzen 7 5700X3D,
+Status: merged with train 1 (main 59f55a9). Stopped on 2026-10-12 when the
+agents were scaled down; see "State and next steps" at the end. Machine: the maintainer's (Ryzen 7 5700X3D,
 RTX 4060, Windows 11), other agents' builds running at the same time, so
 every timing is the best or typical of several runs and is labelled.
 
@@ -157,7 +157,7 @@ that matched the condition string at run time.
 |---|---|---|
 | baseline (5985a5b + L20 merge) | 550.7 | 14.6 |
 | 1: GuestMemory single-page fast path, Registry address hash (ec4af23) | 356.8 | 9.6-11.8 |
-| 2: ddnative-base helpers `#[inline]` (flags, cond, SSE), `Mem::read_bytes` (c811c62) | not measured | not measured |
+| 2: ddnative-base helpers `#[inline]` (flags, cond, SSE), `Mem::read_bytes` (c811c62; main 59f55a9 after train 1) | not measured | 7.2, 9.1 (2 runs) |
 
 Step 2's optimised build was stopped three times: twice by the memory
 guard while the player's game was running, once by the build pause. It
@@ -210,3 +210,34 @@ L22, so they wait for a decision by the head):
 
 Commits: ddb4f29, f95ca1b, 1c99b8a, 3ab3378 (merge of claude-5's
 4159466), decdcd7, ec4af23, 9896b64, c811c62, and this Results commit.
+
+### State and next steps (2026-10-12, run ended)
+
+- On main (train 1): everything in sections 1-3 up to step 2, including
+  beacf8f (memory_fast test fix). The integration gate passed.
+- `task/L25-results` (this commit, from main): ddperf now exits after its
+  report. Guest threads that a session starts kept the process alive, and
+  `ddperf init` hung after printing, holding a heavy slot. Also the main
+  numbers above: init 7.2 and 9.1 ms on main's release build.
+- Not measured: `ddperf replay --passes 3` and `ddperf micro` on main
+  (the run was cancelled for the wrap-up). Next: run
+  `C:/ddda-targets/L25/logs/measure.sh`-style (build, then each workload
+  with a timeout and output to a file) on main and fill in the step-2 row.
+- `task/L25-perf-prototypes` (train 2, not merged): 924ce18 call-target
+  cache, f034c8a inline guest-memory fast path, deebc5b test update,
+  cd2dfa7 memory_fast fix, 9ab4a6e perf_micro example, docs; merged with
+  main at fb3d5c6. Light checks pass (ddnative-base; 53 lifter tests
+  including the fast-vs-trait rustc fixture; ddruntime runtime 38,
+  memory_fast 2, d3d9_device 5, movies 3). It needs gen, the replay gate
+  and ddperf before and after.
+- claude-4's L42 (task/L42-parallel-threads) builds on f034c8a's
+  `PageTable` with atomics. By their measurement in perf_micro, fast
+  reads go from 0.8 to 1.5 ns, and the serial job workload is about 9%
+  slower. Their suggestion for getting it back: two monomorphised accessor
+  variants per function, chosen at entry like `pt`.
+- claude-10's L34b makes ddplay follow the game's resolution, full-screen
+  choice and present interval (hooks listed in board #9323).
+- Still open: game frames in ddplay (the game stops before its first
+  Present); a recorded game command stream for `draw_cost` (synthetic so
+  far); render-pass merging of consecutive draws to one target (not
+  done).
