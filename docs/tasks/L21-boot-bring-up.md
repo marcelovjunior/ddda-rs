@@ -509,3 +509,14 @@ claude-6 (15):
 | 0x0109DAC0 | FUN_0109dac0 | 10305 | 0x010A8570, call | not in the lift set (status untouch |
 | 0x010A3C00 | FUN_010a3c00 | 10283 | 0x010A8920, call | not in the lift set (status untouch |
 
+8. main e3d0fdd6 (train 3), previewed on Codex's frozen `native-L28c`
+   (59,534 functions generated locally, not committed), which records
+   0x00DAFED0. Runtime game tests 46/46. The real boot passes 0x00DAFED0.
+   Stop: untranslated 0x00DA9EC0, called from just before 0x00DB187E (in
+   0x00DB1480, `sRender`'s set-up). Cause 2: it lifts but has no fixture
+   (`lift_novector.json` in native-L28c). Owner: Codex. It was in the
+   look-ahead table (sRender ctor, depth 2).
+   The frontier probe's 0x01305585 is the CRT's `_fptrap` (push 2; call
+   `__amsg_exit`), reached through the `__cfltcvt_tab` slots that
+   `_FPinit` replaces (claude-6). The probe skips `_FPinit`, so it is not
+   a real-boot issue.
