@@ -403,3 +403,137 @@ incremental = false
 opt-level = 1
 incremental = false
 
+# `play-fast`: the play build for quick iteration (L68). The 32 lifted
+# shards at opt-level 0: ~17 s per shard with the parallel front end
+# (RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Z threads=8", its own target dir) against
+# ~206 s at opt-level 1 (2026-10-12, ddlift-05). Everything else as `play`.
+[profile.play-fast]
+inherits = "play"
+
+[profile.play-fast.package.ddlift-00]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-01]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-02]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-03]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-04]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-05]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-06]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-07]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-08]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-09]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-10]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-11]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-12]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-13]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-14]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-15]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-16]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-17]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-18]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-19]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-20]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-21]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-22]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-23]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-24]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-25]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-26]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-27]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-28]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-29]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-30]
+opt-level = 0
+incremental = false
+
+[profile.play-fast.package.ddlift-31]
+opt-level = 0
+incremental = false
