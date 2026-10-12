@@ -3,6 +3,12 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00CC25B0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00CC25B0.
+pub fn f_00cc25b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } { let r = cpu.fl.alu_sub((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), ((cpu.eax >> 0) & 0xFF), 8); } cpu.eax = (cpu.eax & !(0xFF << 0)) | (((cpu.fl.cond("ne") as u32) & 0xFF) << 0); { let r = cpu.fl.alu_add(cpu.eax, cpu.eax, 32); cpu.eax = r; } { let r = cpu.fl.alu_xor(cpu.eax, m.fast_u32(pt, cpu.ecx.wrapping_add(0x20)), 32); cpu.eax = r; } { let r = cpu.fl.alu_and(cpu.eax, 0x2u32, 32); cpu.eax = r; } { let r = cpu.fl.alu_xor(m.fast_u32(pt, cpu.ecx.wrapping_add(0x20)), cpu.eax, 32); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x20), r); } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return;
+}
+
 // Translated from 0x00CC25D0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00CC25D0.
 pub fn f_00cc25d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -4979,10 +4985,4 @@ pub fn f_00cd7a10(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn f_00cd7a20(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     cpu.eax = 0x1619C74u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00CD7A30 (DDDA.exe 2017-12-13 Steam), rQuestInfinity::vf15.
-pub fn f_00cd7a30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); { let (a, c) = (cpu.eax, 0x70u32); let r = (a as i32).wrapping_mul(c as i32) as u32; cpu.fl = Flags::new(x86::IMUL, a, c, r, 32); cpu.eax = r; } { let r = cpu.fl.alu_add(cpu.eax, m.fast_u32(pt, cpu.ecx.wrapping_add(0x60)), 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return;
 }

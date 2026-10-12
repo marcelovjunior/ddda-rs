@@ -170,6 +170,16 @@ def build():
         if f["representative"] in ported:
             ported.update(f["members"])
     db.executemany("UPDATE functions SET status='verified' WHERE address=?", [(a,) for a in ported])
+    # L49: entries that are code of lifted bodies, not functions (switch case
+    # labels, frame tails; lift.fragments, written by gen) are replayed as
+    # part of their owners and credited when every owner is verified
+    fragments_file = gaps_file.with_name("fragments.json")
+    fragments = json.loads(fragments_file.read_text()) if fragments_file.exists() else {}
+    credited = [int(a, 16) for a, v in fragments.items()
+                if all(int(o, 16) in ported for o in v["owners"]) and int(a, 16) not in ported]
+    if credited:
+        print(f"fragments credited through their verified owners ({fragments_file.name}): {len(credited)}")
+    db.executemany("UPDATE functions SET status='verified' WHERE address=?", [(a,) for a in credited])
     db.execute("CREATE INDEX calls_caller ON calls(caller)")
     db.execute("CREATE INDEX calls_callee ON calls(callee)")
     db.commit()

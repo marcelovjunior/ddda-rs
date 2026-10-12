@@ -35,6 +35,10 @@ class DiscoveryTests(unittest.TestCase):
         self.assertFalse(d.code_entry(p, m, 0x3000))
         p.put(0x1000, b'\xcc')
         self.assertFalse(d.code_entry(p, m, 0x1000))
+        # L49: a case table (three nearby code addresses) is not an entry,
+        # although its bytes decode to instructions ending in a transfer
+        p.put(0x1100, struct.pack('<III', 0x1180, 0x1190, 0x11a0) + b'\xc3')
+        self.assertFalse(d.code_entry(p, m, 0x1100))
 
     def test_address_taken_entry_needs_a_function_boundary(self):
         # L45: immediates naming code mid-instruction are constants, not entries

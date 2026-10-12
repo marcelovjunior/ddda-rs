@@ -820,6 +820,9 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
     let code = match r {
         Ok(Ok(())) => cpu.eax,
         Ok(Err(u)) => {
+            // L21: a worker thread's stop is the run's next stop, but the
+            // main thread runs on; say so at once (the run may never end)
+            eprintln!("guest thread {tid} stopped: {u}");
             rt.kernel.with(|k| k.faults.push((tid, u.to_string())));
             FAULT_EXIT
         }
@@ -829,6 +832,7 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
                 .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
                 .or_else(|| e.downcast_ref::<crate::dispatch::Unbound>().map(|u| u.to_string()))
                 .unwrap_or_else(|| "panic".into());
+            eprintln!("guest thread {tid} stopped: {msg}");
             rt.kernel.with(|k| k.faults.push((tid, msg)));
             FAULT_EXIT
         }
