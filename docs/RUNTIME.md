@@ -179,14 +179,17 @@ case; ports that call unported code go through x86::call_ext like the
 lifted bodies.
 
 `Cpu` currently includes GPRs, XMMs, flags, DF and full x87 state, but no
-explicit EIP, guest MXCSR or segment/TLS base. x87 state is preserved by
+explicit EIP or guest MXCSR. FS base is in Cpu; L27 initializes a per-thread
+TEB and SEH chain. x87 state is preserved by
 the helper; new SSE helpers use fixed MXCSR `0x1F80`. Before general boot,
 audit guest control-word/MXCSR/FS accesses and add the required thread
 state or reject them. D3D creation uses flags `0x46` or `0x26`
 (`0x00DB192A`, `0x00DB194B`, call `0x00DB1960`), including FPU_PRESERVE;
 it does not justify forcing every game thread to a guessed precision mode.
-SEH is not implemented by the current `Cpu`/lifter; CRT SEH scaffolding
-must be replaced by an evidenced service contract or explicitly block.
+L27 adds bounded SEH search, nested dispatch and target-frame unwind.
+Instruction-fault delivery and arbitrary continuation still block: the lifter
+has no instruction checkpoint or continuation entry. See the evidenced
+scope census and remaining executor contract in [L27](tasks/L27-seh-dispatch.md).
 
 ## 2. Dispatcher and the measured boot frontier
 
@@ -616,7 +619,7 @@ module; behaviour choices are labelled in the code.
 | Audible audio: the XAudio2 2.7 mixer (PCM/float/MS ADPCM decode, linear SRC, volumes, channel volumes, matrices with 2.7's default matrices and 48-frame ramps, submix stages, the platform's AudioReverb XAPO, the game's own XAPOs through IXAPO), fed by `audio.rs`'s clock; output to the default device in `ddplay` (`cpal`, WASAPI shared) | `crates/ddaudio`, `audio.rs`, `crates/ddplay/src/sink.rs` | mixer and wiring done, tested; `ddplay` sink written, build pending; compared against the real XAudio2 2.7 and 2.9 (`ddaudio` oracle): bit-exact or float rounding; voice filters not implemented (unused by the game); the game's XAPOs pass through until `0x00DCF3F0`, `0x00DCCD30`, `0x00DD5030` are lifted; [results](tasks/L19-audio-output.md#results) |
 | WMVCore synchronous movie reader, output media props, header attributes and sample buffers (`0x00F7DEB0`, `0x00F7CA40`, `0x00F7C200`); YV12/PCM via system WMVCore and dispatched guest IStream callbacks | `movies.rs`, `movies/windows.rs` | contract tested; six installed movies decoded through a fixture guest stream and lifted format selector; original stream still needs three native entries, capture encoding remains unbound; [L18 census and limits](tasks/L18-movies.md#results) |
 | Network services offline (brief L32): WS2_32 (18 ordinals) as in a process where no module called WSAStartup (every socket call WSANOTINITIALISED, nothing written; `ntohs`, `__WSAFDIsSet`, `WSAGetLastError` exact), measured with `research/runtime/windows/NetProbe.cs`; Secur32 (SSPI, 9 imports) stops with a report (runs only on a connected socket); WININET `InternetGetConnectedState` offline (`system.rs`) | `net.rs` | done, contract tests written (verification in the integration build); the faithful "initialised, no network" state is not measured; [census](tasks/L32-network-services.md#results) |
-| SEH dispatch (brief L27) |  | not started |
+| SEH dispatch (brief L27): software raises, guest chain search/nesting, target-frame unwind, unhandled filter, per-thread TEB | `seh.rs`, Windows x86 oracle, 14 passing SEH regressions | partial; instruction faults and nonlocal/interior continuation await executor support; see [Results](tasks/L27-seh-dispatch.md#results) |
 
 Drivers (`examples/`): `initializers` (census of all 5,662 static
 initializers in CRT order: 5,651 complete), `boot` (the CRT entry
@@ -671,12 +674,16 @@ above, concretely, in the order it will be built:
 
 Findings for the next stages (2026-10-11, Ghidra):
 
-- Exceptions are rare: only three helpers (0x012E1A13, 0x012E1A60,
+- Five C++ throw sites are identified: three helpers (0x012E1A13, 0x012E1A60,
   0x012E1AD4, STL failure paths) and the CRT's own `FindHandler` call
-  `__CxxThrowException@8` (0x012F530B); RaiseException is otherwise used
-  by `__raise_exc_ex` and the delay-load helper. The runtime can stop with
-  a report on RaiseException; what it needs first is the SEH frame
-  bookkeeping (`__SEH_prolog4`/`__SEH_epilog4`, `fs:[0]`), brief L15.
+  `__CxxThrowException@8` (0x012F530B). The additional rethrow at
+  `0x012FE745` belongs to catch funclet `0x012FE733`, outside the original
+  inventory extent. RaiseException is otherwise used
+  by `__raise_exc_ex` and the delay-load helper. This does not establish
+  runtime frequency. L27 identifies 42 EH4 registrations including CRT
+  startup `0x012EF8A7` and the image probe `0x012F9AB0`; software dispatch
+  exists, but prolog/epilog lifts and instruction continuation remain
+  prerequisites to complete original exception paths.
 - Allocators: lifted code calls the five platform models directly; the
   runtime redirects the three allocator models (`ddnative_base::platform::
   redirect`) to the original bodies (L15 lifts them), because the game also

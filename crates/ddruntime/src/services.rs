@@ -80,7 +80,7 @@ pub(crate) struct State {
     /// (the CRT runs them in reverse at exit).
     exit_list: Vec<u32>,
     /// The guest's unhandled-exception filter (SetUnhandledExceptionFilter).
-    exception_filter: u32,
+    pub(crate) exception_filter: u32,
     /// GetLastError / SetLastError.
     pub(crate) last_error: u32,
     /// TLS slots (TlsAlloc): None = free.
@@ -280,8 +280,8 @@ pub fn is_processor_feature_present(m: &mut dyn Mem, cpu: &mut Cpu) {
 }
 
 /// KERNEL32 `SetUnhandledExceptionFilter(filter)` (stdcall): records the
-/// filter, returns the previous one (none before). The runtime does not
-/// raise guest exceptions yet, so the filter is never called.
+/// filter, returns the previous one (none before). `seh` invokes it from
+/// UnhandledExceptionFilter, as the CRT's top-level filter expects.
 pub fn set_unhandled_exception_filter(m: &mut dyn Mem, cpu: &mut Cpu) {
     let filter = arg(m, cpu, 0);
     cpu.eax = with_state(|s| std::mem::replace(&mut s.exception_filter, filter));
@@ -353,7 +353,7 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
     });
     for i in imports {
         registry.name(i.token, i.full_name());
-        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::d3dx::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).chain(crate::net::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+        let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::d3dx::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).chain(crate::net::APIS).chain(crate::seh::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
             registry.insert(i.token, Binding::Service(*f))?;
             bound += 1;
