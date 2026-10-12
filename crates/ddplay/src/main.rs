@@ -16,9 +16,11 @@
 //! toggles borderless fullscreen. `--test-pattern` runs a moving pattern
 //! through the backend instead of the game (a presentation diagnostic).
 //! Keyboard, mouse and the host's XInput pads reach the game through the
-//! runtime's input seam (`input.rs`).
+//! runtime's input seam (`input.rs`). Audio plays on the default output
+//! device (`sink.rs`, brief L19).
 mod input;
 mod present;
+mod sink;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -139,6 +141,7 @@ impl App {
                 };
                 ddruntime::session::install_fault_hook();
                 let _ = proxy.send_event(GameEvent::Input(ddruntime::input::connect()));
+                sink::start(ddruntime::audio::output());
                 match gpu {
                     Some((device, queue, adapter, window)) => {
                         let mut backend = ddgpu::WgpuBackend::new(device, queue, adapter);
