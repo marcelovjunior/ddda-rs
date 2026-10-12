@@ -16,7 +16,16 @@ const DRAW_PRIMITIVE: usize = 81;
 const DRAW_INDEXED_PRIMITIVE: usize = 82;
 const DRAW_INDEXED_PRIMITIVE_UP: usize = 84;
 const SET_STREAM_SOURCE: usize = 100;
+const SET_STREAM_SOURCE_FREQ: usize = 102;
 const SET_INDICES: usize = 104;
+const CREATE_QUERY: usize = 118;
+// IDirect3DQuery9 slots
+const QUERY_ISSUE: usize = 6;
+const QUERY_GET_DATA: usize = 7;
+const QUERYTYPE_OCCLUSION: u32 = 9;
+const ISSUE_END: u32 = 1;
+const ISSUE_BEGIN: u32 = 2;
+const GETDATA_FLUSH: u32 = 1;
 
 /// A frame read back from a target: RGBA8, rows top to bottom.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,9 +39,40 @@ impl Oracle {
     /// Execute `clear` then `draws` with `uploads` as the resources' contents
     /// and read `read` (an A8R8G8B8/X8R8G8B8 target) back.
     pub fn render(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], read: &Target) -> Result<Frame, String> {
+        self.render_counted(uploads, clear, draws, read, &[]).map(|(f, _)| f)
+    }
+
+    /// [`Oracle::render`] with D3DQUERYTYPE_OCCLUSION queries: query k is
+    /// issued with D3DISSUE_BEGIN before draw `spans[k].start` and
+    /// D3DISSUE_END after draw `spans[k].end - 1` (an empty span begins and
+    /// ends at once). Returns the frame and each query's sample count.
+    pub fn render_counted(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], read: &Target,
+                          spans: &[std::ops::Range<usize>]) -> Result<(Frame, Vec<u32>), String> {
+        let (raw, counts) = self.render_all(uploads, clear.as_slice(), draws, std::slice::from_ref(read), spans)?;
+        Ok((rgba_frame(read, &raw[0])?, counts))
+    }
+
+    /// [`Oracle::render`] reading every target of `reads` back as it is
+    /// stored: D3D9's layout and bits (float formats as their raw words),
+    /// rows tightly packed, top to bottom. The first target is render
+    /// target 0 for the clear; the clear's other targets are bound at their
+    /// indices, so a clear covers an MRT set.
+    pub fn render_targets(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
+        self.render_all(uploads, clear.as_slice(), draws, reads, &[]).map(|(r, _)| r)
+    }
+
+    /// [`Oracle::render_targets`] with several clears in order before the
+    /// draws.
+    pub fn render_cleared(&mut self, uploads: &[Upload], clears: &[ClearCall], draws: &[DrawCall], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
+        let refs: Vec<&ClearCall> = clears.iter().collect();
+        self.render_all(uploads, &refs, draws, reads, &[]).map(|(r, _)| r)
+    }
+
+    fn render_all(&mut self, uploads: &[Upload], clears: &[&ClearCall], draws: &[DrawCall], reads: &[Target],
+                  spans: &[std::ops::Range<usize>]) -> Result<(Vec<Vec<u8>>, Vec<u32>), String> {
         unsafe {
             let mut created: Vec<Obj> = Vec::new();
-            let r = self.render_inner(uploads, clear, draws, read, &mut created);
+            let r = self.render_inner(uploads, clears, draws, reads, spans, &mut created);
             // unbind what the device holds before releasing it
             let d = self.device;
             for k in 0..16 {
@@ -42,6 +82,9 @@ impl Oracle {
             com!(d, SET_INDICES, (Obj), std::ptr::null_mut::<c_void>());
             com!(d, SET_DEPTH_STENCIL_SURFACE, (Obj), std::ptr::null_mut::<c_void>());
             com!(d, SET_RENDER_TARGET, (u32, Obj), 0, self.targets[0]);
+            for k in 1..4u32 {
+                com!(d, SET_RENDER_TARGET, (u32, Obj), k, std::ptr::null_mut::<c_void>());
+            }
             for o in created {
                 release(o);
             }
@@ -49,13 +92,14 @@ impl Oracle {
         }
     }
 
-    unsafe fn render_inner(&mut self, uploads: &[Upload], clear: Option<&ClearCall>, draws: &[DrawCall], read: &Target,
-                           created: &mut Vec<Obj>) -> Result<Frame, String> {
+    unsafe fn render_inner(&mut self, uploads: &[Upload], clears: &[&ClearCall], draws: &[DrawCall], reads: &[Target],
+                           spans: &[std::ops::Range<usize>], created: &mut Vec<Obj>) -> Result<(Vec<Vec<u8>>, Vec<u32>), String> {
         let d = self.device;
+        let read = reads.first().ok_or("no target to read")?;
         // targets by surface
-        let mut targets: HashMap<u32, Obj> = HashMap::new();
-        let mut target = |t: &Target, depth: bool, created: &mut Vec<Obj>| -> Result<Obj, String> {
-            if let Some(&o) = targets.get(&t.surface) {
+        let targets: std::cell::RefCell<HashMap<u32, Obj>> = Default::default();
+        let target = |t: &Target, depth: bool, created: &mut Vec<Obj>| -> Result<Obj, String> {
+            if let Some(&o) = targets.borrow().get(&t.surface) {
                 return Ok(o);
             }
             let mut s: Obj = std::ptr::null_mut();
@@ -67,7 +111,7 @@ impl Oracle {
                            t.width, t.height, t.format, 0, 0, 0, &mut s, std::ptr::null_mut()), "CreateRenderTarget")?;
             }
             created.push(s);
-            targets.insert(t.surface, s);
+            targets.borrow_mut().insert(t.surface, s);
             Ok(s)
         };
         let rt = target(read, false, created)?;
@@ -75,28 +119,165 @@ impl Oracle {
         for k in 1..4u32 {
             com!(d, SET_RENDER_TARGET, (u32, Obj), k, std::ptr::null_mut::<c_void>());
         }
+        // every texture first: a format the driver refuses fails before
+        // any state of this call reaches the device
+        let mut textures: HashMap<u32, Obj> = HashMap::new();
+        for b in draws.iter().flat_map(|d| &d.textures) {
+            if let std::collections::hash_map::Entry::Vacant(e) = textures.entry(b.resource) {
+                let t = self.texture_from(b, uploads)?;
+                created.push(t);
+                e.insert(t);
+            }
+        }
         check(com!(d, BEGIN_SCENE, ()), "BeginScene")?;
-        if let Some(c) = clear {
+        for c in clears {
             if let Some(t) = &c.depth {
                 let ds = target(t, true, created)?;
                 com!(d, SET_DEPTH_STENCIL_SURFACE, (Obj), ds);
             }
-            check(com!(d, CLEAR, (u32, Obj, u32, u32, f32, u32), 0, std::ptr::null_mut(), c.flags, c.colour, c.z, c.stencil), "Clear")?;
+            for (k, t) in c.targets.iter().enumerate().skip(1) {
+                if let Some(t) = t {
+                    let s = target(t, false, created)?;
+                    com!(d, SET_RENDER_TARGET, (u32, Obj), k as u32, s);
+                }
+            }
+            // Clear follows the viewport, SRGBWRITEENABLE and the scissor
+            // test (D3D9 behaviour): the call's own, not an earlier call's
+            com!(d, SET_RENDER_STATE, (u32, u32), 194, c.srgb as u32);
+            com!(d, SET_RENDER_STATE, (u32, u32), 174, c.scissor.is_some() as u32);
+            if let Some(r) = c.scissor {
+                com!(d, SET_SCISSOR_RECT, (*const i32), r.as_ptr());
+            }
+            com!(d, SET_VIEWPORT, (*const u32), c.viewport.as_ptr());
+            let flat: Vec<i32> = c.rects.iter().flatten().copied().collect();
+            let p = if c.rects.is_empty() { std::ptr::null() } else { flat.as_ptr() };
+            check(com!(d, CLEAR, (u32, *const i32, u32, u32, f32, u32), c.rects.len() as u32, p, c.flags, c.colour, c.z, c.stencil), "Clear")?;
         }
         let buffers: HashMap<u32, &Vec<u8>> = uploads.iter().filter_map(|u| match u {
             Upload::Buffer { resource, bytes } => Some((*resource, bytes)),
             _ => None,
         }).collect();
-        let mut textures: HashMap<u32, Obj> = HashMap::new();
-        for draw in draws {
-            let r = self.one_draw(draw, uploads, &buffers, &mut textures, &mut |t, depth, c| target(t, depth, c), created);
-            if r.is_err() {
-                com!(d, END_SCENE, ());
-                return r.map(|_| Frame { width: 0, height: 0, rgba: vec![] });
-            }
+        let mut queries: Vec<Obj> = Vec::new();
+        for _ in spans {
+            let mut q: Obj = std::ptr::null_mut();
+            check(com!(d, CREATE_QUERY, (u32, *mut Obj), QUERYTYPE_OCCLUSION, &mut q), "CreateQuery")?;
+            created.push(q);
+            queries.push(q);
         }
+        let issue = |at: usize, end: bool| {
+            for (k, s) in spans.iter().enumerate() {
+                if end && s.end == at {
+                    com!(queries[k], QUERY_ISSUE, (u32), ISSUE_END);
+                } else if !end && s.start == at {
+                    com!(queries[k], QUERY_ISSUE, (u32), ISSUE_BEGIN);
+                    if s.end == at {
+                        com!(queries[k], QUERY_ISSUE, (u32), ISSUE_END);
+                    }
+                }
+            }
+        };
+        for (k, draw) in draws.iter().enumerate() {
+            issue(k, false);
+            let r = self.one_draw(draw, uploads, &buffers, &mut textures, &mut |t, depth, c| target(t, depth, c), created);
+            if let Err(e) = r {
+                com!(d, END_SCENE, ());
+                return Err(e);
+            }
+            issue(k + 1, true);
+        }
+        issue(draws.len(), false);
         com!(d, END_SCENE, ());
-        self.read_frame(rt, read, created)
+        let mut counts = Vec::new();
+        for &q in &queries {
+            let mut n = 0u32;
+            loop {
+                let hr = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+                check(hr, "GetData")?;
+                if hr == 0 {
+                    break;
+                }
+            }
+            counts.push(n);
+        }
+        let mut raw = Vec::new();
+        for t in reads {
+            let s = target(t, false, created)?;
+            raw.push(self.read_raw(s, t, created)?);
+        }
+        let _ = rt;
+        Ok((raw, counts))
+    }
+
+    /// What an occlusion query's GetData returns before any Issue (HRESULT
+    /// and the value left in a buffer holding 0xDEAD), between
+    /// D3DISSUE_BEGIN and D3DISSUE_END, and after an END with no draw
+    /// (HRESULT and count).
+    /// What Clear writes with render states set: a 4x4 A8R8G8B8 target
+    /// cleared to 0, then `states` (render state, value) and the scissor
+    /// rectangle set, then cleared to `colour` (D3DCLEAR_TARGET); the raw
+    /// BGRA bytes.
+    pub fn clear_with_states(&mut self, colour: u32, states: &[(u32, u32)], scissor: [i32; 4]) -> Result<Vec<u8>, String> {
+        self.clear_probe(colour, states, scissor, [0, 0, 4, 4, 0, 1f32.to_bits()], &[])
+    }
+
+    /// [`Oracle::clear_with_states`] with a viewport (X, Y, W, H, MinZ,
+    /// MaxZ bits) and rectangles (none: Count 0).
+    pub fn clear_probe(&mut self, colour: u32, states: &[(u32, u32)], scissor: [i32; 4], viewport: [u32; 6], rects: &[[i32; 4]]) -> Result<Vec<u8>, String> {
+        unsafe {
+            let d = self.device;
+            let t = Target { surface: 0, format: 21, width: 4, height: 4, texture: None, level: 0 };
+            let mut created = Vec::new();
+            let mut rt: Obj = std::ptr::null_mut();
+            check(com!(d, CREATE_RENDER_TARGET, (u32, u32, u32, u32, u32, i32, *mut Obj, Obj), 4, 4, 21, 0, 0, 0, &mut rt, std::ptr::null_mut()), "CreateRenderTarget")?;
+            created.push(rt);
+            com!(d, SET_RENDER_TARGET, (u32, Obj), 0, rt);
+            for (s, v) in [(194u32, 0u32), (174, 0), (168, 0xF)] {
+                com!(d, SET_RENDER_STATE, (u32, u32), s, v);
+            }
+            check(com!(d, CLEAR, (u32, Obj, u32, u32, f32, u32), 0, std::ptr::null_mut(), 1, 0, 1.0, 0), "Clear")?;
+            for &(s, v) in states {
+                com!(d, SET_RENDER_STATE, (u32, u32), s, v);
+            }
+            com!(d, SET_SCISSOR_RECT, (*const i32), scissor.as_ptr());
+            com!(d, SET_VIEWPORT, (*const u32), viewport.as_ptr());
+            let flat: Vec<i32> = rects.iter().flatten().copied().collect();
+            let p = if rects.is_empty() { std::ptr::null() } else { flat.as_ptr() };
+            check(com!(d, CLEAR, (u32, *const i32, u32, u32, f32, u32), rects.len() as u32, p, 1, colour, 1.0, 0), "Clear")?;
+            let full = [0u32, 0, 4, 4, 0, 1f32.to_bits()];
+            com!(d, SET_VIEWPORT, (*const u32), full.as_ptr());
+            for (s, v) in [(194u32, 0u32), (174, 0), (168, 0xF)] {
+                com!(d, SET_RENDER_STATE, (u32, u32), s, v);
+            }
+            let r = self.read_raw(rt, &t, &mut created);
+            com!(d, SET_RENDER_TARGET, (u32, Obj), 0, self.targets[0]);
+            for o in created {
+                release(o);
+            }
+            r
+        }
+    }
+
+    pub fn occlusion_states(&mut self) -> Result<[i32; 5], String> {
+        unsafe {
+            let d = self.device;
+            let mut q: Obj = std::ptr::null_mut();
+            check(com!(d, CREATE_QUERY, (u32, *mut Obj), QUERYTYPE_OCCLUSION, &mut q), "CreateQuery")?;
+            let mut n = 0xDEADu32;
+            let before = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+            let left = n as i32;
+            com!(q, QUERY_ISSUE, (u32), ISSUE_BEGIN);
+            let building = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+            com!(q, QUERY_ISSUE, (u32), ISSUE_END);
+            let mut after;
+            loop {
+                after = com!(q, QUERY_GET_DATA, (*mut u32, u32, u32), &mut n, 4, GETDATA_FLUSH);
+                if after != 1 {
+                    break;
+                }
+            }
+            release(q);
+            Ok([before, left, building, after, n as i32])
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -190,11 +371,12 @@ impl Oracle {
                      draw.primitive, draw.min_index, draw.vertex_count, draw.primitives, ib.as_ptr(), *format, bytes.as_ptr(), *stride)
             }
             (Vertices::Streams(streams), indices) => {
-                for &(n, res, off, stride, _) in streams {
+                for &(n, res, off, stride, freq) in streams {
                     let data = buffers.get(&res).ok_or_else(|| format!("no upload for vertex buffer {res:#x}"))?;
                     let vb = self.buffer(CREATE_VERTEX_BUFFER, data, 0)?;
                     created.push(vb);
                     com!(d, SET_STREAM_SOURCE, (u32, Obj, u32, u32), n, vb, off, stride);
+                    com!(d, SET_STREAM_SOURCE_FREQ, (u32, u32), n, freq.max(1));
                 }
                 match indices {
                     Indices::None => com!(d, DRAW_PRIMITIVE, (u32, u32, u32), draw.primitive, draw.start, draw.primitives),
@@ -211,6 +393,9 @@ impl Oracle {
             }
             _ => return Err("unsupported vertex/index combination".into()),
         };
+        for k in 0..16 {
+            com!(d, SET_STREAM_SOURCE_FREQ, (u32, u32), k, 1);
+        }
         check(hr, "Draw")
     }
 
@@ -284,8 +469,11 @@ impl Oracle {
         Ok(tex)
     }
 
-    unsafe fn read_frame(&mut self, rt: Obj, t: &Target, created: &mut Vec<Obj>) -> Result<Frame, String> {
+    /// A target's contents as stored: GetRenderTargetData into a
+    /// system-memory surface of the same format, rows tightly packed.
+    unsafe fn read_raw(&mut self, rt: Obj, t: &Target, created: &mut Vec<Obj>) -> Result<Vec<u8>, String> {
         let d = self.device;
+        let bpp = bytes_per_pixel(t.format).ok_or_else(|| format!("reading format {} back", t.format))?;
         let mut sys: Obj = std::ptr::null_mut();
         check(com!(d, CREATE_OFFSCREEN_PLAIN_SURFACE, (u32, u32, u32, u32, *mut Obj, Obj), t.width, t.height, t.format, POOL_SYSTEMMEM, &mut sys, std::ptr::null_mut()), "CreateOffscreenPlainSurface")?;
         created.push(sys);
@@ -294,17 +482,35 @@ impl Oracle {
         check(com!(sys, 13, (*mut u64, Obj, u32), locked.as_mut_ptr(), std::ptr::null_mut(), 0x10), "LockRect")?;
         let pitch = locked[0] as u32 as usize;
         let bits = locked[1] as *const u8;
-        let mut rgba = Vec::with_capacity((t.width * t.height * 4) as usize);
+        let row = (t.width * bpp) as usize;
+        let mut out = Vec::with_capacity(row * t.height as usize);
         for y in 0..t.height as usize {
-            for x in 0..t.width as usize {
-                let p = bits.add(y * pitch + 4 * x);
-                let (b, g, r, a) = (*p, *p.add(1), *p.add(2), *p.add(3));
-                rgba.extend_from_slice(&[r, g, b, if t.format == 22 { 255 } else { a }]);
-            }
+            out.extend_from_slice(std::slice::from_raw_parts(bits.add(y * pitch), row));
         }
         com!(sys, 14, ());
-        Ok(Frame { width: t.width, height: t.height, rgba })
+        Ok(out)
     }
+}
+
+/// Bytes per pixel of the render-target formats the oracle reads back.
+pub fn bytes_per_pixel(format: u32) -> Option<u32> {
+    Some(match format {
+        21 | 22 | 31 | 32 | 33 | 34 | 112 | 114 => 4,
+        23 | 24 | 25 | 26 | 111 | 81 => 2,
+        36 | 113 | 115 => 8,
+        116 => 16,
+        28 | 50 => 1,
+        _ => return None,
+    })
+}
+
+/// An A8R8G8B8/X8R8G8B8 target's raw bytes as RGBA8 (X8 reads alpha 255).
+fn rgba_frame(t: &Target, raw: &[u8]) -> Result<Frame, String> {
+    if !matches!(t.format, 21 | 22) {
+        return Err(format!("format {} is not an 8-bit BGRA target (use render_targets)", t.format));
+    }
+    let rgba = raw.chunks_exact(4).flat_map(|p| [p[2], p[1], p[0], if t.format == 22 { 255 } else { p[3] }]).collect();
+    Ok(Frame { width: t.width, height: t.height, rgba })
 }
 
 /// Copy rows of `pitch` bytes into a D3DLOCKED_RECT (x64: Pitch, pBits).

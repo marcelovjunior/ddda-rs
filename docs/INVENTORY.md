@@ -236,7 +236,18 @@ functions; 59,290 non-thunk functions):
 | verified (1:1 + differential test) | 58,628 | 98.9% | 96.0% |
 | not verified (each with a recorded reason) | 662 | 1.1% | 4.0% |
 
-58,913 lifted entries with 175,425 recorded cases. The L15 table above and its notes below are
+58,913 lifted entries with 175,425 recorded cases.
+
+After L17 parts B and C (2026-10-11, commit 4b4c9b9: the SEH prolog/epilog
+helpers, the `__EH_prolog3` body and both worker-thread loops): **58,704 of
+59,290 verified (99.0%, 96.4% of code bytes)**; 58,989 lifted entries with
+175,600 cases. Of the rest, 112 still carry the historical status
+`platform` (CRT/library range). They are inside the total but were never
+lifted or recorded. Brief L28 (claude-3) brings them through the normal
+pipeline; L22 (claude-6) handles the ones the lifter rejects (MXCSR among
+them).
+
+The L15 table above and its notes below are
 kept for history.
 
 Plus 289 verified thunks; 56,306 lifted entries with 167,621 recorded

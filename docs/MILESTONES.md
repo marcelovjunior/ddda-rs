@@ -971,3 +971,48 @@ opening (codex-31), route perf (codex-29).
   captures the next dynamic input/audio boundary before wiring host devices
   or claiming audible parity.
 
+
+## Batch 2026-10-12 (train 1: batched verification; title/gameplay/co-op maps)
+
+- **Process change:** verification is batched. Agents run cheap checks and
+  commit; the head merges about five ready branches into an integration
+  branch and runs one gen + `native_gate.sh` + runtime tests
+  (docs/tasks/AGENT-RULES.md, "Batched verification"). Train 1 landed on
+  main 59f55a9:
+  - L25: performance. GPU present 2.9-3.5 ms → 0.4-0.6 ms; per-draw
+    backend cost 475 µs → 18 µs; vector replay 551 → 357 ms.
+  - L29: every render-target format the renderer uses equals the driver.
+  - L24: 29 readable math ports (`crates/mtmath`, `docs/MATH.md`).
+  - L26: an offline Steam client (14 imports, 37 interface methods) and
+    the DDDA.sav sandbox with read-only import.
+  - L19: audible XAudio2 2.7 mixing, bit-exact against the real 2.7 on
+    PCM, ADPCM, SRC and reverb; a cpal sink in ddplay.
+  - L36: ddruntime builds without the lifted program
+    (`--no-default-features`).
+- **Earlier merges, 2026-10-11/12:**
+  - L17 B+C: the SEH helpers and both worker loops (58,704 verified,
+    99.0%, 96.4% of bytes).
+  - L18: movies.
+  - L20: D3D9 completeness.
+  - L23: all 29,198 shaders equal the driver (28,488 bit-exact, 710 within
+    332 ULP, 0 differing).
+  - L30/L30b: the frame-rate audit (`docs/FRAME_RATE.md`; FRAME.md 1a: the
+    clock, base 30, `MaxFPS` 30-999).
+- **Maps:**
+  - `docs/TITLE_PATH.md` (L35/L35b): WinMain to the title's first frame;
+    3,276 of 3,594 path functions verified.
+  - `docs/GAMEPLAY_PATH.md` (L38/L38b): title to gameplay, and the census
+    of all 586 non-verified functions:
+    - 410 are recorder failures (claude-3: mock ABI 190, NaN 81, runaway
+      73, noreturn 15, other);
+    - 176 are lifter rejections (claude-6).
+  - `docs/COOP_ON_REBUILD.md` (L40): the single-player assumptions (one
+    pointer, `sPlayerManager+0x99C`) and a seat-relative proposal.
+- **Blockers:**
+  - The boot stops in CRT start-up (`__setmbcp`), which is in L28 batch 1
+    on train 2.
+  - Then the title path's 80+ unverified functions (IME setup, singleton
+    constructors, the sShader2 loader 0x00E0E470) and the IMM32 and D3DX
+    services (L43, L37).
+- **One next action:** run train 2 (L28 + L22 data adoption, L31, L33, L34,
+  L37, the L25 prototypes, L32), then rerun the boot.

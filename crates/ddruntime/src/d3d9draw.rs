@@ -13,7 +13,7 @@
 use crate::d3d9::{D3DERR_INVALIDCALL, D3D_OK};
 use crate::d3d9dev::{objects, with_device, Kind};
 use crate::d3d9res::Image;
-pub use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GraphicsBackend, Indices, Target, TextureBinding, Upload, Vertices};
+pub use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TextureBinding, Upload, Vertices};
 use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -30,6 +30,12 @@ pub struct Recorder {
     pub fills: Vec<FillCall>,
     /// keep only counts after this many draws (long headless runs)
     pub limit: usize,
+    /// the gamma ramp last given (None: identity)
+    pub gamma: Option<Box<GammaRamp>>,
+    /// objects the runtime freed, in order
+    pub released: Vec<u32>,
+    /// occlusion queries begun and ended, in order
+    pub queries: Vec<(u32, bool)>,
 }
 
 impl GraphicsBackend for Recorder {
@@ -58,6 +64,24 @@ impl GraphicsBackend for Recorder {
     /// A recorder draws nothing, so it has nothing to read back.
     fn read_back(&mut self, _target: &Target) -> Option<Vec<u8>> {
         None
+    }
+    fn query_begin(&mut self, query: u32) {
+        self.queries.push((query, true));
+    }
+    fn query_end(&mut self, query: u32) {
+        self.queries.push((query, false));
+    }
+    /// Nothing is drawn, so no samples are counted.
+    fn query_result(&mut self, _query: u32) -> Option<u64> {
+        None
+    }
+    fn gamma(&mut self, ramp: Option<&GammaRamp>) {
+        self.gamma = ramp.map(|r| Box::new(*r));
+    }
+    fn release(&mut self, resource: u32) {
+        if self.limit == 0 || self.released.len() < self.limit {
+            self.released.push(resource);
+        }
     }
 }
 
@@ -89,7 +113,10 @@ pub fn recorded<R>(f: impl FnOnce(&Recorder) -> R) -> Option<R> {
 // --- uploads -------------------------------------------------------------------
 
 fn read_bytes(m: &dyn Mem, at: u32, len: u32) -> Vec<u8> {
-    (0..len).map(|k| m.u8(at.wrapping_add(k))).collect()
+    // the same bytes as reading each with m.u8, copied page by page
+    let mut v = vec![0; len as usize];
+    m.read_bytes(at, &mut v);
+    v
 }
 
 fn image_upload(m: &dyn Mem, resource: u32, index: u32, format: u32, img: &Image) -> Upload {
@@ -353,10 +380,14 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
     let dev = a[0];
     let rects: Vec<[i32; 4]> = (0..if a[2] != 0 { a[1] } else { 0 })
         .map(|k| std::array::from_fn(|c| m.u32(a[2] + 16 * k + 4 * c as u32) as i32)).collect();
-    let (rts, ds, viewport) = with_device(dev, |d| (d.render_targets, d.depth_stencil, d.state.viewport));
+    let (rts, ds, viewport, scissor, srgb) = with_device(dev, |d| {
+        let s = &d.state;
+        let on = |k: u32| s.render.get(&k).copied().unwrap_or(0) != 0;
+        (d.render_targets, d.depth_stencil, s.viewport, on(174).then_some(s.scissor), on(194))
+    });
     let c = ClearCall {
         rects, flags: a[3], colour: a[4], z: f32::from_bits(a[5]), stencil: a[6],
-        targets: std::array::from_fn(|k| target(rts[k])), depth: target(ds), viewport,
+        targets: std::array::from_fn(|k| target(rts[k])), depth: target(ds), viewport, scissor, srgb,
     };
     backend(|b| b.clear(&c));
     cpu.eax = D3D_OK;

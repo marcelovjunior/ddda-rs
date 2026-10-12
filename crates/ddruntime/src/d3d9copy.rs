@@ -4,10 +4,11 @@
 //! destination is uploaded before it is next used); GetRenderTargetData
 //! reads a target back into a system-memory surface's shadow; event and
 //! timestamp queries answer as a device whose commands complete
-//! synchronously.
+//! synchronously; occlusion queries count samples on the backend.
 use crate::d3d9::{D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3D_OK};
 use crate::d3d9dev::{new_object, objects, Kind};
 use crate::d3d9draw::{backend, flush, target, CopyCall, FillCall};
+use crate::d3d9dev::QueryState;
 use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -152,9 +153,8 @@ const QUERY_TIMESTAMPDISJOINT: u32 = 11;
 const QUERY_TIMESTAMPFREQ: u32 = 12;
 
 /// CreateQuery(this, type, IDirect3DQuery9**): a NULL out pointer asks
-/// whether the type is supported. Event and timestamp queries are; an
-/// occlusion query is too (its counts come from the backend when drawing is
-/// measured; until then GetData reports it).
+/// whether the type is supported. Event, timestamp and occlusion queries
+/// are (the game uses occlusion queries: nDraw::Query, 0x01148093).
 pub fn create_query(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, ty, out) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     let supported = matches!(ty, QUERY_EVENT | QUERY_OCCLUSION | QUERY_TIMESTAMP | QUERY_TIMESTAMPDISJOINT | QUERY_TIMESTAMPFREQ);
@@ -163,16 +163,16 @@ pub fn create_query(m: &mut dyn Mem, cpu: &mut Cpu) {
     } else if out == 0 {
         D3D_OK
     } else {
-        let q = new_object(m, "IDirect3DQuery9", Kind::Query { device: dev, ty, issued: false, value: 0 });
+        let q = new_object(m, "IDirect3DQuery9", Kind::Query { device: dev, ty, state: QueryState::Created, value: 0 });
         m.set_u32(out, q);
         D3D_OK
     };
     ret(m, cpu, 12);
 }
 
-fn query<R>(q: u32, f: impl FnOnce(&mut u32, &mut bool, &mut u64) -> R) -> R {
+fn query<R>(q: u32, f: impl FnOnce(&mut u32, &mut QueryState, &mut u64) -> R) -> R {
     objects(|o| match o.live.get_mut(&q).map(|x| &mut x.kind) {
-        Some(Kind::Query { ty, issued, value, .. }) => f(ty, issued, value),
+        Some(Kind::Query { ty, state, value, .. }) => f(ty, state, value),
         _ => panic!("{q:#x} is not a live IDirect3DQuery9"),
     })
 }
@@ -191,27 +191,61 @@ pub fn query_get_data_size(m: &mut dyn Mem, cpu: &mut Cpu) {
     });
     ret(m, cpu, 4);
 }
-/// Issue(this, flags): D3DISSUE_END (1) completes the query at once (the
-/// device's commands are synchronous); a timestamp samples the clock.
+const ISSUE_END: u32 = 1;
+const ISSUE_BEGIN: u32 = 2;
+
+/// Issue(this, flags): D3DISSUE_END (1) completes an event or timestamp
+/// query at once (the device's commands are synchronous; a timestamp
+/// samples the clock). An occlusion query counts on the backend from
+/// D3DISSUE_BEGIN (2) to D3DISSUE_END; an END without a BEGIN counts
+/// nothing (Wine's d3d9 issues the begin itself; not measured on the
+/// driver, and the game always pairs them).
 pub fn query_issue(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (q, flags) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    query(q, |ty, issued, value| {
-        if flags & 1 != 0 {
-            *issued = true;
+    let ty = query(q, |ty, _, _| *ty);
+    if ty == QUERY_OCCLUSION {
+        let state = query(q, |_, state, _| *state);
+        if flags & ISSUE_BEGIN != 0 {
+            backend(|b| b.query_begin(q));
+            query(q, |_, state, _| *state = QueryState::Building);
+        }
+        if flags & ISSUE_END != 0 {
+            if state == QueryState::Created && flags & ISSUE_BEGIN == 0 {
+                backend(|b| b.query_begin(q));
+            }
+            backend(|b| b.query_end(q));
+            query(q, |_, state, _| *state = QueryState::Ended);
+        }
+    } else if flags & ISSUE_END != 0 {
+        query(q, |ty, state, value| {
+            *state = QueryState::Ended;
             if *ty == QUERY_TIMESTAMP {
                 *value = crate::services::runtime_clock().as_nanos() as u64;
             }
-        }
-    });
+        });
+    }
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
 }
 /// GetData(this, data*, size, flags): S_OK with the result once issued,
-/// S_FALSE (1) before.
+/// S_FALSE (1) before. Occlusion queries, as measured on the driver (ddgpu
+/// test occlusion_query_states_on_the_d3d9_driver): before any Issue S_OK
+/// with 0xDDDDDDDD written, between BEGIN and END S_FALSE, after END S_OK
+/// with the sample count (S_FALSE while a backend that draws nothing has
+/// no count).
 pub fn query_get_data(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (q, data, size) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    let (ty, issued, value) = query(q, |ty, issued, value| (*ty, *issued, *value));
-    cpu.eax = if !issued && ty != QUERY_TIMESTAMPFREQ {
+    let (ty, state, value) = query(q, |ty, state, value| (*ty, *state, *value));
+    let occlusion = if ty != QUERY_OCCLUSION {
+        None
+    } else {
+        match state {
+            QueryState::Created => Some(Some(0xDDDD_DDDDu64)),
+            QueryState::Building => Some(None),
+            QueryState::Ended => Some(backend(|b| b.query_result(q))),
+        }
+    };
+    cpu.eax = if occlusion == Some(None) || (occlusion.is_none() && state != QueryState::Ended && ty != QUERY_TIMESTAMPFREQ) {
         1
     } else {
         let v: u64 = match ty {
@@ -219,7 +253,7 @@ pub fn query_get_data(m: &mut dyn Mem, cpu: &mut Cpu) {
             QUERY_TIMESTAMP => value,
             QUERY_TIMESTAMPFREQ => 1_000_000_000,
             QUERY_TIMESTAMPDISJOINT => 0,
-            _ => panic!("occlusion query results are not measured yet (the backend does not count samples)"),
+            _ => occlusion.flatten().unwrap_or(0),
         };
         if data != 0 {
             for k in 0..size.min(8) {

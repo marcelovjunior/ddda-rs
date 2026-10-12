@@ -13,6 +13,43 @@ mod lifted_009; pub use lifted_009::*;
 mod lifted_010; pub use lifted_010::*;
 mod lifted_011; pub use lifted_011::*;
 mod lifted_012; pub use lifted_012::*;
+pub use mtmath::abi::f_00cfc1d0;
+pub use mtmath::abi::f_00cfc350;
+pub use mtmath::abi::f_00cfc4b0;
+pub use mtmath::abi::f_00cfc620;
+pub use mtmath::abi::f_00cfc770;
+pub use mtmath::abi::f_00cfc810;
+pub use mtmath::abi::f_00cfc8b0;
+pub use mtmath::abi::f_00cfc940;
+pub use mtmath::abi::f_00cfc9e0;
+pub use mtmath::abi::f_00cfcb00;
+pub use mtmath::abi::f_00cfcc20;
+pub use mtmath::abi::f_00cfcd40;
+pub use mtmath::abi::f_00cfce60;
+pub use mtmath::abi::f_00cfcf80;
+pub use mtmath::abi::f_00cfd5e0;
+pub use mtmath::abi::f_00cfd890;
+pub use mtmath::abi::f_00cfdb10;
+/// The lifted bodies of the functions mtmath replaces.
+pub mod replaced {
+    pub use super::lifted_011::f_00cfc1d0;
+    pub use super::lifted_011::f_00cfc350;
+    pub use super::lifted_011::f_00cfc4b0;
+    pub use super::lifted_011::f_00cfc620;
+    pub use super::lifted_011::f_00cfc770;
+    pub use super::lifted_011::f_00cfc810;
+    pub use super::lifted_011::f_00cfc8b0;
+    pub use super::lifted_011::f_00cfc940;
+    pub use super::lifted_011::f_00cfc9e0;
+    pub use super::lifted_011::f_00cfcb00;
+    pub use super::lifted_011::f_00cfcc20;
+    pub use super::lifted_011::f_00cfcd40;
+    pub use super::lifted_011::f_00cfce60;
+    pub use super::lifted_011::f_00cfcf80;
+    pub use super::lifted_011::f_00cfd5e0;
+    pub use super::lifted_011::f_00cfd890;
+    pub use super::lifted_011::f_00cfdb10;
+}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00C000E0, f_00c000e0),
@@ -1786,6 +1823,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00C70960, f_00c70960),
 (0x00C70C40, f_00c70c40),
 (0x00C70CE0, f_00c70ce0),
+(0x00C70EA0, f_00c70ea0),
 (0x00C70F50, f_00c70f50),
 (0x00C70FC0, f_00c70fc0),
 (0x00C71070, f_00c71070),
@@ -2003,7 +2041,12 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00C7ACE0, f_00c7ace0),
 (0x00C7AD00, f_00c7ad00),
 (0x00C7AD20, f_00c7ad20),
+(0x00C7AD40, f_00c7ad40),
+(0x00C7AD50, f_00c7ad50),
+(0x00C7AD60, f_00c7ad60),
+(0x00C7AD70, f_00c7ad70),
 (0x00C7AD80, f_00c7ad80),
+(0x00C7AD90, f_00c7ad90),
 (0x00C7ADA0, f_00c7ada0),
 (0x00C7ADB0, f_00c7adb0),
 (0x00C7ADC0, f_00c7adc0),
