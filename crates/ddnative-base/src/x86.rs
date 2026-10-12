@@ -115,9 +115,42 @@ pub fn set_lifted_lookup(lookup: LiftLookup) {
 /// Copy the function pointer before calling, so nested calls are reentrant.
 #[inline]
 pub fn call_lifted(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
-    let lookup = LIFTED.get().expect("initialize the lifted program before entering a raw shard");
-    let f = lookup(target).unwrap_or_else(|| panic!("missing lifted target {target:#010x}"));
+    let f = lifted_target(target);
     f(m, cpu);
+}
+
+/// Slots of the per-thread cache of resolved lifted targets.
+const RESOLVED_SLOTS: usize = 4096;
+
+thread_local! {
+    /// Lifted targets already resolved on this thread, direct-mapped by
+    /// address: a cross-shard call resolves its target once instead of
+    /// searching the shard's table every time. The program's lookup never
+    /// changes once installed (set_lifted_lookup), so entries never go stale.
+    static RESOLVED: [std::cell::Cell<(u32, Option<LiftFn>)>; RESOLVED_SLOTS] =
+        const { [const { std::cell::Cell::new((0, None)) }; RESOLVED_SLOTS] };
+}
+
+/// The lifted function at `target` (what `call_lifted` calls).
+#[inline]
+pub fn lifted_target(target: u32) -> LiftFn {
+    // functions are mostly 16-byte aligned: drop those bits, fold the high ones in
+    let slot = ((target >> 4) ^ (target >> 16)) as usize & (RESOLVED_SLOTS - 1);
+    let hit = RESOLVED.with(|r| match r[slot].get() {
+        (t, Some(f)) if t == target => Some(f),
+        _ => None,
+    });
+    hit.unwrap_or_else(|| {
+        let f = lifted_target_uncached(target);
+        RESOLVED.with(|r| r[slot].set((target, Some(f))));
+        f
+    })
+}
+
+/// The lifted function at `target`, from the program's lookup (no cache).
+pub fn lifted_target_uncached(target: u32) -> LiftFn {
+    let lookup = LIFTED.get().expect("initialize the lifted program before entering a raw shard");
+    lookup(target).unwrap_or_else(|| panic!("missing lifted target {target:#010x}"))
 }
 
 thread_local! {

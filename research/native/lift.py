@@ -1023,8 +1023,22 @@ def cpu_arm(arm):
     arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}
     fields.update({r: f"cpu.xmm[{i}]" for i, r in enumerate(XMM)})
-    return re.sub(r'"(?:\\.|[^"\\])*"|\b(?:' + "|".join(fields) + r')\b',
-                  lambda m: fields.get(m[0], m[0]), arm)
+    arm = re.sub(r'"(?:\\.|[^"\\])*"|\b(?:' + "|".join(fields) + r')\b',
+                 lambda m: fields.get(m[0], m[0]), arm)
+    return fast_memory(arm)
+
+
+# The six Mem accessors the templates emit, lowered to the inline fast path
+# on `dyn Mem` (ddnative-base mem.rs): `pt` is the page table read once at
+# function entry (rust_fn); with None (fixtures, Sparse) each one makes the
+# same trait call as before.
+MEM_ACCESS = re.compile(r'"(?:\\.|[^"\\])*"|\bm\.(u8|u16|u32|set_u8|set_u16|set_u32)\(')
+
+
+def fast_memory(arm):
+    """Lower `m.u32(a)` to `m.fast_u32(pt, a)` (all six accessors), leaving
+    Rust strings untouched. Gen-time only: cached arms keep `m.u32`."""
+    return MEM_ACCESS.sub(lambda m: f"m.fast_{m[1]}(pt, " if m[1] else m[0], arm)
 
 
 def straight_line(addr, arms):
@@ -1044,6 +1058,8 @@ def rust_fn(addr, name, arms):
     header = [
         f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
         f"pub fn f_{addr:08x}(m: &mut dyn Mem, cpu: &mut Cpu) {{",
+        # the page table behind m (a Copy pointer, valid for the whole call)
+        "    let pt = m.page_table();",
     ]
     traced = os.environ.get("LIFT_TRACE", "").lower() in (f"0x{addr:x}", f"{addr:x}")
     body = None if traced else straight_line(addr, arms)  # a trace needs the block loop

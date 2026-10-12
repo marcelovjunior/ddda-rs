@@ -16,7 +16,9 @@
 //! `micro` times single operations behind those paths: a `call_ext`
 //! round trip through the runtime's Registry to a service that only
 //! returns, and a guest memory read through `&dyn Mem` against the same
-//! read called directly (what devirtualising `Mem` could save).
+//! read called directly (what devirtualising `Mem` could save), and
+//! resolving a direct cross-shard call's target with and without the
+//! per-thread cache.
 //!
 //! `--count` reports how often the guest touches memory (by width, and
 //! accesses that cross a page) and calls `call_ext`, through a counting
@@ -427,6 +429,14 @@ fn read_dyn(m: &dyn Mem, base: u32, n: u32) -> u32 {
     (0..n).fold(0u32, |acc, k| acc.wrapping_add(m.u32(base.wrapping_add((k & 0x3FF) * 4))))
 }
 
+/// The lifted code's lowered access (lift.py fast_memory): inline fast
+/// path through the page table, the trait call otherwise.
+#[inline(never)]
+fn read_fast(m: &dyn Mem, base: u32, n: u32) -> u32 {
+    let pt = m.page_table();
+    (0..n).fold(0u32, |acc, k| acc.wrapping_add(m.fast_u32(pt, base.wrapping_add((k & 0x3FF) * 4))))
+}
+
 #[inline(never)]
 fn read_direct(m: &GuestMemory, base: u32, n: u32) -> u32 {
     (0..n).fold(0u32, |acc, k| acc.wrapping_add(Mem::u32(m, base.wrapping_add((k & 0x3FF) * 4))))
@@ -451,14 +461,33 @@ fn run_micro() {
     let ns = t.elapsed().as_secs_f64() * 1e9 / N as f64;
     println!("call_ext -> Registry -> service (push return address, ret): {ns:.2} ns per call");
     x86::set_ext_calls(None);
-    for (name, f) in [("dyn Mem", 0), ("direct", 1)] {
+    for (name, f) in [("dyn Mem", 0), ("direct", 1), ("the inline fast path", 2)] {
         let t = Instant::now();
         let mut sum = 0u32;
         for _ in 0..10 {
-            sum = sum.wrapping_add(if f == 0 { read_dyn(&mem, 0x1000_0000, N) } else { read_direct(&mem, 0x1000_0000, N) });
+            sum = sum.wrapping_add(match f {
+                0 => read_dyn(&mem, 0x1000_0000, N),
+                1 => read_direct(&mem, 0x1000_0000, N),
+                _ => read_fast(&mem, 0x1000_0000, N),
+            });
         }
         let ns = t.elapsed().as_secs_f64() * 1e9 / (10 * N) as f64;
         println!("guest u32 read through {name}: {ns:.2} ns ({sum:#x})");
+    }
+    // resolving a direct cross-shard call's target (call_lifted): 2048
+    // real lifted addresses, called round robin, cached or searched
+    let all = ddnative::generated::lifted::all();
+    let targets: Vec<u32> = all.iter().step_by((all.len() / 2048).max(1)).map(|e| e.0).take(2048).collect();
+    for (name, cached) in [("cached", true), ("searched", false)] {
+        let t = Instant::now();
+        let mut acc = 0usize;
+        for k in 0..N as usize {
+            let a = targets[k % targets.len()];
+            let f = if cached { x86::lifted_target(a) } else { x86::lifted_target_uncached(a) };
+            acc = acc.wrapping_add(f as usize);
+        }
+        let ns = t.elapsed().as_secs_f64() * 1e9 / N as f64;
+        println!("call_lifted target resolution, {name}: {ns:.2} ns ({acc:#x})");
     }
 }
 

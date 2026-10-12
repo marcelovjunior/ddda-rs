@@ -86,7 +86,7 @@ class SwitchTests(unittest.TestCase):
         with patch.object(harness, "executable", return_value=True), patch.object(harness, "code", read):
             arms = lift.lift(0x1000, len(code))
         rust = lift.rust_fn(0x1000, "synthetic", arms)
-        self.assertIn("pc = m.u32(cpu.eax.wrapping_mul(4).wrapping_add(0x2000)); continue;", rust)
+        self.assertIn("pc = m.fast_u32(pt, cpu.eax.wrapping_mul(4).wrapping_add(0x2000)); continue;", rust)
         self.assertIn("0x1007 =>", rust)
         self.assertIn("0x1008 =>", rust)
         self.assertIn("_ => unreachable!()", rust)
