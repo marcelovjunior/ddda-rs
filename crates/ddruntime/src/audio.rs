@@ -778,9 +778,8 @@ fn feed(mixer: &mut ddaudio::Mixer, m: &dyn Mem, voice: u32, f: &Format, data: u
     let spb = format.samples_per_block as u64;
     let (block0, block1) = (first / spb, (first + n).div_ceil(spb));
     let base = data.wrapping_add((block0 * f.align as u64) as u32);
-    let bytes: Vec<u8> = (0..((block1 - block0) * f.align as u64) as u32)
-        .map(|i| m.u8(base.wrapping_add(i)))
-        .collect();
+    let mut bytes = vec![0u8; ((block1 - block0) * f.align as u64) as usize];
+    m.read_bytes(base, &mut bytes);
     let mut frames = Vec::new();
     format.decode(&bytes, first - block0 * spb, n, &mut frames);
     mixer.feed(voice, f.channels, &frames);

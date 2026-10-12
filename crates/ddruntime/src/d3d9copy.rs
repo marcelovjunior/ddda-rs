@@ -81,11 +81,10 @@ fn copy_image(m: &mut dyn Mem, src: u32, r: [i32; 4], dst: u32, x: u32, y: u32) 
     let r = if r == [0; 4] { [0, 0, sw as i32, sh as i32] } else { r };
     let (bx, by) = (r[0] as u32 / block, r[1] as u32 / block);
     let (bw, bh) = (((r[2] - r[0]) as u32).div_ceil(block), ((r[3] - r[1]) as u32).div_ceil(block));
+    let mut line = vec![0u8; (bw * bpb) as usize];
     for row in 0..bh {
-        for k in 0..bw * bpb {
-            let v = m.u8(sp + (by + row) * spitch + bx * bpb + k);
-            m.set_u8(dp + (y / block + row) * dpitch + (x / block) * bpb + k, v);
-        }
+        m.read_bytes(sp + (by + row) * spitch + bx * bpb, &mut line);
+        crate::fastmem::write_bulk(m, dp + (y / block + row) * dpitch + (x / block) * bpb, &line);
     }
     mark_dirty(dst);
     true
@@ -135,9 +134,8 @@ pub fn get_render_target_data(m: &mut dyn Mem, cpu: &mut Cpu) {
             if let (Some(bytes), Some((dp, dpitch, _, _, h, _))) = (backend(|b| b.read_back(&t)), surface_shadow(m, dst)) {
                 let row = bytes.len() / t.height.max(1) as usize;
                 for y in 0..h.min(t.height) as usize {
-                    for (k, &v) in bytes[y * row..(y + 1) * row].iter().enumerate().take(dpitch as usize) {
-                        m.set_u8(dp + y as u32 * dpitch + k as u32, v);
-                    }
+                    let line = &bytes[y * row..(y + 1) * row];
+                    crate::fastmem::write_bulk(m, dp + y as u32 * dpitch, &line[..line.len().min(dpitch as usize)]);
                 }
             }
             D3D_OK

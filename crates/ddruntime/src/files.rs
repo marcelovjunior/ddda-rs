@@ -263,9 +263,7 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
     });
     cpu.eax = match data {
         Some(v) => {
-            for (k, &b) in v.iter().enumerate() {
-                m.set_u8(buf.wrapping_add(k as u32), b);
-            }
+            crate::fastmem::write_bulk(m, buf, &v);
             if read_out != 0 {
                 m.set_u32(read_out, v.len() as u32);
             }
@@ -304,9 +302,7 @@ pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
     });
     cpu.eax = match data {
         Ok(v) => {
-            for (k, &b) in v.iter().enumerate() {
-                m.set_u8(buf.wrapping_add(k as u32), b);
-            }
+            crate::fastmem::write_bulk(m, buf, &v);
             m.set_u32(ov, 0); // Internal: STATUS_SUCCESS
             m.set_u32(ov + 4, v.len() as u32); // InternalHigh: bytes
             crate::threads::queue_apc(crate::threads::current_tid(), routine, [0, v.len() as u32, ov]);
@@ -324,7 +320,8 @@ pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// WriteFile(handle, buffer, count, written*, overlapped): into the overlay.
 pub fn write_file(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, buf, count, written_out) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
-    let data: Vec<u8> = (0..count).map(|k| m.u8(buf.wrapping_add(k))).collect();
+    let mut data = vec![0u8; count as usize];
+    m.read_bytes(buf, &mut data);
     let ok = with_files(|f| match f.handles.get_mut(&h) {
         Some(Open::File(file)) => file.write_all(&data).is_ok(),
         _ => false,

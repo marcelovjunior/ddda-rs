@@ -116,12 +116,12 @@ fn free(p: u32) {
     with_state(|s| s.heap.free(p)).expect("movie-owned heap block");
 }
 fn bytes(m: &dyn Mem, p: u32, n: u32) -> Vec<u8> {
-    (0..n).map(|k| m.u8(p + k)).collect()
+    let mut v = vec![0u8; n as usize];
+    m.read_bytes(p, &mut v);
+    v
 }
 fn put(m: &mut dyn Mem, p: u32, b: &[u8]) {
-    for (k, &v) in b.iter().enumerate() {
-        m.set_u8(p + k as u32, v);
-    }
+    crate::fastmem::write_bulk(m, p, b);
 }
 fn wide(m: &dyn Mem, p: u32) -> Vec<u16> {
     let mut b = Vec::new();
