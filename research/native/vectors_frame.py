@@ -73,6 +73,10 @@ PORTS = {
     0x00F0C160: ("chain", 744),
     0x0084CCC0: ("integrate", 1258),
 }
+# unwired observable-equivalent models (crates/mtframe/tests/models.rs)
+MODELS_ = {
+    0x00487B00: ("recognition", 0x8D0),  # the inventory size (0x8B0) stops before the epilogue
+}
 # ports of other crates run as the original when called (their ports run in the replay)
 FOREIGN_PORTS = {0x00402530, 0x004025C0, 0x00402620, 0x00CF5E20}
 MODELS = {0x00CF73F0: "pool40_alloc", 0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
@@ -120,6 +124,7 @@ class Scratch:
         self.st_returns = {}  # stub address -> the float bits it leaves in st0
         self.fakes = {}       # exe address -> (argument bytes popped, eax or None)
         self.fpcw = 0x037F    # the x87 control word the case runs with
+        self.cells = []       # memory the stubs themselves write (their counters)
 
     def window(self, base, length):
         """An extra window (inside the SCRATCH mapping, above the main one)."""
@@ -163,7 +168,7 @@ class Scratch:
     def stub(self, code):
         a = self.stub_top
         self.code[a - STUBS:a - STUBS + len(code)] = code
-        self.stub_top += 16
+        self.stub_top += (len(code) + 15) & ~15
         assert self.stub_top <= STUBS + STUBS_LEN, "stubs full"
         return a
 
@@ -172,6 +177,15 @@ class Scratch:
 
     def value_stub(self, value, pop):
         return self.stub(bytes([0xB8]) + struct.pack("<I", value) + bytes([0xC2, pop & 0xFF, pop >> 8]))
+
+    def bump_stub(self, first, step, pop):
+        """`mov eax, [cell]; add dword [cell], step; ret pop`: successive
+        blocks `first`, `first + step`, ..."""
+        cell = self.alloc(4)
+        self.u32(cell, first)
+        self.cells.append(cell)
+        return self.stub(bytes([0xA1]) + struct.pack("<I", cell) + bytes([0x81, 0x05]) + struct.pack("<II", cell, step)
+                         + bytes([0xC2, pop & 0xFF, pop >> 8]))
 
     def float_stub(self, bits, pop):
         """`fld dword [cell]; ret pop`: returns `bits` in st0."""
@@ -344,7 +358,7 @@ def run(addr, size, regs, xmm, sc, args, globals_, fpcw=0x037F):
     try:
         uc.emu_start(addr, h.RET, count=400000)
     except UcError as e:
-        raise Dropped(str(e))
+        raise Dropped(f"{e} at {uc.reg_read(xc.UC_X86_REG_EIP):#x}")
     if bad:
         raise Dropped(bad[0])
     if uc.reg_read(xc.UC_X86_REG_EIP) != h.RET or inside:
@@ -363,6 +377,7 @@ def run(addr, size, regs, xmm, sc, args, globals_, fpcw=0x037F):
         "fpcw_out": uc.reg_read(xc.UC_X86_REG_FPCW),
         "fptag_out": uc.reg_read(xc.UC_X86_REG_FPTAG),
         "calls": calls,
+        "stub_cells": sc.cells,
         "nan_fixups": fixed[0],
     }
 
@@ -513,6 +528,119 @@ def build(kind, rnd):
         origin = [0, 0, 0, 0] if rnd.random() < 0.7 else [floats(rnd) for _ in range(4)]
         g += [(0x018CFE80, struct.pack("<4I", *origin)), (0x018FA4BC, struct.pack("<I", mgr)),
               (0x0159E1A0, h.code(0x0159E1A0, 0x40))]
+    elif kind == "recognition":
+        this = sc.alloc(0x60, 16)
+        regs["ecx"] = this
+        sc.u32(this + 0x20, rnd.choice([0, 0x3F000000, floats(rnd)]))
+        sc.u32(this + 0x24, rnd.choice([0x3F800000, 0x3F800000, 0x40000000, 0]))
+        sc.u32(this + 0x28, rnd.getrandbits(16))
+        sc.u32(this + 0x2C, rnd.choice([0x40000000, 0, 0x3D000000, floats(rnd)]))
+        sc.u32(this + 0x30, rnd.choice([0x41200000, 0, 0x3D000000, floats(rnd)]))
+        sc.u32(main + 0x68, rnd.choice([0, 0, 0, 1]))
+        sc.u8(main + 0x6C, rnd.choice([0, 0, 0, 1]))
+        sc.u32(main + 0x70, rnd.choice([0x3F800000, 0x3F800000, 0x3F000000, 0x40000000, floats(rnd)]))
+        sc.u32(main + 0x38, rnd.choice([0x41F00000, 0x41F00000, floats(rnd)]))
+        # allocators: MtArray's and cEnemyInfo's descriptors pick one each
+        blocks = sc.window(SCRATCH + 0x70000, 0x10000)
+        table = [rnd.getrandbits(32) for _ in range(64)]
+        arr_index, info_index = rnd.randrange(64), rnd.randrange(64)
+        alloc = sc.alloc(0x10)
+        vt = sc.alloc(0x40)
+        sc.u32(alloc, vt)
+        sc.u32(vt + 0x1C, sc.bump_stub(blocks, 0x60, 12) if rnd.random() < 0.9 else sc.value_stub(0, 12))
+        sc.u32(vt + 0x20, sc.bump_stub(blocks + 0x2000, 0x200, 8))
+        sc.u32(vt + 0x24, sc.ret_stub(4))
+        table[arr_index] = table[info_index] = alloc
+        arr_dti = bytearray(rnd.randbytes(0x20))
+        struct.pack_into("<I", arr_dti, 0x18, (arr_index << 23) | rnd.getrandbits(23) | (rnd.getrandbits(3) << 29))
+        info_dti = bytearray(rnd.randbytes(0x20))
+        struct.pack_into("<I", info_dti, 0x18, (info_index << 23) | rnd.getrandbits(23) | (rnd.getrandbits(3) << 29))
+        g += [(0x01876628, struct.pack("<64I", *table)), (0x01877D24, bytes(arr_dti)), (0x0198B568, bytes(info_dti))]
+        # class names (the descriptors' name pointers) and descriptor chains
+        names = [sc.alloc(4) for _ in range(3)]
+        g += [(0x019A1134, struct.pack("<I", names[0])), (0x019A3DB8, struct.pack("<I", names[1])),
+              (0x019A3DE0, struct.pack("<I", names[2]))]
+
+        def dti_chain(match):
+            nodes = [sc.alloc(0x20) for _ in range(rnd.randrange(1, 4))]
+            for k, n in enumerate(nodes):
+                sc.u32(n + 4, sc.alloc(4))
+                sc.u32(n + 0x10, nodes[k + 1] if k + 1 < len(nodes) else 0)
+            if match is not None:
+                sc.u32(rnd.choice(nodes) + 4, match)
+            return nodes[0]
+
+        unit_base = [SCRATCH + 0x40000]
+        units = []
+
+        def unit():
+            # interleaved: unit k's windows at +k*0x40 and +0x23A4+k*0x40
+            u = unit_base[0]
+            unit_base[0] += 0x40
+            assert u + 0x40 < SCRATCH + 0x40000 + 0x23A4
+            for off, n in [(0, 0x10), (0x2C, 4), (0x23A4, 0x10)]:
+                sc.window(u + off, n)
+            sc.u32(u + 4, rnd.getrandbits(32) & ~7 | rnd.choice([1, 2, 1, 2, 0, 3, 5]))
+            sc.u32(u + 0x23A4, rnd.choice([1, 5, 0, 0xFFFFFFFF]))
+            state = sc.alloc(0x50)
+            sc.u32(state + 0x44, rnd.choice([3, 3, 3, 1]))
+            holder = sc.alloc(4)
+            sc.u32(holder, state if rnd.random() < 0.9 else 0)
+            sc.u32(u + 0x23B0, holder)
+            units.append(u)
+            return u
+
+        for k, (mgr_global, _) in enumerate([(0x018FA4B0, 0), (0x018FA4C8, 1), (0x018FA4E0, 2)]):
+            n = rnd.choice([0, 1, 2, 3, 5, 9, 17])
+            items = sc.alloc(4 * max(n, 1))
+            for i in range(n):
+                if rnd.random() < 0.15:
+                    sc.u32(items + 4 * i, 0)
+                    continue
+                u = unit()
+                vtu = sc.alloc(0x20)
+                sc.u32(vtu + 0x10, sc.value_stub(dti_chain(names[k] if rnd.random() < 0.7 else None), 0))
+                sc.u32(u, vtu)
+                sc.u32(items + 4 * i, u)
+            mgr = sc.alloc(0x40)
+            sc.u32(mgr + 0x24, n)
+            sc.u32(mgr + 0x30, items)
+            g.append((mgr_global, struct.pack("<I", mgr)))
+        players = SCRATCH + 0x60000
+        sc.window(players + 0x9A0, 0xC)
+        for slot in range(3):
+            sc.u32(players + 0x9A0 + 4 * slot, unit() if rnd.random() < 0.5 else 0)
+        always = SCRATCH + 0x41000
+        sc.window(always + 0xBE284, 0x10)
+        known = [u for u in units if rnd.random() < 0.3]
+        lst = sc.alloc(4 * max(len(known), 1))
+        for i, u in enumerate(known):
+            sc.u32(lst + 4 * i, u)
+        sc.u32(always + 0xBE284, len(known) if rnd.random() < 0.8 else 0)
+        sc.u32(always + 0xBE290, lst)
+        g += [(0x018FA4EC, struct.pack("<I", players)), (0x018FA4BC, struct.pack("<I", always))]
+        # existing records
+        n = rnd.choice([0, 0, 1, 2, 4, 6])
+        cap = n + rnd.choice([0, 0, 1, 3])
+        data = sc.alloc(4 * max(cap, 1))
+        for i in range(n):
+            info = sc.alloc(0x50, 16)
+            target = rnd.choice(units) if units and rnd.random() < 0.8 else unit()
+            sc.u32(info + 0xC, target)
+            sc.u8(info + 8, rnd.choice([0, 1]))
+            for off in (0x10, 0x14):
+                sc.u32(info + off, rnd.choice([0, 0x3F800000, 0x40400000, 0x41300000, floats(rnd)]))
+            sc.u32(data + 4 * i, info)
+        sc.u32(this + 0x34, 0x01558298)
+        sc.u32(this + 0x38, n)
+        sc.u32(this + 0x3C, cap)
+        sc.u8(this + 0x40, 0)
+        sc.u32(this + 0x44, data if cap or rnd.random() < 0.5 else 0)
+        species = sc.alloc(0x10)
+        sc.u32(species + 8, quiet(rnd))
+        sc.fake(0x005A02F0, 0, eax=rnd.choice([1, 1, 0, 0x100, 0xFFFFFF01]))
+        sc.fake(0x008BC6E0, 0, eax=rnd.choice([species, 0]))
+        sc.fake(0x00488440, 0, eax=rnd.choice([1, 0, 0xFFFFFF00, 0x101]))
     return regs, sc, args, g
 
 
@@ -561,5 +689,17 @@ def edge():
     print(f"frame_edge.json: {len(cases)} cases")
 
 
+def models():
+    """Recordings for the observable-equivalent models (not wired)."""
+    cases = []
+    for addr, (kind, size) in sorted(MODELS_.items()):
+        print(f"0x{addr:08X} {kind} ...", flush=True)
+        got = edge_cases(addr, kind, size, 400, addr)
+        print(f"0x{addr:08X} {kind}: {len(got)} cases, {sum(len(c['calls']) for c in got)} calls")
+        cases += got
+    json.dump(cases, open(f"{OUT}/frame_models.json", "w"))
+    print(f"frame_models.json: {len(cases)} cases")
+
+
 if __name__ == "__main__":
-    {"lift": lift, "edge": edge}[sys.argv[1]]()
+    {"lift": lift, "edge": edge, "models": models}[sys.argv[1]]()
