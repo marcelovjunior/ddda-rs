@@ -1704,6 +1704,15 @@ fn delete_move_copy_and_truncate_never_touch_the_install() {
     let outs = [0x0030_0610, 0x0030_0614, 0x0030_0618, 0x0030_061C];
     assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, outs[0], outs[1], outs[2], outs[3]], 20).0, 1);
     assert_eq!(outs.map(|p| m.u32(p)), files::VOLUME);
+    // MtFile::vf05's question (overlapped mode): the file's own path fails
+    m.set_u32(free, 0x55);
+    path(&mut m, a, &install.join(r"nativePC\orig.arc").to_string_lossy());
+    assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, 0, 0, free, 0], 20), (0, 267), "ERROR_DIRECTORY");
+    assert_eq!(m.u32(free), 0x55, "untouched");
+    path(&mut m, a, &install.join(r"nativePC\nope.arc").to_string_lossy());
+    assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, 0, 0, free, 0], 20), (0, 2));
+    path(&mut m, a, &install.join("nativePC").to_string_lossy());
+    assert_eq!(call1(&mut m, files::get_disk_free_space_a, &[a, 0, 0, free, 0], 20).0, 1, "a directory");
     // SHCreateDirectoryExW in the home
     let home = sandbox.join(r"csidl-0x001c\CAPCOM\DRAGONS DOGMA DARK ARISEN");
     let shc = |m: &mut GuestMemory, p: &str| {
