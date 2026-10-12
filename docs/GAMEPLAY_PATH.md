@@ -219,8 +219,111 @@ The full list, with verdicts and call chains, is private
 ## 3. Not done
 
 - No run.
-- The title's menu items are not mapped to the four handover call sites
-  (1.1).
-- `aBbsRpg`'s creation as the parent of `aGameMain` is inferred.
+- The title's menu texts are not mapped to the menu results (4.1).
+- The registration of the area tree's parent links is not found (4.2).
 - The closure's roots over-approximate the gameplay path (whole
   classes).
+
+## 4. Follow-up (L38b)
+
+### 4.1 The title's menus and their area requests
+
+`aTitle` slot 6 (0x00531400) picks the first state.
+- **Normally `0x00531800`**, press start (TITLE_PATH 1.6). It is
+  followed by `0x00533320` → `0x005325E0`, the menu run by `0x0052FC30`
+  (1.1).
+- **`0x00531A20`, the top menu**, when `sGameSys+0xB8840` has bit
+  0x40000000 or 0x10000, or `+0xB883C` has bit 4. Before it,
+  0x00531400 resets the save structures (0x0043C580, 0x004965A0) and
+  sets `sSave+0x21AFDC = 1`. *Inferred:* the game sets these flags when
+  it returns to the title area.
+
+**`0x00531A20`** creates **`uGUITopMenu`**, or **`uGUILoadGame`** when
+`+0xB883C` bit 4 is set. It then switches on the menu's result
+(`+0x1C8`):
+
+| Result | Next |
+|---|---|
+| 0x10 | state 0x00532FB0 |
+| 0x11 | `0x00449FD0` (clears the four party slots), `0x004373C0` (sets `sGameSys` flags), then state 0x00533200 → **`aStage801`**, character creation |
+| 0x12 | the same set-up, then state 0x00533280 → **`aStage802`** |
+| 0x14 | the same set-up, then state 0x00533280 → **`aStage804`** (`+0xC0` = result ≠ 0x12) |
+| 1, 2, 5, 0xF, 0x13, 0x15 | other states (not followed) |
+
+**`aGameMain`** is requested by the label state 0x005330E0. That state is
+installed by:
+- the load flow `0x00532110` (after storage request kind 9: Continue);
+- the code at 0x00531E72 and 0x00531EC8.
+
+*Not traced:* which menu text gives which result. The texts are in
+`id\menu\title_2\menu_01` / `id\DDN\menu\title_1\top_01`. A live read of
+`uGUITopMenu+0x1C8` per item would settle it.
+
+### 4.2 How `aBbsRpg` is created
+
+**The mechanism.** `sArea` keeps an area tree: 512 `sArea::AreaInfo`
+nodes from `+0x20`, 0x1C bytes each (vtable, the area's DTI at `+8`, the
+parent node at `+0xC`).
+- An area request (`sArea::vf10` 0x00DB4C10) only stores the target DTI
+  at `+0x3828`.
+- `sArea::vf06` then calls `0x00DB4F10`, which:
+  1. finds or adds the target's node;
+  2. walks its parent links to the root;
+  3. compares that chain with the current stack (`+0x382C`, up to 8)
+     through each area's DTI and its DTI parents;
+  4. pops and pushes the levels that differ.
+- So requesting `aGameMain` (or a stage) brings up every ancestor area
+  first. That is how `[aBbsRpg, aGameMain, aStageNNN]` arises without any
+  code naming `aBbsRpg`.
+
+**What it rules out.** All area DTIs register with the same parent DTI
+0x0198D678 (*inferred* `cArea`; e.g. `aGameMain` at 0x013306A0,
+`aBbsRpg` at 0x013305E0), so the tree is not the class hierarchy.
+
+*Not found:* where the parent links (`aGameMain` under `aBbsRpg`, the
+stages under `aGameMain`) are registered. No code references these DTIs
+outside their registration. *Inferred:* registered at run time from
+another source (by name, or from a resource).
+
+### 4.3 The gameplay path's archives by name
+
+| Requester | Archives |
+|---|---|
+| `aBbsRpg` slot 5 (0x004FA5C0) | `system\TexDetail\TexDetail`, `rom\bbsrpg_core` (24146), `rom\bbs_rpg` (1) |
+| 0x004FB050 (no direct caller; *inferred* `aGameMain`'s slot) | `rom\dl1\game_dl1` (24148) |
+| `aGameMain` (*inferred*) | `rom\game_main` (id 3): the requester was not found |
+| every area, slot 5 | `sa\DX9\<area>.arc`: `GameMain`, `Stage380` (also `Stage380_PROLOGUE`, `Stage380_T`), `Stage800`, `Stage801`, `Stage200`, `Stage100` |
+| the stage loader **0x004FFBA0** (called from 0x00525160, 0x0052ADB0, 0x0052B940) | see below |
+| stage event mode 3 (0x0050BE20 → 0x005171A0), simple events (0x0050DCD0 → 0x00517470) | the event archives `rom\event\sSSS_EE` (computed ids; EVENTS.md) |
+| Continue | `DDDA.sav` (TITLE_PATH 5.4) |
+
+**What the stage loader 0x004FFBA0 requests:**
+- with `i` = the stage's index (0x00508B50):
+  - `i + 5`: `rom\stage\<group>\stageNNN`;
+  - `i + 0x8407`: `..._nav` (when listed);
+  - `i + 0x8448`: `..._om` (when present);
+- `rom\gui\GUIuGUITimer` (33795), when `sSave+0x20E77B` has bits 0xC;
+- weapon and NPC archives from the stage's lists (e.g. `rom\wp\w0\one`,
+  `rom\npc\f02\npc223` id 1114 by default);
+- the dragon `rom\enemy\em5800` / `em5801` (162/163) on stages
+  0x1F5/0x1F6 and 0x25D;
+- a fixed weapon list (`rom\wp\w1\dag`, `dag000`, `rom\wp\w0\one`,
+  `one004`, `one006`) on stage 0x263.
+
+**The opening's files** (present in the install, sizes in bytes):
+
+| File | Size |
+|---|---:|
+| `rom\stage\stage300\stage380.arc` | 124,689,241 |
+| `stage380_nav.arc` | 148,157 |
+| `stage380_om.arc` | 36,003,921 |
+| `rom\stage\stage800\stage800.arc` | 1,377,577 |
+| `stage801.arc` | 1,967,053 |
+| `rom\stage\stage200\stage200.arc` | 153,950,909 |
+| `stage200_nav.arc` | 261,264 |
+| `stage200_om.arc` | 43,673,401 |
+| `rom\stage\stage100\stage100.arc` | 10,160,171 |
+| `rom\game_main.arc` | 23,775,211 |
+| `rom\bbs_rpg.arc` | 11,177,818 |
+| `rom\bbsrpg_core.arc` | 4,590,287 |
+| `rom\dl1\game_dl1.arc` | 1,018,928 |
