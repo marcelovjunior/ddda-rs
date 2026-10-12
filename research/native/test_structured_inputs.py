@@ -15,7 +15,11 @@ import structured_inputs as trials
 
 
 class InputTests(unittest.TestCase):
+    RANGE_LAYOUT = dict(stride=20, first={'stack':8}, last={'stack':12}, result={'stack':4},
+                        uint_offsets=[8,12], float_offsets=[16])
     def record(self, code, strategy=None, seed=19, **kwargs):
+        if strategy == 'record-range-v1':
+            kwargs.setdefault('input_layout',self.RANGE_LAYOUT)
         image=code.ljust(0x1000,b'\xcc')
         body=[i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(code,0x400000)]
         with patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])), \
@@ -77,6 +81,19 @@ class InputTests(unittest.TestCase):
             self.assertNotIn('stack_contract', c)
             self.assertEqual(c, self.record(code, 'zero-call-v1'))
             self.assertEqual(trials._inputs([c]), dict(input_strategy='zero-call-v1'))
+
+    def test_range_inputs_supply_related_stack_arguments_and_keep_guest_writes(self):
+        # Read first/end/result, write byte length and the first float to result;
+        # overwrite first record then read that same word back into EAX.
+        code=bytes.fromhex('8b4c2408 8b54240c 2bd1 8b442404 8910 f30f104110 f30f114004 c70178563412 8b01 c3')
+        c=self.record(code,'record-range-v1',seed=1)
+        from record_inputs import RecordRangeInputs
+        r=RecordRangeInputs(self.RANGE_LAYOUT,1)
+        self.assertEqual(c['regs_out']['eax'],0x12345678)
+        self.assertIn([r.RESULT,struct.pack('<If',r.count*20,0.0).hex()],c['writes'])
+        self.assertIn([r.first,'78563412'],c['writes'])
+        self.assertEqual(c['input_layout'],self.RANGE_LAYOUT)
+        self.assertEqual(trials._inputs([c]),dict(input_strategy='record-range-v1',input_layout=self.RANGE_LAYOUT))
 
     def test_mockzero_keeps_random_memory_and_zeroes_mock_returns(self):
         code=bytes.fromhex('a1000240008b11c3').ljust(0x200,b'\xcc')+struct.pack('<I',0x12345678)
@@ -271,5 +288,40 @@ class InputTests(unittest.TestCase):
             self.assertNotIn('ext',selected[0x20])
             self.assertIn((0x60,'zero-call-v1',True,True),runs)
             self.assertTrue(all(c.get('fresh') for c in out if c['addr']==0x60))
+
+    def test_range_layout_is_reproduced_and_distinguishes_retry_keys(self):
+        layout=dict(stride=4,first={'stack':4},last={'stack':8})
+        case=dict(input_strategy='record-range-v1',input_layout=layout)
+        self.assertEqual(trials._inputs([case]),case)
+        row=dict(addr=1,body_key='k',requested_seeds=3,seconds=20,cases=[],input_layout=layout)
+        self.assertEqual(trials.done_keys([row],3,20,layout=layout),{(1,'k')})
+        self.assertFalse(trials.done_keys([row],3,20,layout={**layout,'stride':8}))
+
+    def test_refresh_closed_is_all_or_nothing_and_preserves_unrelated_cases(self):
+        for success in (False,True):
+            with tempfile.TemporaryDirectory() as folder:
+                root=Path(folder);(root/'patterns').mkdir();(root/'vectors').mkdir()
+                functions=[dict(addr=1,arms=['closed'],calls=[],size=1,body=[1]),
+                           dict(addr=2,ext=True,arms=['old'],calls=[],size=1,body=[2],x87_entry=1,insn_budget=30000)]
+                cases=[dict(addr=1,seed=9),dict(addr=2,calls=[dict(target=1)])]
+                trials.write(root/'patterns/lift.json',functions);trials.write(root/'vectors/lift.json',cases)
+                with (patch.object(trials.lift,'seed_closed_contracts',return_value={1}),
+                      patch.object(trials.lift,'noreturn_entries',return_value=set()),
+                      patch.object(trials.lift,'lift',return_value=['new']),
+                      patch.object(trials.lift,'release_body'),
+                      patch.dict(trials.lift.BODY_INFO,{2:dict(body=[2])}),
+                      patch.object(trials,'_rerecord_any',return_value=[dict(addr=2,calls=[])] if success else []),
+                      contextlib.redirect_stdout(io.StringIO())):
+                    if success:trials.refresh_closed(root)
+                    else:
+                        with self.assertRaisesRegex(ValueError,'untouched'):trials.refresh_closed(root)
+                if success:
+                    self.assertEqual(trials.read(root/'vectors/lift.json'),[cases[0],dict(addr=2,calls=[])])
+                    self.assertEqual(trials.read(root/'patterns/lift.json')[0],functions[0])
+                    self.assertNotIn('x87_entry',trials.read(root/'patterns/lift.json')[1])
+                    self.assertNotIn('insn_budget',trials.read(root/'patterns/lift.json')[1])
+                else:
+                    self.assertEqual(trials.read(root/'vectors/lift.json'),cases)
+                    self.assertEqual(trials.read(root/'patterns/lift.json'),functions)
 
 if __name__=='__main__':unittest.main()

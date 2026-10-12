@@ -247,5 +247,63 @@ class FrameContractTests(unittest.TestCase):
             c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
         self.assertEqual([e['out']['pop'] for e in c['calls']],[4,0])
 
+    def test_later_callee_consumes_arguments_pushed_before_indirect_call(self):
+        # Saved string; two indirect arguments; call eax; push HRESULT;
+        # call stdcall(ret 8). The indirect callee must pop 8, not 12.
+        code=bytes.fromhex('8b01 6a55 6a11 6a22 ffd0 50 e8f0000000 c3'.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=8):
+            c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[8,8])
+        self.assertEqual(c['calls'][1]['regs']['esp'],c['regs_in']['esp']-12)
+
+    def test_indirect_call_can_have_no_arguments_of_its_own(self):
+        # A pre-pushed argument belongs entirely to the later ret-8 call.
+        # The intervening virtual call takes only this in ECX.
+        code=bytes.fromhex('8b01 6a55 ffd0 50 e8f4000000 c3')
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=8):
+            c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[0,8])
+
+    def test_later_callee_can_consume_only_intervening_pushes(self):
+        # Two indirect arguments, then an unrelated stdcall argument, then
+        # caller cleanup of the original arguments. Follow the balanced call.
+        code=bytes.fromhex('8b01 6a11 6a22 ffd0 50 e8f1000000 83c408 c3'.replace(' ',''))
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=4):
+            c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+        self.assertEqual([e['out']['pop'] for e in c['calls']],[0,4])
+
+    def test_later_argument_after_register_setup_and_branch_barrier(self):
+        # Setting up this before pushing HRESULT must not hide the saved
+        # prefix. A branch still ends the conservative straight-line scan.
+        for setup, accepted in [('8bcb',True),('eb00',False)]:
+            code=bytes.fromhex('8b01 6a55 6a11 6a22 ffd0 '+setup+' 50 e8ee000000 c3')
+            body,(p1,p2)=self.image(code)
+            with p1,p2,patch.object(h,'static_pop',return_value=8):
+                if accepted:
+                    c=h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+                    self.assertEqual([e['out']['pop'] for e in c['calls']],[8,8])
+                else:
+                    with self.assertRaises(h.Rejected):
+                        h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
+
+    def test_split_callee_and_caller_cleanup_preserves_own_return_check(self):
+        # Eight bytes of outgoing space: the callee may remove four and
+        # the caller four, even with flag/register work before ADD ESP.
+        # Removing twelve at the caller remains an actual imbalance.
+        for cleanup,pop in ((8,0),(4,4),(12,None)):
+            code=bytes.fromhex('8b018b501083ec0889f1ffd231c083c4')+bytes([cleanup])+b'\xc3'
+            body,(p1,p2)=self.image(code)
+            with p1,p2:
+                if pop is None:
+                    with self.assertRaises(h.Rejected):
+                        h.run_sparse(0x400000,17,zero_inputs=True,body=body,end=0x400000+len(code))
+                else:
+                    c=h.run_sparse(0x400000,17,zero_inputs=True,body=body,end=0x400000+len(code))
+                    self.assertEqual(c['calls'][0]['out']['pop'],pop)
+                    self.assertEqual(c['regs_out']['esp'],c['regs_in']['esp']+4)
+
 
 if __name__=='__main__':unittest.main()
