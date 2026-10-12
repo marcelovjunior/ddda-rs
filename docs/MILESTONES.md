@@ -1,12 +1,14 @@
 # Milestones
 
-### L28c post-train-14 input strategies (2026-10-12)
+### L28c frame and scalar input batches (2026-10-12, pending replay)
 
-- Main **817c036b** merged: **59,391 / 59,440 verified**, **49 residuals**
-  (31 recorder, 18 lifter/gap); previous 16 fixtures now credited.
-- Three general frame/input strategies, **192 light tests pass**; nine
-  static matches. Recording queued; no new fixtures credited yet.
-- **Next action:** serial heavy.py trials and append-only baseline audit.
+- **+14 functions / +42 cases**, all 3/3; private **59,676 / 177,622**.
+  Every per-batch audit preserves all **59,662 / 177,580** baseline records.
+- **201 light tests pass**; main train 14 merged. RESIDUALS has **49 rows**,
+  **14 pending replay**, ownership 31 recorder / 18 lifter or gap.
+- **Next action:** finish queued checked-state recipes and the tested paired
+  EBP-save input rule, then audit and hand off the complete private set.
+
 
 ### L28c bounded callee cleanup batch (2026-10-12, pending replay)
 

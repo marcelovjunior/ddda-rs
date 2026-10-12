@@ -35,36 +35,47 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
-### Post-train-14 frame-input strategies (2026-10-12, recording queued)
+### Frame and scalar inputs: +14/+42 (2026-10-12, pending replay)
 
-Merged main **817c036b** after train 14: **59,391 / 59,440 verified**.
-RESIDUALS now has **49 rows: 31 recorder, 18 lifter/gap**, with the previous
-16 replay-pending rows credited. Six remaining dispatch blockers now name
-their observed frame shapes rather than only the final outside-image guard.
+Main **817c036b** (train 14) merged: **59,391 / 59,440 verified**.
+The previous 16 fixtures are credited. RESIDUALS has **49 rows: 31 recorder,
+18 lifter/gap**, now **14 pending replay**. Every batch below records **3/3**:
 
-Three isolated opt-in input strategies pass **192 light tests**:
+| General input strategy | Added functions | Source |
+|---|---|---|
+| Fixed frame with interleaved arithmetic | 4644D0, 691AE0, 691E50, 692A40 | 093c5223 |
+| Aligned locals restored through stable EBP | 7BEA60, 9D0E70, A195D0, BD45C0 | 4e20bc48 |
+| Entry outgoing area consumed by final call | B75EC0 | 496bd72e |
+| Fixed local cleanup before a tail jump | 7126C0 | 912d5ba2 |
+| Checked null-memory return path | CED240 | 347fae6e |
+| Inline exception frame with matching unlink | CEEBC0 | 50cdbee2 |
+| Scalar-one ordinary mock returns | 410000, E0D750 | 7b862033 |
 
-- **093c5223**, prefix-call-v1: register arithmetic around a fixed local
-  allocation, requiring matching ADD-ESP cleanup at every own return.
-  Static matches: 4644D0, 691AE0, 691E50, 692A40.
-- **4e20bc48**, ebp-call-v1: aligned locals with a stable EBP and matching
-  saved-register restores at every return. Ordinary operations may be
-  interleaved between pops only when they do not change the stack/frame.
-  Static matches: 7BEA60, 9D0E70, A195D0, BD45C0.
-- **496bd72e**, outgoing-call-v1: an initial outgoing area counts as call
-  arguments when every acyclic path ends in an indirect CALL immediately
-  followed by RET; no intervening ESP adjustment except 32-bit pushes.
-  Static match: B75EC0.
+**201 light tests pass.** Private totals: **59,676 functions / 177,622 cases**,
+**+14/+42**. The per-batch audits (`prefix`, `ebp`, `outgoing`, `tail-frame`,
+`null-call`, `exception-frame`, `one-call`, each `-audit.json` in `L28c/`)
+all preserve the entire **59,662 / 177,580** baseline from
+`prefix-before.json`: no changed records/cases, promotions, removals or stale
+mocks. Existing input policies and global return/memory/CPU guards remain
+unchanged. These are input hints; full Rust replay remains the head's task.
 
-Synthetic execution checks return addresses, ESP, mock cleanup and saved
-registers, with negative frame/cleanup/control-flow tests. Existing input
-policies and global return/memory guards are unchanged. These are mock-input
-hints; static matches are not credited as recordings or Rust comparisons.
-The first recorder job is queued through heavy.py; further runs remain
-serial. Baseline `L28c/prefix-before.json`: **59,662 functions / 177,580 cases**.
-Next: record each strategy, append successes, audit that entire baseline,
-and update this entry with measured results. No full Rust build.
+The scalar-one cases retain the original instruction limit. The earlier
+small-value mock palette generated multiples of four, so it could never
+satisfy a wait for exactly one. The null-path rule for CED240 checks the
+actual generated dword before using its decoded EAX=0/RET path; it does not
+claim cleanup for the other virtual branch.
 
+**Still in progress:** DA46C0 records 3/3 after exact replay of verified
+initializer 137E5C0 (which seeds the global state through verified D006C0).
+Its cases await adoption through the existing API; the first driver used a
+CLI strategy name that adoption does not accept and exited without changing
+existing records. A serial continuation is queued through heavy.py to adopt
+and audit those cases, try D29AF0 from checked caller state, and record
+12FF0F0 with **01297649**. That new opt-in rule tracks paired temporary EBP
+saves through every acyclic path and restores them before LEAVE; cleanup
+may consume only tracked arguments. Synthetic execution preserves the return
+address and nonvolatile registers; unmatched saves/cleanup are refused.
+No fixtures are credited for those pending steps. 493AA0 remains set aside.
 
 ### Bounded callee cleanup inputs: +9/+27 (2026-10-12, pending replay)
 
