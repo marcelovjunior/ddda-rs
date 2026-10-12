@@ -1,7 +1,7 @@
 """Finite instruction bounds from known control flow and checked aliases.
 
 This is a deliberately small abstract interpreter, not a guest executor.
-Unknown entry registers/flags never become constants. Guarded callers may
+Unknown entry registers/flags never become constants implicitly. Guarded callers may
 provide a bounded snapshot of their actual initial argument bytes.
 It grants a bound only after following a completely known, returning trace.
 Stores affect subsequent reads or impose a runtime non-aliasing obligation;
@@ -54,7 +54,8 @@ class WriteGuard:
 def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 deadline=None, max_bytes=256*4096, guarded=False, decode=None,
                 closed=frozenset(), models=None, pop_for=None, initial_direction=None,
-                caller_stack=None, entry_pointers=None, initial_writes=None):
+                caller_stack=None, entry_pointers=None, initial_writes=None,
+                entry_values=None):
     """Return a strict count or guarded bound certificate; None if unproven.
 
     `read_image(address, size)` must return original image bytes only and
@@ -78,6 +79,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     enforced by the same WriteGuard. Initial object bytes remain unknown,
     except `initial_writes`: exact bytes written by a checked original setup.
     These receive the same overlap and unknown-writer guards as trace stores.
+    `entry_values` supplies only explicit checked-setup register bindings;
+    each must match its entry witness, and ESP cannot be rebound.
+    Bounded affine expressions preserve relationships between unknown entry
+    values through 32-bit copies, sums/differences, LEA and saved words. Only
+    cancellation of every symbolic term creates an integer fact. Arithmetic
+    flags remain unknown when the operands were unknown.
     """
     # Only the bounded caller-argument window is an input fact. The saved
     # return address and uninitialized callee locals are deliberately absent.
@@ -94,6 +101,10 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
         raise ValueError('entry pointers require guarded 32-bit register witnesses')
     pointers = dict(entry_pointers or {})
     pointer_slots = {}
+    # Linear expressions modulo 2**32 preserve relationships, not concrete
+    # input values. Only complete cancellation may produce a known integer.
+    affine_regs = ({r: ({r: 1}, 0) for r in REGS} if entry_pointers is not None else {})
+    affine_slots = {}
     if initial_writes is not None and (entry_pointers is None or len(initial_writes) > max_bytes
             or any(type(a) is not int or not 0 <= a <= MASK or type(v) is not int or not 0 <= v <= 255
                    for a,v in initial_writes.items())):
@@ -106,6 +117,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     code_bytes = {a for i in instructions for a in range(i.address, i.address+i.size)}
     regs = dict.fromkeys(REGS)
     regs['esp'] = stack
+    if entry_values is not None:
+        if (entry_pointers is None or any(r not in REGS or r == 'esp'
+                or type(v) is not int or not 0 <= v <= MASK
+                or v != entry_pointers[r] for r,v in entry_values.items())):
+            raise ValueError('entry values require matching explicit setup-register bindings')
+        regs.update(entry_values)
     stores = {}
     opaque = {}
     revisions = dict.fromkeys(REGS,0)
@@ -226,7 +243,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             raise ValueError('proof read limit')
         return int.from_bytes(bytes(values), 'little')
 
-    def store(a, size, value, symbol=None, pointer_value=None):
+    def store(a, size, value, symbol=None, pointer_value=None, affine_value=None):
         if a is None:
             if not guarded:
                 raise ValueError('unknown destination')
@@ -249,6 +266,11 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
         for old in list(pointer_slots):
             if any((a+k-old)&MASK < 4 for k in range(size)):
                 del pointer_slots[old]
+        for old in list(affine_slots):
+            if any((a+k-old)&MASK < 4 for k in range(size)):
+                del affine_slots[old]
+        if size == 4 and value is None and affine_value is not None:
+            affine_slots[a] = affine_value
         if entry_pointers is not None and size == 4 and value is None and pointer_value is not None:
             pointer_slots[a] = pointer_value
         for k in range(size):
@@ -272,15 +294,59 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             return None if regs[name] is None else (regs[name] >> shift) & ((1 << bits)-1)
         raise ValueError('operand')
 
-    def put(i, op, value, pointer_value=None):
+    def affine_add(left, right, scale=1):
+        if left is None or right is None:
+            return None
+        terms = dict(left[0])
+        for origin, coefficient in right[0].items():
+            terms[origin] = (terms.get(origin,0)+scale*coefficient)&MASK
+        return {k:v for k,v in terms.items() if v}, (left[1]+scale*right[1])&MASK
+
+    def affine_load(a):
+        value = affine_slots.get(a)
+        if value is not None:
+            protected.update((a+k)&MASK for k in range(4))
+            if len(protected) > max_bytes:
+                raise ValueError('proof read limit')
+        return value
+
+    def affine_get(i, op):
+        if entry_pointers is None or op.size != 4:
+            return None
+        value = get(i,op)
+        if value is not None:
+            return {}, value
+        if op.type == X86_OP_REG:
+            return affine_regs.get(i.reg_name(op.reg))
+        if op.type == X86_OP_MEM:
+            a = address(i,op)
+            return affine_load(pointer_address(i,op) if a is None else a)
+        return None
+
+    def affine_address(i, op):
+        if entry_pointers is None or op.mem.segment or i.addr_size != 4:
+            return None
+        result = ({}, op.mem.disp & MASK)
+        for reg, scale in ((op.mem.base,1),(op.mem.index,op.mem.scale)):
+            if reg:
+                name = i.reg_name(reg)
+                value = regs.get(name)
+                source = ({},value) if value is not None else affine_regs.get(name)
+                result = affine_add(result,source,scale)
+        return result
+
+    def put(i, op, value, pointer_value=None, affine_value=None):
+        if value is None and affine_value is not None and not affine_value[0]:
+            value = affine_value[1]
         if op.type == X86_OP_MEM:
             a = address(i,op)
             store(pointer_address(i,op) if a is None else a, op.size, value,
-                  symbolic(i,op),pointer_value)
+                  symbolic(i,op),pointer_value,affine_value)
         elif op.type == X86_OP_REG:
             name, shift, bits = register(i, op)
             revisions[name] += 1
             pointers[name] = pointer_value if bits == 32 else None
+            affine_regs[name] = affine_value if bits == 32 else None
             mask = (1 << bits)-1
             regs[name] = (None if value is None or (bits != 32 and regs[name] is None)
                           else ((regs[name] or 0) & ~(mask << shift)) | ((value & mask) << shift))
@@ -309,7 +375,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             if mn in ('ret', 'retn'):
                 if frames:
                     ret, saved = frames.pop()
-                    # Stack-allocation helpers move the return address. The
+                    # A stack allocation helper may adjust ESP. The
                     # actual RET operand must still be the saved call PC.
                     if regs['esp'] is None or load(regs['esp'],4) != ret:
                         return None
@@ -354,6 +420,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                             store(None if dst is None else (dst+direction*k*size)&MASK,size,value)
                         regs['esi'] = None if src is None else (src+direction*n*size)&MASK
                         pointers['esi'] = None
+                        affine_regs['esi'] = None
                         revisions['esi'] += 1
                     elif dst is not None:
                         for k in range(n):
@@ -362,33 +429,38 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                         regs['edi'] = (dst+direction*n*size)&MASK
                     revisions['edi'] += 1
                     pointers['edi'] = None
+                    affine_regs['edi'] = None
                 regs['ecx'] = 0
+                affine_regs['ecx'] = None
                 overhead += n  # Unicorn visits each iteration and the completion
                 continue
             if mn == 'push' and op[0].size == 4:
                 value = get(i, op[0])
                 pointer_value = pointer(i,op[0])
+                affine_value = affine_get(i,op[0])
                 regs['esp'] = (regs['esp']-4) & MASK
-                store(regs['esp'], 4, value, pointer_value=pointer_value)
+                store(regs['esp'], 4, value, pointer_value=pointer_value, affine_value=affine_value)
             elif mn == 'pop' and op[0].type == X86_OP_REG and op[0].size == 4 and i.reg_name(op[0].reg) != 'esp':
                 value = load(regs['esp'], 4)
                 pointer_value = load_pointer(regs['esp'])
+                affine_value = affine_load(regs['esp'])
                 regs['esp'] = (regs['esp']+4) & MASK
-                put(i, op[0], value, pointer_value)
+                put(i, op[0], value, pointer_value, affine_value)
             elif mn == 'mov':
-                put(i, op[0], get(i, op[1]), pointer(i,op[1]))
+                put(i, op[0], get(i, op[1]), pointer(i,op[1]), affine_get(i,op[1]))
             elif guarded and mn == 'xchg' and all(o.type == X86_OP_REG and o.size == 4 for o in op):
                 a,b = (get(i,o) for o in op)
                 pa,pb = (pointer(i,o) for o in op)
-                put(i,op[0],b,pb)
-                put(i,op[1],a,pa)
+                aa,ab = (affine_get(i,o) for o in op)
+                put(i,op[0],b,pb,ab)
+                put(i,op[1],a,pa,aa)
             elif guarded and mn in ('movzx','movsx'):
                 value = get(i,op[1])
                 if value is not None and mn == 'movsx' and value & (1 << (op[1].size*8-1)):
                     value -= 1 << (op[1].size*8)
                 put(i,op[0],value)
             elif mn == 'lea' and op[0].type == X86_OP_REG and op[0].size == 4:
-                put(i, op[0], address(i, op[1]),pointer_address(i,op[1]))
+                put(i, op[0], address(i, op[1]),pointer_address(i,op[1]),affine_address(i,op[1]))
             elif guarded and mn == 'not':
                 value = get(i,op[0])
                 put(i,op[0],None if value is None else ~value)
@@ -419,11 +491,16 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     elif old_cf is not None:
                         flags['cf'] = old_cf
                 if mn not in ('cmp','test'):
+                    affine_value = None
+                    if bits == 32 and mn in ('add','sub','inc','dec'):
+                        right = affine_get(i,op[1]) if len(op)>1 else ({},1)
+                        affine_value = affine_add(affine_get(i,op[0]),right,
+                                                  1 if mn in ('add','inc') else -1)
                     base_pointer = pointer(i,op[0])
                     adjusted = None
                     if base_pointer is not None and b is not None and mn in ('add','sub','inc','dec'):
                         adjusted = (base_pointer+(b if mn in ('add','inc') else -b)) & MASK
-                    put(i, op[0], result, adjusted)
+                    put(i, op[0], result, adjusted, affine_value)
             elif guarded and mn in ('shl','shr','sar'):
                 a,n = get(i,op[0]),get(i,op[1])
                 bits = op[0].size*8
@@ -490,10 +567,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                                 store((location+k)&MASK,1,value)
                         regs['eax'] = dst
                         pointers['eax'] = dst_pointer
+                        affine_regs['eax'] = None
                     elif model in ('pool40_alloc','mt_alloc'):
                         # Allocation addresses are deliberately not predicted.
                         regs['eax'] = None
                         pointers['eax'] = None
+                        affine_regs['eax'] = None
                     elif model != 'mt_free':
                         return None
                 elif target in closed:
@@ -505,6 +584,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     # known direct target and cleanup are the same contract.
                     regs['esp'] = (regs['esp']+(pop_for(target) if direct else outgoing)) & MASK
                     regs.update(eax=0,ecx=0,edx=0)
+                    affine_regs.update(eax=None,ecx=None,edx=None)
                     pointers.update(eax=None,ecx=None,edx=None)
                     overhead += 4  # mock entry plus a possible x87 trampoline
                 else:

@@ -3,6 +3,12 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00DEED20 (DDDA.exe 2017-12-13 Steam), Global::FUN_00deed20.
+pub fn f_00deed20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = (cpu.eax & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.ecx.wrapping_add(0x2B)) as u32)) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x00DEED30 (DDDA.exe 2017-12-13 Steam), Global::FUN_00deed30.
 pub fn f_00deed30(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
