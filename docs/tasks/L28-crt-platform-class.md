@@ -80,8 +80,17 @@ base-data write or push. Data remains open; base is native-train3-orig.
   0x00D29CF3 requires nonzero count. No verified setup recipe supplying
   those inputs was established in this batch; no guessed game state added.
 
-**Next action:** trace the first unproven branch/read in the constructed
-0x00493AA0 path, then supply only an evidenced producer or general bound.
+**Follow-up diagnosis:** the save-manager-backed 0x00493AA0 proof stops
+after 7,038 instructions at 0x00493B86: it tests the value loaded through
+player manager 0x018FA4EC + 0x99C (loads at 0x00493B75/7B). This is a second
+manager, not state initialized by the supplied save-manager setup. Original
+producer 0x0047DF20 writes that singleton at 0x0047E0DE. Substituting this
+producer alone also yields three instruction-limit rejections, with no new
+accepted cases. Logs: `recipes-proof-diagnose.log`, `recipes-player-manager.log`.
+No broader bound was granted for the unknown branch.
+
+**Next action:** establish a checked composition of the required manager
+producers for 0x00493AA0, with explicit overlap and setup-read dependencies.
 The remaining fifteen recorder entries are explicitly unfinished; this
 checkpoint does not claim that all 37 requested recipes are implemented.
 

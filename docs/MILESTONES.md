@@ -8,8 +8,9 @@
 - Private native-L28c: **59,591 / 177,367**, +10/+30 this session. Audit
   proves all 59,581 baseline records and 177,337 cases unchanged.
 - Fifteen recorder residuals remain unfinished, alongside two other-lane
-  entries and nine unconfirmed boundaries. **Next action:** trace the first
-  unproven read/branch after the manager setup for 0x00493AA0.
+  entries and nine unconfirmed boundaries. The 0x00493AA0 proof needs both
+  save/player manager state; either producer alone still rejects.
+  **Next action:** checked composition of those manager setup states.
 
 ### L28c wrapper fixtures (2026-10-12, pending replay)
 
