@@ -20,7 +20,7 @@ def digest(value):
 
 
 def validate_state(state):
-    if set(state)-{'writes'} != {'pages', 'heap', 'registers'}:
+    if set(state)-{'writes','stack'} != {'pages', 'heap', 'registers'}:
         raise ValueError('invalid constructed state fields')
     if len(state['pages']) > h.MAX_PAGES:
         raise ValueError('constructed state exceeds page cap')
@@ -32,6 +32,9 @@ def validate_state(state):
     for name, value in state['registers'].items():
         if name not in dict(h.GPR) or name == 'esp' or not isinstance(value, int) or not 0 <= value <= 0xffffffff:
             raise ValueError('invalid constructed register binding')
+    for offset,value in state.get('stack',{}).items():
+        if type(offset) is not int or not 4 <= offset <= 128 or offset % 4 or type(value) is not int or not 0 <= value <= 0xffffffff:
+            raise ValueError('invalid constructed stack argument')
     for a,v in state.get('writes',{}).items():
         if type(a) is not int or not 0 <= a <= 0xffffffff or type(v) is not int or not 0 <= v <= 255:
             raise ValueError('invalid setup-written byte')
@@ -61,7 +64,7 @@ def construct(setup, accepted, bindings, run, key, initial_state=None):
     state = {}
     if initial_state is not None:
         validate_state(initial_state)
-        if initial_state['registers']:
+        if initial_state['registers'] or initial_state.get('stack'):
             raise ValueError('setup sequence must retain each accepted register distribution')
     actual = run(setup, seed, capture_state=state,
                  **({'initial_state': initial_state} if initial_state is not None else {}),
@@ -77,12 +80,20 @@ def construct(setup, accepted, bindings, run, key, initial_state=None):
         state['pages'] = {**initial_state['pages'], **state['pages']}
         state['writes'] = {**initial_state.get('writes', {}), **state.get('writes', {})}
         state['heap'] = max(initial_state['heap'], state['heap'])
-    registers = {}
+    registers, arguments = {}, {}
     for target, source in bindings.items():
         if len(source) != 2 or source[0] not in ('regs_in', 'regs_out') or source[1] not in dict(h.GPR):
             raise ValueError('binding must name a setup input/output register')
-        registers[target] = actual[source[0]][source[1]]
+        value = actual[source[0]][source[1]]
+        if target.startswith('stack+'):
+            try: offset = int(target[6:],0)
+            except ValueError: raise ValueError('stack binding must name a byte offset') from None
+            arguments[offset] = value
+        else:
+            registers[target] = value
     state['registers'] = registers
+    if arguments:
+        state['stack'] = arguments
     validate_state(state)
     provenance = dict(rule='constructed-v1', setup=setup['addr'], seed=seed,
                       body_key=key, case_hash=digest(accepted), bindings=bindings)
@@ -109,15 +120,17 @@ def construct_chain(setups, bindings, run):
         if not 0 <= index < len(setups):
             raise ValueError('setup binding phase is outside the sequence')
         phase_bindings[index][target] = source
-    state, recipes, registers = None, [], {}
+    state, recipes, registers, arguments = None, [], {}, {}
     for index, (setup, accepted, key) in enumerate(setups):
         state, recipe = construct(setup, accepted, phase_bindings[index],
                                   run, key, initial_state=state)
         registers.update(state['registers'])
+        arguments.update(state.get('stack',{}))
         # A method binding never changes the next producer's entry registers.
-        state = {**state, 'registers': {}}
+        state = {**state, 'registers': {}, 'stack': {}}
         recipes.append(recipe)
     state['registers'] = registers
+    state['stack'] = arguments
     validate_state(state)
     return state, dict(rule='constructed-chain-v1', setups=recipes)
 
@@ -131,7 +144,7 @@ def main():
     p.add_argument('--also-setup', action='append', default=[], type=lambda v: int(v, 0),
                    help='replay another checked setup on the accumulated state')
     p.add_argument('--bind', action='append', default=[], metavar='ECX=[PHASE.]regs_in.ecx',
-                   help='bind from the last setup, or a zero-based setup phase')
+                   help='bind register or stack+OFFSET from last setup, or a zero-based setup phase')
     p.add_argument('--seconds', type=float, default=20)
     p.add_argument('--strategy', choices=('zero-call-v1','guarded-stores-v1','guarded-state-v1'), default='zero-call-v1')
     args = p.parse_args()

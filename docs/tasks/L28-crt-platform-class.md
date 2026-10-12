@@ -35,6 +35,24 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Checked stack-argument bindings (2026-10-12)
+
+`--bind stack+4=1.regs_in.edi` binds a method stack argument to a checked
+producer register, optionally selecting a setup phase. Only aligned offsets
+4..128 are allowed; the return address cannot be rebound. Bindings replace
+stale captured stack bytes in both execution and proof inputs. Later setup
+phases retain their original entry distributions. **154 light tests pass**;
+no recording ran while waiting for head's heavy slot.
+
+Prepared recipe: destination 0x00489F80, source manager 0x0049F990;
+0x004A06B0 gets EAX from phase 0 input EAX and stack+4 from phase 1 input
+EDI. Both producers already have three accepted cases. Pending actual
+sequence replay; this is not a recorded or validated combined recipe yet.
+A second evidenced producer is 0x00DBB690 for destructor 0x00DBA780:
+factory 0x00488B10 calls it on ECX at 0x00488B42, and wrapper 0x00488B70
+calls the destructor on the same ECX object at 0x00488B79.
+**Next:** queued 0x00494D80 retry, then these two constructor recipes.
+
 ### Integer proof operations (2026-10-12)
 
 The bounded interpreter now models CDQ, 32-bit SHLD/SHRD, and signed

@@ -1647,6 +1647,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             struct.pack_into('<I', page, regs_in['esp'] - stack_page + offset, value)
     if sweep is not None and sweep[0] == 'stack':
         struct.pack_into('<I', page, regs_in['esp'] - stack_page + sweep[1], sweep[2])
+    argument_bytes = {}
+    if initial_state is not None:
+        for offset,value in initial_state.get('stack',{}).items():
+            data = struct.pack('<I',value)
+            start = regs_in['esp']+offset
+            page[start-stack_page:start-stack_page+4] = data
+            argument_bytes.update({start+k:b for k,b in enumerate(data)})
     pages_in[stack_page] = bytes(page)
     uc.mem_write(stack_page, bytes(page))
     # L22 x87 entry contract (lift.x87_deficit): the caller left `x87_entry`
@@ -1697,7 +1704,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                         if len(proof_inputs) >= MAX_PAGES:
                             raise KeyError(p)
                         # Same immutable input generator used by on_unmapped.
-                        proof_inputs[page] = fill(page)
+                        proof_inputs[page] = pages_in[stack_page] if page == stack_page else fill(page)
                     data.append(proof_inputs[page][p & 4095])
                 return bytes(data)
             certificate = image_bound(proof_body, code, regs_in['esp'], entry=address,
@@ -1710,13 +1717,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                 caller_stack=(bytes(uc.mem_read(regs_in['esp']+4,128))
                                               if input_strategy in ('guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1') else None),
                                 entry_pointers=regs_in if initial_state is not None or input_strategy in ('guarded-stores-v1', 'guarded-state-v1') else None,
-                                initial_writes=({a:v for a,v in initial_state.get('writes',{}).items()
+                                initial_writes=({a:v for a,v in {**initial_state.get('writes',{}),**argument_bytes}.items()
                                                  if not regs_in['esp'] <= a < regs_in['esp']+4}
                                                 if initial_state is not None else None),
                                 # Only explicit bindings from checked setup
                                 # cases are values; other entry GPRs remain unknown.
                                 entry_values=initial_state['registers'] if initial_state is not None else None,
-                                initial_pages=initial_state['pages'] if input_strategy == 'guarded-state-v1' else None,
+                                initial_pages={**initial_state['pages'],stack_page:pages_in[stack_page]} if input_strategy == 'guarded-state-v1' else None,
                                 read_initial=read_initial if input_strategy == 'guarded-state-v1' else None)
             bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:

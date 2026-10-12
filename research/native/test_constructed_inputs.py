@@ -78,12 +78,34 @@ class ConstructedTests(unittest.TestCase):
             accepted=dict(addr=address,seed=seed,body_key='test',**self.run_body(f,seed))
             phases.append((f,accepted,'test'))
         state,recipe=c.construct_chain(phases,{'edi':['0','regs_out','eax'],
-                                              'ecx':['regs_out','eax']},self.run_body)
+                                              'ecx':['regs_out','eax'],
+                                              'stack+4':['0','regs_out','eax']},self.run_body)
         self.assertEqual(state['registers'],{'edi':17,'ecx':34})
-        self.assertEqual(recipe['setups'][0]['bindings'],{'edi':['regs_out','eax']})
+        self.assertEqual(state['stack'],{4:17})
+        self.assertEqual(recipe['setups'][0]['bindings'],{'edi':['regs_out','eax'],'stack+4':['regs_out','eax']})
         for phase in ('-1','2','invalid'):
             with self.assertRaisesRegex(ValueError,'setup binding phase'):
                 c.construct_chain(phases,{'edi':[phase,'regs_out','eax']},self.run_body)
+
+    def test_checked_outputs_bind_stack_arguments_and_replace_prior_stack_bytes(self):
+        self.fixture('b8401f0000 c3','8b4c2404 31c0 40 49 75fc c3')
+        f=dict(addr=0x400000)
+        accepted=dict(addr=f['addr'],seed=1,body_key='test',
+                      **self.run_body(f,1,input_strategy='zero-call-v1'))
+        state,_=c.construct(f,accepted,{'stack+4':['regs_out','eax']},self.run_body,'test')
+        result=self.run_body(dict(addr=0x400100),2,initial_state=state,input_strategy='guarded-state-v1')
+        self.assertEqual(result['regs_out']['eax'],8000)
+        self.assertIn('image_budget',result)
+        address=result['regs_in']['esp']+4
+        data=bytearray(state['pages'].get(address & ~4095,bytes(4096)))
+        data[address & 4095:(address & 4095)+4]=bytes(4)
+        state['pages'][address & ~4095]=bytes(data)
+        state['writes'].update({address+k:0 for k in range(4)})
+        again=self.run_body(dict(addr=0x400100),2,initial_state=state,input_strategy='guarded-state-v1')
+        self.assertEqual(again['regs_out']['eax'],8000)
+        for target in ('stack+0','stack+129','stack+bad'):
+            with self.assertRaisesRegex(ValueError,'stack'):
+                c.construct(f,accepted,{target:['regs_out','eax']},self.run_body,'test')
 
     def test_sequence_retains_legacy_random_distribution(self):
         self.fixture('c3','c3')

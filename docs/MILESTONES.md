@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c checked stack arguments (2026-10-12)
+
+- Setup outputs can bind method stack arguments while preserving the return
+  address and subsequent setup distributions. **154 tests pass.**
+- 0x004A06B0 and 0x00DBA780 producer recipes are prepared, not recorded.
+  **Next action:** run serial trials when head's heavy slot becomes free.
+
 ### L28c integer proof operations (2026-10-12)
 
 - CDQ, double shifts and overflow-aware signed branches have regression
