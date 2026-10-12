@@ -238,7 +238,10 @@ def frame_tail(target, entries, noreturn, read, is_code):
     it pops registers its jumper saved and returns to the jumper's caller.
     `__VEC_memcpy` 0x012F9D82, entered by `jmp` from the memcpy variants,
     ends `pop eax; pop esi; pop edi; pop ebp; ret` (exit ESP + 16). A
-    direct jump there is local code, decoded inline, not a tail call."""
+    direct jump there is local code, decoded inline, not a tail call.
+    L50: so is an entry whose code depends on its jumper's state
+    (jumper_state): boot stop 17, 0x01146410 `push edi; mov edi, ecx;
+    jne 0x01146420`, where 0x01146420 reads edi and pops it."""
     import harness as h
     key = (target, read, is_code, frozenset(entries) if not isinstance(entries, frozenset) else entries)
     if key not in _FRAME_TAILS:
@@ -246,8 +249,9 @@ def frame_tail(target, entries, noreturn, read, is_code):
         try:
             ins = decode_body(target, 1, entries, noreturn, read, is_code, ext=True)[0]
             TABLE_PROOF.pop(target, None)
+            result = jumper_state(ins, target) is not None
             rets = {(i.operands[0].imm if i.operands else 0) for i in ins if i.mnemonic in ("ret", "retn")}
-            if len(rets) == 1:
+            if not result and len(rets) == 1:
                 # calls are stepped over with their proven pops (L46: the CRT
                 # x87 tail 0x01300749 reports errors through calls)
                 with _patched_code(h, read):
@@ -258,6 +262,97 @@ def frame_tail(target, entries, noreturn, read, is_code):
             result = False
         _FRAME_TAILS[key] = result
     return _FRAME_TAILS[key]
+
+
+CALLEE_SAVED = ("ebx", "esi", "edi", "ebp")
+
+
+_EH4_PROLOGS = []
+
+
+def _eh4_prologs():
+    if not _EH4_PROLOGS:
+        _EH4_PROLOGS.append(eh4_helpers()[0])
+    return _EH4_PROLOGS[0]
+
+
+def jumper_state(ins, entry):
+    """L50: evidence that the code at `entry` (decoded `ins`) continues
+    the code that jumps to it, or None. Under the MSVC x86 conventions
+    ebx, esi, edi and ebp are callee-saved: no function takes them as
+    inputs, so reading one before writing it on some path from the entry
+    reads its jumper's register (0x01146420 `mov esi, [edi + 0x6c]`;
+    `leave` without a prologue, 0x00947493). Popping below the entry ESP
+    takes what the jumper pushed. A call to `__SEH_prolog4` sets ebp (it
+    builds its caller's frame; 0x012EF8A7). Not reads: saving a register
+    with `push` or a dword store (`___report_gsfailure` stores the
+    registers for its report, 0x012FF158); the no-ops `mov r, r` and `lea r, [r]` (hot-patch and
+    alignment padding, 0x012E1AD4, 0x0114A9EA); `xor r, r`, `sub r, r`,
+    `or r, -1` and `and r, 0`, whose results do not depend on r. The stack depth is
+    tracked until the first call or other ESP change it cannot follow."""
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
+    full = {n: r for r in CALLEE_SAVED for n in _aliases(r)}
+    at = {i.address: i for i in ins}
+    todo, seen = [(entry, frozenset(), 0)], set()
+    while todo:
+        state = todo.pop()
+        pc, written, depth = state
+        if pc not in at or state in seen or len(seen) > 4096:
+            continue
+        seen.add(state)
+        i, mn = at[pc], at[pc].mnemonic
+        ops = i.operands
+        try:
+            reads, writes = ({i.reg_name(r) for r in regs} for regs in i.regs_access())
+        except Exception:  # noqa: BLE001  (no access detail)
+            return None
+        if mn == "push" and ops and ops[0].type == X86_OP_REG:
+            reads = set()  # a save
+        elif (mn == "mov" and len(ops) == 2 and ops[0].type == X86_OP_MEM and ops[1].type == X86_OP_REG
+              and ops[1].size == 4 and i.reg_name(ops[1].reg) in CALLEE_SAVED):
+            # a save to memory: the address registers are still read
+            address = {i.reg_name(r) for r in (ops[0].mem.base, ops[0].mem.index) if r}
+            reads = {n for n in reads if n != i.reg_name(ops[1].reg) or n in address}
+        same = len(ops) == 2 and ops[0].type == X86_OP_REG
+        if same and ((mn in ("xor", "sub", "mov") and ops[1].type == X86_OP_REG and ops[0].reg == ops[1].reg)
+                     or (mn == "or" and ops[1].type == X86_OP_IMM and ops[1].imm & 0xffffffff == 0xffffffff)
+                     or (mn == "and" and ops[1].type == X86_OP_IMM and ops[1].imm & 0xffffffff == 0)):
+            reads = set()  # mov r, r is a no-op, the others set r
+            if mn == "mov":
+                writes = set()
+        if (mn == "lea" and same and ops[1].mem.base == ops[0].reg and not ops[1].mem.index
+                and not ops[1].mem.disp and not ops[1].mem.segment):
+            reads, writes = set(), set()  # lea r, [r]
+        used = {full[n] for n in reads if n in full} - written
+        if used:
+            return f"reads {', '.join(sorted(used))} at 0x{pc:08X}"
+        written |= {full[n] for n in writes if n in full}
+        if mn == "call" and ops and ops[0].type == X86_OP_IMM and (ops[0].imm & 0xffffffff) in _eh4_prologs():
+            written |= {"ebp"}
+        if depth is not None:
+            if mn == "push":
+                depth += 4
+            elif mn == "pop":
+                depth -= 4
+                if depth < 0:
+                    return f"pops below its entry at 0x{pc:08X}"
+            elif (mn in ("add", "sub") and len(ops) == 2 and ops[0].type == X86_OP_REG
+                  and i.reg_name(ops[0].reg) == "esp" and ops[1].type == X86_OP_IMM):
+                depth += (_s(ops[1].imm) if mn == "sub" else -_s(ops[1].imm))
+                if depth < 0:
+                    return f"releases its jumper's stack at 0x{pc:08X}"
+            elif mn == "call" or "esp" in writes:
+                depth = None
+        if mn in ("ret", "retn", "int3", "ud2", "hlt"):
+            continue
+        if mn.startswith("j") and ops and ops[0].type == X86_OP_IMM:
+            todo.append(((ops[0].imm & 0xffffffff), written, depth))
+            if mn == "jmp":
+                continue
+        elif mn == "jmp":
+            continue
+        todo.append((pc + i.size, written, depth))
+    return None
 
 
 def inlined_tail(t):

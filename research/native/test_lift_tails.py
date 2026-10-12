@@ -353,6 +353,31 @@ class CallerBoundTests(unittest.TestCase):
         self.assertEqual(self.proof(unbounded, entries=(0x1000, 0x1020, 0x1030))[0], {0x1007: False})
 
 
+class JumperStateTests(unittest.TestCase):
+    """L50, boot stop 17: 0x01146410 `push edi; mov edi, ecx; jne
+    0x01146420`, an inventory entry that reads edi and pops it."""
+    # jumper 0x1000: push edi; mov edi,ecx; jne 0x1010; xor al,al; pop edi; ret 4
+    JUMPER = bytes.fromhex("57" "8bf9" "750b" "32c0" "5f" "c20400") + b"\xcc" * 5
+
+    def decode(self, target):
+        code = self.JUMPER + target
+        read, is_code = image_fixture(code, {})
+        ins = lift.decode_body(0x1000, 0x10, entries=frozenset({0x1000, 0x1010}), noreturn=frozenset(),
+                               read=read, is_code=is_code, ext=True)[0]
+        return {i.address for i in ins}
+
+    def test_an_entry_that_reads_the_jumpers_register_is_its_code(self):
+        # 0x1010: mov eax,[edi+4]; pop edi; ret 4
+        self.assertIn(0x1013, self.decode(bytes.fromhex("8b4704" "5f" "c20400")))
+
+    def test_an_entry_with_its_own_frame_stays_a_tail_call(self):
+        # 0x1010: mov edi,edi; push ebp; mov ebp,esp; mov eax,[ebp+8]; pop ebp; ret 4
+        body = self.decode(bytes.fromhex("8bff" "55" "8bec" "8b4508" "5d" "c20400"))
+        self.assertNotIn(0x1010, body)
+        # a pop below the entry ESP takes what the jumper pushed
+        self.assertIn(0x1010, self.decode(bytes.fromhex("5f" "c20400")))
+
+
 class FragmentTests(unittest.TestCase):
     def test_case_labels_and_frame_tails_inside_lifted_bodies(self):
         # 0x1000: push ebp; push edi; jmp 0x1010; 0x1010: pop edi; pop ebp; ret
