@@ -929,7 +929,16 @@ are re-lifted against the new closed set and re-recorded with their previous
 distribution, and the helper is promoted only if every one of them records
 again (otherwise it stays ext), so no verified function is lost. Without
 that restriction 378 widely mocked targets (over 100,000 recorded calls)
-would have forced re-recording most of the program. A promoted entry with a
+would have forced re-recording most of the program. The same holds for
+helpers that move ESP by a value (`harness.moves_frame`): `__alloca_probe`
+0x012F2280 ends with `xchg esp, eax` (exit = entry ESP + 4 - entry EAX, a
+page-probed allocation). The walk cannot derive that exit, but it sees ESP
+written from an unresolved value (xchg/mov/add/sub/lea into ESP; `and esp`
+alignment and `leave` excluded), so the helper is unmockable and promoted
+like a caller-frame one. With no derivable exit it is stored as
+`frame_exit: 'return-pc'`: being call-free, it can reach the caller's
+return PC only by returning, so its nested frame ends at the first arrival
+there. A promoted entry with a
 caller-frame exit stores it as `frame_exit`; `run_sparse(frame_contracts=)`
 (passed by `structured_inputs.py`, `trace_recorder.py` and `lift.py vectors`)
 ends that callee's nested frame at its return PC with exactly the derived
