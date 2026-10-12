@@ -2506,6 +2506,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2515,6 +2516,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2524,6 +2526,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2533,6 +2536,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2542,6 +2546,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2551,6 +2556,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2560,6 +2566,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2569,6 +2576,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2578,6 +2586,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2587,6 +2596,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2596,6 +2606,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2605,6 +2616,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2614,6 +2626,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2623,6 +2636,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2632,6 +2646,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2641,6 +2656,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -4220,6 +4236,16 @@ dependencies = [
  "ddvfs",
  "mtarc",
  "mtlmt",
+]
+
+[[package]]
+name = "mtframe"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "mtcore",
+ "mtmath",
+ "serde_json",
 ]
 
 [[package]]
