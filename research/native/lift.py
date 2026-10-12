@@ -254,6 +254,161 @@ def x87_effect(i):
     return needed, delta
 
 
+INSN_BUDGET = 20000      # harness.run_sparse's default max_insn
+INSN_CEILING = 2_000_000  # hard ceiling of a constant-loop budget
+_JCC_TAKEN = {
+    # condition on the counter value c against limit l (32-bit), as the latch's
+    # jcc sees them after `cmp c, l` (or `dec/sub` setting flags from c alone)
+    "jb": lambda c, l: c < l, "jae": lambda c, l: c >= l, "jbe": lambda c, l: c <= l, "ja": lambda c, l: c > l,
+    "jl": lambda c, l: _s(c) < _s(l), "jge": lambda c, l: _s(c) >= _s(l),
+    "jle": lambda c, l: _s(c) <= _s(l), "jg": lambda c, l: _s(c) > _s(l),
+    "jne": lambda c, l: c != l, "je": lambda c, l: c == l,
+    "jns": lambda c, l: not c >> 31, "js": lambda c, l: bool(c >> 31),
+}
+
+
+def _s(v):
+    return v - (1 << 32) if v >> 31 else v
+
+
+def constant_loop_budget(ins):
+    """Instruction budget for a body whose every loop has a constant trip
+    count (L22). Returns None unless every back edge is proven; the recorder
+    otherwise keeps INSN_BUDGET, which exists to stop input-dependent loops.
+
+    A loop is a back edge (jcc/jmp to an earlier address) spanning a
+    contiguous range with no call, indirect jump or other back edge. Its
+    counter R (a 32-bit GPR) is written once in the range, by inc/dec or
+    add/sub imm, on every path to the latch (no branch into the part between
+    update and latch). The latch is a jcc directly after `cmp R, imm` or
+    after the update itself. On each entry into the loop, R was last set by
+    `xor R, R` or `mov R, imm` on straight-line code with no branch target
+    or call in between. Trip counts are simulated exactly; cost = trips x
+    range length. Budget = INSN_BUDGET + sum of costs, at most INSN_CEILING.
+    """
+    from capstone.x86 import X86_OP_REG, X86_OP_IMM
+    at = {i.address: k for k, i in enumerate(ins)}
+    targets = {}
+    for k, i in enumerate(ins):
+        if i.mnemonic.startswith("j") and i.operands and i.operands[0].type == X86_OP_IMM:
+            targets.setdefault(i.operands[0].imm & 0xffffffff, []).append(k)
+    def writes(i):
+        try:
+            return {i.reg_name(r) for r in i.regs_access()[1]}
+        except Exception:  # noqa: BLE001
+            return None
+    def aliases(r):
+        return {r, r[1:], r[1:] + "l", r[1] + "h"} if r in GPR32 else {r}
+    total, loops = 0, []
+    for k, i in enumerate(ins):
+        if not i.mnemonic.startswith("j") or not i.operands:
+            continue
+        if i.operands[0].type != X86_OP_IMM:
+            continue
+        t = i.operands[0].imm & 0xffffffff
+        if t > i.address:
+            continue
+        if t not in at:
+            return None  # a back edge leaving the decoded body
+        loops.append((at[t], k))
+    for start, latch in loops:
+        body = ins[start:latch + 1]
+        if any(ins[j].address + ins[j].size != ins[j + 1].address for j in range(start, latch)):
+            return None  # not contiguous
+        if any(b.mnemonic in ("call", "ret", "retn") or (b.mnemonic.startswith("j") and b.operands
+               and b.operands[0].type != X86_OP_IMM) for b in body):
+            return None
+        if any((s2, l2) != (start, latch) and s2 <= latch and start <= l2 for s2, l2 in loops):
+            return None  # overlapping back edges: nested or irreducible
+        jcc = ins[latch]
+        if jcc.mnemonic not in _JCC_TAKEN:
+            return None
+        setter = ins[latch - 1]
+        counter, limit = None, None
+        if (setter.mnemonic == "cmp" and setter.operands[0].type == X86_OP_REG and setter.operands[0].size == 4
+                and setter.operands[1].type == X86_OP_IMM):
+            counter, limit = setter.reg_name(setter.operands[0].reg), setter.operands[1].imm & 0xffffffff
+        elif setter.mnemonic in ("inc", "dec", "add", "sub") and setter.operands[0].type == X86_OP_REG:
+            counter, limit = setter.reg_name(setter.operands[0].reg), 0
+            if jcc.mnemonic not in ("jne", "je", "jns", "js"):
+                return None  # only ZF/SF tests are defined by the result alone
+        if counter not in GPR32:
+            return None
+        updates = []
+        for j in range(start, latch + 1):
+            w = writes(ins[j])
+            if w is None:
+                return None
+            if w & aliases(counter):
+                updates.append(j)
+        if len(updates) != 1:
+            return None
+        u = ins[updates[0]]
+        if u.mnemonic in ("inc", "dec") and len(u.operands) == 1:
+            step = 1 if u.mnemonic == "inc" else 0xffffffff
+        elif (u.mnemonic in ("add", "sub") and u.operands[0].type == X86_OP_REG and u.operands[0].size == 4
+              and u.operands[1].type == X86_OP_IMM):
+            step = (u.operands[1].imm if u.mnemonic == "add" else -u.operands[1].imm) & 0xffffffff
+        else:
+            return None
+        if u.operands[0].size != 4 or (setter is not u and updates[0] > latch - 1):
+            return None
+        # every path to the latch passes the update: no branch from the loop
+        # lands between the update and the latch
+        if any(updates[0] < at[t2] <= latch for t2, srcs in targets.items() if t2 in at
+               for s in srcs if start <= s <= latch and s != latch):
+            return None
+        # entry value on every path into the loop head
+        entries = [j for j in targets.get(ins[start].address, []) if not start <= j <= latch]
+        prev = start - 1
+        if prev >= 0 and ins[prev].mnemonic not in ("jmp", "ret", "retn") and ins[prev].address + ins[prev].size == ins[start].address:
+            entries.append(prev)
+        if not entries or any(start < at[t2] <= latch for t2, srcs in targets.items() if t2 in at
+                              for s in srcs if not start <= s <= latch):
+            return None  # a jump into the middle of the loop
+        values = set()
+        for e in entries:
+            value, j = None, e
+            while j >= 0 and value is None:
+                b = ins[j]
+                if b.mnemonic == "call":
+                    return None
+                w = writes(b)
+                if w is None:
+                    return None
+                if w & aliases(counter):
+                    if b.mnemonic == "xor" and len(b.operands) == 2 and all(o.type == X86_OP_REG and b.reg_name(o.reg) == counter for o in b.operands):
+                        value = 0
+                    elif (b.mnemonic == "mov" and b.operands[0].type == X86_OP_REG and b.reg_name(b.operands[0].reg) == counter
+                          and b.operands[1].type == X86_OP_IMM):
+                        value = b.operands[1].imm & 0xffffffff
+                    else:
+                        return None
+                    break
+                if b.address in targets or j == 0 or ins[j - 1].address + ins[j - 1].size != b.address \
+                        or ins[j - 1].mnemonic in ("jmp", "ret", "retn"):
+                    return None  # a merge point or the body start: no single straight path
+                j -= 1
+            if value is None:
+                return None
+            values.add(value)
+        if len(values) != 1:
+            return None
+        c, trips, taken = values.pop(), 0, _JCC_TAKEN[jcc.mnemonic]
+        while True:
+            trips += 1
+            c = (c + step) & 0xffffffff
+            if trips * (latch - start + 1) > INSN_CEILING:
+                return None
+            if not taken(c, limit):
+                break
+        total += trips * (latch - start + 1)
+    if not loops:
+        return None
+    budget = INSN_BUDGET + total
+    return budget if budget <= INSN_CEILING else None
+
+
 def returns_float(ins, k, depth=0):
     """Prove a one-value deficit downstream of this mocked call.
 
@@ -385,13 +540,38 @@ def x87_depth_check(ins, addr, end, callable=frozenset(), ext=False, switches=No
     return exits, sorted(push_sites)
 
 
+def skip_neutral(ins, j, registers):
+    """Step back over at most four instructions that neither transfer
+    control nor write one of `registers` (e.g. `push ebx; push edi` between
+    a switch's `ja` bound and its `jmp`, 0x0061FDB5). Returns the index of
+    the first instruction that is not skipped."""
+    names = set()
+    for r in registers:
+        names |= {r, r[1:], r[1:] + "l", r[1] + "h"} if r in GPR32 else {r}
+    for _ in range(4):
+        if j < 0:
+            break
+        i = ins[j]
+        if (i.mnemonic.startswith("j") or i.mnemonic in ("call", "ret", "retn", "int3", "ud2", "hlt")
+                or i.mnemonic.startswith("loop")):
+            break
+        try:
+            written = {i.reg_name(r) for r in i.regs_access()[1]}
+        except Exception:  # noqa: BLE001  (no access detail: not neutral)
+            break
+        if written & names:
+            break
+        j -= 1
+    return j
+
+
 def table_bound(ins, k, index):
     """Slots a dword table indexed by `index` at ins[k] can select, when the
     linear path proves it: an adjacent `cmp index, imm` (or `mov R, imm;
     cmp index, R`) with ja/jae, or an `and index, imm` with no later write
     to the index register. None if unproven."""
     from capstone.x86 import X86_OP_REG, X86_OP_IMM
-    j = k - 1
+    j = skip_neutral(ins, k - 1, {ins[k].reg_name(index)})
     if j >= 1 and ins[j].mnemonic in ("ja", "jae"):
         cmp = ins[j - 1]
         if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2 and cmp.operands[0].type == X86_OP_REG
@@ -482,7 +662,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
     # the case code is outside the entry's inventory band.
     bound, remap_addr = None, None
     bound_index = op.mem.index
-    prev_bound = k - 1
+    prev_bound = skip_neutral(ins, k - 1, {jump.reg_name(op.mem.index)})
     if prev_bound >= 0 and ins[prev_bound].mnemonic == "movzx":
         dst, src = ins[prev_bound].operands
         if (dst.type == X86_OP_REG and dst.reg == op.mem.index and dst.size == 4
@@ -491,7 +671,8 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
                 and ins[prev_bound].reg_name(src.mem.base) in GPR32):
             remap_addr = src.mem.disp & 0xffffffff
             bound_index = src.mem.base
-            prev_bound -= 1
+            prev_bound = skip_neutral(ins, prev_bound - 1,
+                                      {jump.reg_name(op.mem.index), ins[prev_bound].reg_name(bound_index)})
     if prev_bound >= 1 and ins[prev_bound].mnemonic in ("ja", "jae"):
         cmp = ins[prev_bound - 1]
         if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2
@@ -542,7 +723,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
     # before the jump. The cmp bounds that lookup, not the dword table.
     index = op.mem.index
     remap = None
-    prev = k - 1
+    prev = skip_neutral(ins, k - 1, {jump.reg_name(index)})
     if prev >= 0 and ins[prev].mnemonic == "movzx":
         dst, src = ins[prev].operands
         if dst.type == X86_OP_REG and dst.reg == index:
@@ -550,7 +731,7 @@ def switch_targets(ins, k, addr, end, read, accept=None, discover=False, bounded
                     or src.mem.segment or src.mem.index or src.mem.base != bound_index):
                 raise Unsupported("indirect jump (unrecognised switch remapping)")
             remap = src.mem.disp & 0xFFFFFFFF
-            prev -= 1
+            prev = skip_neutral(ins, prev - 1, {jump.reg_name(index), ins[prev].reg_name(bound_index)})
     if prev >= 1 and ins[prev].mnemonic in ("ja", "jae"):
         cmp = ins[prev - 1]
         if (cmp.mnemonic == "cmp" and len(cmp.operands) == 2
@@ -611,8 +792,12 @@ def lift(addr, size, callable=frozenset(), ext=False):
     entry = (x87_deficit(ins, addr, 0, 8) or 0) if ext else 0
     exits, push_sites = x87_depth_check(ins, addr, None, callable, ext, switches, stops, entry)
     X87_PUSH_SITES[addr] = push_sites
+    # Constant-trip loops that need more than the recorder's default budget.
+    budget = constant_loop_budget(ins)
+    budget = budget if budget is not None and budget - INSN_BUDGET + len(ins) > INSN_BUDGET else None
     BODY_INFO[addr] = {"body": sorted(starts), "body_ranges": ranges,
-                       "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {})}
+                       "noreturn_sites": sorted(stops), **({"x87_entry": entry} if entry else {}),
+                       **({"insn_budget": budget} if budget else {})}
     if not ext:
         X87_NET[addr] = exits.pop() if len(exits) == 1 else (0 if not exits else None)
 
@@ -919,7 +1104,13 @@ def lift(addr, size, callable=frozenset(), ext=False):
                     # Targets outside known local destinations leave the body
                     # (switch overflow or a non-switch function pointer).
                     # The recorder and replay share this tail-call boundary.
-                    cases = " | ".join(f"0x{t:X}" for t in sorted(set(switches[i.address])))
+                    # L22: a target that is a block start of this body (any
+                    # leader, not only the table's discovered slots) is local
+                    # code, as on the CPU and in the recorder (0x0061FDA0:
+                    # slot 3 0x0062019C is a known start past the table-only
+                    # discovery). A non-leader interior start would still
+                    # leave the body here; the recorder continues locally.
+                    cases = " | ".join(f"0x{t:X}" for t in sorted(set(switches[i.address]) | leaders))
                     body.append(f"{{ let t = {load(i, ops[0])}; if matches!(t, {cases}) {{ pc = t; continue; }} "
                                 f"{SAVE} x86::call_ext(m, cpu, t); return; }}")
                 else:
@@ -1430,6 +1621,8 @@ def vector_key(f):
         fields.append('original-entry-v1')
     if f.get('x87_entry'):
         fields.append(f"x87-entry-v1:{f['x87_entry']}")
+    if f.get('insn_budget'):
+        fields.append(f"insn-budget-v1:{f['insn_budget']}")
     return "body-v1:" + hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -1452,6 +1645,8 @@ def _vectors_for(args):
         inputs['original_entry'] = True
     if len(args) > 9 and args[9]:
         inputs['x87_entry'] = args[9]
+    if len(args) > 10 and args[10]:
+        inputs['max_insn'] = args[10]
     if body is not None:
         inputs.update(body=body, noreturn_sites=stops, noreturn_targets=noreturn_entries())
     out, got, seed = [], 0, 0
@@ -1527,7 +1722,7 @@ def vectors(per=3):
     nov_keys = json.load(open(nov_keys_path)) if os.path.exists(nov_keys_path) else {}
     novector = (set(json.load(open(nov_path))) if os.path.exists(nov_path) else set()) | set(failed)
     novector = {a for a in novector if a in failed or keys.get(a) is None or nov_keys.get(str(a)) == keys[a]}
-    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False), f.get('x87_entry', 0))
+    todo = [(f["addr"], per, f["addr"] + f["size"] if f.get("ext") else None, f["size"], f.get("x87_push", []), f.get("body"), f.get("noreturn_sites", []), keys[f["addr"]], f.get('original_entry',False), f.get('x87_entry', 0), f.get('insn_budget'))
             for f in lifted if f["addr"] not in have and f["addr"] not in novector]
     closed = [f["addr"] for f in lifted if not f.get("ext")]
     print(len(have), "functions reuse their vectors;", len(todo), "to record", flush=True)

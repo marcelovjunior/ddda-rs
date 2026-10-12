@@ -67,6 +67,18 @@ class OpenTableTests(unittest.TestCase):
         self.assertIsNone(bound("83e00340ff248500200000"))               # and eax,3; inc eax
         self.assertIsNone(bound("ff248500200000"))
 
+    def test_bound_across_neutral_instructions(self):
+        # cmp eax,1; ja default; push ebx; push edi; jmp [eax*4+0x2000]; ret; ret; ret (default)
+        code = bytes.fromhex("83f8017709" "53" "57" "ff248500200000" "c3c3c3")
+        tables = {0x2000: dwords(0x100E, 0x100F, 0x1010)}
+        for ext in (False, True):
+            _, switches, _, _ = body(code, tables, ext=ext)
+            self.assertEqual(switches[0x1007], [0x100E, 0x100F])  # bound 2, not the table-only 3
+        # a write to the index between the bound and the jump is not neutral
+        code = bytes.fromhex("83f8017708" "40" "ff248500200000" "c3c3c3")  # inc eax
+        _, switches, _, _ = body(code, {0x2000: dwords(0x100D, 0x100E, 0x100F)})
+        self.assertEqual(switches[0x1006], [0x100D, 0x100E, 0x100F])  # table-only, no bound
+
     def test_no_forward_slot_is_a_runtime_jump(self):
         # jmp [ecx*4+0x2000] with slot 0 not code (a negative index selects earlier slots)
         code = bytes.fromhex("ff248d00200000c3")

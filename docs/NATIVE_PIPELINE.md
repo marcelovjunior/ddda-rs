@@ -1099,7 +1099,13 @@ inventory entries are allowed (Ghidra exports some case labels as
 `switchD_*::caseD_*` functions); otherwise the table-only rule applies.
 Without any valid forward slot (memcpy's negative index at 0x012EFF18) the
 jump is a runtime jump (`RuntimeTargets`). Closed bodies keep the strict
-rules.
+rules. Both the strict recognizer and `table_bound` look past at most four
+instructions between the bound (or the byte remap) and the `jmp` when they
+neither transfer control nor write the index or remap source (`push ebx;
+push edi` at 0x0061FDB5). An ext indirect `jmp` continues locally at any
+target that is a block leader of the body, not only at the table's
+discovered slots, as the CPU and the recorder do; a non-leader interior
+target would still leave the body (a replay failure, never a false pass).
 
 **Machine instructions.** `ddnative_base::platform::Machine` answers CPUID
 and RDTSC per thread. The runtime installs `ddruntime::machine::Recorded`
@@ -1120,6 +1126,24 @@ width is processor-model specific (Intel SDM, PUSH).
 REPE/REPNE, PMAXSW/PMINSW, PSLLDQ/PSRLDQ, PAUSE, and the x87 forms FLDPI,
 FPTAN, FPATAN, FYL2X, FSCALE, FPREM, FPREM1, FRNDINT, FXAM, F2XM1, FNCLEX,
 each checked against the host in `ddnative-base`'s instruction tests.
+
+**Constant-loop instruction budget.** `run_sparse`'s 20,000-instruction cap
+stops input-dependent runaways. A loop whose trip count is a proven
+constant terminates identically on every input, so `lift.constant_loop_budget`
+grants such a body more: every back edge in the body must be a contiguous
+loop without calls, indirect jumps or overlapping back edges, with one
+counter register written once per iteration (inc/dec, add/sub imm) on every
+path to the latch, a latch jcc directly after `cmp counter, imm` (or after
+the update, for ZF/SF tests), and a start set by `xor R, R` or `mov R, imm`
+on straight-line code on every entry. Trip counts are simulated exactly;
+the budget is 20,000 plus trips x loop length for every loop, at most
+2,000,000. It is stored as `insn_budget` (body key `insn-budget-v1:N`) only
+when the static estimate exceeds the default, and passed as `max_insn`. A
+loop of the same shape with an input start or limit gets nothing; anything
+that still overruns is rejected as runaway. Examples: the sine-table
+initializer 0x00CFC150 (4096 x fsin, then a 0x4000-byte fill) and the C++
+initializer 0x0137E490 (0x2000 x 40-byte records), both on the `__cinit`
+path. `research/native/test_lift_budget.py` has the synthetic cases.
 
 **Still rejected.** STMXCSR/LDMXCSR: a guest MXCSR needs the sticky
 exception flags of every SSE instruction (hardware sets PE where Unicorn
