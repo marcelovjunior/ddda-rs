@@ -292,6 +292,10 @@ gap (`patterns/verification_gaps.json`, mostly unproven tables) are no
 longer credited. Known overcount of at most 6: memcpy-family records
 that still tail-call the inlined frame tail 0x012F9D82 (fixed in L46).
 
+After train 5 (2026-10-12, main 84cf1194): **59,231 of 59,440 verified
+(99.6%)**, with 46 gaps not credited. L46 fixed the train-4 overcount
+(the memcpy-family records jump to their inlined tails locally).
+
 The L15 table above and its notes below are
 kept for history.
 

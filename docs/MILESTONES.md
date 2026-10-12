@@ -1296,3 +1296,26 @@ opening (codex-31), route perf (codex-29).
     must stay undefined through INC).
 - **One next action:** train 5 (L46 x87 state and frame-tail fix, L47
   scoped steps, Codex's next batches), then claude-2's next boot stop.
+
+## Batch 2026-10-12 (train 5: precise SEH where needed; boot stops 10-12)
+
+- **Train 5 landed on main 84cf1194: 59,231 of 59,440 verified (99.6%),**
+  with 46 verification gaps not credited (44 unproven tables, plus two
+  fragments that pop registers they never pushed). Every suite is green;
+  `tests/options.rs` and the SEH tests are included.
+- **L47 (claude-6):** instruction steps only for the 44 bodies that
+  register EH4 scope tables, +0.12% code. A fault inside an EH4 body now
+  resumes at its `__except` (a test runs the original
+  `__IsNonwritableInCurrentImage`).
+- **L46 (claude-6):**
+  - fnsave/frstor measured on the FPU and modelled bit-exact;
+  - three x87 helpers promoted closed, and 0x012F1C9D recorded;
+  - jumps into inlined frame tails stay local (memcpy's `__VEC_memcpy`
+    path; the train-4 overcount is gone);
+  - INC/DEC keep an undefined CF undefined (boot stop 10, `_qsort`);
+  - an int3 path counts as noreturn for callee pops (stop 12,
+    0x00DB8B90).
+- **Codex:** register-passed objects in the recorder (0x00478600).
+- **One next action:** claude-2's boot run on main (past stop 12); L48
+  (claude-6) re-credits the gaps (edge bounds through memory slots,
+  byte-remap tables, per-slot cases for input-indexed switches).
