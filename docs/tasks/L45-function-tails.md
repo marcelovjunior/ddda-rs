@@ -189,7 +189,17 @@ unchanged, nothing promoted or missing.
 | 0x0066006E, 0x00670069, 0x0069002E, 0x0069006E, 0x006F0063 | vtable 0x01407180 slots 34-38 | UTF-16 text after the table | dropped by the boundary rule |
 | 0x00410000, 0x00E0D750 (`CompressStream::vf10`) | two hops | loops until a mocked callee (0x00CF16F0, the compression step) returns 1; no input strategy returns 1 | open: input distribution (Codex's strategy lane) |
 | 0x00476D60 | two hops | constant 900-iteration loop with a byte-remap switch; the budget rule does not cover switch bodies | open |
-| 0x012F1C9D, 0x01304753 | sBbsRpgMain ctor (5 deep), one hop | CRT `pow`/`_trandisp` interior pieces: x87 values come from callees (`__fload_withFB` pushes) or the caller's frame (`fst` into the caller's EBP frame) | open: needs callee x87 effects or caller-frame inputs |
+| 0x012F1C9D | sBbsRpgMain ctor (5 deep, `_CIpow` 0x012F1C40) | entered with x in st0; `__fload_withFB` pushes y before `fyl2x`. Its error path uses `fnsave`/`frstor` (full x87 state save and restore), which neither the emitter nor `ddnative-base` models | open: needs fnsave/frstor in ddnative-base. The x87 contract half is done (below) |
+| 0x01304753 | one hop | `_trandisp`-style interior piece: `fst` of the caller's st0 into the caller's EBP frame | open: needs caller-frame inputs |
+
+For 0x012F1C9D the x87 contract part is general and committed (dec31786).
+An ext body's entry deficit now walks through calls to closed callees
+whose x87 effect is known (`X87_NET`, new `X87_NEED`), and
+`x87_depth_check` checks a closed callee's need at the call. Lifting the
+three call-free helpers (0x01300675 fldcw, `__fload_withFB` +1,
+0x01300660 2^x) closed and walking through them gives 0x012F1C9D its true
+contract: one value from `_CIpow`. Only `fnsave`/`frstor` then remain.
+Making the helpers closed is a promotion (Codex's `promote`).
 
 0x00DAFED0 (novector) is Codex's (L28c).
 
