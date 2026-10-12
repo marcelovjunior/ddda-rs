@@ -15,6 +15,8 @@
 
 use crate::chain::{self, Products};
 use crate::effect::{self, Effects};
+use crate::integrate::{self, Attraction, Frame};
+use crate::fpu;
 use crate::lunge::{self, Step};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::{self, Cpu, LiftFn};
@@ -304,9 +306,153 @@ pub fn f_00f0c160(m: &mut dyn Mem, cpu: &mut Cpu) {
     leave(m, cpu, 0);
 }
 
+/// The integration's calls, made on the machine as the original makes
+/// them; `frame` is esp after the prologue (the spills are above it).
+struct IntegrateMachine<'a> {
+    cpu: &'a mut Cpu,
+    c: u32,
+    frame: u32,
+    push: [F32; 3],
+    pushed: [F32; 3],
+    pull: [F32; 3],
+}
+
+impl IntegrateMachine<'_> {
+    fn spill(&self, m: &mut dyn Mem, offset: u32, v: F32) {
+        m.set_u32(self.frame.wrapping_add(offset), v.to_bits());
+    }
+    fn spill3(&self, m: &mut dyn Mem, offset: u32, v: [F32; 3]) {
+        for (k, c) in v.iter().enumerate() {
+            self.spill(m, offset + 4 * k as u32, *c);
+        }
+    }
+    /// The float a virtual call left in st0, stored to [esp+8] as the
+    /// original does.
+    fn result(&mut self, m: &mut dyn Mem) -> F32 {
+        let bits = fpu::store_f32(&mut self.cpu.st);
+        m.set_u32(self.frame.wrapping_add(8), bits);
+        F32::from_bits(bits)
+    }
+}
+
+impl integrate::Calls for IntegrateMachine<'_> {
+    fn push_factor(&mut self, m: &mut dyn Mem, character: u32) -> F32 {
+        let cpu = &mut *self.cpu;
+        cpu.eax = m.u32(character);
+        cpu.edx = m.u32(cpu.eax.wrapping_add(0x1EC));
+        cpu.ecx = character;
+        let target = cpu.edx;
+        call_out(m, cpu, target, 0x0084_CDF1);
+        let factor = self.result(m);
+        let cpu = &mut *self.cpu;
+        cpu.xmm[1] = lane0(factor);
+        for k in 0..3 {
+            cpu.xmm[2 + k] = lane0(self.push[k]);
+        }
+        cpu.xmm[0] = [m.u32(self.frame.wrapping_add(4)), 0, 0, 0];
+        cpu.xmm[6] = [0; 4];
+        factor
+    }
+    fn attraction_scale(&mut self, m: &mut dyn Mem, scaler: u32, key: u32) -> F32 {
+        let cpu = &mut *self.cpu;
+        cpu.ecx = scaler;
+        cpu.edx = m.u32(scaler);
+        push(m, cpu, key);
+        cpu.eax = m.u32(cpu.edx.wrapping_add(0x3C));
+        let target = cpu.eax;
+        call_out(m, cpu, target, 0x0084_CFBD);
+        let scale = self.result(m);
+        let cpu = &mut *self.cpu;
+        cpu.xmm[5] = lane0(scale);
+        cpu.xmm[3] = lane0(self.pull[2]);
+        cpu.xmm[1] = lane0(self.pull[0]);
+        cpu.xmm[4] = lane0(self.pushed[2]);
+        cpu.xmm[7] = lane0(self.pushed[0]);
+        cpu.xmm[0] = [m.u32(self.frame.wrapping_add(4)), 0, 0, 0];
+        cpu.xmm[6] = [0; 4];
+        scale
+    }
+    fn fpu(&mut self) -> &mut X87 {
+        &mut self.cpu.st
+    }
+    fn moving(&mut self, m: &mut dyn Mem, f: &Frame) {
+        self.push = f.push;
+        self.spill3(m, 0x30, f.moved);
+        self.spill3(m, 0x10, f.push);
+        let cpu = &mut *self.cpu;
+        cpu.xmm[1] = lane0(f.moved[0]);
+        for k in 0..3 {
+            cpu.xmm[2 + k] = lane0(f.push[k]);
+        }
+    }
+    fn pushed(&mut self, m: &mut dyn Mem, f: &Frame) {
+        self.pushed = f.pushed;
+        self.spill3(m, 0x10, f.pushed);
+        let cpu = &mut *self.cpu;
+        cpu.xmm[7] = lane0(f.pushed[0]);
+        cpu.xmm[5] = lane0(f.pushed[1]);
+        cpu.xmm[4] = lane0(f.pushed[2]);
+        for k in 0..3 {
+            cpu.xmm[1 + k] = [m.u32(integrate::ORIGIN + 4 * k as u32), 0, 0, 0];
+        }
+    }
+    fn attracting(&mut self, m: &mut dyn Mem, _f: &Frame, a: &Attraction) {
+        self.pull = a.pull;
+        self.spill3(m, 0x20, a.pull);
+        let cpu = &mut *self.cpu;
+        for k in 0..3 {
+            cpu.xmm[1 + k] = lane0(a.pull[k]);
+        }
+        cpu.xmm[5] = lane0(a.z_term);
+        cpu.ecx = m.u32(integrate::MANAGER);
+        let index = m.u32(self.c.wrapping_add(integrate::ATTRACT_KEY));
+        cpu.eax = m.u32(integrate::ATTRACTION_KEYS.wrapping_add(index.wrapping_mul(4)));
+    }
+}
+
+/// The character integration (the character in esi).
+pub fn f_0084ccc0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let c = cpu.esi;
+    enter_aligned(m, cpu, 16, 0x40);
+    let frame = cpu.esp;
+    let status_high = m.u32(c.wrapping_add(integrate::STATUS + 4));
+    let step = m.u32(c.wrapping_add(integrate::STEP));
+    m.set_u32(frame.wrapping_add(0xC), status_high);
+    m.set_u32(frame.wrapping_add(4), step);
+    cpu.xmm[0] = [step, 0, 0, 0];
+    cpu.xmm[6] = [0; 4];
+    // the flag tests leave their results in eax, ecx and edx
+    let no_factor = m.u32(c.wrapping_add(integrate::FLAGS_236C)) & integrate::NO_PUSH_FACTOR;
+    cpu.eax = no_factor;
+    cpu.ecx = no_factor;
+    cpu.edx = status_high;
+    let mut machine = IntegrateMachine {
+        cpu: &mut *cpu,
+        c,
+        frame,
+        push: [F32::ZERO; 3],
+        pushed: [F32::ZERO; 3],
+        pull: [F32::ZERO; 3],
+    };
+    let f = integrate::update(m, c, &mut machine);
+    let at = |o: u32| m.u32(c.wrapping_add(o));
+    cpu.xmm = [
+        [at(integrate::VELOCITY_MIN + 8), 0, 0, 0],
+        [at(integrate::VELOCITY_MAX), 0, 0, 0],
+        lane0(f.above_min[0]),
+        lane0(f.below_max[2]),
+        lane0(f.below_max[1]),
+        lane0(f.pushed_to[1]),
+        lane0(f.moved_to[2]),
+        lane0(f.pushed_to[0]),
+    ];
+    leave(m, cpu, 0);
+}
+
 /// The ports the lifted program calls instead of the lifted bodies, with
 /// the mask of xmm registers each reproduces exactly (all of them).
 pub const PORTS: &[(u32, LiftFn, u8)] = &[
+    (0x0084_CCC0, f_0084ccc0, 0b1111_1111),
     (0x00A3_6DF0, f_00a36df0, 0b1111_1111),
     (0x00E6_C260, f_00e6c260, 0b1111_1111),
     (0x00F0_C160, f_00f0c160, 0b1111_1111),

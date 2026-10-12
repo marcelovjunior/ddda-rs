@@ -71,6 +71,7 @@ PORTS = {
     0x00E6C260: ("emitter_time", 75),
     0x00A36DF0: ("lunge", 346),
     0x00F0C160: ("chain", 744),
+    0x0084CCC0: ("integrate", 1258),
 }
 # ports of other crates run as the original when called (their ports run in the replay)
 FOREIGN_PORTS = {0x00402530, 0x004025C0, 0x00402620, 0x00CF5E20}
@@ -378,6 +379,13 @@ def s_main(sc, rnd):
     return obj
 
 
+def quiet(rnd):
+    """A float with only quiet NaNs (values that go through the x87:
+    Unicorn does not quiet a signalling NaN on fld, the CPU does)."""
+    b = floats(rnd)
+    return b | 0x400000 if is_nan(b) else b
+
+
 def far_object(sc, rnd, base, ranges):
     """An object at `base` (above the main window) of which only `ranges`
     ((offset, length) pairs) are mapped as windows."""
@@ -387,6 +395,7 @@ def far_object(sc, rnd, base, ranges):
 
 
 FAR = SCRATCH + 0x10000  # big objects (their used ranges are windows)
+FAR2 = SCRATCH + 0x20000
 
 
 def build(kind, rnd):
@@ -471,6 +480,39 @@ def build(kind, rnd):
         sc.fake(0x00F07270, 0)
         sc.fake(0x00F01390, 0)
         sc.fpcw = rnd.choice([0x037F, 0x037F, 0x027F, 0x007F, 0x077F, 0x0B7F, 0x0F7F])
+    elif kind == "integrate":
+        c = far_object(sc, rnd, FAR, [(0, 4), (0x14, 4), (0x30, 4), (0x40, 0x10), (0xE0, 0xC), (0x236C, 4),
+                                      (0x2530, 0x3C), (0x26A0, 8), (0x27B0, 4), (0x2864, 4), (0x2A20, 4),
+                                      (0x2A30, 0x20), (0x2D80, 0x30)])
+        regs["esi"] = c
+        vt = sc.alloc(0x200)
+        sc.u32(vt + 0x1EC, sc.float_stub(quiet(rnd), 0))
+        sc.u32(c, vt)
+        sc.u32(c + 0x14, rnd.choice([0x3F800000, 0x3F000000, 0x3E800000, 0x40000000, floats(rnd)]))
+        status = rnd.getrandbits(32) & ~0x1800 | rnd.choice([0, 0x800, 0x1000, 0x1800])
+        sc.u32(c + 0x26A0, status)
+        sc.u32(c + 0x236C, rnd.getrandbits(32) & ~0x40000 | rnd.choice([0, 0x40000]))
+        sc.u32(c + 0x30, 0 if rnd.random() < 0.7 else rnd.getrandbits(32))
+        sc.u8(c + 0x2DAC, rnd.choice([0, 1, 1, 0x80]))
+        sc.u8(c + 0x2DAD, rnd.choice([0, 0, 0, 1]))
+        sc.u32(c + 0x2DA8, rnd.randrange(16))
+        for off in (0x40, 0x44, 0x48, 0xE0, 0xE8, 0x2864, 0x27B0, 0x2D80, 0x2D88, 0x2DA0, 0x2DA4,
+                    *range(0x2530, 0x256C, 4)):
+            sc.u32(c + off, floats(rnd))
+        if rnd.random() < 0.5:  # ordered limits: max above min
+            for k in range(3):
+                lo, hi = sorted(rnd.uniform(-20, 20) for _ in range(2))
+                sc.u32(c + 0x2550 + 4 * k, f2b(hi))
+                sc.u32(c + 0x2560 + 4 * k, f2b(lo))
+        sc.u32(c + 0x2864, rnd.choice([0, 0x3F000000, 0x3F800000, 0x40000000, sc.get32(c + 0x2864)]))
+        for off in (0x2A30, 0x2A34, 0x2A38):
+            sc.u32(c + off, quiet(rnd))
+        mgr = far_object(sc, rnd, FAR2, [(0xB8754, 4)])
+        scaler = 0 if rnd.random() < 0.3 else sc.vtable_object({0x3C // 4: sc.float_stub(quiet(rnd), 4)})
+        sc.u32(mgr + 0xB8754, scaler)
+        origin = [0, 0, 0, 0] if rnd.random() < 0.7 else [floats(rnd) for _ in range(4)]
+        g += [(0x018CFE80, struct.pack("<4I", *origin)), (0x018FA4BC, struct.pack("<I", mgr)),
+              (0x0159E1A0, h.code(0x0159E1A0, 0x40))]
     return regs, sc, args, g
 
 
