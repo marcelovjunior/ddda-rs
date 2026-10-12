@@ -19,7 +19,7 @@ Private row evidence: `native-L28c/L28c/residual-census-train12.json`.
 inventory address; it remains outside this denominator.
 
 Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/oracle)**, **91 codex (recorder)**.
-**38 rows have private cases awaiting replay.** Boot stops take priority;
+**44 rows have private cases awaiting replay.** Boot stops take priority;
 0x00493AA0 remains set aside.
 
 | Address | Class | Blocker | Owner |
@@ -57,19 +57,19 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x00646A30 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x0064DD20 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00663040 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x006692F0 | Recorder: return address | Return address is changed; needs valid input layout or a supported callee stack contract. | codex (recorder) |
-| 0x00669F40 | Recorder: return address | Return address is changed; needs valid input layout or a supported callee stack contract. | codex (recorder) |
-| 0x0066B9E0 | Recorder: memory extent | Recording touches more than 256 pages; bounded valid object/buffer inputs needed. | codex (recorder) |
+| 0x006692F0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
+| 0x00669F40 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
+| 0x0066B9E0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x00677930 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x00685030 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x00685B40 | Recorder: processor flags | POPF(D) requests unsupported processor-flag changes; valid caller/stack state remains unresolved. | codex (recorder) |
+| 0x00685B40 | Recorder: dispatch/return | wrapper-call-v1 and guarded-values-v1 now reach execution outside the image at generated object pointers; valid caller/cleanup state unresolved. | codex (recorder) |
 | 0x00689960 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
 | 0x0068A9F0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x00691AE0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00691E50 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00692A40 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x006A1770 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x006E0EB0 | Recorder: memory extent | Recording touches more than 256 pages; bounded valid object/buffer inputs needed. | codex (recorder) |
+| 0x006E0EB0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x006EDFE0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x006F1590 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x006F2350 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
@@ -78,10 +78,10 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x006F8C00 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00705E00 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x0070B210 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x0070F3C0 | Recorder: memory extent | Recording touches more than 256 pages; bounded valid object/buffer inputs needed. | codex (recorder) |
+| 0x0070F3C0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x007126C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00712AC0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
-| 0x0071C0F0 | Recorder: return address | Return address is changed; needs valid input layout or a supported callee stack contract. | codex (recorder) |
+| 0x0071C0F0 | Recorder: replay pending | 3/3 private cases with general wrapper-call-v1; caller-derived mock cleanup recorded and return checked. | codex (recorder) |
 | 0x00736370 | Inventory admission | L22 identifies an address-taken ASCII tag, not code; resolve inventory admission (current decode rejects BOUND). | claude-6 (lifter) |
 | 0x007BEA60 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x007F2020 | Recorder: replay pending | 3/3 private sentinel-records-v1 cases; finite generated record array with observed stride, binding and terminator. Head replay pending. | codex (recorder) |

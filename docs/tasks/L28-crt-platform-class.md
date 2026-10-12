@@ -35,6 +35,37 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Smaller input classes: +6/+18 (2026-10-12, pending replay)
+
+The existing general wrapper-call-v1 records **all three return-address
+rows** (6692F0, 669F40, 71C0F0) and **all three memory-extent rows**
+(66B9E0, 6E0EB0, 70F3C0), each 3/3. Neither guard was changed. The seventh
+row, 685B40 (previously processor flags), leaves the image at generated
+object pointers with both wrapper-call-v1 and guarded-values-v1. Its
+RESIDUALS class is now dispatch/return; valid caller state is still needed.
+Evidence: `L28c/class-small.log`.
+
+Private totals **59,646 functions / 177,532 cases**. This round adds
+**43 functions / 129 cases**: 26 wrapper-call, 14 finite-proof and three
+sentinel-record functions. `L28c/class-small-audit.json` confirms every
+baseline **59,603 function / 177,403 case unchanged**, zero stale mocks,
+promotions, missing records or unexpected changes. Frozen base untouched.
+All recorder workers exited. **180 light tests pass**; no source changes
+since that test run. Rust replay is pending the head's integration train.
+
+RESIDUALS still has **109 inventory rows**, now **44 pending replay**
+(including prior C9E0F0); remaining recorder blockers are **35 dispatch,
+seven instruction-bound, and one each setup mismatch, object/manager,
+stale-body input, floating comparison and allocator state**. Main train 12
+merged before handoff. The 104-row starting queue shrank as main credited
+other work and L50 took boundary ownership; no residual is silently dropped.
+
+**Next action:** derive valid caller/object state for the remaining dispatch
+class, with L50's boot boundary fixture requests first. 493AA0 remains set
+aside. Source commits this round: 78db90cc (condition/negation proofs),
+331fd9fb (checked legacy caller seeds), 691fcd39 (sentinel inputs).
+
+
 ### Sentinel records and longer finite proofs: +6/+18 (2026-10-12)
 
 **Six functions record 3/3:** 524A10, 524BE0, 5293E0 now complete with

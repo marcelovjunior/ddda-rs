@@ -1,5 +1,15 @@
 # Milestones
 
+### L28c smaller input classes (2026-10-12, pending replay)
+
+- **+6/+18**, all three return-address and three memory-extent rows;
+  cumulative **+43 functions / +129 cases**, private **59,646 / 177,532**.
+- **180 tests pass**; audit preserves all **59,603 / 177,403** prior records
+  and cases. RESIDUALS has **44 pending replay**; Rust verification pending.
+- **Next action:** valid caller/object state for 35 dispatch rows; boot
+  boundary fixture requests first. Seven instruction-bound rows remain.
+
+
 ### L28c sentinel and finite-proof batch (2026-10-12, pending replay)
 
 - **+6/+18**, all 3/3: three longer finite proofs and three generated
