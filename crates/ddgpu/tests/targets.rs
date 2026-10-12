@@ -518,3 +518,63 @@ fn render_to_texture_matches_the_d3d9_driver() {
     }
     assert!(failures.is_empty());
 }
+
+/// ps_3_0: oC0 = texld(c0.xyz, s0) on a cube sampler
+fn ps_sample_cube() -> Vec<u32> {
+    vec![
+        0xFFFF_0300,
+        0x0200_001F, 0x9800_0000, 0xA00F_0800, // dcl_cube s0
+        0x0300_0042, 0x800F_0000, 0xA0E4_0000, 0xA0E4_0800, // texld r0, c0, s0
+        0x0200_0001, 0x800F_0800, 0x80E4_0000, // mov oC0, r0
+        0x0000_FFFF,
+    ]
+}
+
+/// A cube render-target texture: each face drawn with its own colour
+/// before the texture is bound (level surfaces face * levels + level),
+/// then sampled towards each face; compared with the driver as bits.
+#[test]
+fn cube_render_targets_match_the_d3d9_driver() {
+    use d3d9cmd::{TargetTexture, TexKind, TextureBinding, USAGE_RENDERTARGET};
+    let Some(mut d3d9) = available() else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    // +X, -X, +Y, -Y, +Z, -Z, off the face centres (point sampling)
+    let directions = [[1.0f32, 0.3, 0.2, 0.0], [-1.0, 0.3, 0.2, 0.0], [0.3, 1.0, 0.2, 0.0], [0.3, -1.0, 0.2, 0.0], [0.3, 0.2, 1.0, 0.0], [0.3, 0.2, -1.0, 0.0]];
+    let out = target(0x100, 116);
+    let mut failures = Vec::new();
+    for format in [21u32, 113] {
+        let tex = TargetTexture { resource: 0x300, kind: TexKind::Cube, width: 4, height: 4, depth: 1, levels: 2, usage: USAGE_RENDERTARGET };
+        let face = |f: u32| Target { surface: 0x310 + f, format, width: 4, height: 4, texture: Some(tex), level: 2 * f, samples: 0, quality: 0 };
+        let mut draws: Vec<DrawCall> = (0..6u32).map(|f| {
+            let v = (f + 1) as f32 / 8.0;
+            draw(&[[v, 1.0 - v, 0.5 * v, 1.0]], [Some(face(f)), None, None, None], 0.5, &[])
+        }).collect();
+        let st = [0u32, 3, 3, 3, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0];
+        let binding = TextureBinding { sampler: 0, resource: 0x300, kind: TexKind::Cube, format, width: 4, height: 4, depth: 1, levels: 2, usage: USAGE_RENDERTARGET, states: st };
+        let mut seen = Vec::new();
+        for (k, dir) in directions.iter().enumerate() {
+            let mut s = sample_draw(binding.clone(), out.clone(), &[]);
+            s.pixel_shader = Some(ps_sample_cube());
+            s.ps_constants.f[0] = dir.map(f32::to_bits);
+            draws.truncate(6);
+            draws.push(s);
+            let clear = clear_of(&[out.clone()], 0);
+            let theirs = d3d9.render_targets(&[], Some(&clear), &draws, &[out.clone()]).unwrap_or_else(|e| panic!("D3D9: {e}"));
+            let ours = ours(&[], &clear, &draws, &[out.clone()]).unwrap_or_else(|e| panic!("wgpu: {e}"));
+            if ours[0] != theirs[0] {
+                failures.push(format!("format {format} towards face {k}: ours {:?} D3D9 {:?}", decode(116, &ours[0][..16]), decode(116, &theirs[0][..16])));
+            }
+            seen.push(theirs[0][..16].to_vec());
+        }
+        // each face holds its own colour (the comparison is not of blanks)
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 6, "format {format}: the six faces sample distinct colours");
+    }
+    for f in &failures {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty());
+}
