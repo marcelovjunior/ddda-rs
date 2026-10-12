@@ -323,10 +323,9 @@ fn set_fpcw(cpu: &mut Cpu, cw: u16) {
 #[test]
 fn ports_match_the_original_on_edge_cases() {
     let Some(cases) = vectors("frame_edge") else { return };
-    x86::set_lifted_lookup(lookup);
     let mut seen = std::collections::BTreeSet::new();
     let mut failures = Vec::new();
-    for (n, c) in cases.iter().enumerate() {
+    let results = par_cases(&cases, || x86::set_lifted_lookup(lookup), |n, c| -> (Option<String>, Option<u32>) {
         let addr = u(&c["addr"]);
         let mut m = Windows {
             bytes: windows(&c["mem_in"]),
@@ -340,8 +339,7 @@ fn ports_match_the_original_on_edge_cases() {
         let calls = replay_edge_calls(c);
         let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut m, &mut cpu)));
         if let Err(e) = made {
-            failures.push(format!("case {n} at {addr:#x}: {}", message(e)));
-            continue;
+            return (Some(format!("case {n} at {addr:#x}: {}", message(e))), None);
         }
         let want_xmm: [[u32; 4]; 8] = std::array::from_fn(|k| {
             if exact >> k & 1 != 0 {
@@ -357,7 +355,7 @@ fn ports_match_the_original_on_edge_cases() {
             && cpu.st.is_empty()
             && cpu.st.control() as u32 == u(&c["fpcw_out"])
             && calls.borrow().is_empty();
-        if !ok {
+        let fail = (!ok).then(|| {
             let diff: Vec<String> = want
                 .iter()
                 .filter(|(a, v)| m.bytes.get(a) != Some(v))
@@ -368,16 +366,20 @@ fn ports_match_the_original_on_edge_cases() {
                 .filter(|&k| cpu.xmm[k] != want_xmm[k])
                 .map(|k| format!("xmm{k} {:x?} want {:x?}", cpu.xmm[k], want_xmm[k]))
                 .collect();
-            failures.push(format!(
+            format!(
                 "case {n} at {addr:#x}: regs {:x?} want {:x?}; mem {}; {}; calls left {}",
                 cpu_regs(&cpu),
                 regs(&c["regs_out"]),
                 diff.join(", "),
                 xmm.join(", "),
                 calls.borrow().len()
-            ));
-        }
-        seen.insert(addr);
+            )
+        });
+        (fail, Some(addr))
+    });
+    for (fail, addr) in results {
+        failures.extend(fail);
+        seen.extend(addr);
     }
     assert!(
         failures.is_empty(),
@@ -387,4 +389,35 @@ fn ports_match_the_original_on_edge_cases() {
         failures[..failures.len().min(20)].join("\n")
     );
     assert_eq!(seen.len(), PORTS.len(), "every port has edge vectors");
+}
+
+/// Run `f` over every case on all cores, results in case order. The cases
+/// are independent; per-thread state (the call replays) is set up per case,
+/// or once per worker by `setup`. LIFT_THREADS=1 runs them on one thread.
+fn par_cases<T: Send>(cases: &[Value], setup: impl Fn() + Sync, f: impl Fn(usize, &Value) -> T + Sync) -> Vec<T> {
+    let threads = std::env::var("LIFT_THREADS").ok().and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())).max(1);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut out: Vec<(usize, T)> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                std::thread::Builder::new()
+                    .stack_size(64 << 20)
+                    .spawn_scoped(s, || {
+                        setup();
+                        let mut mine = Vec::new();
+                        loop {
+                            let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(c) = cases.get(k) else { break };
+                            mine.push((k, f(k, c)));
+                        }
+                        mine
+                    })
+                    .expect("a test thread")
+            })
+            .collect();
+        workers.into_iter().flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+    });
+    out.sort_by_key(|e| e.0);
+    out.into_iter().map(|e| e.1).collect()
 }

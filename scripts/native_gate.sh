@@ -9,7 +9,12 @@ cd "$(dirname "$0")/.."
 # Generated code is split into shard crates (L06): about 1.6 GB per rustc,
 # so four jobs fit. Cargo reuses unchanged shard crates by itself; the
 # incremental cache inside a shard only costs disk (it once grew to 20 GB).
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
+# L76: opt-level-0 shards take ~1.5 GB per rustc, so 8 jobs fit; the
+# parallel front end (-Z threads) halves each shard's compile (type and
+# borrow checking dominate at opt-level 0). RUSTC_BOOTSTRAP enables -Z on
+# stable. Changing RUSTFLAGS rebuilds a target dir once.
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-8}"
+export RUSTC_BOOTSTRAP=1 RUSTFLAGS="${RUSTFLAGS:--Zthreads=8}"
 CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 cargo test -q -p ddnative
 # readable ports wired over lifted bodies (crates/mtmath and crates/mtcore,
 # docs/MATH.md, docs/CORE.md)

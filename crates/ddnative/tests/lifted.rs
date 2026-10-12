@@ -16,7 +16,11 @@ fn vectors(name: &str) -> Option<Vec<Value>> {
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
         Err(_) => return None,
     };
-    serde_json::from_str::<Value>(&text).ok()?.as_array().cloned()
+    // take the array out of the parsed tree (lift.json is ~400 MB: no clone)
+    match serde_json::from_str::<Value>(&text).ok()? {
+        Value::Array(cases) => Some(cases),
+        _ => None,
+    }
 }
 fn u(v: &Value) -> u32 { v.as_u64().unwrap() as u32 }
 
@@ -3815,7 +3819,7 @@ impl ddnative::platform::Machine for Recorded {
 fn every_lifted_function_matches_the_original() {
     let Some(cases) = vectors("lift") else { return };
     let all = lifted::all();
-    let table = Rc::new(lifted::dispatch_table());
+    let by_addr: std::collections::HashMap<u32, _> = all.iter().map(|e| (e.0, e.1)).collect();
     let mut seen = std::collections::HashSet::new();
     let mut failures = Vec::new();
     // LIFT_DEBUG=0xADDR prints what differs for that function's vectors
@@ -3828,101 +3832,128 @@ fn every_lifted_function_matches_the_original() {
     };
     let brand = brand.trim_end_matches('\0');
     let mut other_cpu = Vec::new();
-    for c in &cases {
-        let addr = u(&c["addr"]);
-        if let Some(cpu) = c.get("cpu_dependent").and_then(|v| v.as_str()) {
-            if cpu != brand { other_cpu.push(format!("{addr:#010x}")); seen.insert(addr); continue; }
-        }
-        let f = all.iter().find(|e| e.0 == addr).expect("lifted function").1;
-        let mut m = Sparse::default();
-        for run in c["reads"].as_array().unwrap() {
-            let (a, hexs) = (u(&run[0]), run[1].as_str().unwrap());
-            for k in 0..hexs.len() / 2 {
-                m.bytes.insert(a + k as u32, u8::from_str_radix(&hexs[2 * k..2 * k + 2], 16).unwrap());
-            }
-        }
-        let ri = &c["regs_in"];
-        let entry = Entry { eax: u(&ri["eax"]), ecx: u(&ri["ecx"]), edx: u(&ri["edx"]), ebx: u(&ri["ebx"]),
-            esp: u(&ri["esp"]), ebp: u(&ri["ebp"]), esi: u(&ri["esi"]), edi: u(&ri["edi"]), xmm0: 0 };
-        let calls = Rc::new(RefCell::new(c.get("calls").and_then(|v| v.as_array()).cloned()
-            .unwrap_or_default().into_iter().collect::<VecDeque<Value>>()));
-        x86::set_ext_calls(Some(replay(calls.clone(), table.clone())));
-        let machine = Rc::new(Recorded(RefCell::new(c.get("machine").and_then(|v| v.as_array()).cloned()
-            .unwrap_or_default().into_iter().collect())));
-        ddnative::platform::set_machine(Some(machine.clone()));
-        x86::ldmxcsr(x86::MXCSR_DEFAULT); // the recorder's initial MXCSR, live while lifted code runs
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut cpu = Cpu::from(entry);
-            cpu.fs_base = 0x7FFD_E000; // harness.TEB_BASE (fixed recorder thread)
-            if let Some(s) = c.get("segments") {
-                let k = |n: &str| u(&s[n]) as u16;
-                cpu.seg = x86::Segments { es: k("es"), cs: k("cs"), ss: k("ss"), ds: k("ds"), fs: k("fs"), gs: k("gs") };
-            }
-            // x87 entry contract: the values the recorder left on the stack, deepest first
-            for v in c.get("st_in").and_then(|v| v.as_array()).into_iter().flatten().rev() {
-                let mut data = [0u8; 10];
-                data[..8].copy_from_slice(&v[0].as_u64().unwrap().to_le_bytes());
-                data[8..].copy_from_slice(&(u(&v[1]) as u16).to_le_bytes());
-                cpu.st.exec::<0x28db>(&mut data); // fld m80real
-            }
-            f(&mut m, &mut cpu);
-            if let Some(v) = c.get("mxcsr") {
-                assert_eq!(x86::stmxcsr(), u(v), "MXCSR");
-            }
-            if c.get("x87_control").is_some() {
-                assert_eq!(cpu.st.control() as u32, u(&c["x87_control"]), "x87 control");
-                assert_eq!(cpu.st.depth(), u(&c["x87_depth"]), "x87 depth");
-                let extended = c["st0_ext"].as_array().map(|v| (v[0].as_u64().unwrap(), u(&v[1]) as u16));
-                assert_eq!(cpu.st.top_extended(), extended, "extended st0");
-            }
-            cpu.exit()
-        }));
-        // a terminal case ends at its recorded noreturn call, with that state
-        let result = match result {
-            Err(e) if c.get("terminal").is_some() && e.is::<Terminal>() => {
-                let t = e.downcast::<Terminal>().unwrap();
-                let x87 = c.get("x87_control").is_none() || (t.control == u(&c["x87_control"]) && t.depth == u(&c["x87_depth"])
-                    && t.ext == c["st0_ext"].as_array().map(|v| (v[0].as_u64().unwrap(), u(&v[1]) as u16)));
-                let x87 = x87 && c.get("mxcsr").map_or(true, |v| t.mxcsr == u(v));
-                if x87 { Ok(t.exit) } else { Err(Box::new("terminal x87 state") as Box<dyn std::any::Any + Send>) }
-            }
-            r => r,
-        };
-        x86::ldmxcsr(x86::MXCSR_DEFAULT);
-        let all_calls_made = calls.borrow().is_empty() && machine.0.borrow().is_empty();
-        let ok = match result {
-            Err(e) => {
-                if debug == Some(addr) {
-                    let msg = e.downcast_ref::<String>().cloned()
-                        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
-                    eprintln!("{addr:#x}: panicked: {msg}");
+    // The cases are independent (fresh memory; call/machine replays and the
+    // MXCSR are per thread): replay them on every core. LIFT_THREADS=1 runs
+    // them in order on one thread.
+    let threads = std::env::var("LIFT_THREADS").ok().and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())).max(1);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<Vec<(u32, Option<bool>)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads).map(|_| {
+            std::thread::Builder::new().stack_size(256 << 20).spawn_scoped(scope, || {
+                let table = Rc::new(lifted::dispatch_table());
+                let mut out = Vec::new();
+                loop {
+                    let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(c) = cases.get(k) else { break };
+                    out.push((|| -> (u32, Option<bool>) {
+                let addr = u(&c["addr"]);
+                if let Some(cpu) = c.get("cpu_dependent").and_then(|v| v.as_str()) {
+                    if cpu != brand { return (addr, None); }
                 }
-                false
-            }
-            Ok(x) => {
-                let ro = &c["regs_out"];
-                let regs = [x.eax, x.ecx, x.edx, x.ebx, x.esp, x.ebp, x.esi, x.edi]
-                    == ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].map(|k| u(&ro[k]));
-                let mut want = std::collections::BTreeMap::new();
-                for run in c["writes"].as_array().unwrap() {
+                let f = *by_addr.get(&addr).expect("lifted function");
+                let mut m = Sparse::default();
+                for run in c["reads"].as_array().unwrap() {
                     let (a, hexs) = (u(&run[0]), run[1].as_str().unwrap());
                     for k in 0..hexs.len() / 2 {
-                        want.insert(a + k as u32, u8::from_str_radix(&hexs[2 * k..2 * k + 2], 16).unwrap());
+                        m.bytes.insert(a + k as u32, u8::from_str_radix(&hexs[2 * k..2 * k + 2], 16).unwrap());
                     }
                 }
-                let st0 = c["st0_out"].as_u64().map(|v| v as u32);
-                if debug == Some(addr) {
-                    let ro = &c["regs_out"];
-                    eprintln!("{addr:#x}: calls made {all_calls_made}; got {x:x?}");
-                    eprintln!("  want regs {:x?} xmm0 {:#x} st0 {st0:x?}",
-                        ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].map(|k| u(&ro[k])), u(&c["xmm0_out"]));
-                    for (a, v) in &want { if m.written.get(a) != Some(v) { eprintln!("  [{a:#x}] want {v:#04x} got {:x?}", m.written.get(a)); } }
-                    for (a, v) in &m.written { if !want.contains_key(a) { eprintln!("  [{a:#x}] extra write {v:#04x}"); } }
+                let ri = &c["regs_in"];
+                let entry = Entry { eax: u(&ri["eax"]), ecx: u(&ri["ecx"]), edx: u(&ri["edx"]), ebx: u(&ri["ebx"]),
+                    esp: u(&ri["esp"]), ebp: u(&ri["ebp"]), esi: u(&ri["esi"]), edi: u(&ri["edi"]), xmm0: 0 };
+                let calls = Rc::new(RefCell::new(c.get("calls").and_then(|v| v.as_array()).cloned()
+                    .unwrap_or_default().into_iter().collect::<VecDeque<Value>>()));
+                x86::set_ext_calls(Some(replay(calls.clone(), table.clone())));
+                let machine = Rc::new(Recorded(RefCell::new(c.get("machine").and_then(|v| v.as_array()).cloned()
+                    .unwrap_or_default().into_iter().collect())));
+                ddnative::platform::set_machine(Some(machine.clone()));
+                x86::ldmxcsr(x86::MXCSR_DEFAULT); // the recorder's initial MXCSR, live while lifted code runs
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut cpu = Cpu::from(entry);
+                    cpu.fs_base = 0x7FFD_E000; // harness.TEB_BASE (fixed recorder thread)
+                    if let Some(s) = c.get("segments") {
+                        let k = |n: &str| u(&s[n]) as u16;
+                        cpu.seg = x86::Segments { es: k("es"), cs: k("cs"), ss: k("ss"), ds: k("ds"), fs: k("fs"), gs: k("gs") };
+                    }
+                    // x87 entry contract: the values the recorder left on the stack, deepest first
+                    for v in c.get("st_in").and_then(|v| v.as_array()).into_iter().flatten().rev() {
+                        let mut data = [0u8; 10];
+                        data[..8].copy_from_slice(&v[0].as_u64().unwrap().to_le_bytes());
+                        data[8..].copy_from_slice(&(u(&v[1]) as u16).to_le_bytes());
+                        cpu.st.exec::<0x28db>(&mut data); // fld m80real
+                    }
+                    f(&mut m, &mut cpu);
+                    if let Some(v) = c.get("mxcsr") {
+                        assert_eq!(x86::stmxcsr(), u(v), "MXCSR");
+                    }
+                    if c.get("x87_control").is_some() {
+                        assert_eq!(cpu.st.control() as u32, u(&c["x87_control"]), "x87 control");
+                        assert_eq!(cpu.st.depth(), u(&c["x87_depth"]), "x87 depth");
+                        let extended = c["st0_ext"].as_array().map(|v| (v[0].as_u64().unwrap(), u(&v[1]) as u16));
+                        assert_eq!(cpu.st.top_extended(), extended, "extended st0");
+                    }
+                    cpu.exit()
+                }));
+                // a terminal case ends at its recorded noreturn call, with that state
+                let result = match result {
+                    Err(e) if c.get("terminal").is_some() && e.is::<Terminal>() => {
+                        let t = e.downcast::<Terminal>().unwrap();
+                        let x87 = c.get("x87_control").is_none() || (t.control == u(&c["x87_control"]) && t.depth == u(&c["x87_depth"])
+                            && t.ext == c["st0_ext"].as_array().map(|v| (v[0].as_u64().unwrap(), u(&v[1]) as u16)));
+                        let x87 = x87 && c.get("mxcsr").map_or(true, |v| t.mxcsr == u(v));
+                        if x87 { Ok(t.exit) } else { Err(Box::new("terminal x87 state") as Box<dyn std::any::Any + Send>) }
+                    }
+                    r => r,
+                };
+                x86::ldmxcsr(x86::MXCSR_DEFAULT);
+                let all_calls_made = calls.borrow().is_empty() && machine.0.borrow().is_empty();
+                let ok = match result {
+                    Err(e) => {
+                        if debug == Some(addr) {
+                            let msg = e.downcast_ref::<String>().cloned()
+                                .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                            eprintln!("{addr:#x}: panicked: {msg}");
+                        }
+                        false
+                    }
+                    Ok(x) => {
+                        let ro = &c["regs_out"];
+                        let regs = [x.eax, x.ecx, x.edx, x.ebx, x.esp, x.ebp, x.esi, x.edi]
+                            == ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].map(|k| u(&ro[k]));
+                        let mut want = std::collections::BTreeMap::new();
+                        for run in c["writes"].as_array().unwrap() {
+                            let (a, hexs) = (u(&run[0]), run[1].as_str().unwrap());
+                            for k in 0..hexs.len() / 2 {
+                                want.insert(a + k as u32, u8::from_str_radix(&hexs[2 * k..2 * k + 2], 16).unwrap());
+                            }
+                        }
+                        let st0 = c["st0_out"].as_u64().map(|v| v as u32);
+                        if debug == Some(addr) {
+                            let ro = &c["regs_out"];
+                            eprintln!("{addr:#x}: calls made {all_calls_made}; got {x:x?}");
+                            eprintln!("  want regs {:x?} xmm0 {:#x} st0 {st0:x?}",
+                                ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"].map(|k| u(&ro[k])), u(&c["xmm0_out"]));
+                            for (a, v) in &want { if m.written.get(a) != Some(v) { eprintln!("  [{a:#x}] want {v:#04x} got {:x?}", m.written.get(a)); } }
+                            for (a, v) in &m.written { if !want.contains_key(a) { eprintln!("  [{a:#x}] extra write {v:#04x}"); } }
+                        }
+                        all_calls_made && regs && m.written == want && x.xmm0 == u(&c["xmm0_out"]) && (st0.is_none() || x.st0 == st0)
+                    }
+                };
+        (addr, Some(ok))
+                    })());
                 }
-                all_calls_made && regs && m.written == want && x.xmm0 == u(&c["xmm0_out"]) && (st0.is_none() || x.st0 == st0)
-            }
-        };
-        if !ok { failures.push(format!("{addr:#010x}")); }
+                out
+            }).expect("a replay thread")
+        }).collect();
+        workers.into_iter().map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+    });
+    for (addr, ok) in results.into_iter().flatten() {
+        match ok {
+            None => other_cpu.push(format!("{addr:#010x}")),
+            Some(false) => failures.push(format!("{addr:#010x}")),
+            Some(true) => {}
+        }
         seen.insert(addr);
     }
     if !other_cpu.is_empty() {

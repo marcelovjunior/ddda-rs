@@ -177,12 +177,9 @@ fn calls_of(c: &Value, stack_base: u32) -> VecDeque<Call> {
 fn recognition_model_matches_the_original() {
     let Some(cases) = read("frame_models").and_then(|v| v.as_array().cloned()) else { return };
     let mut failures = Vec::new();
-    let mut n = 0;
-    for (k, c) in cases.iter().enumerate() {
-        if u(&c["addr"]) != 0x0048_7B00 {
-            continue;
-        }
-        n += 1;
+    let cases: Vec<Value> = cases.into_iter().filter(|c| u(&c["addr"]) == 0x0048_7B00).collect();
+    let n = cases.len();
+    let results = par_cases(&cases, || {}, |k, c| -> Option<String> {
         let esp = u(&c["regs_in"]["esp"]);
         let stack_base = c["mem_in"]
             .as_array()
@@ -218,10 +215,9 @@ fn recognition_model_matches_the_original() {
             .take(6)
             .map(|(a, v)| format!("[{a:#x}] {:x?} want {v:#04x}", m.0.get(a)))
             .collect();
-        if msg.is_some() || !diff.is_empty() {
-            failures.push(format!("case {k}: {}; {}", msg.unwrap_or_default(), diff.join(", ")));
-        }
-    }
+        (msg.is_some() || !diff.is_empty()).then(|| format!("case {k}: {}; {}", msg.unwrap_or_default(), diff.join(", ")))
+    });
+    failures.extend(results.into_iter().flatten());
     assert!(n > 0, "recordings of 0x00487B00");
     assert!(
         failures.is_empty(),
@@ -268,4 +264,35 @@ fn cloth_schedule_model_matches_the_original() {
         failures.len(),
         failures[..failures.len().min(20)].join("\n")
     );
+}
+
+/// Run `f` over every case on all cores, results in case order. The cases
+/// are independent; per-thread state (the call replays) is set up per case,
+/// or once per worker by `setup`. LIFT_THREADS=1 runs them on one thread.
+fn par_cases<T: Send>(cases: &[Value], setup: impl Fn() + Sync, f: impl Fn(usize, &Value) -> T + Sync) -> Vec<T> {
+    let threads = std::env::var("LIFT_THREADS").ok().and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())).max(1);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut out: Vec<(usize, T)> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                std::thread::Builder::new()
+                    .stack_size(64 << 20)
+                    .spawn_scoped(s, || {
+                        setup();
+                        let mut mine = Vec::new();
+                        loop {
+                            let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(c) = cases.get(k) else { break };
+                            mine.push((k, f(k, c)));
+                        }
+                        mine
+                    })
+                    .expect("a test thread")
+            })
+            .collect();
+        workers.into_iter().flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+    });
+    out.sort_by_key(|e| e.0);
+    out.into_iter().map(|e| e.1).collect()
 }

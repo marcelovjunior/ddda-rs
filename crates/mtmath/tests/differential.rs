@@ -195,7 +195,7 @@ fn ports_match_the_original_on_edge_cases() {
     let Some(cases) = vectors("math_edge") else { return };
     let mut seen = std::collections::BTreeSet::new();
     let mut failures = Vec::new();
-    for (n, c) in cases.iter().enumerate() {
+    let results = par_cases(&cases, || {}, |n, c| -> (Option<String>, Option<u32>) {
         let addr = u(&c["addr"]);
         let mut m = Windows(windows(&c["mem_in"]));
         let ri = regs(&c["regs_in"]);
@@ -213,21 +213,53 @@ fn ports_match_the_original_on_edge_cases() {
         let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut m, &mut cpu)));
         if let Err(e) = made {
             let msg = e.downcast_ref::<String>().cloned().unwrap_or_default();
-            failures.push(format!("case {n} at {addr:#x}: {msg}"));
-            continue;
+            return (Some(format!("case {n} at {addr:#x}: {msg}")), None);
         }
         let want: [[u32; 4]; 8] = std::array::from_fn(|k| {
             if exact >> k & 1 != 0 { std::array::from_fn(|lane| u(&c["xmm_out"][k][lane])) } else { entry[k] }
         });
         let ok = cpu_regs(&cpu) == regs(&c["regs_out"]) && cpu.xmm == want
             && m.0 == windows(&c["mem_out"]) && cpu.st.is_empty() && calls.borrow().is_empty();
-        if !ok {
-            failures.push(format!("case {n} at {addr:#x}: regs {:x?} want {:x?}; xmm {:x?} want {want:x?}",
+        let fail = (!ok).then(|| format!("case {n} at {addr:#x}: regs {:x?} want {:x?}; xmm {:x?} want {want:x?}",
                                   cpu_regs(&cpu), regs(&c["regs_out"]), cpu.xmm));
-        }
-        seen.insert(addr);
+        (fail, Some(addr))
+    });
+    for (fail, addr) in results {
+        failures.extend(fail);
+        seen.extend(addr);
     }
     assert!(failures.is_empty(), "{} of {} cases differ:\n{}", failures.len(), cases.len(),
             failures[..failures.len().min(20)].join("\n"));
     assert_eq!(seen.len(), PORTS.len(), "every port has edge vectors");
+}
+
+/// Run `f` over every case on all cores, results in case order. The cases
+/// are independent; per-thread state (the call replays) is set up per case,
+/// or once per worker by `setup`. LIFT_THREADS=1 runs them on one thread.
+fn par_cases<T: Send>(cases: &[Value], setup: impl Fn() + Sync, f: impl Fn(usize, &Value) -> T + Sync) -> Vec<T> {
+    let threads = std::env::var("LIFT_THREADS").ok().and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get())).max(1);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut out: Vec<(usize, T)> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                std::thread::Builder::new()
+                    .stack_size(64 << 20)
+                    .spawn_scoped(s, || {
+                        setup();
+                        let mut mine = Vec::new();
+                        loop {
+                            let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(c) = cases.get(k) else { break };
+                            mine.push((k, f(k, c)));
+                        }
+                        mine
+                    })
+                    .expect("a test thread")
+            })
+            .collect();
+        workers.into_iter().flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+    });
+    out.sort_by_key(|e| e.0);
+    out.into_iter().map(|e| e.1).collect()
 }
