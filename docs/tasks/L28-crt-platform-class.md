@@ -35,6 +35,32 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Sentinel records and longer finite proofs: +6/+18 (2026-10-12)
+
+**Six functions record 3/3:** 524A10, 524BE0, 5293E0 now complete with
+180 seconds of wall time. Their general proofs count **597,397, 597,397,
+616,732** instructions respectively, plus the unchanged 20,000 allowance;
+the global ceiling remains unchanged. 7F2020, 8282E0 and B7FF30 record
+with **sentinel-records-v1** (691fcd39), an immutable generated array with
+observed stride, entry binding and terminating field. First three seeds
+supply 1/3/8 records, then the -1 terminator. These three fit the ordinary
+instruction limit; no budget increase was necessary. Synthetic tests also
+exercise the finite proof over these generated records.
+
+Private **59,640 functions / 177,514 cases**, cumulative **+37/+111**.
+`L28c/class-sentinel-audit.json`: all **59,603 / 177,403** baseline records
+and cases unchanged; no stale mocks, promotions, removals or other edits.
+**180 light tests pass**. Main train 12 merged; Rust replay remains the
+head's integration task. RESIDUALS retains 109 rows, **38 awaiting replay**
+(including the prior C9E0F0), with seven instruction-bound rows remaining.
+Evidence: `class-bound-longer.log`, `class-sentinel.log`.
+
+**Next:** finish the seven smaller return-address, memory-extent and
+processor-flag trials, then valid caller/object state for the remaining
+34 dispatch rows. Stop 17 remains claude-6's boundary task; no new boot
+request is pending. 493AA0 stays set aside.
+
+
 ### Instruction-bound class: +11/+33 (2026-10-12, pending replay)
 
 **11 of 27 class members record 3/3**, using guarded-values-v1 and the

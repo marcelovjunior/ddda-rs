@@ -19,7 +19,7 @@ Private row evidence: `native-L28c/L28c/residual-census-train12.json`.
 inventory address; it remains outside this denominator.
 
 Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/oracle)**, **91 codex (recorder)**.
-**32 rows have private cases awaiting replay.** Boot stops take priority;
+**38 rows have private cases awaiting replay.** Boot stops take priority;
 0x00493AA0 remains set aside.
 
 | Address | Class | Blocker | Owner |
@@ -37,10 +37,10 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x004EE720 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
 | 0x004F5200 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 48,022 instructions, limit 68,022. Head replay pending. | codex (recorder) |
 | 0x004F53B0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 48,003 instructions, limit 68,003. Head replay pending. | codex (recorder) |
-| 0x00524A10 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
-| 0x00524BE0 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
+| 0x00524A10 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 597,397 instructions, limit 617,397. Head replay pending. | codex (recorder) |
+| 0x00524BE0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 597,397 instructions, limit 617,397. Head replay pending. | codex (recorder) |
 | 0x00528550 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 37,829 instructions, limit 57,829. Head replay pending. | codex (recorder) |
-| 0x005293E0 | Recorder: instruction bound | Recording exceeds its instruction limit; requires valid input state and a proved finite trace. | codex (recorder) |
+| 0x005293E0 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 616,732 instructions, limit 636,732. Head replay pending. | codex (recorder) |
 | 0x005652E0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00565308 | Recorder: stale-body inputs | Stale body omits 13 instructions from 0x0056532A; refreshed-body recording leaves the image. Resolve inputs before refreshing accepted cases. | codex (recorder) |
 | 0x0056532A | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
@@ -84,10 +84,10 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x0071C0F0 | Recorder: return address | Return address is changed; needs valid input layout or a supported callee stack contract. | codex (recorder) |
 | 0x00736370 | Inventory admission | L22 identifies an address-taken ASCII tag, not code; resolve inventory admission (current decode rejects BOUND). | claude-6 (lifter) |
 | 0x007BEA60 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x007F2020 | Recorder: sentinel records | EDX record pointer, stride 0x48, first dword -1 terminator; zero-filled records do not terminate. | codex (recorder) |
+| 0x007F2020 | Recorder: replay pending | 3/3 private sentinel-records-v1 cases; finite generated record array with observed stride, binding and terminator. Head replay pending. | codex (recorder) |
 | 0x00811A90 | Recorder: replay pending | 3/3 private guarded-values-v1 cases; finite proof 68,475 instructions, limit 88,475. Head replay pending. | codex (recorder) |
 | 0x00815C60 | Recorder: floating comparison | Checked 0x00811780 constructor reaches COMISS at 0x00816522; exact floating-point facts needed for a finite trace. | codex (recorder) |
-| 0x008282E0 | Recorder: sentinel records | EAX record pointer, stride 8, first dword -1 terminator; zero-filled records do not terminate. | codex (recorder) |
+| 0x008282E0 | Recorder: replay pending | 3/3 private sentinel-records-v1 cases; finite generated record array with observed stride, binding and terminator. Head replay pending. | codex (recorder) |
 | 0x0083FFF0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00947493 | Lifter: cross-entry boundary | L50: body continues from verified owner 0x009472C0; boundary fix first, then Codex fixture. | claude-6 (lifter) |
 | 0x009897C0 | Lifter/oracle: x87 state | x87 stack fault before fild at 0x009899d0 | claude-6 (lifter/oracle) |
@@ -96,7 +96,7 @@ Ownership: **3 claude-6 (gap)**, **13 claude-6 (lifter)**, **2 claude-6 (lifter/
 | 0x00A195D0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00A2F3B0 | Verification gap | unproven table at 0x00A2F4A5 | claude-6 (gap) |
 | 0x00B75EC0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
-| 0x00B7FF30 | Recorder: sentinel records | stack+8 record pointer, stride 8, first dword -1 terminator; zero-filled records do not terminate. | codex (recorder) |
+| 0x00B7FF30 | Recorder: replay pending | 3/3 private sentinel-records-v1 cases; finite generated record array with observed stride, binding and terminator. Head replay pending. | codex (recorder) |
 | 0x00B952C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00B955C0 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |
 | 0x00B97220 | Recorder: dispatch/return | Execution leaves the image; valid object/call-target or stack-cleanup evidence still needed. | codex (recorder) |

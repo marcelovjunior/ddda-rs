@@ -1,5 +1,15 @@
 # Milestones
 
+### L28c sentinel and finite-proof batch (2026-10-12, pending replay)
+
+- **+6/+18**, all 3/3: three longer finite proofs and three generated
+  sentinel-array inputs. Cumulative **+37/+111**; private **59,640 / 177,514**.
+- **180 light tests pass**; baseline **59,603 / 177,403** unchanged, audit
+  clean. Main merged; RESIDUALS marks **38 awaiting replay**.
+- **Next action:** finish seven smaller input-class trials; valid caller
+  state remains the main blocker for 34 dispatch rows. Boot stops first.
+
+
 ### L28c instruction-bound class batch (2026-10-12, pending replay)
 
 - **+11/+33**, all 3/3, from finite generated-state traces. Cumulative
