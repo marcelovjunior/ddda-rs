@@ -534,3 +534,20 @@ claude-6 (15):
    - claude-6's not-lifted group on the same route is unchanged:
      0x004AB440, 0x00DFECF0, 0x00E0E470, 0x00F9FBA0, 0x012E1A13,
      0x012F9D82, 0x012F1C9D.
+10. Preview on native-L28c (59,559 records: Codex's 0x00419100 and 11
+    constructor/title functions; generated locally, restored). Runtime
+    game tests 46/46. The boot passes the archive manager and more of
+    `sBbsRpgMain`'s constructor.
+    - Stop: "read of undefined x86 flag 0x1" (CF, the lifter's PARTIAL flag
+      state) in the lifted CRT `_qsort` 0x012EEB50. Guest frames: _qsort ←
+      0x00E0F590 ← 0x00E11E30 ← `sShader2`'s constructor 0x00E121D0 ←
+      `sBbsRpgMain`'s constructor 0x0041B400 ← 0x0041B3C0 ← app init
+      0x00DF3AC0 ← WinMain. Registers at the fault: eax 0xA89, ecx 0xA8A,
+      ebx 4, esp 0x7EFFD008, ebp 0x7EFFD114, esi 0x653E9654,
+      edi 0x653E6C30.
+    - 0x00E0F590 sorts 4-byte entries with the comparator 0x00E0F520
+      (verified; CMP then SBB, well-formed). In `_qsort` and `__shortsort`
+      (0x012EEAC0) every CF read follows a CMP, so the source document
+      (the disassembly) shows no undefined read. The fault comes from the
+      lifted body's flag model (e.g. after DIV / INC, after the comparator
+      call, or a branch join). Cause 2 (lifter). Owner: claude-6.
