@@ -272,5 +272,42 @@ class ImageBudgetTests(unittest.TestCase):
         self.assertEqual(ordinary['regs_in']['ecx'],0)
 
 
+    def test_caller_stack_is_opt_in_bounded_and_store_sensitive(self):
+        code=bytes.fromhex('8b4c2404 49 75fd c3')
+        ins,read,_=self.fixture(code)
+        self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True,ceiling=30))
+        args=struct.pack('<I',3)
+        c=image_bound(ins,read,0xf008000,guarded=True,caller_stack=args)
+        self.assertEqual(c['instructions'],8)
+        self.assertIn(0xf008004,c['protected'])
+        for kwargs in ({'caller_stack':args}, {'guarded':True,'caller_stack':bytes(129)}):
+            with self.assertRaises(ValueError):
+                image_bound(ins,read,0xf008000,**kwargs)
+        # A preceding concrete write takes precedence over initial input.
+        ins,read,_=self.fixture(bytes.fromhex('c744240402000000')+code)
+        self.assertEqual(image_bound(ins,read,0xf008000,guarded=True,
+                                    caller_stack=args)['instructions'],7)
+        # Neither the return address nor callee-local bytes are caller arguments.
+        for code in ('8b0c24 49 75fd c3','8b4c24fc 49 75fd c3','8b8c2484000000 49 75fd c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True,
+                                         caller_stack=bytes(128),ceiling=30))
+
+    def test_stack_policy_records_finite_branch_without_changing_old_policy(self):
+        code=bytes.fromhex('837c240400 7508 b9e02e0000 49 75fd c3')
+        with self.assertRaisesRegex(h.Rejected,'runaway'):
+            self.guarded_record(code,'guarded-objects-v1')
+        c=self.guarded_record(code,'guarded-stack-v1')
+        self.assertEqual(c['image_budget']['instructions'],24004)
+        self.assertEqual(c['regs_out']['ecx'],0)
+        self.assertEqual(c['regs_out']['esp'],c['regs_in']['esp']+4)
+        # Compute the argument address through the (abstractly unknown) saved
+        # return value. Its actual write must invalidate the inferred input.
+        prefix=bytes.fromhex('8b3c24 81ef')+struct.pack('<I',h.RET)
+        prefix+=bytes.fromhex('01e7 83c704 c70701000000')
+        with self.assertRaisesRegex(h.Rejected,'unknown output aliases a protected byte'):
+            self.guarded_record(prefix+code,'guarded-stack-v1')
+
+
 if __name__ == '__main__':
     unittest.main()
