@@ -1,5 +1,14 @@
 # Milestones
 
+### L28c string/constructed fixtures (2026-10-12, pending replay)
+
+- **+3/+9:** two string helpers and a checked constructed self-copy, 3/3
+  each. Cumulative **+10/+30**, private **59,602 / 177,400**.
+- Audit: all **59,592 baseline functions / 177,370 cases unchanged**;
+  no stale mocks or unexpected edits. **161 tests pass**; main merged.
+- Five recipes remain, including 0x00493AA0 set aside. **Next action:**
+  new boot stops first, otherwise checked state for 0x004A0C00's branch.
+
 ### L28c division/tail fixtures (2026-10-12, pending replay)
 
 - **+2/+6:** 0x0046A2D0 and 0x00DBA780 record 3/3; **161 tests pass**.

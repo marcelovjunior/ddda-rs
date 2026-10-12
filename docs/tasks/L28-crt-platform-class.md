@@ -35,6 +35,52 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### String and constructed-copy fixtures (2026-10-12, pending replay)
+
+**+3 functions / +9 cases, all 3/3:** 0x0048F330 and 0x00495520 use
+guarded-input-v1 with exact narrow-register/zero-vector facts; their proofs
+cover 59,359 and 532,884 instructions. 0x0048AB50 replays its accepted
+0x00489F80 constructor exactly, then binds both stack arguments to that
+constructed object (a self-copy); its proof covers 38,189 instructions.
+Each execution limit is its proved count plus the existing 20,000 margin.
+
+Cumulative **+10 functions / +30 cases** from the 15-recipe queue;
+native-L28c **59,602 / 177,400**. `L28c/string-constructed-audit.json`
+confirms all **59,592 baseline functions / 177,370 cases unchanged**,
+with no promotions, removals, unexpected edits or stale mocks. A Windows
+file-sharing error delayed the constructed vector rename: the pending
+file was checked to contain the identical prior cases plus precisely the
+three new cases before completing the rename and adoption bookkeeping.
+The subsequent full audit passed. Frozen base native-train3-orig untouched.
+
+**161 light tests pass** for the source through 1d22d152; no subsequent
+source edits. Main merged through 35b516ed before handoff. No Rust build;
+head integration replay remains required.
+
+**Five recipes remain:**
+
+- 0x00493AA0 stays aside as requested. Manager-first changes destination
+  reads/writes/MXCSR; destination-first changes manager reads/writes,
+  ECX/EDX outputs and calls. Neither order matches the accepted setup.
+- 0x004A0C00: constructor 0x00489F80, EAX bound to its input EAX,
+  records 0/3. The proof stops at conditional branch 0x004027E9 after
+  92 instructions; further callee/manager state is unresolved.
+- 0x00815C60: constructor 0x00811780, EDI bound to its input EAX,
+  records 0/3. The proof reaches COMISS at 0x00816522 after 9,319
+  instructions; floating-point comparison facts remain unresolved.
+- 0x00C9E0F0: narrow-register/zero-vector retry still records 0/3
+  (runaway). A valid serializer source/count recipe remains outstanding.
+- 0x00D29AF0: constructor 0x00D29820 supplies its nonempty default buffer;
+  ECX bound to its input ECX still records 0/3 (runaway). The proof retains
+  the 20-byte buffer count but stops after 21 instructions at allocator
+  dispatch 0x00D29B4C (CALL EAX, EAX=0); allocator-manager state remains
+  unresolved. The constructor alone does not establish that dispatch.
+
+Private logs: `narrow-vector-recipes.log`, `remaining-constructed-recipes.log`,
+`constructed-815c60-proof.log`, `remaining-constructed-proof.log` under L28c.
+**Next action:** prioritize any new boot stop; otherwise resolve the first
+unknown branch in 0x004A0C00 using checked caller/manager state.
+
 ### Division/tail fixtures (2026-10-12, pending replay)
 
 **+2/+6, all 3/3:** 0x0046A2D0 proves **151,141** instructions (limit
