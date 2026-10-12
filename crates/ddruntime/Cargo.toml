@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+unicorn-engine = { version = "=2.0.1", optional = true }
 ddnative-base = { path = "../ddnative-base" }
 ddnative = { path = "../ddnative", optional = true }
 ddexe = { path = "../ddexe" }
@@ -22,6 +23,10 @@ hostdisplay = { path = "../hostdisplay" }
 # and binds every service, and a call into game code stops as untranslated.
 default = ["game"]
 game = ["dep:ddnative"]
+# `emu`: the diagnostic emulator fallback for untranslated functions
+# (src/emu.rs, L51; also needs DDRUNTIME_EMU_FALLBACK=1 at run time).
+# Builds Unicorn's C sources, so CMake must be on PATH (VS Build Tools has it).
+emu = ["dep:unicorn-engine"]
 
 [[example]]
 name = "boot"
