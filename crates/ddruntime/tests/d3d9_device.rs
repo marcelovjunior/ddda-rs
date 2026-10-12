@@ -129,8 +129,9 @@ fn a_gamma_ramp_is_shown_on_a_full_screen_swap_chain_only() {
     com(&mut s, dev, 21, &[0, 0, DATA]);
     com(&mut s, dev, 17, &[0, 0, 0, 0]);
     assert!(recorded(|r| r.gamma.is_none()).unwrap(), "windowed: the ramp is not applied");
-    // full screen at the desktop mode
-    write_pp(&mut s, [1920, 1080, 22, 1, 0, 0, 1, hwnd, 0, 1, 75, 0, 60, 0]);
+    // full screen at the desktop mode (the host's, L34)
+    let d = ddruntime::d3d9::display().desktop;
+    write_pp(&mut s, [d.width, d.height, 22, 1, 0, 0, 1, hwnd, 0, 1, 75, 0, d.refresh, 0]);
     assert_eq!(com(&mut s, dev, 16, &[PP]), 0, "Reset to full screen");
     com(&mut s, dev, 17, &[0, 0, 0, 0]);
     let g = recorded(|r| r.gamma.clone()).unwrap().expect("the ramp reaches the backend");
