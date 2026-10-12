@@ -199,23 +199,74 @@ RETURN_STRATEGIES = tuple(MOCKZERO)
 INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', *RETURN_STRATEGIES)
 
 
-def import_pops(_cache={}):
-    """Named x86 WINAPI cleanup; resolve slots/initial targets from the PE.
+# Callee cleanup (bytes) of imported functions, from their documented x86
+# signatures on Microsoft Learn (and the Steamworks headers): WINAPI, STDAPI,
+# WSAAPI and SEC_ENTRY are __stdcall, so the callee pops 4 bytes per
+# parameter and 8 per 64-bit one; the steam_api C exports are __cdecl (0).
+# Only the mock's stack cleanup comes from here; effects and results stay
+# mocked and recorded. Names are DLL!export (lowercase DLL) or DLL!ordinal:N.
+IMPORT_CLEANUP = {
+    # KERNEL32
+    'kernel32.dll!EncodePointer': 4, 'kernel32.dll!DecodePointer': 4,          # (PVOID)
+    'kernel32.dll!EnterCriticalSection': 4, 'kernel32.dll!LeaveCriticalSection': 4,  # (LPCRITICAL_SECTION)
+    'kernel32.dll!InterlockedIncrement': 4, 'kernel32.dll!InterlockedDecrement': 4,  # (LONG volatile *)
+    'kernel32.dll!Sleep': 4,                                                     # (DWORD)
+    'kernel32.dll!GetLastError': 0,                                              # (void)
+    'kernel32.dll!LoadLibraryW': 4,                                              # (LPCWSTR)
+    'kernel32.dll!GetProcAddress': 8,                                            # (HMODULE, LPCSTR)
+    'kernel32.dll!QueryPerformanceCounter': 4, 'kernel32.dll!QueryPerformanceFrequency': 4,  # (LARGE_INTEGER *)
+    'kernel32.dll!MultiByteToWideChar': 24,                                      # (UINT, DWORD, LPCCH, int, LPWSTR, int)
+    'kernel32.dll!VerSetConditionMask': 16,                                      # (ULONGLONG, DWORD, BYTE)
+    'kernel32.dll!VerifyVersionInfoA': 16,                                       # (LPOSVERSIONINFOEXA, DWORD, DWORDLONG)
+    'kernel32.dll!RtlUnwind': 16,                                                # (PVOID, PVOID, PEXCEPTION_RECORD, PVOID)
+    # USER32
+    'user32.dll!ScreenToClient': 8,                                              # (HWND, LPPOINT)
+    'user32.dll!GetCursorPos': 4, 'user32.dll!ClipCursor': 4,                    # (LPPOINT) / (const RECT *)
+    'user32.dll!ShowCursor': 4,                                                  # (BOOL)
+    'user32.dll!SystemParametersInfoA': 16,                                      # (UINT, UINT, PVOID, UINT)
+    # IMM32
+    'imm32.dll!ImmGetContext': 4, 'imm32.dll!ImmGetDefaultIMEWnd': 4,            # (HWND)
+    'imm32.dll!ImmReleaseContext': 8,                                            # (HWND, HIMC)
+    'imm32.dll!ImmGetOpenStatus': 4,                                             # (HIMC)
+    'imm32.dll!ImmSetCompositionWindow': 8, 'imm32.dll!ImmSetCandidateWindow': 8,  # (HIMC, LP...FORM)
+    'imm32.dll!ImmGetCompositionStringW': 16,                                    # (HIMC, DWORD, LPVOID, DWORD)
+    'imm32.dll!ImmGetCandidateListW': 16,                                        # (HIMC, DWORD, LPCANDIDATELIST, DWORD)
+    'imm32.dll!ImmGetCandidateListCountA': 8,                                    # (HIMC, LPDWORD)
+    # Secur32 (SEC_ENTRY)
+    'secur32.dll!FreeContextBuffer': 4, 'secur32.dll!DeleteSecurityContext': 4,  # (PVOID) / (PCtxtHandle)
+    'secur32.dll!InitializeSecurityContextA': 48,                                # 12 parameters
+    # AVIFIL32 / MSVFW32 (STDAPI / VFWAPI)
+    'avifil32.dll!AVIFileInit': 0,                                               # (void)
+    'avifil32.dll!AVIFileOpenA': 16,                                             # (PAVIFILE *, LPCSTR, UINT, LPCLSID)
+    'avifil32.dll!AVIFileCreateStreamA': 12,                                     # (PAVIFILE, PAVISTREAM *, AVISTREAMINFOA *)
+    'avifil32.dll!AVIMakeCompressedStream': 16,                                  # (PAVISTREAM *, PAVISTREAM, AVICOMPRESSOPTIONS *, CLSID *)
+    'avifil32.dll!AVIStreamSetFormat': 16,                                       # (PAVISTREAM, LONG, LPVOID, LONG)
+    'msvfw32.dll!ICCompressorChoose': 24,                                        # (HWND, UINT, LPVOID, LPVOID, PCOMPVARS, LPSTR)
+    # DINPUT8
+    'dinput8.dll!DirectInput8Create': 20,                                        # (HINSTANCE, DWORD, REFIID, LPVOID *, LPUNKNOWN)
+    # WS2_32 by ordinal (WSAAPI): 10 ioctlsocket, 18 select, 151 __WSAFDIsSet
+    'ws2_32.dll!ordinal:10': 12, 'ws2_32.dll!ordinal:18': 20, 'ws2_32.dll!ordinal:151': 8,
+    # steam_api (S_API ... __cdecl): the caller cleans up
+    'steam_api.dll!SteamAPI_RegisterCallback': 0, 'steam_api.dll!SteamAPI_UnregisterCallback': 0,
+}
 
-    Sources: Microsoft Learn EncodePointer/DecodePointer (Winbase.h),
-    LeaveCriticalSection (synchapi.h): each has one pointer argument.
-    See NATIVE_PIPELINE.md for links. No import behavior is emulated here.
-    """
+
+def import_pops(_cache={}):
+    """Documented x86 cleanup per IAT slot (IMPORT_CLEANUP); resolve slots
+    and their initial targets from the PE. No import behavior is emulated."""
     if EXE not in _cache:
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'runtime'))
         from measure import PE
         pe = PE(EXE)
-        names = {'kernel32.dll!'+n for n in ('EncodePointer','DecodePointer','LeaveCriticalSection')}
-        slots = {a:4 for a,n in pe.imports().items()
-                 if n.split('!')[0].lower()+'!'+n.split('!')[1] in names}
-        _cache[EXE] = slots, {pe.word(a):v for a,v in slots.items()}
+        slots = {}
+        for a, n in pe.imports().items():
+            dll, _, name = n.partition('!')
+            key = dll.lower() + '!' + name
+            if key in IMPORT_CLEANUP:
+                slots[a] = IMPORT_CLEANUP[key]
+        _cache[EXE] = slots, {pe.word(a): v for a, v in slots.items()}
     return _cache[EXE]
 
 
@@ -269,14 +320,18 @@ class SparseInputs:
         return struct.unpack('<I',struct.pack('<f',value))[0]
 
 
-def static_pop(target, _cache={}):
+STATIC_POP_LIMIT = 20000  # lift.decode_body's instruction limit
+
+
+def static_pop(target, _cache={}, limit=None):
     """Bounded reachable ret cleanup, following direct tails, never neighbours.
 
     Proven bounded switches are followed; unknown indirect or inconsistent
     exits retain the zero-pop fallback.
     The cache includes the reader so synthetic images cannot contaminate it.
     """
-    key = (target, code, image)
+    limit = STATIC_POP_LIMIT if limit is None else limit
+    key = (target, code, image, limit)
     if key not in _cache:
         from capstone import Cs, CS_ARCH_X86, CS_MODE_32
         md = Cs(CS_ARCH_X86, CS_MODE_32)
@@ -287,7 +342,7 @@ def static_pop(target, _cache={}):
             pc = todo.pop()
             history = []
             while pc not in seen:
-                if len(seen) >= 512:
+                if len(seen) >= limit:
                     unknown = True
                     break
                 seen.add(pc)
@@ -617,7 +672,8 @@ def frame_text(contract):
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
-               max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None):
+               max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
+               terminal=False):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -658,6 +714,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     exclusive with zero_inputs and recorded in successful vectors. Original
     image bytes, executed instructions and rejection checks never change.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
+
+    `terminal` (terminal-v1) accepts a root call at a noreturn site into a
+    mocked noreturn entry as the end of the case: the call event is recorded
+    with "terminal": true and no "out", the run stops at the callee's entry
+    (the return address pushed) and that state is the case's result. The
+    replay stops at the same call_ext and compares there. Without it such
+    runs are rejected, as before.
 
     `frame_contracts` maps closed callees with a caller-frame exit
     (frame_exit, e.g. a promoted `__SEH_prolog4`) to that contract. Their
@@ -899,6 +962,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     frames = []  # (return PC, caller ESP), distinguishing calls into shared code
     root_frame = [True]
     entering = [False]  # a call was just made: the next instruction is the callee's entry
+    terminal_call = [None]  # return PC of a root call at a noreturn site (terminal runs)
+    stopped = [False]       # a terminal call ended the case
     frame_contracts = {a: (c[0], c[1], tuple(tuple(t) for t in c[2])) for a, c in (frame_contracts or {}).items()}
     flow = {}
     own_ret = [False]  # the previous instruction was one of the function's own `ret`s
@@ -978,6 +1043,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # The guard is for runs that reach a noreturn function. The root's own
         # body is the code under test (e.g. `__exit` 0x012EDC4B returns
         # syntactically; its callee does the exit) and runs like any root.
+        if (terminal_call[0] is not None and frames and frames[-1][0] == terminal_call[0]
+                and addr in noreturn_targets and addr not in lifted):
+            stopped[0] = True
+            calls.append({"target": addr, "regs": {n: uc_.reg_read(r) for n, r in GPR}, "terminal": True})
+            uc_.emu_stop()
+            return
         if addr in noreturn_targets and addr != address:
             bad.append(f"noreturn target at {addr:#010x}")
             uc_.emu_stop()
@@ -986,6 +1057,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # Unicorn has already decoded this instruction. Reading an arbitrary
         # 15-byte window can cross an unmapped next page even when the whole
         # instruction is mapped, breaking both premap and float checks.
+        if stopped[0]:
+            return
         instruction_sizes[addr] = size
         esp_now = uc_.reg_read(UC_X86_REG_ESP)
         if own_ret[0] and addr != RET:
@@ -1001,9 +1074,12 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     rets[addr] = False
             own_ret[0] = rets[addr]
             if addr in noreturn_sites:
-                bad.append(f"noreturn call at {addr:#010x}")
-                uc_.emu_stop()
-                return
+                if terminal and end is not None:
+                    terminal_call[0] = addr + size
+                else:
+                    bad.append(f"noreturn call at {addr:#010x}")
+                    uc_.emu_stop()
+                    return
         # The ext recorder already rejects stray returns in on_ext. Closed
         # runs must not accidentally execute seeded heap/stack bytes either.
         # The only non-image code we intentionally execute is the st0 capture.
@@ -1147,6 +1223,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     local_allocations = local_alloc_sites(address, body) if end is not None else set()
 
     def on_ext(uc_, pc, size, _):
+        if stopped[0]:
+            return
         # a call to the function's own entry (recursion) leaves it like any
         # other call: the lifted code makes it through call_ext, so mock it
         recursion = pc == address and branch[0] is not None and branch[0].mnemonic == "call"
@@ -1302,7 +1380,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         bad.append(machine.problem)
     # Caller-frame helpers (frame_exit) are checked against their exact
     # derived exit ESP; every other function keeps the ordinary range.
-    contract = frame_exit(address, body) if not bad and body is not None else None
+    # A terminal case ends at the noreturn callee's entry, not at a return.
+    contract = frame_exit(address, body) if not bad and body is not None and not stopped[0] else None
     stack_contract = None
     if not bad and caller_frame(contract):
         want = regs_in[contract[0]] + contract[1]
@@ -1315,7 +1394,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         if not bad and uc.reg_read(UC_X86_REG_ESP) != want & 0xFFFFFFFF:
             bad.append(f"returned with ESP not {frame_text(contract)} (caller-frame contract)")
         stack_contract = {"rule": "caller-frame-v1", "exit_esp": frame_text(contract)}
-    elif not bad and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
+    elif not bad and not stopped[0] and not (4 <= ((uc.reg_read(UC_X86_REG_ESP) - regs_in["esp"]) & 0xFFFFFFFF) <= 0x404):
         bad.append("returned with a misaligned stack")
     if not bad and uc.reg_read(UC_X86_REG_FPSW) & 0x40:
         bad.append("x87 stack fault")  # the Rust model has no empty/full-stack values
@@ -1367,4 +1446,5 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             **({"nan_guard_retired": sorted(retired)} if retired else {}),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {}),
-            **({"stack_contract": stack_contract} if stack_contract else {})}
+            **({"stack_contract": stack_contract} if stack_contract else {}),
+            **({"terminal": True} if stopped[0] else {})}
