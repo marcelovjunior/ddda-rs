@@ -117,7 +117,7 @@ def trial(args):
             kw['input_layout'] = layout
         try:
             result = h.run_sparse(f['addr'], seed, end=f['addr']+f['size'], lifted=_CLOSED,
-                                  body=f['body'], x87_push=f.get('x87_push',[]),
+                                  body=f['body'], x87_push=f.get('x87_push',[]), x87_pop=f.get('x87_pop', ()),
                                   noreturn_sites=f.get('noreturn_sites',[]), noreturn_targets=_NORETURN,
                                   original_entry=f.get('original_entry',False), x87_entry=f.get('x87_entry',0), max_insn=f.get('insn_budget') or lift.INSN_BUDGET,
                                   frame_contracts=_FRAMES, terminal=terminal, max_seconds=remaining, **kw)
@@ -272,7 +272,7 @@ def _rerecord(f, closed, frames, noreturn, kw, seeds, seconds):
         if len(new) == seeds or time.monotonic() - start > seconds:
             break
         seed = (a << 8) ^ index
-        mode = (dict(end=a+f['size'], lifted=frozenset(closed), x87_push=f.get('x87_push', []),
+        mode = (dict(end=a+f['size'], lifted=frozenset(closed), x87_push=f.get('x87_push', []), x87_pop=f.get('x87_pop', ()),
                      original_entry=f.get('original_entry', False)) if f.get('ext') else dict(size=f['size']))
         try:
             r = h.run_sparse(a, seed, body=f['body'], noreturn_sites=f.get('noreturn_sites', []),
@@ -308,8 +308,8 @@ def refresh_closed(root, seeds=3, seconds=20):
         try:
             arms = lift.lift(a, f['size'], closed, ext=bool(f.get('ext')))
             prior = {k:v for k,v in f.items() if k not in ('x87_entry','insn_budget')}
-            g = dict(prior, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
-                     **lift.BODY_INFO[a])
+            g = lift.drop_absent(dict(prior, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
+                                      **lift.BODY_INFO[a]), a)
         finally:
             lift.release_body(a, f['size'])
         fresh = _rerecord_any(g, closed, frames, noreturn, _inputs(old[a]), seeds, seconds)
@@ -379,6 +379,7 @@ def promote(root, seeds=3, seconds=20, targets=None):
             lift.release_body(a, f['size'])
         g = {key: value for key, value in f.items() if key not in ('ext', 'x87_entry')}
         g.update(arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []), **lift.BODY_INFO[a])
+        lift.drop_absent(g, a)
         if g['calls']:
             continue
         contract = h.frame_exit(a, g['body'])
@@ -407,8 +408,8 @@ def promote(root, seeds=3, seconds=20, targets=None):
             f = selected[index[a]]
             try:
                 arms = lift.lift(a, f['size'], now, ext=True)
-                g = dict(f, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
-                         **lift.BODY_INFO[a])
+                g = lift.drop_absent(dict(f, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
+                                          **lift.BODY_INFO[a]), a)
             except lift.Unsupported:
                 failed.add(a)
                 continue
@@ -468,6 +469,22 @@ def refresh(root, strategies, seeds, seconds, only=None):
     stale = [f for f in selected if any(r.startswith(('stale body', 'tail call into its own inlined code'))
                                         for r in gaps.get(f['addr'], []))
              and (only is None or f['addr'] in only)]
+    # L50: a named ext record whose recording contract the current lifter
+    # changes (vector_key: e.g. the x87 values its mocks pop) is stale too
+    named = {f['addr'] for f in stale}
+    for f in selected:
+        if only is None or f['addr'] not in only or f['addr'] in named or not f.get('ext'):
+            continue
+        try:
+            lift.lift(f['addr'], f['size'], closed, ext=True)
+            g = lift.drop_absent(dict(f, x87_push=lift.X87_PUSH_SITES.get(f['addr'], []), **lift.BODY_INFO[f['addr']]),
+                                 f['addr'])
+            if lift.vector_key(g) != lift.vector_key(f):
+                stale.append(f)
+        except lift.Unsupported:
+            stale.append(f)  # reported below as a lift error
+        finally:
+            lift.release_body(f['addr'], f['size'])
     report = dict(closed_stale=[f['addr'] for f in stale if not f.get('ext')], functions={})
     position = {f['addr']: k for k, f in enumerate(selected)}
     for f in [f for f in stale if f.get('ext')]:
@@ -475,8 +492,8 @@ def refresh(root, strategies, seeds, seconds, only=None):
         old = [c for c in cases if c['addr'] == a]
         try:
             arms = lift.lift(a, f['size'], closed, ext=True)
-            g = dict(f, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
-                     **lift.BODY_INFO[a])
+            g = lift.drop_absent(dict(f, arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []),
+                                      **lift.BODY_INFO[a]), a)
         except lift.Unsupported as e:
             report['functions'][a] = dict(error=f'lift: {e}')
             continue
@@ -501,7 +518,7 @@ def refresh(root, strategies, seeds, seconds, only=None):
                 seed = (a << 8) ^ index
                 try:
                     r = h.run_sparse(a, seed, end=a+g['size'], lifted=frozenset(closed), body=g['body'],
-                                     x87_push=g.get('x87_push', []), noreturn_sites=g.get('noreturn_sites', []),
+                                     x87_push=g.get('x87_push', []), x87_pop=g.get('x87_pop', ()), noreturn_sites=g.get('noreturn_sites', []),
                                      noreturn_targets=noreturn, original_entry=g.get('original_entry', False),
                                      x87_entry=g.get('x87_entry', 0),
                                      max_insn=g.get('insn_budget') or lift.INSN_BUDGET,
@@ -581,7 +598,7 @@ def sweep(root, seconds, only=None):
                     seed = (a << 8) ^ (0x80 + attempt)
                     try:
                         r = h.run_sparse(a, seed, end=a+f['size'], lifted=frozenset(closed), body=f['body'],
-                                         x87_push=f.get('x87_push', []), noreturn_sites=f.get('noreturn_sites', []),
+                                         x87_push=f.get('x87_push', []), x87_pop=f.get('x87_pop', ()), noreturn_sites=f.get('noreturn_sites', []),
                                          noreturn_targets=noreturn, original_entry=f.get('original_entry', False),
                                          x87_entry=f.get('x87_entry', 0), max_insn=f.get('insn_budget') or lift.INSN_BUDGET,
                                          frame_contracts=frames, max_seconds=max(1, seconds - (time.monotonic() - start)),

@@ -35,6 +35,65 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Frame and scalar inputs: +16/+48 (2026-10-12, pending replay)
+
+Latest main **1ed8c4aa** merged before handoff (train 14 still credits
+**59,391 / 59,440**). Every addition below records **3/3**:
+
+| General input strategy | Added functions | Commit / existing strategy |
+|---|---|---|
+| Fixed frame with interleaved arithmetic | 4644D0, 691AE0, 691E50, 692A40 | 093c5223 |
+| Aligned locals restored through stable EBP | 7BEA60, 9D0E70, A195D0, BD45C0 | 4e20bc48 |
+| Entry outgoing area consumed by final call | B75EC0 | 496bd72e |
+| Fixed local cleanup before a tail jump | 7126C0 | 912d5ba2 |
+| Checked null-memory return path | CED240 | 347fae6e |
+| Inline exception frame with matching unlink | CEEBC0 | 50cdbee2 |
+| Scalar-one ordinary mock returns | 410000, E0D750 | 7b862033 |
+| Checked global initializer state | DA46C0 | existing constructed-v1 |
+| Paired temporary EBP saves | 12FF0F0 | 01297649, tests d44e4adb |
+
+**202 light tests pass after merging main.** Private totals are
+**59,678 functions / 177,628 cases**, **+16/+48**. Every per-batch audit
+preserves all **59,662 functions / 177,580 cases** from
+`L28c/prefix-before.json`. Final `L28c/floating-one-call-v1-audit.json`
+confirms no changed records/cases, promotions, removals or stale mocks.
+All recording workers have exited. Original instruction limits and global
+return/memory/CPU guards remain unchanged; full Rust replay is still pending.
+
+The null-return rule checks the actual generated dword before using the
+decoded EAX=0/RET path; it makes no cleanup claim for the virtual branch.
+The scalar-one strategy covers an input value absent from the earlier
+multiples-of-four palette, completing two waits without raising the limit.
+DA46C0 uses exact replay of verified initializer **137E5C0**, which seeds the
+global state through verified **D006C0**. Every accepted setup observation
+matches before its state is used. Temporary EBP saves are tracked on every
+acyclic path; direct cleanup may consume only arguments, indirect calls have
+no pending arguments, and each frame save must be restored before LEAVE.
+
+**Unresolved trials:** EBP-frame inputs for 4EE720, 689960 and 815C60, and
+scalar-one inputs for those three plus 12A5B30 and 1314A90, all reach the
+instruction limit (3/3 attempts each). D29AF0's checked-caller attempts from
+C9DDF0, C9DF30 and C9EDD0 also reach that limit. No replacement cases were
+adopted for these rows. **493AA0 remains set aside.** These observations do
+not establish that the underlying functions are unbounded.
+
+**Updated map and next action:** RESIDUALS has **49 rows, 16 pending replay**.
+Owner confirmations #9784/#9823 move the three independent CRT tail entries
+12F693F, 12F6A6F and 1300DFF to the recorder lane: **34 recorder / 15 lifter
+or gap**, with **18 recorder rows unfinished**. L50 **a395f418** now includes
+130070B inside 12F693F, 12F6A6F, 1329888 and 12F6948. Prepare with that rule
+for the next shared-tail batch; check 12F6A78's body at the same time. Boot
+requests take priority. L50 also flags currently verified 7128B0, 712D90 and
+A68400 for possible input refresh after the x87 contract change; they remain
+outside this non-verified census and were not changed in this append batch.
+
+**Handoff:** `E:/ddda-re/notes/native-L28c`, frozen base
+`E:/ddda-re/notes/native-train3-orig` untouched. Receipt:
+`L28c/frame-input-handoff.json`. SHA-256:
+
+- `patterns/lift.json`: `acaa685ddec1f9c15410d8faec9da80cd261bfb569e8a52667c2f2722ac4243c`
+- `vectors/lift.json`: `b038e3777a8a5102a069a108f31d884afc4f871667e0c72497df29009bd64115`
+
 ### Bounded callee cleanup inputs: +9/+27 (2026-10-12, pending replay)
 
 **All nine targeted dispatchers record 3/3:** 685B40, 83FFF0, B952C0,

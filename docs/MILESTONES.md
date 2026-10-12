@@ -1,5 +1,15 @@
 # Milestones
 
+### L28c frame and scalar input batches (2026-10-12, pending replay)
+
+- **+16 functions / +48 cases**, all 3/3; private **59,678 / 177,628**.
+  Every audit preserves all **59,662 / 177,580** baseline records/cases.
+- Latest main **1ed8c4aa** merged; **202 light tests pass**. All recorders
+  exited. RESIDUALS: **49 rows, 16 pending**, 34 recorder / 15 lifter or gap.
+- **Next action:** prepare shared CRT tails with the owner-confirmed L50
+  rule; remaining bound/caller-state trials still hit the instruction limit.
+
+
 ### L28c bounded callee cleanup batch (2026-10-12, pending replay)
 
 - **+9/+27**, all targeted dispatchers 3/3; this round **+16/+48**.

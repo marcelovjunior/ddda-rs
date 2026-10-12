@@ -32,6 +32,28 @@ class X87Tests(unittest.TestCase):
         self.assertEqual(lift.X87_PUSH_SITES[0x400000], [0x400005])
         self.assertIn("call_ext", " ".join(arms))
 
+    def test_a_mocked_callee_pops_what_it_takes(self):
+        # L50 (0x009897C0 looping through _CIfmod): mov ebx,3; L: fld1;
+        # call 0x400100; dec ebx; jnz L; ret -- the callee `fstp st(0); ret`
+        # takes one value
+        code = (bytes.fromhex("bb03000000" "d9e8" "e8f4000000" "4b" "75f6" "c3").ljust(0x100, b"\xcc")
+                + bytes.fromhex("ddd8c3"))
+        image = (0x400000, [(0x400000, code.ljust(0x1000, b"\x90"))])
+        with patch.object(harness, "image", return_value=image), patch.dict(lift._MOCK_POPS, clear=True):
+            lift.lift(0x400000, 0x10, ext=True)
+            self.assertEqual(lift.BODY_INFO[0x400000]["x87_pop"], [[0x40000C, 1]])
+            body = lift.BODY_INFO[0x400000]["body"]
+            # without the pops the loop grows the stack: the walk meets it
+            with patch.object(lift, "mock_pops", return_value=0):
+                with self.assertRaisesRegex(lift.Unsupported, "x87-overflow"):
+                    lift.lift(0x400000, 0x10, ext=True)
+            r = harness.run_sparse(0x400000, 17, zero_inputs=True, end=0x400010, body=body,
+                                   x87_pop=[[0x40000C, 1]])
+            self.assertEqual([e["out"].get("st_pop") for e in r["calls"]], [1, 1, 1])
+            self.assertEqual(r["x87_depth"], 0)
+            self.assertEqual(harness.run_sparse(0x400000, 17, zero_inputs=True, end=0x400010,
+                                                body=body)["x87_depth"], 3)
+
     def test_entry_contract_walks_through_a_closed_x87_callee(self):
         # call 0x400100 (closed, pushes one value, like __fload_withFB);
         # faddp st(1); fstp dword [0x2000]; ret -> the caller supplies one value
