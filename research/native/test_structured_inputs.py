@@ -127,6 +127,14 @@ class InputTests(unittest.TestCase):
         with self.assertRaisesRegex(h.Rejected,'function time budget'):
             self.record(bytes.fromhex('ebfe'),'small-v1',max_seconds=0)
 
+    def test_retry_reruns_only_matching_failures(self):
+        rec=lambda a,reason,cases=():dict(addr=a,body_key='k',requested_seeds=3,seconds=20,
+                                         attempts=[dict(reason=reason)],cases=list(cases))
+        prior=[rec(1,'memset of 0x80000 bytes (0x80000 in this run)'),rec(2,'runaway'),rec(3,'ok',[{}]),
+               dict(rec(4,'memset of 0x60000 bytes'),requested_seeds=12)]
+        self.assertEqual(trials.done_keys(prior,3,20),{(1,'k'),(2,'k'),(3,'k')})
+        self.assertEqual(trials.done_keys(prior,3,20,'memset|memcpy'),{(2,'k'),(3,'k')})
+
     def test_trial_preserves_failure_reason_and_seed(self):
         f=dict(addr=0x400000,size=1,body=[0x400000],calls=[],ext=True)
         with patch.object(h,'run_sparse',side_effect=h.Rejected('runaway')):
@@ -164,5 +172,76 @@ class InputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'boundary changed'):
                 trials.check_boundary(root,[{**old,'body':[1,3]},new])
 
+    def promote_fixture(self, root, caller_records):
+        ext=lambda a,arms=('arm',):dict(addr=a,size=4,body=[a],calls=[],arms=list(arms),ext=True)
+        free,mocked,calling,unwanted=ext(0x10),ext(0x20),ext(0x30,('x86::call_ext(m, cpu, 0x99)',)),ext(0x40)
+        user=ext(0x60,('{ let t = 0x20u32; x86::call_ext(m, cpu, t); }','{ let t = 0x70u32; x86::call_ext(m, cpu, t); }'))
+        plain=ext(0x70)
+        caller=dict(addr=0x50,arms=['{ let t = 0x10u32; x86::call_ext(m, cpu, t); }',
+                                    '{ let t = 0x20u32; x86::call_ext(m, cpu, t); }',
+                                    '{ let t = 0x70u32; x86::call_ext(m, cpu, t); }',
+                                    '(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x30))(m, cpu);'])
+        cases=[dict(addr=0x10,input_strategy='small-v1'),dict(addr=0x20),
+               dict(addr=0x60,input_strategy='objects-mockzero-v1',calls=[{'target':0x20},{'target':0x70}])]
+        for path,value in [('patterns/lift.json',[free,mocked,calling,unwanted,user,plain]),('vectors/lift.json',cases),
+                           ('patterns/structured_candidates.json',[caller])]:
+            trials.write(root/path,value)
+        runs=[]
+        def run(a,seed,**kw):
+            runs.append((a,kw.get('input_strategy'),'end' in kw,0x20 in kw.get('lifted',())))
+            if a==0x60 and not caller_records:
+                raise h.Rejected('runaway')
+            return dict(regs_in={},fresh=True)
+        lifts=[]
+        def relift(a,size,callable,ext=False):
+            lifts.append((a,ext,0x20 in callable));return ['closed arm' if not ext else 'ext arm']
+        with (patch.object(trials.lift,'seed_closed_contracts',return_value=set()),
+              patch.object(trials.lift,'lift',side_effect=relift),
+              patch.object(trials.lift,'release_body'),
+              patch.object(trials.lift,'noreturn_entries',return_value=set()),
+              patch.dict(trials.lift.BODY_INFO,{a:dict(body=[a]) for a in (0x10,0x20,0x30,0x40,0x60,0x70)}),
+              patch.object(h,'run_sparse',side_effect=run),
+              patch.object(h,'frame_exit',side_effect=lambda a,body:('ebp',4,()) if a in (0x10,0x20) else ('esp',4,())),
+              contextlib.redirect_stdout(io.StringIO())):
+            (root/'structured-random.jsonl').write_text('')
+            with self.assertRaisesRegex(ValueError,'archive the trial logs'):
+                trials.promote(root)
+            (root/'structured-random.jsonl').unlink()
+            trials.promote(root)
+        return {f['addr']:f for f in trials.read(root/'patterns/lift.json')},trials.read(root/'vectors/lift.json'),runs
+
+    def test_promotion_rerecords_mocking_callers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'patterns').mkdir();(root/'vectors').mkdir()
+            selected,out,runs=self.promote_fixture(root,caller_records=True)
+            for a in (0x10,0x20):
+                self.assertNotIn('ext',selected[a])
+                self.assertEqual(selected[a]['arms'],['closed arm'])
+                self.assertEqual(selected[a]['frame_exit'],['ebp',4,[]])
+            self.assertEqual(selected[0x30]['arms'],['x86::call_ext(m, cpu, 0x99)'])   # makes a call
+            self.assertEqual(selected[0x40]['arms'],['arm'])                          # no candidate calls it
+            self.assertTrue(selected[0x70]['ext'] and selected[0x70]['arms']==['arm'])   # ordinary and mocked
+            self.assertTrue(selected[0x60]['ext'])
+            self.assertEqual(selected[0x60]['arms'],['ext arm'])                      # re-lifted against 0x20 closed
+            self.assertIn((0x10,'small-v1',False,False),runs)
+            self.assertIn((0x60,'objects-mockzero-v1',True,True),runs)
+            self.assertEqual(sorted({c['addr'] for c in out}),[0x10,0x20,0x60])
+            self.assertTrue(all(c.get('fresh') and c['body_key']==trials.lift.vector_key(selected[c['addr']]) for c in out))
+            self.assertEqual([c['seed'] for c in out if c['addr']==0x10],[(0x10<<8)^i for i in (1,2,3)])
+            self.assertEqual(trials.frame_contracts(list(selected.values())),{0x10:['ebp',4,[]],0x20:['ebp',4,[]]})
+            self.assertEqual(trials.read(root/'structured-promoted.json'),
+                             dict(promoted=[0x10,0x20],rerecorded=[0x60],kept_ext=[]))
+
+    def test_promotion_keeps_target_ext_when_a_caller_cannot_rerecord(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'patterns').mkdir();(root/'vectors').mkdir()
+            selected,out,runs=self.promote_fixture(root,caller_records=False)
+            self.assertNotIn('ext',selected[0x10])
+            self.assertTrue(selected[0x20]['ext'] and selected[0x20]['arms']==['arm'])
+            self.assertEqual(selected[0x60]['arms'][0],'{ let t = 0x20u32; x86::call_ext(m, cpu, t); }')
+            self.assertIn(dict(addr=0x20),out)
+            self.assertIn(dict(addr=0x60,input_strategy='objects-mockzero-v1',calls=[{'target':0x20},{'target':0x70}]),out)
+            self.assertEqual(trials.read(root/'structured-promoted.json'),
+                             dict(promoted=[0x10],rerecorded=[],kept_ext=[0x20]))
 
 if __name__=='__main__':unittest.main()
