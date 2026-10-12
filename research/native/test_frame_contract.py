@@ -159,6 +159,18 @@ class FrameContractTests(unittest.TestCase):
         self.assertEqual(c['regs_out']['esp'],esp)
         self.assertIn([esp,'0a004000'+'01000000'+c['regs_in']['ebp'].to_bytes(4,'little').hex()],c['writes'])
 
+    def test_terminal_at_a_tail_jump_into_a_noreturn_entry(self):
+        # push 1; jmp 0x400100 (a noreturn entry, as `_purecall` jumps to `_abort`)
+        code=bytes.fromhex('6a01e9f9000000')
+        body,(p1,p2)=self.image(code)
+        with p1,p2,patch.object(h,'static_pop',return_value=0):
+            run=lambda **kw:h.run_sparse(0x400000,9,body=body,end=0x400000+len(code),noreturn_targets={0x400100},**kw)
+            with self.assertRaisesRegex(h.Rejected,'noreturn target at 0x00400100'):
+                run()
+            c=run(terminal=True)
+        self.assertEqual(c['calls'],[dict(target=0x400100,regs=c['regs_out'],terminal=True)])
+        self.assertEqual(c['regs_out']['esp'],c['regs_in']['esp']-4)
+
     def test_terminal_at_a_call_whose_return_path_is_int3_padding(self):
         # push 1; call 0x400100 (not a known noreturn entry); pop esi; int3
         code=bytes.fromhex('6a01e8f90000005ecc')

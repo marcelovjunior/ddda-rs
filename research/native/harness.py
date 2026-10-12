@@ -1141,6 +1141,16 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             calls.append({"target": addr, "regs": {n: uc_.reg_read(r) for n, r in GPR}, "terminal": True})
             uc_.emu_stop()
             return
+        if (terminal and end is not None and addr in noreturn_targets and addr != address
+                and addr not in lifted and not frames and branch[0] is not None
+                and branch[0].mnemonic == "jmp"):
+            # L45: a root tail jump into a mocked noreturn entry (`_purecall`
+            # 0x012EE1A1: jmp _abort) ends the case like a call there; no
+            # return address is pushed, the registers are the callee's entry.
+            stopped[0] = True
+            calls.append({"target": addr, "regs": {n: uc_.reg_read(r) for n, r in GPR}, "terminal": True})
+            uc_.emu_stop()
+            return
         if addr in noreturn_targets and addr != address:
             bad.append(f"noreturn target at {addr:#010x}")
             uc_.emu_stop()
