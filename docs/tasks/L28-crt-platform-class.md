@@ -35,6 +35,17 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Explicit checked bindings (2026-10-12)
+
+Checked producer return values can be explicit method-register proof inputs;
+other entry registers remain unknown. Mismatched bindings and ESP bindings
+reject. Stack allocation helper tests use plain compiler terminology and
+check that the return address is preserved when the callee adjusts ESP.
+**145 light tests pass; 59,591 records / 177,367 cases unchanged**,
+`L28c/bindings-audit.json`. The three-producer 0x00493AA0 recipe still
+records 0/3. **Next:** priority boot stop 16, 0x00DC8270, with checked
+0x00DD5ED0 constructor state and a proof-derived instruction budget.
+
 ### Affine input relationships (2026-10-12)
 
 The guarded-store proof tracks linear expressions modulo 2^32 through full

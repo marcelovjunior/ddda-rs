@@ -122,6 +122,16 @@ class ConstructedTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'differs from captured'):
             c.validate_state({**state, 'writes': {address: 1}})
 
+    def test_explicit_setup_return_binding_is_a_proof_value(self):
+        self.fixture('b8401f0000 c3','31c0 40 49 75fc c3')
+        f=dict(addr=0x400000)
+        accepted=dict(addr=f['addr'],seed=1,body_key='test',
+                      **self.run_body(f,1,input_strategy='zero-call-v1'))
+        state,_=c.construct(f,accepted,{'ecx':['regs_out','eax']},self.run_body,'test')
+        result=self.run_body(dict(addr=0x400100),2,initial_state=state,input_strategy='guarded-stores-v1')
+        self.assertEqual(result['regs_out']['eax'],8000)
+        self.assertIn('image_budget',result)
+
     def test_method_overwrite_invalidates_setup_count(self):
         self.fixture('c74104401f0000 c3',
                      'c7410402000000 8b5104 31c0 40 4a 75fc c3')

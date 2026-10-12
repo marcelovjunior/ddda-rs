@@ -1694,7 +1694,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                 entry_pointers=regs_in if input_strategy == 'guarded-stores-v1' else None,
                                 initial_writes=({a:v for a,v in initial_state.get('writes',{}).items()
                                                  if not regs_in['esp'] <= a < regs_in['esp']+4}
-                                                if initial_state is not None else None))
+                                                if initial_state is not None else None),
+                                # Only explicit bindings from checked setup
+                                # cases are values; other entry GPRs remain unknown.
+                                entry_values=initial_state['registers'] if initial_state is not None else None)
             bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:
                 max_insn += bound  # keep the ordinary overhead allowance

@@ -51,7 +51,17 @@ class ImageBudgetTests(unittest.TestCase):
         writer=next(i.address for i in ins if i.op_str=='dword ptr [edx], 0')
         self.assertTrue(WriteGuard(proof).conflicts(writer,witnesses['esp']-4,4))
 
-    def test_closed_stack_allocator_moves_but_cannot_forge_its_return(self):
+    def test_only_explicit_matching_entry_bindings_are_known(self):
+        ins,read,_=self.fixture(bytes.fromhex('85c9 7401 c3 cc'))
+        witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}
+        witnesses['esp']=0xf008000
+        kw=dict(guarded=True,entry_pointers=witnesses)
+        self.assertIsNone(image_bound(ins,read,witnesses['esp'],entry_values={'eax':witnesses['eax']},**kw))
+        self.assertIsNotNone(image_bound(ins,read,witnesses['esp'],entry_values={'ecx':witnesses['ecx']},**kw))
+        for bindings in ({'ecx':1},{'esp':witnesses['esp']},{'ecx':True}):
+            with self.assertRaises(ValueError):image_bound(ins,read,witnesses['esp'],entry_values=bindings,**kw)
+
+    def test_closed_stack_allocation_helper_preserves_return_address(self):
         caller=bytes.fromhex('55 8bec e8f8000000 8be5 5d c3')
         # pop edx; lea eax,[esp-16]; xchg esp,eax; push edx; ret
         helper=bytes.fromhex('5a 8d4424f0 94 52 c3')

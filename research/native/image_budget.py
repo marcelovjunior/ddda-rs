@@ -1,7 +1,7 @@
 """Finite instruction bounds from known control flow and checked aliases.
 
 This is a deliberately small abstract interpreter, not a guest executor.
-Unknown entry registers/flags never become constants. Guarded callers may
+Unknown entry registers/flags never become constants implicitly. Guarded callers may
 provide a bounded snapshot of their actual initial argument bytes.
 It grants a bound only after following a completely known, returning trace.
 Stores affect subsequent reads or impose a runtime non-aliasing obligation;
@@ -54,7 +54,8 @@ class WriteGuard:
 def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 deadline=None, max_bytes=256*4096, guarded=False, decode=None,
                 closed=frozenset(), models=None, pop_for=None, initial_direction=None,
-                caller_stack=None, entry_pointers=None, initial_writes=None):
+                caller_stack=None, entry_pointers=None, initial_writes=None,
+                entry_values=None):
     """Return a strict count or guarded bound certificate; None if unproven.
 
     `read_image(address, size)` must return original image bytes only and
@@ -78,6 +79,8 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     enforced by the same WriteGuard. Initial object bytes remain unknown,
     except `initial_writes`: exact bytes written by a checked original setup.
     These receive the same overlap and unknown-writer guards as trace stores.
+    `entry_values` supplies only explicit checked-setup register bindings;
+    each must match its entry witness, and ESP cannot be rebound.
     Bounded affine expressions preserve relationships between unknown entry
     values through 32-bit copies, sums/differences, LEA and saved words. Only
     cancellation of every symbolic term creates an integer fact. Arithmetic
@@ -114,6 +117,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     code_bytes = {a for i in instructions for a in range(i.address, i.address+i.size)}
     regs = dict.fromkeys(REGS)
     regs['esp'] = stack
+    if entry_values is not None:
+        if (entry_pointers is None or any(r not in REGS or r == 'esp'
+                or type(v) is not int or not 0 <= v <= MASK
+                or v != entry_pointers[r] for r,v in entry_values.items())):
+            raise ValueError('entry values require matching explicit setup-register bindings')
+        regs.update(entry_values)
     stores = {}
     opaque = {}
     revisions = dict.fromkeys(REGS,0)
@@ -366,7 +375,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             if mn in ('ret', 'retn'):
                 if frames:
                     ret, saved = frames.pop()
-                    # Stack-allocation helpers move the return address. The
+                    # A stack allocation helper may adjust ESP. The
                     # actual RET operand must still be the saved call PC.
                     if regs['esp'] is None or load(regs['esp'],4) != ret:
                         return None

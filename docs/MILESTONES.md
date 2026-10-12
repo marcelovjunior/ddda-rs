@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c explicit setup bindings (2026-10-12)
+
+- Checked setup outputs can supply explicit method-register proof facts.
+  **145 light tests pass; accepted records unchanged (59,591 / 177,367).**
+- Three-producer 0x00493AA0 remains 0/3; priority moves to boot stop 16,
+  0x00DC8270. **Next action:** checked sound-engine constructor state.
+
 ### L28c affine proof checkpoint (2026-10-12)
 
 - Symbolic pointer cancellation advances the manager-backed 0x00493AA0
