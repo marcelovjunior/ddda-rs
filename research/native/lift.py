@@ -1729,6 +1729,7 @@ if __name__ == "__main__":
 
 
 _CLOSED = frozenset()
+_FRAMES = {}
 
 
 def vector_key(f):
@@ -1746,9 +1747,9 @@ def vector_key(f):
     return "body-v1:" + hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
 
 
-def _init_worker(closed):
-    global _CLOSED
-    _CLOSED = frozenset(closed)
+def _init_worker(closed, frames=None):
+    global _CLOSED, _FRAMES
+    _CLOSED, _FRAMES = frozenset(closed), dict(frames or {})
 
 
 def _vectors_for(args):
@@ -1769,6 +1770,8 @@ def _vectors_for(args):
         inputs['max_insn'] = args[10]
     if body is not None:
         inputs.update(body=body, noreturn_sites=stops, noreturn_targets=noreturn_entries())
+    if _FRAMES:
+        inputs['frame_contracts'] = _FRAMES  # caller-frame exits of closed callees
     out, got, seed = [], 0, 0
     # a time budget per function: loops over random counts of random
     # pointers can take minutes per seed and never give a vector
@@ -1849,7 +1852,8 @@ def vectors(per=3):
     log = open(prog, "a")
     # a worker is replaced after 8 functions: some functions leave hundreds of
     # MB of Unicorn state behind that gc does not free (workers reached 3 GB)
-    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed,),
+    frames = {f["addr"]: f["frame_exit"] for f in lifted if not f.get("ext") and f.get("frame_exit")}
+    with Pool(int(os.environ.get("LIFT_WORKERS", os.cpu_count())), _init_worker, (closed, frames),
               maxtasksperchild=8) as pool:
         for n, (addr, out) in enumerate(pool.imap_unordered(_vectors_for, todo, chunksize=1)):
             cases += out

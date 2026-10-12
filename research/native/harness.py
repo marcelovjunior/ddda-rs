@@ -157,6 +157,7 @@ PLATFORM = {0x00CF73F0: "pool40_alloc", 0x00DE0B80: "mt_alloc", 0x00DE0B90: "mt_
 HEAP_BASE = 0x0C000000  # mem::HEAP_BASE: Sparse's bump allocator
 MAX_PAGES = 256  # run_sparse rejects runs that touch more distinct pages
 MODEL_BYTES = 1 << 20  # run_sparse rejects runs whose memset/memcpy calls touch more in total
+CONST_MODEL_BYTES = 4 << 20  # per-run budget for memset/memcpy sizes pushed as immediates
 TCG_BUFFER = 32 << 20  # Unicorn's translated-code buffer per instance (our functions are small)
 X87_TRAMP, X87_SLOT = 0x0DEB0000, 0x0DEB1000  # mocked float returns (run_sparse x87_push)
 TEB_BASE, GDT_BASE = 0x7FFDE000, 0x7FFDC000
@@ -616,7 +617,7 @@ def frame_text(contract):
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
-               max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0):
+               max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -657,6 +658,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     exclusive with zero_inputs and recorded in successful vectors. Original
     image bytes, executed instructions and rejection checks never change.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
+
+    `frame_contracts` maps closed callees with a caller-frame exit
+    (frame_exit, e.g. a promoted `__SEH_prolog4`) to that contract. Their
+    nested frame ends at the return PC with exactly the derived ESP rather
+    than an ESP at or above the call's (the prolog returns below it).
 
     `mockzero-v1` keeps the default random pages and registers but makes
     every mocked callee return zero (eax, ecx, edx, xmm0 and any st0 push;
@@ -742,6 +748,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         return True
 
     reads, written = {}, set()
+    # Stack dwords written by `push imm32` and not overwritten since: a model
+    # size argument found here is a constant of the code, not a random input.
+    const_slots, pending_push = {}, [None]
+
+    def forget_constants(addr, size):
+        for slot in [a for a in const_slots if a < addr + size and addr < a + 4]:
+            del const_slots[slot]
 
     def note(uc_, access, addr, size, value, _):
         for p in {addr & ~0xFFF, (addr + size - 1) & ~0xFFF}:
@@ -754,6 +767,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     reads[addr + k] = cur[k]
         else:
             written.update(range(addr, addr + size))
+            push = pending_push[0]
+            forget_constants(addr, size)
+            if push is not None and (addr, size) == (push[0], 4):
+                const_slots[addr] = push[1]
+            pending_push[0] = None
 
     decoded = {}
     instruction_sizes = {}
@@ -880,6 +898,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     is_own = lambda pc: pc in body if body is not None else body_end is not None and address <= pc < body_end
     frames = []  # (return PC, caller ESP), distinguishing calls into shared code
     root_frame = [True]
+    entering = [False]  # a call was just made: the next instruction is the callee's entry
+    frame_contracts = {a: (c[0], c[1], tuple(tuple(t) for t in c[2])) for a, c in (frame_contracts or {}).items()}
     flow = {}
     own_ret = [False]  # the previous instruction was one of the function's own `ret`s
     valid_flags = [0x8d5]
@@ -943,10 +963,22 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # Must precede on_ext: the first root instruction after a closed
         # callee returns can itself be another call that needs recording.
         esp_now = uc_.reg_read(UC_X86_REG_ESP)
+        if entering[0]:
+            entering[0] = False
+            contract = frame_contracts.get(addr)
+            if contract is not None:
+                regs_now = {"esp": esp_now, "ebp": uc_.reg_read(UC_X86_REG_EBP)}
+                exit_esp = regs_now[contract[0]] + contract[1]
+                for sign, k in contract[2]:
+                    exit_esp += sign * struct.unpack("<I", bytes(uc_.mem_read((esp_now + k) & 0xFFFFFFFF, 4)))[0]
+                frames[-1] = (frames[-1][0], exit_esp & 0xFFFFFFFF)
         while frames and addr == frames[-1][0] and esp_now >= frames[-1][1]:
             frames.pop()
         root_frame[0] = not frames
-        if addr in noreturn_targets:
+        # The guard is for runs that reach a noreturn function. The root's own
+        # body is the code under test (e.g. `__exit` 0x012EDC4B returns
+        # syntactically; its callee does the exit) and runs like any root.
+        if addr in noreturn_targets and addr != address:
             bad.append(f"noreturn target at {addr:#010x}")
             uc_.emu_stop()
 
@@ -981,6 +1013,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             uc_.emu_stop()
             return
         premap(uc_, addr)
+        pending_push[0] = None
+        i = integer_ops.get(addr)
+        if (i is not None and i.mnemonic == "push" and i.operands[0].type == 2 and i.operands[0].size == 4
+                and uc_.reg_read(UC_X86_REG_EIP) == addr):
+            pending_push[0] = ((esp_now - 4) & 0xFFFFFFFF, i.operands[0].imm & 0xFFFFFFFF)
         if addr in integer_ops and not model_entry(addr) and uc_.reg_read(UC_X86_REG_EIP) == addr:
             reason = check_integer_flags(uc_, integer_ops[addr])
             if reason:
@@ -995,6 +1032,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     flow[addr] = ""
             if flow[addr] == "call" and uc_.reg_read(UC_X86_REG_EIP) == addr:
                 frames.append((addr + size, esp_now))
+                entering[0] = True
         i = x87_ops.get(addr)
         if i is not None and uc_.reg_read(UC_X86_REG_EIP) == addr:
             # QEMU does not reliably set SF on overflow/underflow. Reject
@@ -1030,6 +1068,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
 
     heap = [HEAP_BASE]
     model_bytes = [0]  # bytes memset/memcpy touched in this run
+    const_bytes = [0]  # of those, with sizes pushed as immediates
 
     def ensure(a, n):
         for p in range(a & ~0xFFF, ((a + n - 1) & ~0xFFF) + 1, 0x1000):
@@ -1045,6 +1084,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         return cur
 
     def mwrite(a, data):
+        forget_constants(a, len(data))
         ensure(a, len(data))
         uc.mem_write(a, data)
         written.update(range(a, a + len(data)))
@@ -1071,8 +1111,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             eax = alloc(uc_.reg_read(UC_X86_REG_ECX))
         elif name in ("memset", "memcpy"):
             dst, x, n = arg(0), arg(1), arg(2)
-            model_bytes[0] += n
-            if n > 0x10000 or model_bytes[0] > MODEL_BYTES:
+            # A size pushed as an immediate (sSave::ctor clears 0x80000 bytes)
+            # is the same on every input: it gets its own, larger budget.
+            constant = const_slots.get((esp + 12) & 0xFFFFFFFF) == n
+            if constant:
+                const_bytes[0] += n
+            else:
+                model_bytes[0] += n
+            if (const_bytes[0] > CONST_MODEL_BYTES if constant
+                    else n > 0x10000 or model_bytes[0] > MODEL_BYTES):
                 # one huge copy, or a loop of them: every byte becomes a
                 # Python dict/set entry (a worker once reached 3.7 GB)
                 bad.append(f"{name} of {n:#x} bytes ({model_bytes[0]:#x} in this run)")

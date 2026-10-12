@@ -912,6 +912,44 @@ The three CRT helpers derive `esp - 0x18 - [esp+0x8]` (0x012F71E0),
 body 0x01306F7F). Replay needs nothing new: it compares all registers.
 Exception dispatch remains a runtime task.
 
+**Promotion of verified call-free callees (L28).** Candidates and their
+mocked callees are lifted in ext mode, so a caller of `__SEH_prolog4`
+recorded the prolog as a mock: the frame never moved and the caller's `ret`
+popped its scope table (`__setmbcp` 0x012FB049 "returned to 0x0161EBE0"
+under every strategy). `structured_inputs.py promote` re-lifts a selected
+ext entry as a closed callee when its arms make no call at all and an
+unverified candidate calls it directly. Its own cases are re-recorded in
+closed mode with the same input distribution. The recorder (`lifted`) and
+the replay (dispatch table) both run closed targets for real, so a case
+that mocked a promoted entry would change meaning. An ordinary call-free
+entry that some case mocks therefore stays ext (a mock with arbitrary
+returns is a faithful stand-in). A caller-frame helper is promoted even when
+mocked, since no mock can move the frame: the callers whose cases mock it
+are re-lifted against the new closed set and re-recorded with their previous
+distribution, and the helper is promoted only if every one of them records
+again (otherwise it stays ext), so no verified function is lost. Without
+that restriction 378 widely mocked targets (over 100,000 recorded calls)
+would have forced re-recording most of the program. A promoted entry with a
+caller-frame exit stores it as `frame_exit`; `run_sparse(frame_contracts=)`
+(passed by `structured_inputs.py`, `trace_recorder.py` and `lift.py vectors`)
+ends that callee's nested frame at its return PC with exactly the derived
+ESP, because the prolog returns below the call's ESP and the ordinary
+`ESP >= call ESP` test would leave the caller marked nested. Promotion
+changes the closed boundary: archive the trial logs and `prepare` again.
+
+**Constant model sizes and noreturn roots (L28).** The memset/memcpy model
+guard (64 KB per call, 1 MB per run) exists because random sizes would make
+every byte a recorder dict entry. A size argument whose stack slot was
+written by a `push imm32` and not overwritten since (tracked per write,
+including the models' own writes) is a constant of the code, the same on
+every input: such calls count against a separate 4 MB per-run budget
+(`CONST_MODEL_BYTES`), e.g. `sSave::ctor` 0x004980F0 clears 0x80000 bytes.
+Sizes from registers or memory keep the ordinary guard. The noreturn-target
+guard rejects runs that reach a noreturn entry; the root's own entry is
+exempt (`__exit` 0x012EDC4B is in the noreturn set by name but returns
+syntactically). `structured_inputs.py record --retry REGEX` re-runs logged
+failures whose reason matches after such a recorder change.
+
 **Image inputs and mock cleanup (L15).** `image-v1` explicitly tags the
 image-backed input policy, with seeded random inputs elsewhere. Existing
 `fill` already supplies the original executable bytes for *all* image
