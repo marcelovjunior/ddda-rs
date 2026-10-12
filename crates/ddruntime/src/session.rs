@@ -234,6 +234,13 @@ impl Session {
     /// 0x012EF8CC and `__RTC_Initialize` have no effect the steps below
     /// depend on but are called for fidelity.
     pub fn start(&mut self) -> Started {
+        self.start_through("WinMain")
+    }
+
+    /// [`Session::start`], ending after the step named `last` (a CRT step
+    /// below or "WinMain"), so a test of the start-up does not run the
+    /// game once the boot gets that far.
+    pub fn start_through(&mut self, last: &str) -> Started {
         let ok = |o: &Outcome, good: &dyn Fn(u32) -> bool| matches!(o, Outcome::Returned(c) if good(c.eax));
         // (name, address, cdecl arguments, success test)
         let steps: [(&'static str, u32, &[u32], &dyn Fn(u32) -> bool); 8] = [
@@ -263,6 +270,9 @@ impl Session {
             }
             if let Outcome::Returned(c) = &o {
                 cmdln = c.eax; // the last step's result: the WinMain command line
+            }
+            if *name == last {
+                return Started { step: name, outcome: o };
             }
         }
         let outcome = self.call(0x0040_79E0, 0, &[0x0040_0000, 0, cmdln, 10]);
