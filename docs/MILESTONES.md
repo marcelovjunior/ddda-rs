@@ -1,5 +1,11 @@
 # Milestones
 
+### L28c division/tail fixtures (2026-10-12, pending replay)
+
+- **+2/+6:** 0x0046A2D0 and 0x00DBA780 record 3/3; **161 tests pass**.
+- Cumulative **+7/+21**, private **59,599 / 177,391**; baseline records
+  unchanged. Main merged. **Next action:** constructor and string recipes.
+
 ### L28c byte/vector proof facts (2026-10-12)
 
 - Exact narrow-register lanes and bitwise-zero vector stores retain only

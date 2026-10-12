@@ -35,6 +35,18 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Division/tail fixtures (2026-10-12, pending replay)
+
+**+2/+6, all 3/3:** 0x0046A2D0 proves **151,141** instructions (limit
+171,141); 0x00DBA780 proves **102,484** (limit 122,484), including its
+checked final external mock tail. Cumulative session **+7/+21**,
+native-L28c **59,599 / 177,391**. `division-tail-audit.json` confirms
+all 59,592 baseline records / 177,370 cases unchanged; no stale mocks,
+promotions or unexpected changes. **161 tests pass.** Main merged through
+35b516ed (boot main-loop milestone); no Rust build. Eight original recipes
+remain, including set-aside 0x00493AA0. **Next:** checked 0x00815C60
+constructor input, then narrow-register/zero-vector string retries.
+
 ### Narrow register and zero-vector facts (2026-10-12)
 
 The proof retains known byte/word register lanes without inventing unknown
