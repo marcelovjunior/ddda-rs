@@ -146,12 +146,12 @@ By system:
 | events, quests, scripts | 3 | 1 | 0 |
 | effects, items | 3 | 1 | 0 |
 
-**How the Arisen pointer is used** (463 load sites in lifted blocks,
+**How the Arisen pointer is used** (superseded by the decompile-based classes of 6.7; 463 load sites in lifted blocks,
 strongest use per function; lower bounds, see 1.1):
 
 | Use | Functions | Meaning for co-op |
 |---|---:|---|
-| identity: compared with another pointer | ≥ 38 | "is this unit the player?" |
+| identity: compared with another pointer | ≥ 38 (**corrected in 6.7: 32**) | "is this unit the player?" |
 | dereferenced (position `+0xE0`, fields) | ≥ 44 | distance to, or state of, the Arisen |
 | passed on | ≥ 47 | a target or an argument |
 | null test only in the block | 183 | mostly followed by a dereference in the next block |
@@ -314,7 +314,7 @@ Only the host's *simulation* needs a seat-aware view of slot 0.
 | 3 | P2's data (`uPlayerBase+0x3DEC` → `sGameSys+0xA76D0`) | **Second instance:** a P2 `cPlayerInfo` (0x7F0 bytes) in host guest memory, filled from the client's own record at join. A wrapper on the record binder `0x00B5A820` points a remote seat's unit at it (6.2) | 1 wrapped + 1 new | cold |
 | 4 | Input: the Arisen reads every local device and the global camera (`0x00B6AEA0`, `0x00B51EE0`) | **Host-side wrapper:** a remote seat's Arisen uses the pad's virtual path, the one pawns use: its pad flag `+0x60` is cleared, and its 36 input bytes are written from the network before `vf200`. The client's own pad code has already rotated the stick by the client's camera (7.1) | 1 wrapped (`0x00B6AEA0`); `0x00B51EE0` and `0x00B52880` unchanged | hot (per Arisen per frame), cheap |
 | 5 | Simulation reads of slot 0 (enemies, AI, NPCs, objects, shells: about 240 of the 284, outside the GUI and camera) | **Seat-relative slot 0.** The lifter rewrites the static loads of `[0x018FA4EC]+0x99C` into a runtime call that returns: the unit itself, if the current unit is an Arisen; the owner's Arisen, for a pawn (`+0x585C`); else the nearest living Arisen to the current unit. The current unit is a thread-local set where passes A/B/C call a unit (`0x00DB7350`, `0x00DB6890`, `0x00DB67B0`, jobs `0x00DBE560`). Outside a unit (managers, GUI): the local seat | 284 rewritten by rule; 3-4 pass walkers wrapped | hot; one TLS read and two distances per load |
-| 6 | Identity tests ("is this unit the player?") | **Review per site:** replace `x == slot0` with "x is an Arisen" where the site means any player (damage reactions, pickups, talk) | ≥ 38 *(lower bound)* | mixed |
+| 6 | Identity tests ("is this unit the player?") | **Review per site:** replace `x == slot0` with "x is an Arisen" where the site means any player (damage reactions, pickups, talk) | 32 (6.7) | mixed |
 | 7 | Camera-work requests from the simulation (`0x004219A0`) | **Host-side wrapper:** a request whose target is a remote seat's Arisen is sent to that client as a camera event | 1 wrapped | cold (grabs, throws) |
 | 8 | Pawn orders (`0x00B768E0`) | **Parameterise by seat**, per COOP_DESIGN: the shared main pawn obeys both (ascending seat order), a hired pawn its owner | 1 | cold (on a button) |
 | 9 | Pawn follow (`0x00585D00`) | Covered by #5: a pawn's slot 0 is its owner's Arisen | 0 extra | hot |
@@ -444,7 +444,7 @@ character.**
 - Shared game over (COOP_DESIGN).
 - P2's chunks written to the client's save (#13).
 
-## 6. The open items of L40, closed (L40b)
+## 6. The open items of L40, closed (L40b, L40c)
 
 ### 6.1 `uPlayerBase+0x3348` is a parameter table, not input [exe]
 
@@ -549,17 +549,180 @@ So about half are stage, event and quest code: cold, run on the host,
 where slot 0 meaning P1 is correct. About a fifth are AI and pawn AI:
 hot, covered by the seat-relative rule.
 
-### 6.4 Still open
+### 6.4 What L40c settled
 
-- Whether pawn AI reads its master `mpPlayer` (`+0x585C`) anywhere.
-  Follow reads slot 0 directly.
-- Whether the replica path of 7.3 reproduces the pose bit for bit
-  (a test, not a reading).
-- The 151 unclassified slot-0 uses (1.4): the per-site review of
-  stage 2.
-- Where the effect provider's motion links are evaluated (EFFECTS.md's
-  next step). It decides whether motion-linked effects come out of a
-  replica by themselves (7.4).
+- **Pawn AI and `mpPlayer`:** 6.5.
+- **The effect entry points:** 6.6.
+- **The slot-0 uses:** 6.7.
+- **The pose test:** 8, a spec to run once the boot reaches gameplay.
+
+Still open after L40c:
+- the provider's motion-link evaluator, which co-op no longer needs
+  (6.6);
+- the per-site review of the identity tests (6.7);
+- the 35 unresolved slot-0 uses (6.7).
+
+### 6.5 Pawn AI and `mpPlayer` (L40c) [exe, scan]
+
+`uCmc+0x585C` (`mpPlayer`, reflected) is read by **two functions**, and
+neither is AI:
+- `uCmc::vf16` `0x00B53710` clears it when the unit it points to is
+  gone (state not 1 or 2);
+- `uCmc::vf03` `0x00B53490` is the reflection listing (`"mpPlayer"`).
+
+It is written only by the two party spawners, `0x00501020` and
+`0x0043D2B0`, which store slot 0. (`0x006A1820`, NPC talk code, writes
+`+0x585C` of a kind-0x8 unit: another class at the same offset.)
+
+These are all the lifted sites that name the offset. So **no pawn
+behaviour reads its master.** Pawn AI finds "its" Arisen only through
+`sPlayerManager+0x99C`: follow `0x00585D00`, the 13 think conditions
+`0x00589C10..0x0058FC10` (6.3), and `sAICharacterInfo`.
+
+**For P2 (*Proposal*):**
+- A hired pawn spawned for P2 gets `mpPlayer` = P1 from the original
+  spawners, since they store slot 0. The seat adapter of #1 sets it to
+  P2's Arisen instead.
+- Nothing in the original reads `mpPlayer`, so the field is free to
+  serve as the owner record. The seat-relative slot 0 of #5 reads it:
+  inside a pawn's update, slot 0 returns that pawn's `mpPlayer`. The
+  shared main pawn keeps P1 (seat 0), which matches COOP_DESIGN's rule
+  that the main pawn follows the host while both command it.
+- `uCmc::vf16` keeps clearing it when that Arisen is gone (P2
+  disconnects). The rule then falls back to the nearest Arisen.
+
+### 6.6 The effect request entry points (L40c) [exe]
+
+Every effect from an `rEffectProvider` (EPV, EFFECTS.md) goes through
+one request and two creators:
+- **`0x00429680(element, provider, owner, index, …)`**: 345 callers.
+  - It bounds-checks `index` against the provider's index table
+    (`+0x68`, count `+0x6C`, 12 bytes per index) and `element` against
+    that index's elements (0xE0 bytes each in memory: the loaded form
+    of the elements of EFFECTS.md).
+  - It reads the camera eye (`sCamera+0x34`, `+0x40`) for the creator.
+  - It dispatches on the element's type at `+0x28`: **0 →
+    `0x004298B0`** (15.5 KB; *inferred* to build the effect units: it
+    reaches the `uEfCam` constructor through `0x0042DED0`);
+    **1 → `0x0042D560`**.
+- `0x00429790`: every element of an index whose id (`+0x2C`) matches;
+  19 callers. Among them are `uPlayerBase::vf93`, the stage set-up
+  `0x00501020` and enemy death actions.
+
+Callers of `0x00429680` by class: 147 unlabelled, `cPlAct*` 28,
+dragon actions (`cEm580*`) 20, objects (`uOmObj*`) 17, shells 6;
+most of the rest are enemy classes. Hit effects come through `uObjModel::vf53`
+`0x008876A0` → `0x0042EFC0` / `0x0042FA60` / `0x0042FE90` (*inferred*
+from its hit-info argument). Other routes into the two creators:
+- `0x00429520`: stage and light code, 8 callers;
+- `0x0042FB60`: `uShlArrow::vf116`;
+- a few enemy `vf33`/`vf05` directly.
+
+**For replication (*Proposal*, refines 7.4):**
+- The host wraps the **two creators** `0x004298B0` and `0x0042D560`
+  (8 callers each). They catch every provider effect, whoever asked:
+  actions, hits, motion links, stage.
+- Each call is sent as an event: provider resource path, index,
+  element, owner net id, and the creator's position and flags
+  arguments.
+- The client calls the same creator with the owner mapped to its
+  replica. Effects attached to an owner's joints then follow the
+  replica's pose.
+- Replicas never request effects themselves (the tail of
+  `uCharacterBase::vf92` stays off, 7.3). So nothing spawns twice.
+- *Not found:* the evaluator of the provider's motion links (`+0x70`
+  records, count `+0x74`). The wrap at the creators makes it
+  unnecessary for co-op.
+
+### 6.7 The slot-0 uses, classified (L40c) [exe]
+
+L40's use classes (1.4) came from single lifted blocks. That method
+missed uses after a branch and misread null tests as identity tests.
+L40c reclassifies all 463 functions with a slot-0 load from Ghidra's
+decompiles, which follow the value across blocks. The rules:
+- The value is the load `*(…)(DAT_018fa4ec + 0x99c)`, directly or
+  through a local assigned from it, or from a local holding
+  `DAT_018fa4ec`.
+- The local is followed to the end of the function. That is an upper
+  bound, since Ghidra reuses local names.
+- A comparison with an integer literal is not an identity test.
+- Each function is counted under its strongest use, in the order of
+  the table.
+
+| Use | Functions | Meaning for co-op |
+|---|---:|---|
+| identity: compared with another pointer | **32** | "is this unit the player?" (#6) |
+| passed on: a call argument, or stored | 108 | the Arisen as a target or parameter: AI targets, camera work, effect owners |
+| reads its state (fields, vfuncs, the record) | 131 | status, kind bytes, action, `+0x3DEC` record |
+| reads its position only (`mPos +0x40`, world row `+0xE0`) | 75 | distance and direction: LOD and update rates (e.g. `0x00853DC0`), aggro ranges, sound and effect anchors (`0x00432370`: the Arisen's position, else the camera's) |
+| existence test only | 82 | "is there a player": gates |
+| unresolved (a pattern the rules do not cover) | 35 | review |
+
+By system:
+
+| System | identity | passed | state | position | existence | unresolved |
+|---|---:|---:|---:|---:|---:|---:|
+| enemies | 20 | 34 | 27 | 15 | 14 | 6 |
+| unattributed (6.3) | 1 | 32 | 26 | 14 | 22 | 13 |
+| GUI / HUD | 0 | 13 | 24 | 7 | 12 | 1 |
+| AI | 0 | 1 | 9 | 5 | 5 | 7 |
+| NPCs and humans | 1 | 3 | 2 | 9 | 8 | 2 |
+| player | 4 | 5 | 6 | 1 | 2 | 2 |
+| other classes | 0 | 4 | 11 | 3 | 1 | 1 |
+| objects | 0 | 2 | 4 | 9 | 2 | 0 |
+| camera | 1 | 1 | 9 | 2 | 2 | 2 |
+| pawns | 1 | 3 | 3 | 3 | 5 | 0 |
+| stage, sky, weather | 0 | 4 | 5 | 2 | 1 | 0 |
+| other managers | 1 | 3 | 1 | 0 | 4 | 1 |
+| shells | 3 | 2 | 0 | 1 | 1 | 0 |
+| sound | 0 | 0 | 2 | 2 | 2 | 0 |
+| events, effects, items | 0 | 1 | 2 | 2 | 1 | 0 |
+
+L40's 151 "not classified" functions split into:
+- 52 state;
+- 45 passed;
+- 19 existence;
+- 13 identity;
+- 4 position;
+- 18 unresolved.
+
+**Correction to 1.4 and #6:** the identity tests are **32 functions**,
+not "≥ 38". Of the 38 lifted-block hits, 34 are null tests followed by a
+dereference in the decompile. 4 are real identity tests; the other 28
+were invisible to the block-local scan.
+
+**The 32 identity tests** (#6):
+- **enemies (20):** `0x004D8150` (`uEm7001`), `0x004E06E0` (`uEm9100`),
+  `0x008D2930` (`uEm0100`), `0x008F3830` (wolf), `0x008FB6C0`
+  (`uEm0204`), `0x0092C8C0` (zombie), `0x00958BE0` (`uEm0900`),
+  `0x00A40F70` (`uEmDragonBase::vf196`), `0x00A68400` /
+  `0x00A76580` / `0x00A7B3C0` (dragon `cEm5800` actions), `0x00A88720`
+  (wight), and `0x00A97260`, `0x00A986C0`, `0x00A9A7D0`, `0x00A9C7D0`,
+  `0x00A9ED60`, `0x00AA05C0`, `0x00AA36C0`, `0x00AA4AC0` (`uEm8000` to
+  `uEm9000`);
+- **player (4):** `0x00B45370`, `0x00B4B6F0` (staff actions),
+  `0x00B855C0`, `0x00BB5840` (`uPlayerBase` code);
+- **shells (3):** `0x00C04180` (`uShlHealingSpot::vf108`),
+  `0x00C145E0`, `0x00C14E60` (`uShlThunderSpark`);
+- **one each:**
+  - `sSetManager::vf06` `0x004A40D0`;
+  - `cCmcUseItem` `0x00599DB0`;
+  - `uCameraGame::vf23` `0x007DCF30`;
+  - `uNpc::vf90` `0x00BAFB00`;
+  - `0x00964720`.
+
+**Co-op reading (*Proposal*):**
+- **Identity (32):** reviewed one by one. Most enemy sites compare a
+  target or grabbed unit with the Arisen (a grab, a hit reaction), so
+  they mean "an Arisen". The rule of #5 does not fit them; they need
+  `is_arisen(x)` (kind bit 0x2, which P2 has). The shells (a healing
+  spot, a spark chain) compare their owner or touch target with the
+  player: the same.
+- **Position only (75) and existence (82):** satisfied by the
+  seat-relative slot 0 of #5 as it stands (the nearest Arisen, or the
+  owner for a pawn).
+- **Passed (108) and state (131):** also #5. Where a GUI or camera
+  function is among them, it runs for the local seat only (section 3).
 
 ## 7. Stage 1 replication design (L40b, *Proposal* on [exe] facts)
 
@@ -727,7 +890,7 @@ joint matrices of both Arisen per frame.
     6.4), a replica that runs the tail reproduces these effects and
     sounds locally, in step with its pose.
   - Stage 1 leaves the tail out.
-- **Action-driven** (phase 91, host only): spells, arrows and other
+- **Action-driven** (phase 91, host only; the entry points are in 6.6): spells, arrows and other
   shells (`uShl*`, line 18). Proposal for stage 2:
   - shells become replicated units (spawn event with class and owner,
     then transforms);
@@ -808,3 +971,129 @@ transport.
 - the other machine shows both Arisen within two frames, with
   bit-identical joint matrices in steady state (the 7.3 test);
 - the one-seat gate is unchanged with co-op off.
+
+## 8. The first co-op test: replica pose bit-exactness (L40c, spec)
+
+This is the first test to run once the boot reaches gameplay. It checks
+the claim of 7.3: a replica that runs only the motion advance and the
+commit, from the host's state, shows **exactly** the host's pose. If it
+fails, the whole replica design is wrong, so it comes before any
+gameplay work.
+
+### 8.1 Set-up
+
+- **Two guest instances on one machine**, from the same install:
+  - a **host** with co-op on (seat 0, and seat 1 remote);
+  - a **client** (seat 1).
+
+  The runtime may give each its own process (`ddplay` host and client
+  on loopback) or two guest memories in one process, if it supports
+  that. Their records (8.3) go to two files, compared by the test.
+- **Saves:** the host continues the maintainer's private save (the
+  Continue path, GAMEPLAY_PATH.md). The client joins with its own
+  Arisen, a second private save or a copy of the same one; only its
+  `cPlayerInfo` and edit data are sent.
+- **Area:** the host's Continue area. With co-op on, the host disables
+  enemy and NPC spawns for this test, so only the party exists. The
+  test needs the two Arisen only, and stage 1 has no other replicas.
+- **The host's step is pinned to 1/30 s** (`mDeltaTime`, COOP_DESIGN).
+  That makes runs repeatable. The comparison itself does not depend on
+  it.
+- **Transport:** loopback, in two variants: lossless; and "lossy",
+  dropping 5% of snapshots with a fixed seed.
+
+### 8.2 Inputs: scripted pads
+
+No live devices are used. Each seat's pad is a script of 36-byte
+records (7.1: sticks out `+0x0C..+0x2B`, held word `+0x30`), one per
+frame:
+- the **host** writes seat 0's script into seat 0's pad, with `+0x60`
+  set to 0 for the test, through the same virtual path P2 uses;
+- the **client** feeds seat 1's script in place of its devices, then
+  uploads it as in 7.1.
+
+Script (600 frames per seat; the two seats are offset by 45 frames, so
+their motion changes do not coincide):
+
+| Frames | Input | Covers |
+|---|---|---|
+| 0-29 | none | idle |
+| 30-119 | stick forward, half tilt | walk, the locomotion phase match (ANIMATION.md) |
+| 120-209 | full tilt, turning 90° over 30 frames | run, turn blend |
+| 210-299 | sprint held | sprint, stamina |
+| 300-389 | three jumps (press, 1 frame) at 300, 340, 380 | takeoff, airborne, landing, interpolation 3/0/2 |
+| 390-479 | stop, then walk backwards | stop blends, direction change |
+| 480-599 | none | idle again; all blends must have ended |
+
+Stage 2 extends the script with weapon draws, attacks and a skill, once
+the motion-flag tail (7.4) is in.
+
+### 8.3 What is recorded and compared
+
+For each frame N and each Arisen (seat 0 and seat 1), the record holds:
+
+| Field | Host: when | Client: when |
+|---|---|---|
+| `uCoord` `mPos +0x40`, `mQuat +0x50` | after the unit's `uObjModel::vf93` in pass A | after the replica's commit (7.3 step 5) |
+| the world matrix (`uCoord` row 3 at `+0xE0..`, the whole `+0xB0..+0xEF` *inferred* as `mWMat`) | same | same |
+| per motion layer: `mMotionNo`, `mFrame`, `mBlend`, `mInterCount` | same | same |
+| per joint (`uModel` `mJoint`, 0xA0 bytes each): `mQuat +0x60`, `mScale +0x70`, `mTrans +0x80`, and the joint's world matrix (*to locate*: not reflected) | same | same |
+| motion flags `+0x494` | same | same (computed by the advance, not sent) |
+
+- **Equality is bitwise** (the f32 bit patterns), never a tolerance.
+- **Alignment:** the client's frame for host frame N is the one that
+  applied snapshot N. The record carries the host frame number, so the
+  test aligns by that, not by arrival time.
+- A difference is reported as: frame, seat, field, joint index, host
+  bits, client bits.
+
+### 8.4 Pass and fail
+
+- **Lossless:** every field equal on every frame, from the first frame
+  both Arisen exist plus 2 (snapshot latency) to the end. Both seats
+  are checked: seat 0 is a replica on the client, seat 1 on the host.
+- **Lossy:** after a dropped snapshot, differences are allowed only
+  from that frame until the active blends end (the layer's
+  `mInterFrame`: at most 8 frames for player locomotion, ANIMATION.md)
+  plus 2. After that, every field is equal again. Transforms (`mPos`,
+  `mQuat`) are equal on every frame that applied a snapshot.
+- **Negative control:** the same run with the client's received
+  `mFrame` of seat 0 changed by one ULP at frame 150 must fail at frame
+  150. That proves the comparison sees a real difference.
+
+### 8.5 Where it runs
+
+- An install-gated integration test of the runtime: the test skips
+  without the game install, like the other install tests. It runs in
+  the integration build through `heavy.py` (AGENT-RULES), never in the
+  light crates.
+- **Prerequisites:**
+  - the boot reaches gameplay through Continue (GAMEPLAY_PATH.md);
+  - the stage-1 adapters of 7.6;
+  - the record hooks;
+  - the scripted pad.
+- The record hooks are runtime-side and write nothing into guest
+  memory.
+- **One-seat gate:** with co-op off, the same build passes the existing
+  comparison unchanged. That check runs in the same job.
+
+### 8.6 Likely first failures (to look at first)
+
+- **Constraints and IK in `vf93`** (`uCns*`; uPlayerBase holds
+  `uCnsLift`, `uCnsEff`, `uConstraint`): they read the ground and other
+  units (look-at, foot placement). On the client, the ground is the
+  same stage data and the other units are replicas at the host's
+  transforms. But a constraint that reads a unit *not* replicated, or
+  state from phase 90/91 the replica skipped, will differ. The step
+  mask `+0x2398` bits that select these sub-steps (7.3) are where to
+  look.
+- **The animation step:** `+0x2EEC` must be the step the host's advance
+  actually used (written just before `uObjModel::vf92`, FRAME.md 5.2).
+- **The floating origin:** `sWorldOffset` may differ between the two
+  worlds. `mPos` is compared after removing each world's own offset;
+  joint world matrices likewise (translation only).
+- **Jobs:** the host moves line 10 as parallel jobs. One unit's advance
+  reads only its own state, so this does not matter unless a
+  constraint reads another party member mid-move. That is a host-side
+  race the original has too, and it would show up as an occasional
+  single-frame difference.

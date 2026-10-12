@@ -1939,13 +1939,20 @@ fn attribute(gpu: &Gpu, oracle: &mut Oracle, tokens: &[u32], vertex: bool, sets:
 
 /// DDDA_SHADER_ATTRIBUTE=<sweep report directory>: every shader the sweep
 /// reports as close but not bit-exact, attributed by [`attribute`];
-/// written to attribution.txt there (DDDA_SHADER_LIMIT=n per package).
+/// written to attribution.txt there (DDDA_SHADER_LIMIT=n per package;
+/// DDDA_SHADER_ATTRIBUTE_SKIP=<file> skips shaders a previous run listed).
 #[test]
 fn attribute_inexact() {
     let Some(dir) = std::env::var_os("DDDA_SHADER_ATTRIBUTE").map(std::path::PathBuf::from) else { return };
     let (Some(mut oracle), Some(gpu)) = (Oracle::new(), Gpu::new()) else { return };
     let limit: usize = std::env::var("DDDA_SHADER_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
     let only: Option<Vec<String>> = std::env::var("DDDA_SHADER_PACKAGES").ok().map(|v| v.split(',').map(String::from).collect());
+    // DDDA_SHADER_ATTRIBUTE_SKIP=<file>: earlier attribution output; shaders
+    // listed there (by tag) are not attributed again, so a run resumes
+    let skip: std::collections::HashSet<String> = std::env::var_os("DDDA_SHADER_ATTRIBUTE_SKIP")
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .map(|t| t.lines().filter_map(|l| l.split_whitespace().nth(2).map(String::from)).collect())
+        .unwrap_or_default();
     let mut out = String::new();
     for name in all_packages() {
         if only.as_ref().is_some_and(|o| !o.contains(&name)) {
@@ -1967,6 +1974,9 @@ fn attribute_inexact() {
         let pixel: Vec<Vec<u32>> = pixel_shaders(&name);
         let vertex: Vec<Vec<u32>> = vertex_shaders(&name);
         for (is_vertex, id, u) in close {
+            if skip.contains(&id) {
+                continue;
+            }
             let list = if is_vertex { &vertex } else { &pixel };
             let Some(tokens) = list.iter().find(|t| tag(t) == id) else { continue };
             let why = attribute(&gpu, &mut oracle, tokens, is_vertex, sets);

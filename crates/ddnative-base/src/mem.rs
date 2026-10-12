@@ -275,6 +275,10 @@ fn allowed(pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, width: usize, pe
 /// entry): the table's bytes when it allows the access, else the trait
 /// method, so faults, lazy pages and fixtures behave exactly as through
 /// the trait.
+// `#[inline]`, not `inline(always)`: release builds inline these anyway, and
+// in debug builds (opt-level 0) `inline(always)` copied the page-table check
+// into every one of the lifted code's memory accesses, making the shard
+// crates four times larger and the runtime examples too big to link.
 impl dyn Mem + '_ {
     /// The guest word at `addr` as a host atomic, for read-modify-write
     /// services (the Interlocked functions): Some when this memory has a
@@ -292,7 +296,7 @@ impl dyn Mem + '_ {
         // SAFETY: 4 aligned bytes inside a backed page of a live table
         unsafe { atomic_u32_at(page.add((addr % PAGE) as usize)) }
     }
-    #[inline(always)]
+    #[inline]
     pub fn fast_u8(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u8 {
         match allowed(pt, addr, 1, READ) {
             // SAFETY: allowed() points at 1 byte inside a backed page
@@ -300,7 +304,7 @@ impl dyn Mem + '_ {
             None => self.u8(addr),
         }
     }
-    #[inline(always)]
+    #[inline]
     pub fn fast_u16(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u16 {
         match allowed(pt, addr, 2, READ) {
             // SAFETY: 2 bytes inside a backed page
@@ -308,7 +312,7 @@ impl dyn Mem + '_ {
             None => self.u16(addr),
         }
     }
-    #[inline(always)]
+    #[inline]
     pub fn fast_u32(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
         match allowed(pt, addr, 4, READ) {
             // SAFETY: 4 bytes inside a backed page
@@ -316,7 +320,7 @@ impl dyn Mem + '_ {
             None => self.u32(addr),
         }
     }
-    #[inline(always)]
+    #[inline]
     pub fn fast_set_u8(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u8) {
         match allowed(pt, addr, 1, WRITE) {
             // SAFETY: 1 byte inside a backed page
@@ -324,7 +328,7 @@ impl dyn Mem + '_ {
             None => self.set_u8(addr, v),
         }
     }
-    #[inline(always)]
+    #[inline]
     pub fn fast_set_u16(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u16) {
         match allowed(pt, addr, 2, WRITE) {
             // SAFETY: 2 bytes inside a backed page
@@ -332,7 +336,7 @@ impl dyn Mem + '_ {
             None => self.set_u16(addr, v),
         }
     }
-    #[inline(always)]
+    #[inline]
     pub fn fast_set_u32(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u32) {
         match allowed(pt, addr, 4, WRITE) {
             // SAFETY: 4 bytes inside a backed page
