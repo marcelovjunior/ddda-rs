@@ -45,7 +45,7 @@ fn run(gpu: &mut WgpuBackend, w: u32, h: u32, frames: u32) -> f64 {
     let frame = |gpu: &mut WgpuBackend, k: u32| {
         gpu.clear(&ClearCall {
             rects: vec![], flags: 1, colour: 0xFF00_0000 | (k & 0xFF), z: 1.0, stencil: 0,
-            targets: [Some(bb.clone()), None, None, None], depth: None, viewport: [0, 0, w, h, 0, 0],
+            targets: [Some(bb.clone()), None, None, None], depth: None, viewport: [0, 0, w, h, 0, 0], scissor: None, srgb: false,
         });
         let x = (k * 7 % w) as i32;
         gpu.fill(&FillCall { dst: bb.clone(), rect: [x, 0, (x + 64).min(w as i32), h as i32 / 2], colour: 0xFFFF_FFFF });

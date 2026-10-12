@@ -87,7 +87,7 @@ fn main() {
     };
     // the commands are built before timing: the backend's cost only
     let stream: Vec<DrawCall> = (0..draws).map(draw).collect();
-    let clear = ClearCall { rects: vec![], flags: 1, colour: 0xFF20_2020, z: 1.0, stencil: 0, targets: [Some(bb.clone()), None, None, None], depth: None, viewport: [0, 0, w, h, 0, 0] };
+    let clear = ClearCall { rects: vec![], flags: 1, colour: 0xFF20_2020, z: 1.0, stencil: 0, targets: [Some(bb.clone()), None, None, None], depth: None, viewport: [0, 0, w, h, 0, 0], scissor: None, srgb: false };
     let frame = |gpu: &mut ddgpu::WgpuBackend| {
         let t = Instant::now();
         gpu.clear(&clear);
