@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 from capstone import Cs, CS_ARCH_X86, CS_MODE_32
 import harness as h
-from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation, initial_outgoing_allocation
+from wrapper_inputs import virtual_tail_wrapper, fixed_frame_allocations, aligned_frame_saves, ebp_frame_allocation, initial_outgoing_allocation, null_leaf_cleanup
 
 
 class WrapperTests(unittest.TestCase):
@@ -18,13 +18,14 @@ class WrapperTests(unittest.TestCase):
             data = bytes.fromhex(code)
             self.assertFalse(virtual_tail_wrapper(0, lambda a,n: data[a:a+n]))
 
-    def run_caller(self, suffix, strategy, prefix=''):
+    def run_caller(self, suffix, strategy, prefix='', callee='8b01 8b4058 ffe0'):
         caller = bytes.fromhex(prefix+' 6a01 6a02')
         caller += b'\xe8' + struct.pack('<i', 0x400100-(0x400000+len(caller)+5))
         caller += bytes.fromhex(suffix)
         data = bytearray(b'\xcc'*4096)
         data[:len(caller)] = caller
-        data[256:263] = bytes.fromhex('8b01 8b4058 ffe0')
+        callee_bytes = bytes.fromhex(callee)
+        data[256:256+len(callee_bytes)] = callee_bytes
         data = bytes(data)
         body = [i.address for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(caller, 0x400000)]
         with patch.object(h, 'image', return_value=(0x400000, [(0x400000,data)])), \
@@ -176,6 +177,28 @@ class WrapperTests(unittest.TestCase):
         self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
         for name in ('ecx', 'edx'):
             self.assertEqual(result['calls'][0]['out'][name], 0)
+
+    def test_null_memory_fast_return_supplies_checked_cleanup(self):
+        callee = '83b9ec00000000 7505 31c0 c20800 8b89ec000000 8b01 8b4018 ffe0'
+        with self.assertRaises(h.Rejected):
+            self.run_caller('c3', 'tail-frame-v1', callee=callee)
+        result = self.run_caller('c3', 'null-call-v1', callee=callee)
+        self.assertEqual(result['calls'][0]['out']['pop'], 8)
+        self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
+
+    def test_null_cleanup_refuses_other_values_and_unchecked_paths(self):
+        def cleanup(code, value=0):
+            data = bytes.fromhex(code)
+            return null_leaf_cleanup(0, lambda a,n:data[a:a+n], {'ecx': 0x1000},
+                                     lambda a,n: value.to_bytes(4, 'little'))
+        code = '83b90400000000 7505 31c0 c20800'
+        self.assertEqual(cleanup(code), 8)
+        self.assertIsNone(cleanup(code, 1))
+        for bad in (code.replace('7505', '7f05'), code.replace('31c0', '31c9'),
+                    code.replace('31c0', '31c0 40'), code.replace('c20800', '66c20800'),
+                    code.replace('83b90400000000', '80b90400000000')):
+            self.assertIsNone(cleanup(bad))
+        self.assertEqual(cleanup('83b90400000000 7401 cc 31c0 c20800'), 8)
 
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
         prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '

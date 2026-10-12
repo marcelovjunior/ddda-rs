@@ -320,3 +320,43 @@ def initial_outgoing_allocation(entry, body, read):
         for pc in done:
             del remaining[pc]
     return {entry}
+
+
+def null_leaf_cleanup(entry, read, registers, memory):
+    """Mock cleanup for a checked zero-memory branch returning EAX=0.
+
+    The entry must compare one dword to zero, branch on equality, then the
+    chosen null path may only clear EAX and return. The other path is not
+    interpreted, and never supplies a cleanup hint for nonzero input.
+    """
+    md = Cs(CS_ARCH_X86, CS_MODE_32)
+    md.detail = True
+    def instruction(pc):
+        return next(md.disasm(read(pc, 15), pc, count=1), None)
+    cmp = instruction(entry)
+    if (cmp is None or cmp.mnemonic != 'cmp' or len(cmp.operands) != 2
+            or cmp.operands[0].type != X86_OP_MEM or cmp.operands[0].size != 4
+            or cmp.operands[1].type != 2 or cmp.operands[1].imm != 0
+            or cmp.addr_size != 4):
+        return None
+    mem = cmp.operands[0].mem
+    register = cmp.reg_name(mem.base)
+    if mem.segment or mem.index or register not in registers:
+        return None
+    branch = instruction(entry+cmp.size)
+    if (branch is None or branch.mnemonic not in ('je', 'jne')
+            or 0x66 in branch.prefix or 0x67 in branch.prefix
+            or len(branch.operands) != 1 or branch.operands[0].type != 2):
+        return None
+    pc = branch.operands[0].imm & 0xffffffff if branch.mnemonic == 'je' else branch.address+branch.size
+    clear = instruction(pc)
+    if clear is None or (clear.mnemonic, clear.op_str) not in (('xor', 'eax, eax'), ('mov', 'eax, 0')):
+        return None
+    ret = instruction(pc+clear.size)
+    if ret is None or ret.mnemonic != 'ret' or ret.bytes[0] not in (0xc2, 0xc3):
+        return None
+    pop = ret.operands[0].imm if ret.operands else 0
+    if not 0 <= pop <= 4096 or pop % 4:
+        return None
+    value = memory((registers[register]+mem.disp) & 0xffffffff, 4)
+    return pop if len(value) == 4 and int.from_bytes(value, 'little') == 0 else None
