@@ -1,7 +1,8 @@
 """Finite instruction bounds from known control flow and checked aliases.
 
 This is a deliberately small abstract interpreter, not a guest executor.
-Unknown entry registers/flags or non-image inputs never become constants.
+Unknown entry registers/flags never become constants. Guarded callers may
+provide a bounded snapshot of their actual initial argument bytes.
 It grants a bound only after following a completely known, returning trace.
 Stores affect subsequent reads or impose a runtime non-aliasing obligation;
 unsupported effects refuse the proof.
@@ -52,7 +53,8 @@ class WriteGuard:
 
 def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 deadline=None, max_bytes=256*4096, guarded=False, decode=None,
-                closed=frozenset(), models=None, pop_for=None, initial_direction=None):
+                closed=frozenset(), models=None, pop_for=None, initial_direction=None,
+                caller_stack=None):
     """Return a strict count or guarded bound certificate; None if unproven.
 
     `read_image(address, size)` must return original image bytes only and
@@ -68,6 +70,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     boundary; every actual call visit must produce a matching mock event.
     Unknown conditions and unsupported effects still refuse the proof.
     """
+    # Only the bounded caller-argument window is an input fact. The saved
+    # return address and uninitialized callee locals are deliberately absent.
+    if caller_stack is not None and (not guarded or type(caller_stack) is not bytes
+                                     or len(caller_stack) > 128):
+        raise ValueError('caller stack requires guarded bytes, at most 128')
+    caller_stack = caller_stack or b''
     if not instructions:
         return None
     ins = {i.address: i for i in instructions}
@@ -135,6 +143,8 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             p = (a+k) & MASK
             if p in stores:
                 v = stores[p]
+            elif 0 <= p-(stack+4) < len(caller_stack):
+                v = caller_stack[p-(stack+4)]
             else:
                 try:
                     raw = read_image(p, 1)
