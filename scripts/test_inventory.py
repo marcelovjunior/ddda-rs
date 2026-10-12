@@ -36,14 +36,17 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(rows,[(0x400000,'platform','construct-if-memory wrapper'),
                                    (0x12e0010,'verified','CRT/library range'),(0x136dde0,'untouched',None)])
 
-    def test_mtmath_ports_and_tests_are_declarations(self):
+    def test_readable_ports_and_tests_are_declarations(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            for d in ('crates/ddnative/src', 'crates/ddnative/tests', 'crates/mtmath/src', 'crates/mtmath/tests'):
+            for d in ('crates/ddnative/src', 'crates/ddnative/tests', 'crates/mtmath/src', 'crates/mtmath/tests',
+                      'crates/mtcore/src', 'crates/mtcore/tests'):
                 (repo/d).mkdir(parents=True)
             (repo/'crates/mtmath/src/random.rs').write_text('// Translated from 0x00D00690 (DDDA.exe)\n')
             (repo/'crates/mtmath/tests/differential.rs').write_text('// verifies 0x00D00690\n')
-            self.assertEqual(i.native_declarations(repo), ({0xD00690}, {0xD00690}))
+            (repo/'crates/mtcore/src/dti.rs').write_text('// Translated from 0x00CF5E20 (DDDA.exe)\n')
+            (repo/'crates/mtcore/tests/differential.rs').write_text('// verifies 0x00CF5E20\n')
+            self.assertEqual(i.native_declarations(repo), ({0xD00690, 0xCF5E20}, {0xD00690, 0xCF5E20}))
 
     def test_legacy_metadata_is_explicitly_unknown(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.closing(sqlite3.connect(':memory:')) as db:

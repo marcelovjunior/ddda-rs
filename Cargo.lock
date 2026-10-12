@@ -4149,6 +4149,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtcore"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "serde_json",
+]
+
+[[package]]
 name = "mteffect"
 version = "0.1.0"
 dependencies = [

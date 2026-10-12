@@ -1,0 +1,29 @@
+//! The MT Framework core library of DDDA.exe as readable Rust
+//! (docs/CORE.md): run-time type descriptors (MtDTI), the string hash,
+//! MtObject, MtArray, MtPropertyList and the allocator registry.
+//!
+//! Each function cites the address it translates and is verified against
+//! the original by differential tests (`crates/mtcore/tests/
+//! differential.rs`): the lifted program's own vectors plus edge cases
+//! recorded from the original (`research/native/vectors_core.py`). The
+//! layouts are the original's (`#[repr(C)]`); guest objects are addressed
+//! through small handles (`dti::Dti`, `array::Array`) over guest memory.
+//!
+//! - [`dti`]: descriptors: allocator lookup, find by id and by name,
+//!   allocator propagation.
+//! - [`hash`]: the CRC-32 string hash behind DTI ids.
+//! - [`object`]: MtObject's destructor body and `operator new`.
+//! - [`array`]: MtArray clear, reserve, destructor.
+//! - [`property`]: MtPropertyList construction, `add`, clear, destructor.
+//! - [`allocator`]: the allocator registry.
+//! - [`abi`]: the ports behind the lifted calling convention; the lifted
+//!   program calls these instead of the lifted bodies.
+
+pub mod abi;
+pub mod allocator;
+pub mod array;
+pub mod dti;
+pub mod hash;
+pub mod machine;
+pub mod object;
+pub mod property;
