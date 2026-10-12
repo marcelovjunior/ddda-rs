@@ -120,7 +120,43 @@ class FrameTailTests(unittest.TestCase):
         self.assertFalse(lift.frame_tail(0x1030, entries, frozenset(), read, is_code))
 
 
+class Eh4ScopeTests(unittest.TestCase):
+    def scope(self, level_store, records):
+        # push 0x3000 (scope table); call 0x1100 (__SEH_prolog4); <level store>; ret
+        code = bytes.fromhex("6800300000" "e8f6000000") + level_store + b"\xc3"
+        code = code.ljust(0x40, b"\xcc") + b"\xc3" * 0x10  # filter/handler code at 0x1040..
+        header = dwords(0xFFFFFFFE, 0, 0xFFFFFFCC, 0)
+        read, is_code = image_fixture(code, {0x3000: header + b"".join(dwords(*r) for r in records)
+                                             + dwords(0xFFFFFFFE, 0, 0xFFFFFFD8)})
+        with patch.object(lift, "eh4_helpers", lambda: (frozenset({0x1100}), frozenset())):
+            ins = lift.decode_body(0x1000, 1, frozenset({0x1000, 0x1100}), frozenset(), read, is_code, ext=True)[0]
+        lift.TABLE_PROOF.pop(0x1000, None)
+        return {i.address for i in ins}
+
+    def test_filter_and_handler_of_stored_levels_are_body_code(self):
+        # and dword ptr [ebp-4], 0: level 0 -> filter 0x1040, handler 0x1041
+        body = self.scope(bytes.fromhex("8365fc00"), [(0xFFFFFFFE, 0x1040, 0x1041), (0, 0, 0x1042)])
+        self.assertTrue({0x1040, 0x1041} <= body)
+        self.assertNotIn(0x1042, body)  # level 1 is never entered
+        # a level from a register: records in order up to the invalid header
+        body = self.scope(bytes.fromhex("31f6" "8975fc"), [(0xFFFFFFFE, 0x1040, 0x1041), (0, 0, 0x1042)])
+        self.assertTrue({0x1040, 0x1041, 0x1042} <= body)
+
+    def test_invalid_records_give_nothing(self):
+        # enclosing level not below its own index; handler outside code
+        body = self.scope(bytes.fromhex("31f6" "8975fc"), [(0, 0, 0x1041)])
+        self.assertNotIn(0x1041, body)
+        body = self.scope(bytes.fromhex("8365fc00"), [(0xFFFFFFFE, 0, 0x5000)])
+        self.assertEqual(body, {0x1000, 0x1005, 0x100A, 0x100E})
+
+
 class VerificationGapTests(unittest.TestCase):
+    def test_named_targets_include_lifted_callees_and_ext_constants(self):
+        arm = ("{ super::lifted::f_012f71e0(m, cpu); } "
+               "(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x12F9D82))(m, cpu);")
+        self.assertEqual(lift.LIFTED_CALLEE.findall(arm), ["012f71e0"])
+        self.assertEqual(lift.EXT_CONSTANT.findall(arm), ["12F9D82"])
+
     def gaps(self, records, code, tables):
         read, is_code = image_fixture(code, tables)
         decode = lift.decode_body
