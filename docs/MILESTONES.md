@@ -1,5 +1,18 @@
 # Milestones
 
+### L28c register-object fixture (2026-10-12, pending replay)
+
+- **0x00478600 records 3/3** after separating entry register objects from
+  zero-return mocks. Its object is passed in ESI; the general input policy
+  reuses the existing pointer palette and keeps all bound/alias/call guards.
+- Private native-L28c: **59,559 → 59,560 records / 177,271 → 177,274
+  cases**. All old records are unchanged. The strengthened SIMD-store
+  guard also re-records all **33 old guarded cases identically**.
+  **102 light tests pass**; the cleanup expectation is resolved.
+- Retried the direct-route and remaining one-hop queue; eight direct and
+  30 one-hop entries remain. **Next action:** merge main, head replay/preview;
+  DB8B90/4080A0 and the three L46 x87 helpers stay with claude-6.
+
 ### L28c guarded-contract follow-up (2026-10-12, original runs queued)
 
 - The head's cleanup-test correction is integrated as **5016233c**;

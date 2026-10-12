@@ -133,9 +133,6 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
         values = []
         for k in range(size):
             p = (a+k) & MASK
-            protected.add(p)
-            if len(protected) > max_bytes:
-                raise ValueError('proof read limit')
             if p in stores:
                 v = stores[p]
             else:
@@ -145,7 +142,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 except KeyError:
                     v = None
             values.append(v)
-        return None if None in values else int.from_bytes(bytes(values), 'little')
+        if None in values:
+            return None  # no value was inferred from this load
+        protected.update((a+k)&MASK for k in range(size))
+        if len(protected) > max_bytes:
+            raise ValueError('proof read limit')
+        return int.from_bytes(bytes(values), 'little')
 
     def store(a, size, value, symbol=None):
         if a is None:
@@ -349,10 +351,10 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                         return None  # a root tail is a different mock boundary
                     pc = target
             elif guarded and mn == 'call':
-                opaque.clear()
                 direct = op[0].type == X86_OP_IMM
-                target = op[0].imm & MASK if direct else None
-                if not direct:
+                target = op[0].imm & MASK if direct else get(i,op[0])
+                opaque.clear()
+                if not direct and target not in closed and target not in models:
                     # A candidate contract, never an assumed actual dispatch:
                     # original execution must mock every visit with this pop.
                     if frames or outgoing is None or not 0 <= outgoing <= 0x400:

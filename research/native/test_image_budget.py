@@ -71,11 +71,11 @@ class ImageBudgetTests(unittest.TestCase):
                 h.run_sparse(0x400000,7,input_strategy='image-bounded-v1',
                              body=[i.address for i in ins],end=0x400000+len(code))
 
-    def guarded_record(self, code):
+    def guarded_record(self, code, strategy='guarded-bounded-v1'):
         ins,read,pages=self.fixture(code)
         with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
                 patch.object(h,'code',side_effect=read):
-            return h.run_sparse(0x400000,7,input_strategy='guarded-bounded-v1',
+            return h.run_sparse(0x400000,7,input_strategy=strategy,
                                 body=[i.address for i in ins],end=0x400000+len(code))
 
     def test_guarded_unknown_output_does_not_invent_pointer_values(self):
@@ -178,7 +178,8 @@ class ImageBudgetTests(unittest.TestCase):
         self.assertEqual(c['regs_out']['esi'],0)
         # A real closed callee returning the same way is NOT the assumed
         # zero-return mock; the certificate must reject that dispatch.
-        code=bytes.fromhex('e8fb010000 b800014000 be88130000 6a01 ffd0 4e75f9 c3')
+        code=bytes.fromhex('e8fb010000 8b0424 2d')+struct.pack('<I',h.RET-0x400100)
+        code+=bytes.fromhex('be88130000 6a01 ffd0 4e75f9 c3')
         ins,read,pages=self.fixture(code)
         pages[0x400000]=pages[0x400000][:0x100]+bytes.fromhex('c20400')+pages[0x400000][0x103:]
         with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
@@ -242,6 +243,33 @@ class ImageBudgetTests(unittest.TestCase):
         code=code.replace(bytes.fromhex('b9401f0000'),bytes.fromhex('b9e02e0000'))
         with self.assertRaisesRegex(h.Rejected,'unknown output aliases a protected byte'):
             self.guarded_record(code)
+
+    def test_unknown_load_does_not_create_a_constant_read_assumption(self):
+        ins,read,_=self.fixture(bytes.fromhex('8b1500200000 8907 c3'))
+        c=image_bound(ins,read,0xf008000,guarded=True)
+        self.assertIsNotNone(c)
+        self.assertFalse(WriteGuard(c).conflicts(0x400006,0x2000,4))
+
+    def test_known_indirect_closed_target_is_traced_not_mocked(self):
+        md=Cs(CS_ARCH_X86,CS_MODE_32);md.detail=True
+        callee={i.address:i for i in md.disasm(bytes.fromhex('31c0 c3'),0x400100)}
+        for code in ('b800014000 ffd0 c3','c70100014000 ff11 c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            c=image_bound(ins,read,0xf008000,guarded=True,closed={0x400100},decode=callee.get)
+            self.assertEqual(c['instructions'],5)
+            self.assertFalse(c['mock_calls'])
+
+    def test_register_objects_keep_mock_returns_zero(self):
+        code=bytes.fromhex('c70100014000 e8f5010000 8b00 be88130000 6a01 ffd0 4e75f9 c3')
+        c=self.guarded_record(code,'guarded-objects-v1')
+        self.assertGreaterEqual(c['regs_in']['ecx'],h.SparseInputs.OBJECT_BASE)
+        self.assertEqual(c['regs_in']['ecx'] & 0xfff,0x100)
+        self.assertGreaterEqual(c['regs_in']['esi'],h.SparseInputs.OBJECT_BASE)
+        self.assertEqual(c['calls'][0]['out']['eax'],0)
+        self.assertEqual(c['calls'][1]['target'],0)
+        self.assertEqual(c['regs_out']['esi'],0)
+        ordinary=self.guarded_record(bytes.fromhex('89c8c3'))
+        self.assertEqual(ordinary['regs_in']['ecx'],0)
 
 
 if __name__ == '__main__':

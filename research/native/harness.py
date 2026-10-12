@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'zero-call-v1', 'record-range-v1', *RETURN_STRATEGIES)
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'zero-call-v1', 'record-range-v1', *RETURN_STRATEGIES)
 
 
 # Callee cleanup (bytes) of imported functions, from their documented x86
@@ -819,7 +819,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # Opt in: preserve every old distribution and every return guard.
     # __alloca_probe_16/_8 (0x012F4E90/0x012F4EA6) align ESP+4; with
     # zero EAX this input exercises their zero-allocation return path.
-    call_stack = input_strategy in ('zero-call-v1','guarded-bounded-v1')
+    call_stack = input_strategy in ('zero-call-v1','guarded-bounded-v1','guarded-objects-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -896,7 +896,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
 
     def budget_write_ok(a, size):
         if budget_guard is not None and budget_guard.conflicts(uc.reg_read(UC_X86_REG_EIP),a,size):
-            bad.append('image budget: unknown output aliases a protected byte')
+            bad.append(f'image budget: unknown output aliases a protected byte at '
+                       f'{uc.reg_read(UC_X86_REG_EIP):#010x}, write {a:#010x}+{size}')
             uc.emu_stop()
             return False
         return True
@@ -1506,6 +1507,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
+        if input_strategy == 'guarded-objects-v1' and name != 'esp':
+            # Register-passed objects must not all alias zero-return mocks
+            # at address zero. Reuse the existing register-pointer palette.
+            v = SparseInputs('zero-objects-v1').register(rnd,name)
         if name == "esp":
             v = (0x0F000000 + rnd.randrange(0x100) * 0x1000 + 0x800) & ~3
             if call_stack:
@@ -1537,7 +1542,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     image_budget = None
-    if input_strategy in ('image-bounded-v1','guarded-bounded-v1') and body is not None and max_insn < 2_000_000:
+    if input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1') and body is not None and max_insn < 2_000_000:
         # Opt-in only. A finite abstract trace with unknown entry GPRs and
         # original image bytes must establish the entire path. Guarded mode
         # additionally traces closed calls and checks unknown output aliases.
@@ -1560,7 +1565,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 break
             proof_body.append(decoded_proof)
         if len(proof_body) == len(body):
-            guarded = input_strategy == 'guarded-bounded-v1'
+            guarded = input_strategy in ('guarded-bounded-v1','guarded-objects-v1')
             certificate = image_bound(proof_body, code, regs_in['esp'], entry=address,
                                 ceiling=2_000_000-max_insn, deadline=deadline,
                                 max_bytes=MAX_PAGES*4096,guarded=guarded,
@@ -1586,7 +1591,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     if machine.problem:
         bad.append(machine.problem)
     if budget_guard is not None and not budget_guard.calls_match():
-        bad.append('image budget: indirect call did not use the proven mock contract')
+        missing = {hex(pc): [visits,budget_guard.mocks.get(pc,0)]
+                   for pc,visits in budget_guard.visits.items() if visits != budget_guard.mocks.get(pc,0)}
+        bad.append(f'image budget: indirect call did not use the proven mock contract: {missing}')
     # Caller-frame helpers (frame_exit) are checked against their exact
     # derived exit ESP; every other function keeps the ordinary range.
     # A terminal case ends at the noreturn callee's entry, not at a return.
