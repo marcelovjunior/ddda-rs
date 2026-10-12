@@ -1,5 +1,31 @@
 # Milestones
 
+### L28c boot stop 14 fixture (2026-10-12, pending replay)
+
+- **0x00DD5ED0 records 3/3**. The opt-in store-fact rule preserves its own
+  vtable and member writes across non-overlapping closed calls; the repeated
+  virtual call resolves to original 0x00DC67E0. Its proven bound is 83,137
+  instructions. Initial object contents remain unknown, and alias guards stay on.
+- Private native-L28c: **59,580 -> 59,581 functions / 177,334 -> 177,337
+  cases**. The prior movie fixture and all other accepted data are audited
+  unchanged. **119 light tests pass**; full replay is left to the head.
+- **Next action:** preview boot past this constructor, then continue the
+  remaining constructor/manager input recipes.
+
+### L28c original setup-state fixture (2026-10-12, pending replay)
+
+- Original reset 0x00F7B170 supplies the stopped movie state required by
+  0x00F7DE40; the latter now records 3/3 normal-return cases. The general
+  constructor/setup strategy checks the producer against its accepted case
+  before transferring memory. It never assigns game-specific field values.
+- Private native-L28c grows **59,579 -> 59,580 functions / 177,331 ->
+  177,334 cases**. The audit proves all old records/cases unchanged.
+  Six new synthetic tests cover the transfer and refusal paths; full Rust
+  replay belongs to the integration train. Results describe all 37 queued
+  entries' input requirements and distinguish state from cleanup/budget faults.
+- **Next action:** boot stop 14, 0x00DD5ED0: preserve an alias-checked vtable
+  fact across closed calls to resolve its repeated indirect call exactly.
+
 ### L28c inventory fixture batch (2026-10-12, pending replay)
 
 - Nineteen more inventory functions record three normal-return cases each.
@@ -1336,3 +1362,13 @@ opening (codex-31), route perf (codex-29).
 - **One next action:** claude-2's boot run on main (past stop 12); L48
   (claude-6) re-credits the gaps (edge bounds through memory slots,
   byte-remap tables, per-slot cases for input-indexed switches).
+
+## Batch 2026-10-12 (train 6: 99.7%)
+
+- **Train 6 landed on main 50b358f8: 59,250 of 59,440 verified (99.7%).**
+  Codex's recorder now has guarded-stack and register-object inputs (19
+  functions, boot stop 13's 0x0075BAD0 among them). Every suite is green.
+- Codex classified all 211 non-verified functions (L28 Results). Next is
+  a constructed-object input strategy: run the verified constructor first,
+  then the method. claude-6 is on L48 (re-credit the 46 gaps).
+- **One next action:** claude-2's boot run past stop 13.
