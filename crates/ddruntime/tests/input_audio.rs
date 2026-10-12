@@ -13,6 +13,9 @@ const STACK: u32 = 0x10010000;
 const DATA: u32 = 0x10000;
 fn setup() -> (GuestMemory, Arc<Registry>) {
     runtime::enter(Arc::new(runtime::Runtime::default()));
+    // the audio workers run on a clock the tests advance: exact quanta,
+    // whatever the machine's load (L44)
+    audio::use_test_clock();
     let mut m = GuestMemory::new();
     m.map(DATA, 0x10000, READ | WRITE).unwrap();
     m.map(STACK - 0x10000, 0x10000, READ | WRITE).unwrap();
@@ -105,6 +108,17 @@ fn keyboard_hook(m: &mut dyn Mem, c: &mut Cpu) {
 }
 fn sleep(m: &mut dyn Mem, ms: u32) {
     api(m, threads::sleep, &[ms]);
+}
+
+/// Advance the audio test clock by `ms` and wait, in guest Sleeps so the
+/// audio thread runs, until every worker has processed those quanta.
+fn advance(m: &mut dyn Mem, ms: u64) {
+    audio::advance_test_clock(std::time::Duration::from_millis(ms));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !audio::test_clock_settled() {
+        assert!(std::time::Instant::now() < until, "the audio worker did not catch up with the test clock");
+        sleep(m, 1);
+    }
 }
 
 #[test]
@@ -391,7 +405,7 @@ fn xaudio_com_27_layout_buffers_real_time_and_worker_callbacks() {
     assert_eq!(m.u32(DATA + 64), 0, "queued but not processing");
     assert_eq!(m.u32(DATA + 0x900), 0);
     assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
-    sleep(&mut m, 40);
+    advance(&mut m, 40);
     method(&mut m, &r, voice, 25, &[DATA + 64]);
     assert_eq!(m.u32(DATA + 68), 0);
     assert_eq!(m.u32(DATA + 0x900), 1);
@@ -429,7 +443,7 @@ fn xaudio_state_operation_sets_flush_stop_and_format_validation() {
     assert_eq!(method(&mut m, &r, v, 21, &[DATA + 0x200, 0]), 0);
     assert_ne!(method(&mut m, &r, v, 28, &[44100]), 0);
     assert_eq!(method(&mut m, &r, v, 22, &[]), 0);
-    sleep(&mut m, 30);
+    advance(&mut m, 30);
     assert_eq!(m.u32(DATA + 0x900), 1);
     assert_eq!(method(&mut m, &r, v, 28, &[44100]), 0);
     assert_eq!(method(&mut m, &r, v, 20, &[0, 0]), 0);
@@ -606,16 +620,16 @@ fn xaudio_all_control_slots_effects_routing_and_engine_callbacks() {
     method(&mut m, &r, v, 2, &[0]);
     method(&mut m, &r, e, 14, &[DATA + 0x800]);
     assert_eq!(m.u32(DATA + 0x800 + 40), 1);
-    sleep(&mut m, 30);
+    advance(&mut m, 30);
     assert!(m.u32(DATA + 0x920) > 0);
     assert_ne!(m.u32(DATA + 0x924), services::MAIN_THREAD_ID);
     method(&mut m, &r, e, 12, &[]);
     let count = m.u32(DATA + 0x920);
-    sleep(&mut m, 20);
+    advance(&mut m, 20);
     assert_eq!(m.u32(DATA + 0x920), count);
     method(&mut m, &r, e, 11, &[]);
     method(&mut m, &r, e, 7, &[DATA + 0x700]);
-    sleep(&mut m, 20);
+    advance(&mut m, 20);
     assert_eq!(m.u32(DATA + 0x920), count);
     for voice in [v, sub, master] {
         method(&mut m, &r, voice, 18, &[]);
@@ -634,14 +648,14 @@ fn xaudio_infinite_loop_exit_discontinuity_and_adpcm_clock() {
     m.set_u32(DATA + 0x200 + 28, 255);
     assert_eq!(method(&mut m, &r, v, 21, &[DATA + 0x200, 0]), 0);
     method(&mut m, &r, v, 19, &[0, 0]);
-    sleep(&mut m, 35);
+    advance(&mut m, 35);
     method(&mut m, &r, v, 25, &[DATA + 64]);
     assert_eq!(m.u32(DATA + 68), 1);
-    assert!(m.u32(DATA + 72) >= 960);
+    assert_eq!(m.u32(DATA + 72), 1440, "exactly three 10 ms quanta of 480 samples");
     assert_eq!(m.u32(DATA + 0x900), 0);
     method(&mut m, &r, v, 23, &[]);
     method(&mut m, &r, v, 24, &[0]);
-    sleep(&mut m, 25);
+    advance(&mut m, 25);
     method(&mut m, &r, v, 25, &[DATA + 64]);
     assert_eq!(m.u32(DATA + 68), 0);
     assert_eq!(m.u32(DATA + 72), 0);
@@ -663,7 +677,7 @@ fn xaudio_infinite_loop_exit_discontinuity_and_adpcm_clock() {
     m.set_u32(DATA + 0x204, 700);
     assert_eq!(method(&mut m, &r, v, 21, &[DATA + 0x200, 0]), 0);
     method(&mut m, &r, v, 19, &[0, 0]);
-    sleep(&mut m, 40);
+    advance(&mut m, 40);
     method(&mut m, &r, v, 25, &[DATA + 64]);
     assert_eq!(m.u32(DATA + 68), 0);
     assert_eq!(m.u32(DATA + 72), 1280);
@@ -951,7 +965,7 @@ fn xaudio_mixes_submitted_pcm_into_the_output() {
     buffer(&mut m, 0x1234, 0x40);
     assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
     assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
-    sleep(&mut m, 60);
+    advance(&mut m, 60);
     let (left, right) = take_output(&output);
     // 16-bit PCM is x / 32768; a mono voice's default send to a stereo
     // mastering voice feeds both channels at full scale.
@@ -1023,7 +1037,7 @@ fn xaudio_decodes_the_games_adpcm_bank_format() {
     }
     assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
     assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
-    sleep(&mut m, 60);
+    advance(&mut m, 60);
     let (left, right) = take_output(&output);
     let mut format = vec![0u8; 50];
     for (i, b) in format.iter_mut().enumerate() {
@@ -1121,7 +1135,7 @@ fn xaudio_runs_guest_xapos_and_skips_unlifted_ones() {
     buffer(&mut m, 0x1234, 0x40);
     assert_eq!(method(&mut m, &r, voice, 21, &[DATA + 0x200, 0]), 0);
     assert_eq!(method(&mut m, &r, voice, 19, &[0, 0]), 0);
-    sleep(&mut m, 60);
+    advance(&mut m, 60);
     let (left, right) = take_output(&output);
     let want: Vec<f32> = pcm.iter().map(|x| *x as f32 / 32768.0 * 0.5).collect();
     assert_contains(&left, &want);
