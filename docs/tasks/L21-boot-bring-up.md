@@ -609,3 +609,13 @@ claude-6 (15):
       cleanup analysis returns zero.
     - Cause 2. Owners: claude-6 (noreturn evidence for 0x004080A0), then
       Codex (the recording).
+13. main 07c7062a (train 5: L46 and L47; stops 10 to 12 fixed). The
+    committed generated code was built as is (no gen, no LIFT_DATA).
+    Runtime game tests 46/46. The boot passes 0x00DB8B90.
+    - Stop: untranslated 0x0075BAD0, called from just before 0x00758134
+      (in 0x00758090, verified). Registers: ebx -1, esp 0x7EFFD14C,
+      ecx 0x6556DB38.
+    - 0x0075BAD0 is 909 bytes with no fixture on main. It is in the
+      look-ahead table (`sBbsRpgMain`'s constructor, depth 2).
+    - Cause 2. Owner: Codex, who has recorded it 3/3 (board #9642); the
+      adoption is pending.
