@@ -408,21 +408,22 @@ incremental = false
 # (RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Z threads=8", its own target dir) against
 # ~206 s at opt-level 1 (2026-10-12, ddlift-05). Everything else as `play`.
 # The shards holding the hot functions of the boot/title (sampling profiles,
-# scripts/sample_profile.py: 05 06 25 26 27 28 31) stay at opt-level 1: at
+# scripts/sample_profile.py: 05 06 25 26 27 28 31 for loading and the movie,
+# 00 01 02 04 10 30 for the title scene) stay at opt-level 1: at
 # opt-level 0 the game's loading crawled (logos after minutes).
 [profile.play-fast]
 inherits = "play"
 
 [profile.play-fast.package.ddlift-00]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-01]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-02]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-03]
@@ -430,7 +431,7 @@ opt-level = 0
 incremental = false
 
 [profile.play-fast.package.ddlift-04]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-05]
@@ -454,7 +455,7 @@ opt-level = 0
 incremental = false
 
 [profile.play-fast.package.ddlift-10]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-11]
@@ -534,7 +535,7 @@ opt-level = 0
 incremental = false
 
 [profile.play-fast.package.ddlift-30]
-opt-level = 0
+opt-level = 1
 incremental = false
 
 [profile.play-fast.package.ddlift-31]
