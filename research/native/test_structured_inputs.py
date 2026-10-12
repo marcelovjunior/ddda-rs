@@ -164,5 +164,41 @@ class InputTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'boundary changed'):
                 trials.check_boundary(root,[{**old,'body':[1,3]},new])
 
+    def test_promotion_gates_and_closed_rerecording(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'patterns').mkdir();(root/'vectors').mkdir()
+            ext=lambda a,arms=('arm',):dict(addr=a,size=4,body=[a],calls=[],arms=list(arms),ext=True)
+            free,mocked,calling,unwanted=ext(0x10),ext(0x20),ext(0x30,('x86::call_ext(m, cpu, 0x99)',)),ext(0x40)
+            caller=dict(addr=0x50,arms=['{ let t = 0x10u32; x86::call_ext(m, cpu, t); }',
+                                        '{ let t = 0x20u32; x86::call_ext(m, cpu, t); }',
+                                        '(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x30))(m, cpu);'])
+            other=dict(addr=0x60,calls=[{'target':0x20}])
+            cases=[dict(addr=0x10,input_strategy='small-v1',old=True),dict(addr=0x20),other]
+            for path,value in [('patterns/lift.json',[free,mocked,calling,unwanted]),('vectors/lift.json',cases),
+                               ('patterns/structured_candidates.json',[caller])]:
+                trials.write(root/path,value)
+            runs=[]
+            def run(a,seed,**kw):
+                runs.append((a,kw.get('input_strategy'),'end' in kw));return dict(regs_in={},fresh=True)
+            with patch.object(trials.lift,'seed_closed_contracts',return_value=set()),                  patch.object(trials.lift,'lift',return_value=['closed arm']),                  patch.object(trials.lift,'release_body'),                  patch.object(trials.lift,'noreturn_entries',return_value=set()),                  patch.dict(trials.lift.BODY_INFO,{a:dict(body=[a]) for a in (0x10,0x20,0x30,0x40)}),                  patch.object(h,'run_sparse',side_effect=run),                  patch.object(h,'frame_exit',return_value=('ebp',4,())),                  contextlib.redirect_stdout(io.StringIO()):
+                (root/'structured-random.jsonl').write_text('')
+                with self.assertRaisesRegex(ValueError,'archive the trial logs'):
+                    trials.promote(root)
+                (root/'structured-random.jsonl').unlink()
+                trials.promote(root)
+            selected={f['addr']:f for f in trials.read(root/'patterns/lift.json')}
+            self.assertNotIn('ext',selected[0x10])
+            self.assertEqual(selected[0x10]['arms'],['closed arm'])
+            self.assertEqual(selected[0x10]['frame_exit'],['ebp',4,[]])
+            self.assertEqual(trials.frame_contracts(list(selected.values())),{0x10:['ebp',4,[]]})
+            for a in (0x20,0x30,0x40):
+                self.assertEqual(selected[a],{0x20:mocked,0x30:calling,0x40:unwanted}[a])
+            self.assertEqual(runs,[(0x10,'small-v1',False)]*3)
+            out=trials.read(root/'vectors/lift.json')
+            self.assertEqual(out[:2],[dict(addr=0x20),other])
+            self.assertEqual([c['seed'] for c in out[2:]],[(0x10<<8)^i for i in (1,2,3)])
+            self.assertTrue(all(c['fresh'] and c['body_key']==trials.lift.vector_key(selected[0x10]) for c in out[2:]))
+            self.assertEqual(trials.read(root/'structured-promoted.json'),[0x10])
+
 
 if __name__=='__main__':unittest.main()

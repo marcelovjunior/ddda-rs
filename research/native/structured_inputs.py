@@ -83,11 +83,17 @@ def prepare(root):
 
 _CLOSED = frozenset()
 _NORETURN = frozenset()
+_FRAMES = {}
 
 
-def init_worker(closed, noreturn):
-    global _CLOSED, _NORETURN
-    _CLOSED, _NORETURN = frozenset(closed), frozenset(noreturn)
+def frame_contracts(selected):
+    """Caller-frame exits of closed entries (set by promote), for nested frames."""
+    return {f['addr']: f['frame_exit'] for f in selected if not f.get('ext') and f.get('frame_exit')}
+
+
+def init_worker(closed, noreturn, frames=None):
+    global _CLOSED, _NORETURN, _FRAMES
+    _CLOSED, _NORETURN, _FRAMES = frozenset(closed), frozenset(noreturn), dict(frames or {})
 
 
 def trial(args):
@@ -109,7 +115,7 @@ def trial(args):
                                   body=f['body'], x87_push=f.get('x87_push',[]),
                                   noreturn_sites=f.get('noreturn_sites',[]), noreturn_targets=_NORETURN,
                                   original_entry=f.get('original_entry',False),
-                                  max_seconds=remaining, **kw)
+                                  frame_contracts=_FRAMES, max_seconds=remaining, **kw)
             cases.append(dict(addr=f['addr'],seed=seed,body_key=key,**result))
             attempts.append(dict(reason='ok',seed=seed))
         except h.Rejected as e:
@@ -146,7 +152,7 @@ def record(root, strategy, seeds, seconds, limit):
             if stream.read(1)!=b'\n':
                 stream.seek(0,2);stream.write(b'\n')
     with path.open('a') as stream, Pool(int(os.environ.get('LIFT_WORKERS','6')),init_worker,
-            (closed,lift.noreturn_entries()),maxtasksperchild=8) as pool:
+            (closed,lift.noreturn_entries(),frame_contracts(selected)),maxtasksperchild=8) as pool:
         for n,result in enumerate(pool.imap_unordered(trial,((f,strategy,seeds,seconds) for f in todo),chunksize=1),1):
             stream.write(json.dumps(result)+'\n');stream.flush()
             if n%250==0:
@@ -185,6 +191,85 @@ def adopt(root, strategy):
     print(f'{strategy}: added {len(added)}; {len(selected)} functions / {len(cases)} cases; Rust replay still required',flush=True)
 
 
+def direct_targets(arms):
+    """Constant call/tail targets an ext body sends through call_ext."""
+    import re
+    text = ' '.join(arms)
+    return ({int(t, 16) for t in re.findall(r'let t = 0x([0-9A-F]+)u32;', text)}
+            | {int(t, 16) for t in re.findall(r'call_ext\(m, cpu, 0x([0-9A-F]+)\)', text)})
+
+
+def promote(root, seeds=3, seconds=20):
+    """Promote verified call-free ext entries that unverified candidates call.
+
+    An entry qualifies when its arms make no call at all (no closed callee,
+    no call_ext), no recorded case mocks it (so no existing case changes
+    meaning: replay and recorder both run closed targets for real), and some
+    candidate calls it directly. It is re-lifted closed and its own cases are
+    re-recorded in closed mode with its previous input distribution. Callers
+    then execute the original body, e.g. the frame moves of the SEH helpers.
+    The closed boundary changes: prepare again in fresh trial logs.
+    """
+    selected = read(root/'patterns/lift.json'); cases = read(root/'vectors/lift.json')
+    candidates = read(root/'patterns/structured_candidates.json')
+    if any(root.glob('structured-*.jsonl')):
+        raise ValueError('archive the trial logs first: promotion changes the closed boundary')
+    closed = lift.seed_closed_contracts(selected)
+    mocked = {e['target'] for c in cases for e in (c.get('calls') or [])}
+    wanted = set().union(*(direct_targets(f['arms']) for f in candidates)) if candidates else set()
+    old = {}
+    for c in cases:
+        old.setdefault(c['addr'], []).append(c)
+    quarantine = quarantined(root)
+    noreturn = lift.noreturn_entries()
+    promoted = {}
+    for k, f in enumerate(selected):
+        a = f['addr']
+        if (not f.get('ext') or f.get('original_entry') or a in h.PLATFORM or a in mocked or a in quarantine
+                or a not in wanted or f.get('calls') or any('call_ext' in arm for arm in f['arms'])):
+            continue
+        try:
+            arms = lift.lift(a, f['size'], closed, ext=False)
+        except lift.Unsupported:
+            continue
+        finally:
+            lift.release_body(a, f['size'])
+        g = {key: value for key, value in f.items() if key != 'ext'}
+        g.update(arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []), **lift.BODY_INFO[a])
+        if g['calls']:
+            continue
+        contract = h.frame_exit(a, g['body'])
+        if h.caller_frame(contract):
+            g['frame_exit'] = contract
+        strategies = {c.get('input_strategy') or ('zero' if c.get('zero_inputs') else 'random') for c in old.get(a, [])}
+        strategy = strategies.pop() if len(strategies) == 1 else 'random'
+        kw = dict(zero_inputs=True) if strategy == 'zero' else {}
+        if strategy not in ('random', 'zero'):
+            kw['input_strategy'] = strategy
+        key, new, start = lift.vector_key(g), [], time.monotonic()
+        for index in range(1, seeds * 8 + 1):
+            if len(new) == seeds or time.monotonic() - start > seconds:
+                break
+            seed = (a << 8) ^ index
+            try:
+                r = h.run_sparse(a, seed, size=g['size'], body=g['body'],
+                                 noreturn_sites=g.get('noreturn_sites', []), noreturn_targets=noreturn,
+                                 max_seconds=seconds, **kw)
+            except h.Rejected:
+                continue
+            new.append(dict(addr=a, seed=seed, body_key=key, **r))
+        if new:
+            selected[k] = g
+            promoted[a] = new
+    cases = [c for c in cases if c['addr'] not in promoted] + [c for a in promoted for c in promoted[a]]
+    write(root/'patterns/lift.json', selected); write(root/'vectors/lift.json', cases)
+    history = root/'structured-promoted.json'
+    previous = read(history) if history.exists() else []
+    write(history, sorted(set(previous) | set(promoted)))
+    print(f'promoted {len(promoted)} closed: {[hex(a) for a in sorted(promoted)]}; '
+          f'{len(selected)} functions / {len(cases)} cases; Rust replay still required', flush=True)
+
+
 def prune_no_vectors(root, have):
     """Successful adoptions must not remain in the historical failure list."""
     path=root/'patterns/lift_novector.json'
@@ -197,7 +282,7 @@ def prune_no_vectors(root, have):
 
 if __name__ == '__main__':
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('command',choices=['prepare','record','adopt'])
+    ap.add_argument('command',choices=['prepare','record','adopt','promote'])
     ap.add_argument('--strategy',default='random',choices=('random','zero',*h.INPUT_STRATEGIES))
     ap.add_argument('--seeds',type=int,default=3)
     ap.add_argument('--seconds',type=float,default=20)
@@ -209,4 +294,5 @@ if __name__ == '__main__':
         ap.error('positive seeds/seconds and nonnegative limit required')
     if args.command=='prepare':prepare(root)
     elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit)
+    elif args.command=='promote':promote(root,args.seeds,args.seconds)
     else:adopt(root,args.strategy)

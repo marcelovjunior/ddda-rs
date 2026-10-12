@@ -78,4 +78,26 @@ class FrameContractTests(unittest.TestCase):
             self.record('595a8be55d52c3')
 
 
+    def test_closed_frame_helper_keeps_the_caller_as_root(self):
+        # caller: push ebp; mov ebp,esp; push 8; call P; call M (mocked);
+        # mov esp,ebp; pop ebp; ret. P = PROLOG at 0x400100 (closed).
+        caller=bytes.fromhex('558bec6a08e8f6000000e8f10100008be55dc3')
+        image=bytearray(caller.ljust(0x1000,bytes([0xcc])))
+        prolog=bytes.fromhex(self.PROLOG)
+        image[0x100:0x100+len(prolog)]=prolog
+        image=bytes(image)
+        md=Cs(CS_ARCH_X86,CS_MODE_32)
+        body=[i.address for i in md.disasm(caller,0x400000)]
+        pbody=[i.address for i in md.disasm(prolog,0x400100)]
+        with patch.object(h,'image',return_value=(0x400000,[(0x400000,image)])),              patch.object(h,'code',side_effect=lambda a,n:image[a-0x400000:a-0x400000+n]),              patch.object(h,'static_pop',return_value=0):
+            contract=h.frame_exit(0x400100,pbody)
+            run=lambda **kw:h.run_sparse(0x400000,7,body=body,end=0x400000+len(caller),
+                                         lifted=frozenset({0x400100}),input_strategy='small-v1',**kw)
+            with self.assertRaises(h.Rejected):
+                run()  # the prolog returns below the call's ESP: the caller looks nested
+            c=run(frame_contracts={0x400100:list(contract)})
+        self.assertEqual([e['target'] for e in c['calls']],[0x400200])
+        self.assertNotIn('stack_contract',c)
+
+
 if __name__=='__main__':unittest.main()

@@ -616,7 +616,7 @@ def frame_text(contract):
 
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
-               max_seconds=None, input_strategy=None, original_entry=False):
+               max_seconds=None, input_strategy=None, original_entry=False, frame_contracts=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -657,6 +657,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     exclusive with zero_inputs and recorded in successful vectors. Original
     image bytes, executed instructions and rejection checks never change.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
+
+    `frame_contracts` maps closed callees with a caller-frame exit
+    (frame_exit, e.g. a promoted `__SEH_prolog4`) to that contract. Their
+    nested frame ends at the return PC with exactly the derived ESP rather
+    than an ESP at or above the call's (the prolog returns below it).
 
     `mockzero-v1` keeps the default random pages and registers but makes
     every mocked callee return zero (eax, ecx, edx, xmm0 and any st0 push;
@@ -867,6 +872,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     is_own = lambda pc: pc in body if body is not None else body_end is not None and address <= pc < body_end
     frames = []  # (return PC, caller ESP), distinguishing calls into shared code
     root_frame = [True]
+    entering = [False]  # a call was just made: the next instruction is the callee's entry
+    frame_contracts = {a: (c[0], c[1], tuple(tuple(t) for t in c[2])) for a, c in (frame_contracts or {}).items()}
     flow = {}
     own_ret = [False]  # the previous instruction was one of the function's own `ret`s
     valid_flags = [0x8d5]
@@ -930,6 +937,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         # Must precede on_ext: the first root instruction after a closed
         # callee returns can itself be another call that needs recording.
         esp_now = uc_.reg_read(UC_X86_REG_ESP)
+        if entering[0]:
+            entering[0] = False
+            contract = frame_contracts.get(addr)
+            if contract is not None:
+                regs_now = {"esp": esp_now, "ebp": uc_.reg_read(UC_X86_REG_EBP)}
+                exit_esp = regs_now[contract[0]] + contract[1]
+                for sign, k in contract[2]:
+                    exit_esp += sign * struct.unpack("<I", bytes(uc_.mem_read((esp_now + k) & 0xFFFFFFFF, 4)))[0]
+                frames[-1] = (frames[-1][0], exit_esp & 0xFFFFFFFF)
         while frames and addr == frames[-1][0] and esp_now >= frames[-1][1]:
             frames.pop()
         root_frame[0] = not frames
@@ -982,6 +998,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     flow[addr] = ""
             if flow[addr] == "call" and uc_.reg_read(UC_X86_REG_EIP) == addr:
                 frames.append((addr + size, esp_now))
+                entering[0] = True
         i = x87_ops.get(addr)
         if i is not None and uc_.reg_read(UC_X86_REG_EIP) == addr:
             # QEMU does not reliably set SF on overflow/underflow. Reject

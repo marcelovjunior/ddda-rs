@@ -911,6 +911,23 @@ The three CRT helpers derive `esp - 0x18 - [esp+0x8]` (0x012F71E0),
 body 0x01306F7F). Replay needs nothing new: it compares all registers.
 Exception dispatch remains a runtime task.
 
+**Promotion of verified call-free callees (L28).** Candidates and their
+mocked callees are lifted in ext mode, so a caller of `__SEH_prolog4`
+recorded the prolog as a mock: the frame never moved and the caller's `ret`
+popped its scope table (`__setmbcp` 0x012FB049 "returned to 0x0161EBE0"
+under every strategy). `structured_inputs.py promote` re-lifts a selected
+ext entry as a closed callee when its arms make no call at all, no recorded
+case mocks it, and an unverified candidate calls it directly. Its own cases
+are re-recorded in closed mode with the same input distribution; no other
+record or case changes meaning, since the recorder (`lifted`) and the replay
+(dispatch table) both run closed targets for real. A promoted entry with a
+caller-frame exit stores it as `frame_exit`; `run_sparse(frame_contracts=)`
+(passed by `structured_inputs.py`, `trace_recorder.py` and `lift.py vectors`)
+ends that callee's nested frame at its return PC with exactly the derived
+ESP, because the prolog returns below the call's ESP and the ordinary
+`ESP >= call ESP` test would leave the caller marked nested. Promotion
+changes the closed boundary: archive the trial logs and `prepare` again.
+
 **Image inputs and mock cleanup (L15).** `image-v1` explicitly tags the
 image-backed input policy, with seeded random inputs elsewhere. Existing
 `fill` already supplies the original executable bytes for *all* image
