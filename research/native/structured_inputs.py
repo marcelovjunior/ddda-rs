@@ -477,6 +477,7 @@ def refresh(root, strategies, seeds, seconds, only=None):
         # keep the record's acceptance mode: terminal-v1 if any old case ended at a noreturn call
         terminal = any(e.get('terminal') for c in old for e in c.get('calls') or [])
         key = lift.vector_key(g)
+        reasons = Counter()
         for strategy in [_inputs(old) if old else {}] + [
                 dict(zero_inputs=True) if s == 'zero' else ({} if s == 'random' else dict(input_strategy=s))
                 for s in strategies]:
@@ -494,16 +495,18 @@ def refresh(root, strategies, seeds, seconds, only=None):
                                      max_insn=g.get('insn_budget') or lift.INSN_BUDGET,
                                      frame_contracts=frames, max_seconds=remaining, visited=seen,
                                      terminal=terminal, **strategy)
-                except h.Rejected:
+                except h.Rejected as e:
+                    reasons[str(e).split(' at ')[0][:60]] += 1
                     continue
-                except Exception:  # noqa: BLE001  (emulator errors: no case)
+                except Exception as e:  # noqa: BLE001  (emulator errors: no case)
+                    reasons[f'error {type(e).__name__}: {e}'[:80]] += 1
                     continue
                 finally:
                     gc.collect()
                 if len(new) < seeds or (goals & seen) - reached:
                     new.append(dict(addr=a, seed=seed, body_key=key, **r))
                     reached |= goals & seen
-        report['functions'][a] = dict(cases=len(new), old_cases=len(old), goals=len(goals),
+        report['functions'][a] = dict(cases=len(new), old_cases=len(old), goals=len(goals), reasons=dict(reasons.most_common(4)),
                                       reached=len(goals & reached),
                                       unreached=[f'0x{t:08X}' for t in sorted(goals - reached)])
         if not new:
