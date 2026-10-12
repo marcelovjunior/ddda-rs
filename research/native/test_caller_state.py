@@ -64,6 +64,16 @@ class CallerStateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stack pointer"):
                 c.validate_state(dict(state, esp=esp))
 
+    def test_caller_rejection_identifies_the_phase_and_preserves_the_reason(self):
+        case = self.accepted()
+        with self.assertRaisesRegex(h.Rejected, '^caller replay: runaway$'):
+            cs.capture(dict(addr=0x400000), case, 0x400100,
+                       lambda *args, **kwargs: self.reject_run(), 'test')
+
+    @staticmethod
+    def reject_run():
+        raise h.Rejected('runaway')
+
     def test_legacy_caller_seed_is_identified_then_replayed_exactly(self):
         caller=dict(addr=0x400000)
         seed=(caller['addr'] << 8)^3
@@ -75,6 +85,30 @@ class CallerStateTests(unittest.TestCase):
         case['regs_out']['eax']^=1
         with self.assertRaisesRegex(h.Rejected,'replay differs'):
             cs.capture(caller,case,0x400100,self.run_body,'test')
+
+    def test_checked_caller_state_supports_a_finite_target_bound(self):
+        caller, helper = dict(addr=0x400000), dict(addr=0x400100)
+        case = self.accepted()
+        # A finite 12,000-trip loop, then read the caller's saved local.
+        code = bytes.fromhex('b9e02e0000 49 75fd 8b45f8 c3')
+        self.code[helper['addr']] = code
+        original_code = h.code
+        def read(a, n):
+            if 0x400100 <= a < 0x400100 + len(code):
+                return code[a-0x400100:a-0x400100+n]
+            return original_code(a, n)
+        original_image = h.image()
+        data = bytearray(original_image[1][0][1])
+        data[0x100:0x100+len(code)] = code
+        with patch.object(h, 'code', side_effect=read), \
+             patch.object(h, 'image', return_value=(0x400000, [(0x400000, bytes(data))])):
+            with self.assertRaisesRegex(h.Rejected, 'runaway'):
+                cs.record_from_caller(caller, case, helper, 2, self.run_body, 'test')
+            result = cs.record_from_caller(caller, case, helper, 2, self.run_body, 'test', bounded=True)
+            self.assertEqual(result['regs_out']['eax'], 0x1234)
+            self.assertGreater(result['image_budget']['instructions'], 20000)
+            self.assertEqual(result['construction']['case_hash'], c.digest(case))
+            self.assertEqual(result['input_strategy'], 'guarded-state-v1')
 
     def test_legacy_seed_does_not_guess_other_input_distributions(self):
         case=self.accepted()
