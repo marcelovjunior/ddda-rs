@@ -14,6 +14,15 @@ Assigned by head on 2026-10-12. Worktree `L66`, branch
    timings, and ddperf replay/main-loop comparison. Heavy jobs are serialized
    through `heavy.py`; shared native data is read-only.
 
+### Ownership update (head board #9974)
+
+L66 now owns only function-level hot/cold layout, hot-list input, Cargo
+package profile wiring and gate verification. Emission is claude-7/L73;
+base helpers are claude-8/L74; toolchain/profile-level settings are
+claude-9/L75. Private experiment notes and timing receipts were handed to
+those owners in board messages #9983–#9985. No game runs by Codex: the head
+runs FPS comparisons with builds paused (#9968).
+
 ## Baseline supplied by head
 
 `ddlift-05`, 36,300 lines, play profile: opt1 278 s (213 s LLVM/codegen),
@@ -60,12 +69,25 @@ build setting, not a workspace-wide compiler requirement.
 | --- | ---: | ---: | --- |
 | Fixed ddlift-05, 36,300 lines | 254.89 s | 21.49 s | opt1/default front end to opt0/eight threads; identical source |
 | Fixed ddlift-05, opt1 | 254.89 s | 162.86 s | eight-thread front end only |
-| Full play + emu | ~25 min (head observation) | 636.08 s (10m36s) | fresh target, 32 cold + one hot package, eight-thread front end, four Cargo jobs |
+| Full play + emu | ~25 min (head observation) | 636.08 s (10m36s) | first full play build in L66 target, 32 cold + one hot package, eight-thread front end, four Cargo jobs |
 | Sampled hot replay | baseline pending | 230 cases x 200 passes, 1.616 ms/pass | zero differing functions; concurrent machine load, preliminary timing |
+
+The target already held dependencies from the single-shard experiments;
+graphics/Unicorn and the full split were built during this measurement.
+This was not a fully empty-cache build.
 
 The observed full build is about 58% shorter than the supplied approximate
 baseline. A matched local full-build/runtime comparison is still pending;
-these numbers do not yet prove the main-loop FPS criterion.
+these numbers do not yet prove the main-loop FPS criterion. A preliminary
+window smoke run presented frames while a foreign build was active; head
+closed it. Its frame rates are invalid for comparison and are not credited.
+The split binary is private at `E:/ddda-re/notes/L66/ddplay-split83.exe`;
+head has the request to compare loading/movie/title phases.
+
+Existing `ddperf replay` does not forward `Probe::page_table()`, so it times
+the trait memory fallback. This limitation was reported in board #9973;
+replay comparisons cannot establish the actual game's aligned-memory or
+main-loop speed.
 
 ### Lean emission and ownership
 
@@ -109,4 +131,4 @@ python E:/ddda-re/tools/heavy.py codex -- bash scripts/native_gate.sh
 
 Next: obtain the complete sampled function list and compare hot replay and
 main-loop timing against the all-optimized baseline. Support commit:
-`881a977a`; generated-layout integration commit follows.
+`881a977a`; layout `509fd759`; production-emitter test cleanup `74dedfba`.
