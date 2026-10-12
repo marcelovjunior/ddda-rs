@@ -213,7 +213,7 @@ pub fn advance_test_clock(by: Duration) {
         let c = s.test_clock.as_mut().expect("advance_test_clock without use_test_clock");
         *c += by;
     });
-    crate::threads::signal();
+    crate::threads::signal_key(crate::threads::key::AUDIO_CLOCK);
 }
 
 /// Whether every audio worker has processed all quanta the test clock has
@@ -594,7 +594,8 @@ fn worker(m: &mut dyn Mem, c: &mut Cpu) {
     }
     let mut next = Instant::now() + QUANTUM;
     loop {
-        crate::threads::block(Some(next));
+        // woken by the engine's release (or the next quantum)
+        crate::threads::block_on(&[crate::threads::key::audio_engine(engine)], Some(next));
         if !state(|s| s.engines.contains_key(&engine)) {
             break;
         }
@@ -632,7 +633,10 @@ fn test_worker(m: &mut dyn Mem, c: &mut Cpu, engine: u32) {
             state(|s| s.test_quanta.insert(engine, done));
             continue;
         }
-        crate::threads::block(Some(Instant::now() + QUANTUM));
+        crate::threads::block_on(
+            &[crate::threads::key::audio_engine(engine), crate::threads::key::AUDIO_CLOCK],
+            Some(Instant::now() + QUANTUM),
+        );
     }
     state(|s| s.test_quanta.remove(&engine));
     c.eax = 0;
@@ -864,7 +868,7 @@ fn render(m: &mut dyn Mem, c: &mut Cpu, engine: u32) -> Option<AudioBlock> {
     impl Drop for Pass {
         fn drop(&mut self) {
             state(|s| s.rendering = None);
-            crate::threads::signal();
+            crate::threads::signal_key(crate::threads::key::AUDIO_PASS);
         }
     }
     let pass = Pass;
@@ -1168,7 +1172,7 @@ fn destroy(m: &mut dyn Mem, c: &mut Cpu, this: u32) {
     // the pass ends.
     let me = crate::threads::current_tid();
     while state(|s| s.rendering.is_some_and(|t| t != me)) {
-        crate::threads::block(None);
+        crate::threads::block_on(&[crate::threads::key::AUDIO_PASS], None);
     }
     let old = state(|s| {
         if s.rendering.is_some() {
@@ -1241,7 +1245,7 @@ fn engine<const SLOT: u32>(m: &mut dyn Mem, c: &mut Cpu) {
                 state(|s| {
                     s.engines.remove(&this);
                 });
-                crate::threads::signal();
+                crate::threads::signal_key(crate::threads::key::audio_engine(this));
             }
             refs
         }

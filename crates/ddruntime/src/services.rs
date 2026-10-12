@@ -237,7 +237,7 @@ pub fn enter_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
         if owner == 0 || owner == me {
             break;
         }
-        crate::threads::block(None);
+        crate::threads::block_on(&[crate::threads::key::critical_section(cs)], None);
     }
     m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_add(1));
     m.set_u32(cs.wrapping_add(8), m.u32(cs.wrapping_add(8)).wrapping_add(1));
@@ -255,7 +255,7 @@ pub fn leave_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_sub(1));
     if rec == 1 {
         m.set_u32(cs.wrapping_add(12), 0);
-        crate::threads::signal();
+        crate::threads::signal_key(crate::threads::key::critical_section(cs));
     }
     ret(m, cpu, 4);
 }

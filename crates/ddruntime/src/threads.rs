@@ -90,10 +90,23 @@ struct LockState {
     waiting: u32,
     /// Incremented on every acquisition (a yielding thread waits for another).
     acquisitions: u64,
-    /// Incremented whenever a kernel object or lock may have changed state.
-    signals: u64,
+    /// Threads blocked in a kernel wait ([`block_on`]), by wait id.
+    sleepers: HashMap<u64, Sleeper>,
+    next_sleeper: u64,
     /// Suspend counts by thread id (a suspended thread does not take the lock).
     suspended: HashMap<u32, u32>,
+}
+
+/// A thread blocked in a kernel wait: the keys whose signal wakes it and a
+/// condition variable of its own. A signal wakes only the
+/// threads it concerns, and handing the guest lock over wakes none of them
+/// (L69: with one shared condition variable, every LeaveCriticalSection,
+/// SetEvent and lock release woke all of the game's ~20 idle worker
+/// threads, and each took the guest lock to recheck its wait).
+struct Sleeper {
+    keys: Box<[u64]>,
+    woken: bool,
+    cv: Arc<Condvar>,
 }
 
 pub struct GuestLock {
@@ -253,7 +266,7 @@ pub(crate) fn with_lock<R>(f: impl FnOnce() -> R) -> R {
 pub(crate) mod stats {
     use std::cell::Cell;
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
@@ -268,23 +281,55 @@ pub(crate) mod stats {
 
     /// 0: not read yet, 1: off, 2: on.
     static ON: AtomicU8 = AtomicU8::new(0);
+    /// Blocked kernel waits woken to recheck (signals reaching a waiter).
+    static WOKEN: AtomicU64 = AtomicU64::new(0);
 
     pub(crate) fn on() -> bool {
         match ON.load(Ordering::Relaxed) {
             0 => {
                 let on = std::env::var("DDRUNTIME_LOCK_STATS").is_ok_and(|v| v == "1");
-                ON.store(if on { 2 } else { 1 }, Ordering::Relaxed);
+                if ON.compare_exchange(0, if on { 2 } else { 1 }, Ordering::Relaxed, Ordering::Relaxed).is_ok() && on {
+                    report_periodically();
+                }
                 on
             }
             v => v == 2,
         }
     }
 
+    /// With `DDRUNTIME_LOCK_STATS_EVERY=<seconds>`, print the statistics so
+    /// far (cumulative) to stderr at that interval, not only at the end.
+    fn report_periodically() {
+        let every = std::env::var("DDRUNTIME_LOCK_STATS_EVERY").ok().and_then(|v| v.parse::<u64>().ok());
+        let Some(every) = every.filter(|&s| s > 0) else {
+            return;
+        };
+        let start = Instant::now();
+        let _ = std::thread::Builder::new().name("lock-stats".into()).spawn(move || loop {
+            std::thread::sleep(Duration::from_secs(every));
+            if let Some(s) = super::lock_stats() {
+                eprintln!("lock stats at {:.0} s:\n{s}", start.elapsed().as_secs_f64());
+            }
+        });
+    }
+
     /// Turn the statistics on, from zero (tests).
     #[cfg(test)]
     pub(crate) fn force_on() {
         ON.store(2, Ordering::Relaxed);
+        WOKEN.store(0, Ordering::Relaxed);
         table().lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    /// A signal woke a blocked kernel wait.
+    pub(super) fn woken() {
+        if on() {
+            WOKEN.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn woken_total() -> u64 {
+        WOKEN.load(Ordering::Relaxed)
     }
 
     pub(crate) fn table() -> &'static Mutex<HashMap<String, Stat>> {
@@ -342,8 +387,9 @@ pub fn lock_stats() -> Option<String> {
     let mut rows: Vec<_> = t.iter().collect();
     rows.sort_by(|a, b| b.1.hold.cmp(&a.1.hold));
     let ms = |d: Duration| d.as_secs_f64() * 1e3;
-    let mut out = String::from("guest lock by service: calls, held ms (total, mean, max), waited ms (total, mean, max)
-");
+    let mut out = format!("blocked kernel waits woken: {}
+guest lock by service: calls, held ms (total, mean, max), waited ms (total, mean, max)
+", stats::woken_total());
     for (name, s) in rows {
         let n = s.calls.max(1) as f64;
         out += &format!("{:>9} {:>10.1} {:>8.3} {:>8.2}  {:>10.1} {:>8.3} {:>8.2}  {name}
@@ -465,34 +511,77 @@ pub fn without_lock<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Note that kernel state changed: every waiting thread rechecks.
-pub(crate) fn signal() {
-    let rt = runtime::current();
-    let mut s = rt.lock.lock();
-    s.signals += 1;
-    rt.lock.cv.notify_all();
+/// Wait keys: what a blocked thread waits for ([`block_on`]), so that a
+/// state change ([`signal_key`]) wakes only the threads waiting for it.
+pub(crate) mod key {
+    /// A kernel object (event, semaphore, mutex, thread) by object id.
+    pub(crate) fn object(o: u32) -> u64 {
+        1 << 32 | o as u64
+    }
+    /// A critical section by guest address.
+    pub(crate) fn critical_section(cs: u32) -> u64 {
+        2 << 32 | cs as u64
+    }
+    /// An APC queued to a guest thread.
+    pub(crate) fn apc(tid: u32) -> u64 {
+        3 << 32 | tid as u64
+    }
+    /// An XAudio2 engine (its release ends its worker).
+    pub(crate) fn audio_engine(engine: u32) -> u64 {
+        4 << 32 | engine as u64
+    }
+    /// The end of an audio pass (crate::audio).
+    pub(crate) const AUDIO_PASS: u64 = 5 << 32;
+    /// The audio test clock advanced (crate::audio).
+    pub(crate) const AUDIO_CLOCK: u64 = 6 << 32;
 }
 
-/// Block until kernel state changes (or `deadline`), giving the lock to the
-/// other guest threads meanwhile. The caller rechecks its condition.
-pub(crate) fn block(deadline: Option<Instant>) {
+/// Note that the state behind `key` changed: the threads waiting for it
+/// recheck.
+pub(crate) fn signal_key(key: u64) {
+    let rt = runtime::current();
+    wake(&mut rt.lock.lock(), Some(key));
+}
+
+/// Wake the threads waiting for `key` (None: every blocked thread).
+fn wake(s: &mut LockState, key: Option<u64>) {
+    for w in s.sleepers.values_mut() {
+        if !w.woken && key.is_none_or(|k| w.keys.contains(&k)) {
+            w.woken = true;
+            w.cv.notify_one();
+            stats::woken();
+        }
+    }
+}
+
+/// Block until one of `keys` is signalled, a thread exits (which may
+/// concern any waiter) or `deadline`, giving the lock to the other guest
+/// threads meanwhile. The caller rechecks its condition. Whoever changes
+/// the state the caller checked holds the guest lock, so signals only after
+/// this thread is registered: no wakeup is lost.
+pub(crate) fn block_on(keys: &[u64], deadline: Option<Instant>) {
+    let keys: Box<[u64]> = keys.into();
     let rt = runtime::current();
     let mut s = rt.lock.lock();
-    let seen = s.signals;
     let depth = s.depth;
+    let id = s.next_sleeper;
+    s.next_sleeper += 1;
+    let cv = Arc::new(Condvar::new());
+    s.sleepers.insert(id, Sleeper { keys, woken: false, cv: cv.clone() });
     rt.lock.release_locked(&mut s);
-    while s.signals == seen {
+    while !s.sleepers[&id].woken {
         match deadline {
-            None => s = rt.lock.cv.wait(s).unwrap_or_else(|e| e.into_inner()),
+            None => s = cv.wait(s).unwrap_or_else(|e| e.into_inner()),
             Some(d) => {
                 let now = Instant::now();
                 if now >= d {
                     break;
                 }
-                s = rt.lock.cv.wait_timeout(s, d - now).unwrap_or_else(|e| e.into_inner()).0;
+                s = cv.wait_timeout(s, d - now).unwrap_or_else(|e| e.into_inner()).0;
             }
         }
     }
+    s.sleepers.remove(&id);
     rt.lock.acquire_locked(s, depth);
     adopt_context(&rt);
 }
@@ -751,21 +840,22 @@ pub fn create_event(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 fn set_event_state(m: &mut dyn Mem, cpu: &mut Cpu, value: bool) {
     let h = arg(m, cpu, 0);
-    let ok = kernel(|k| match k.object_of(h).and_then(|o| k.objects.get_mut(&o)) {
-        Some(Object::Event { set, .. }) => {
-            *set = value;
-            true
+    let o = kernel(|k| {
+        let o = k.object_of(h)?;
+        match k.objects.get_mut(&o) {
+            Some(Object::Event { set, .. }) => {
+                *set = value;
+                Some(o)
+            }
+            _ => None,
         }
-        _ => false,
     });
-    if ok {
-        if value {
-            signal();
-        }
-    } else {
-        set_error(ERROR_INVALID_HANDLE);
+    match o {
+        Some(o) if value => signal_key(key::object(o)),
+        Some(_) => {}
+        None => set_error(ERROR_INVALID_HANDLE),
     }
-    cpu.eax = ok as u32;
+    cpu.eax = o.is_some() as u32;
     ret(m, cpu, 4);
 }
 /// SetEvent(handle).
@@ -788,19 +878,22 @@ pub fn create_semaphore(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// ReleaseSemaphore(handle, count, previous*).
 pub fn release_semaphore(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, n, prev) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    let r = kernel(|k| match k.object_of(h).and_then(|o| k.objects.get_mut(&o)) {
-        Some(Object::Semaphore { count, max }) => match count.checked_add(n).filter(|c| c <= max && n > 0) {
-            Some(c) => Ok(std::mem::replace(count, c)),
-            None => Err(ERROR_TOO_MANY_POSTS),
-        },
-        _ => Err(ERROR_INVALID_HANDLE),
+    let r = kernel(|k| {
+        let o = k.object_of(h).ok_or(ERROR_INVALID_HANDLE)?;
+        match k.objects.get_mut(&o) {
+            Some(Object::Semaphore { count, max }) => match count.checked_add(n).filter(|c| c <= max && n > 0) {
+                Some(c) => Ok((o, std::mem::replace(count, c))),
+                None => Err(ERROR_TOO_MANY_POSTS),
+            },
+            _ => Err(ERROR_INVALID_HANDLE),
+        }
     });
     cpu.eax = match r {
-        Ok(old) => {
+        Ok((o, old)) => {
             if prev != 0 {
                 m.set_u32(prev, old);
             }
-            signal();
+            signal_key(key::object(o));
             1
         }
         Err(e) => {
@@ -823,20 +916,23 @@ pub fn create_mutex(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn release_mutex(m: &mut dyn Mem, cpu: &mut Cpu) {
     let h = arg(m, cpu, 0);
     let me = current_tid();
-    let r = kernel(|k| match k.object_of(h).and_then(|o| k.objects.get_mut(&o)) {
-        Some(Object::Mutex { owner, recursion }) if *owner == me => {
-            *recursion -= 1;
-            if *recursion == 0 {
-                *owner = 0;
+    let r = kernel(|k| {
+        let o = k.object_of(h).ok_or(ERROR_INVALID_HANDLE)?;
+        match k.objects.get_mut(&o) {
+            Some(Object::Mutex { owner, recursion }) if *owner == me => {
+                *recursion -= 1;
+                if *recursion == 0 {
+                    *owner = 0;
+                }
+                Ok(o)
             }
-            Ok(())
+            Some(Object::Mutex { .. }) => Err(ERROR_NOT_OWNER),
+            _ => Err(ERROR_INVALID_HANDLE),
         }
-        Some(Object::Mutex { .. }) => Err(ERROR_NOT_OWNER),
-        _ => Err(ERROR_INVALID_HANDLE),
     });
     cpu.eax = match r {
-        Ok(()) => {
-            signal();
+        Ok(o) => {
+            signal_key(key::object(o));
             1
         }
         Err(e) => {
@@ -877,28 +973,28 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
     loop {
         let r = kernel(|k| {
             let objs: Option<Vec<u32>> = handles.iter().map(|&h| k.object_of(h)).collect();
-            let Some(objs) = objs else { return Some(WAIT_FAILED) };
+            let Some(objs) = objs else { return Ok(WAIT_FAILED) };
             if all {
                 if objs.iter().all(|o| signalled(&k.objects[o], me)) {
                     for o in &objs {
                         consume(k.objects.get_mut(o).unwrap(), me);
                     }
-                    return Some(WAIT_OBJECT_0);
+                    return Ok(WAIT_OBJECT_0);
                 }
             } else if let Some(i) = objs.iter().position(|o| signalled(&k.objects[o], me)) {
                 consume(k.objects.get_mut(&objs[i]).unwrap(), me);
-                return Some(WAIT_OBJECT_0 + i as u32);
+                return Ok(WAIT_OBJECT_0 + i as u32);
             }
-            None
+            Err(objs.iter().map(|&o| key::object(o)).collect::<Vec<_>>())
         });
         match r {
-            Some(WAIT_FAILED) => {
+            Ok(WAIT_FAILED) => {
                 set_error(ERROR_INVALID_HANDLE);
                 return WAIT_FAILED;
             }
-            Some(r) => return r,
-            None if deadline.is_some_and(|d| Instant::now() >= d) => return WAIT_TIMEOUT,
-            None => block(deadline),
+            Ok(r) => return r,
+            Err(_) if deadline.is_some_and(|d| Instant::now() >= d) => return WAIT_TIMEOUT,
+            Err(keys) => block_on(&keys, deadline),
         }
     }
 }
@@ -928,7 +1024,7 @@ fn sleep_for(ms: u32) {
     match ms {
         0 => yield_now(),
         INFINITE => loop {
-            block(None);
+            block_on(&[], None);
         },
         _ => sleep_unlocked(Duration::from_millis(ms as u64)),
     }
@@ -937,7 +1033,7 @@ fn sleep_for(ms: u32) {
 /// guest thread `tid`; it runs at that thread's next alertable wait.
 pub(crate) fn queue_apc(tid: u32, routine: u32, args: [u32; 3]) {
     kernel(|k| k.apcs.entry(tid).or_default().push_back((routine, args)));
-    signal();
+    signal_key(key::apc(tid));
 }
 
 /// Run this thread's queued APCs, oldest first; whether any ran.
@@ -977,7 +1073,7 @@ pub fn sleep_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
             }
             // nothing queued yet: wait for a state change (a completion
             // queued to this thread signals) or the deadline
-            block(deadline);
+            block_on(&[key::apc(current_tid())], deadline);
         }
     };
     ret(m, cpu, 8);
@@ -1110,8 +1206,10 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
             }
         }
     });
+    // its thread object, and whatever it owned (a critical section left
+    // entered), may concern any waiter
     let mut s = rt.lock.lock();
-    s.signals += 1;
+    wake(&mut s, None);
     rt.lock.release_locked(&mut s);
 }
 
@@ -1444,5 +1542,120 @@ mod tests {
         assert!(before.3 && after.3, "every increment counted: {before:?} {after:?}");
         assert!(after.0 * 4.0 < before.0, "{before:?} -> {after:?}");
         assert!(after.2 > before.2, "{before:?} -> {after:?}");
+    }
+
+    /// WaitForSingleObject(handle, INFINITE) as an idle worker does.
+    fn wait_service(m: &mut dyn Mem, c: &mut Cpu) {
+        let h = m.u32(c.esp + 4);
+        c.eax = wait(&[h], false, INFINITE);
+        crate::services::ret(m, c, 4);
+    }
+
+    /// Call the service at `target` with `args` on this thread's stack.
+    fn call_service(r: &Registry, m: &mut GuestMemory, c: &mut Cpu, top: u32, target: u32, args: &[u32]) {
+        c.esp = top;
+        for a in args.iter().rev() {
+            c.esp -= 4;
+            m.set_u32(c.esp, *a);
+        }
+        c.esp -= 4;
+        m.set_u32(c.esp, 0xFFFF_0000);
+        let (f, locked) = match r.get(target) {
+            Some(Binding::Service(f)) => (f, true),
+            Some(Binding::LockFree(f)) => (f, false),
+            _ => unreachable!(),
+        };
+        r.run_service(f, m, c, target, locked);
+    }
+
+    /// `idle` guest threads wait on their own events (as the game's worker
+    /// pools do) while one thread enters and leaves a critical section and
+    /// calls a cheap service `n` times: that thread's mean iteration (µs).
+    fn idle_waiters_scenario(idle: u32, n: u32) -> f64 {
+        const ENTER: u32 = 0x7000_0100;
+        const LEAVE: u32 = 0x7000_0110;
+        const NOOP: u32 = 0x7000_0120;
+        const WAIT: u32 = 0x7000_0130;
+        const SET: u32 = 0x7000_0140;
+        let rt = Arc::new(Runtime::default());
+        runtime::enter(rt.clone());
+        set_parallel(true);
+        let mut r = Registry::new();
+        for (a, f, name) in [
+            (ENTER, crate::services::enter_critical_section as LiftFn, "KERNEL32.dll!EnterCriticalSection"),
+            (LEAVE, crate::services::leave_critical_section, "KERNEL32.dll!LeaveCriticalSection"),
+            (NOOP, noop, "TEST.dll!Noop"),
+            (WAIT, wait_service, "KERNEL32.dll!WaitForSingleObject"),
+            (SET, set_event, "KERNEL32.dll!SetEvent"),
+        ] {
+            r.insert(a, Binding::Service(f)).unwrap();
+            r.name(a, name);
+        }
+        let r = Arc::new(r);
+        let mut m = GuestMemory::new();
+        m.map(0x0090_0000, 0x1000, READ | WRITE).unwrap(); // the critical section
+        let events: Vec<u32> = (0..idle).map(|_| create_named(&m, 0, || Object::Event { manual: false, set: false })).collect();
+        without_lock(|| {
+            let waiters: Vec<_> = events
+                .iter()
+                .enumerate()
+                .map(|(k, &h)| {
+                    let (rt, r, mut m) = (rt.clone(), r.clone(), m.share());
+                    std::thread::spawn(move || {
+                        runtime::enter(rt);
+                        let tid = 0x4000 + 4 * k as u32;
+                        CURRENT_TID.with(|c| c.set(tid));
+                        let stack = 0x0100_0000 + k as u32 * 0x1_0000;
+                        m.map(stack, 0x1_0000, READ | WRITE).unwrap();
+                        let mut c = Cpu::default();
+                        call_service(&r, &mut m, &mut c, stack + 0xF000, WAIT, &[h]);
+                    })
+                })
+                .collect();
+            std::thread::sleep(Duration::from_millis(50)); // all waiting
+            let (rt2, r2, mut m2) = (rt.clone(), r.clone(), m.share());
+            let worker = std::thread::spawn(move || {
+                runtime::enter(rt2);
+                CURRENT_TID.with(|c| c.set(0x3000));
+                let stack = 0x0200_0000;
+                m2.map(stack, 0x1_0000, READ | WRITE).unwrap();
+                let mut c = Cpu::default();
+                let t = Instant::now();
+                for _ in 0..n {
+                    call_service(&r2, &mut m2, &mut c, stack + 0xF000, ENTER, &[0x0090_0000]);
+                    call_service(&r2, &mut m2, &mut c, stack + 0xF000, NOOP, &[]);
+                    call_service(&r2, &mut m2, &mut c, stack + 0xF000, LEAVE, &[0x0090_0000]);
+                }
+                let mean = t.elapsed().as_secs_f64() * 1e6 / n as f64;
+                for &h in &events {
+                    call_service(&r2, &mut m2, &mut c, stack + 0xF000, SET, &[h]);
+                }
+                mean
+            });
+            let mean = worker.join().unwrap();
+            for w in waiters {
+                w.join().unwrap();
+            }
+            mean
+        })
+    }
+
+    /// L69: idle waiters (WaitForSingleObject on their own objects) must not
+    /// slow a busy thread's services: a LeaveCriticalSection or SetEvent
+    /// wakes only the threads waiting for that object. Numbers with
+    /// `-- --nocapture`.
+    #[test]
+    fn idle_waiters_do_not_slow_a_busy_thread() {
+        stats::force_on();
+        let alone = idle_waiters_scenario(0, 3000);
+        let alone_stats = lock_stats().unwrap();
+        stats::force_on();
+        let with_idle = idle_waiters_scenario(16, 3000);
+        let idle_stats = lock_stats().unwrap();
+        eprintln!("EnterCriticalSection + a service + LeaveCriticalSection per iteration:");
+        eprintln!("  no other threads:          {alone:8.2} us");
+        eprintln!("  16 idle waiting threads:   {with_idle:8.2} us");
+        eprintln!("alone, {alone_stats}with 16 idle, {idle_stats}");
+        assert!(with_idle < alone * 3.0 + 5.0, "idle waiters slow the busy thread: {alone:.2} -> {with_idle:.2} us");
     }
 }
