@@ -67,7 +67,17 @@ public static class Imm
     static byte[] Buf(int n) { byte[] b = new byte[n]; for (int k = 0; k < n; k++) b[k] = 0xCC; return b; }
     static string Ints(int[] a) { return string.Join(",", Array.ConvertAll(a, x => "0x" + x.ToString("X"))); }
 
-    static WndProc proc = (h, m, w, l) => DefWindowProcW(h, m, w, l);
+    // the IME messages the window receives (logged while `logging`)
+    static bool logging;
+    static StringBuilder got = new StringBuilder();
+    static WndProc proc = (h, m, w, l) => {
+        if (logging && m >= 0x0281 && m <= 0x0291 || logging && m >= 0x010D && m <= 0x010F)
+            got.Append(" msg 0x" + m.ToString("X") + "(0x" + w.ToInt64().ToString("X") + ",0x" + l.ToInt64().ToString("X") + ")");
+        return DefWindowProcW(h, m, w, l);
+    };
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr h);
+    static string Logged() { string r = got.Length == 0 ? " (no IME message)" : got.ToString(); got.Clear(); return r; }
 
     static void Calls(string tag, IntPtr hwnd, IntPtr c)
     {
@@ -153,6 +163,31 @@ public static class Imm
             }
             SetLastError(0); W("ImmGetVirtualKey(window) after WM_KEYDOWN(VK_LEFT)" + (translate ? " + TranslateMessage" : "") + " = 0x" + ImmGetVirtualKey(hwnd).ToString("X") + Err());
         }
+        // the last error on success, a bogus window handle, and the
+        // notifications once the window is shown and focused
+        IntPtr ctx = ImmGetContext(hwnd);
+        int[] comp2 = { 1, 0, 0, 1, 1, 0, 0 };
+        int[] cand2 = { 0, 0x80, 0, 0, 0, 0x437, 1, 0x437 };
+        SetLastError(0xDEAD); W("ImmSetCompositionWindow, last error preset 0xDEAD = " + ImmSetCompositionWindow(ctx, comp2) + Err());
+        SetLastError(0xDEAD); W("ImmSetCandidateWindow, last error preset 0xDEAD = " + ImmSetCandidateWindow(ctx, cand2) + Err());
+        SetLastError(0xDEAD); W("ImmSetOpenStatus(FALSE), last error preset 0xDEAD = " + ImmSetOpenStatus(ctx, false) + Err());
+        SetLastError(0xDEAD); W("ImmGetOpenStatus, last error preset 0xDEAD = " + ImmGetOpenStatus(ctx) + Err());
+        SetLastError(0xDEAD); W("ImmReleaseContext, last error preset 0xDEAD = " + ImmReleaseContext(hwnd, ctx) + Err());
+        SetLastError(0xDEAD); W("ImmGetContext, last error preset 0xDEAD = " + (ImmGetContext(hwnd) != IntPtr.Zero) + Err());
+        SetLastError(0); W("ImmGetContext(bogus 0x12345678) = 0x" + ImmGetContext((IntPtr)0x12345678).ToInt64().ToString("X") + Err());
+        SetLastError(0); W("ImmGetDefaultIMEWnd(bogus 0x12345678) = 0x" + ImmGetDefaultIMEWnd((IntPtr)0x12345678).ToInt64().ToString("X") + Err());
+        SetLastError(0); W("ImmGetVirtualKey(bogus 0x12345678) = 0x" + ImmGetVirtualKey((IntPtr)0x12345678).ToString("X") + Err());
+        logging = true;
+        ShowWindow(hwnd, 1); SetFocus(hwnd);
+        MSG pm; while (PeekMessageW(out pm, IntPtr.Zero, 0, 0, 1)) DispatchMessageW(ref pm);
+        W("shown and focused:" + Logged());
+        W("shown: ImmSetCompositionWindow = " + ImmSetCompositionWindow(ctx, comp2) + Logged());
+        W("shown: ImmSetCandidateWindow = " + ImmSetCandidateWindow(ctx, cand2) + Logged());
+        W("shown: ImmSetOpenStatus(FALSE) = " + ImmSetOpenStatus(ctx, false) + Logged());
+        W("shown: ImmGetOpenStatus = " + ImmGetOpenStatus(ctx) + Logged());
+        W("shown: ImmSetOpenStatus(TRUE) = " + ImmSetOpenStatus(ctx, true) + Logged() + "; ImmGetOpenStatus = " + ImmGetOpenStatus(ctx));
+        W("shown: ImmSetOpenStatus(FALSE) = " + ImmSetOpenStatus(ctx, false) + Logged() + "; ImmGetOpenStatus = " + ImmGetOpenStatus(ctx));
+        logging = false;
         DestroyWindow(hwnd);
         File.WriteAllText(path, o.ToString());
     }

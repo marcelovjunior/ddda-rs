@@ -156,3 +156,74 @@ fn every_imm32_import_of_the_game_is_bound() {
         assert!(bound, "IMM32.dll!{n}");
     }
 }
+
+thread_local! {
+    static IME_LOG: std::cell::RefCell<Vec<(u32, u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Logs the IME messages (WM_IME_SETCONTEXT, WM_IME_NOTIFY) the window gets.
+fn logging_wndproc(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (msg, wparam, lparam) = (m.u32(cpu.esp + 8), m.u32(cpu.esp + 12), m.u32(cpu.esp + 16));
+    if msg == user32::WM_IME_SETCONTEXT || msg == user32::WM_IME_NOTIFY {
+        IME_LOG.with(|l| l.borrow_mut().push((msg, wparam, lparam)));
+    }
+    user32::def_window_proc(m, cpu);
+}
+
+fn ime_log() -> Vec<(u32, u32, u32)> {
+    IME_LOG.with(|l| l.borrow_mut().drain(..).collect())
+}
+
+#[test]
+fn a_shown_focused_window_is_told_of_context_changes_and_errors_follow_windows() {
+    let (mut m, _r, hwnd) = game_window();
+    // rebind the class's window procedure to the logging one
+    let mut r = Registry::new();
+    r.insert(0x0050_0000, Binding::Lifted(logging_wndproc)).unwrap();
+    let r = Arc::new(r);
+    r.install();
+    let c = call(user32::imm_get_context, &mut m, &[hwnd]);
+    let (comp, cand) = (DATA + 0x200, DATA + 0x240);
+    for (k, v) in [1u32, 0, 0, 1, 1, 0, 0].into_iter().enumerate() {
+        m.set_u32(comp + 4 * k as u32, v);
+    }
+    for (k, v) in [0u32, 0x80, 0, 0, 0, 0x437, 1, 0x437].into_iter().enumerate() {
+        m.set_u32(cand + 4 * k as u32, v);
+    }
+    // before ShowWindow (as 0x01106C80 calls them): nothing is sent
+    call(user32::imm_set_composition_window, &mut m, &[c, comp]);
+    call(user32::imm_set_candidate_window, &mut m, &[c, cand]);
+    assert!(ime_log().is_empty());
+    // showing activates the window: the context becomes its own
+    call(user32::show_window, &mut m, &[hwnd, 1]);
+    assert_eq!(ime_log(), [(0x281, 1, 0xC000_000F), (0x282, 2, 0)], "WM_IME_SETCONTEXT(ISC_SHOWUIALL), IMN_OPENSTATUSWINDOW");
+    // now each change is notified, and success clears the last error
+    set_last_error(&mut m, 0xDEAD);
+    assert_eq!(call(user32::imm_set_composition_window, &mut m, &[c, comp]), 1);
+    assert_eq!(last_error(&mut m), 0);
+    assert_eq!(ime_log(), [(0x282, 0xB, 0)], "IMN_SETCOMPOSITIONWINDOW");
+    assert_eq!(call(user32::imm_set_candidate_window, &mut m, &[c, cand]), 1);
+    assert_eq!(ime_log(), [(0x282, 9, 1)], "IMN_SETCANDIDATEPOS, 1 << dwIndex");
+    set_last_error(&mut m, 0xDEAD);
+    assert_eq!(call(user32::imm_set_open_status, &mut m, &[c, 0]), 1);
+    assert_eq!(last_error(&mut m), 0);
+    assert!(ime_log().is_empty(), "no change, no notification");
+    assert_eq!(call(user32::imm_set_open_status, &mut m, &[c, 1]), 1);
+    assert_eq!(call(user32::imm_get_open_status, &mut m, &[c]), 1);
+    assert_eq!(call(user32::imm_set_open_status, &mut m, &[c, 0]), 1);
+    assert_eq!(call(user32::imm_get_open_status, &mut m, &[c]), 0);
+    assert_eq!(ime_log(), [(0x282, 8, 0), (0x282, 8, 0)], "IMN_SETOPENSTATUS on each change");
+    // getting and releasing the context leave the last error alone
+    set_last_error(&mut m, 0xDEAD);
+    call(user32::imm_get_context, &mut m, &[hwnd]);
+    call(user32::imm_release_context, &mut m, &[hwnd, c]);
+    assert_eq!(last_error(&mut m), 0xDEAD);
+    // a handle that is no window: NULL, ERROR_INVALID_WINDOW_HANDLE
+    set_last_error(&mut m, 0);
+    assert_eq!(call(user32::imm_get_context, &mut m, &[0x1234_5678]), 0);
+    assert_eq!(last_error(&mut m), 1400);
+    set_last_error(&mut m, 0);
+    assert_eq!(call(user32::imm_get_default_ime_wnd, &mut m, &[0x1234_5678]), 0);
+    assert_eq!(last_error(&mut m), 1400);
+    x86::set_ext_calls(None);
+}

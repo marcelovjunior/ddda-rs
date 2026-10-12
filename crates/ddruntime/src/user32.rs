@@ -387,6 +387,14 @@ fn activate(m: &mut dyn Mem, cpu: &mut Cpu, hwnd: u32) {
     if old_focus != 0 && old_focus != hwnd {
         send(m, cpu, old_focus, WM_KILLFOCUS, hwnd, 0);
     }
+    if desk(|d| d.ime.window != 0) {
+        // the input context becomes this window's: WM_IME_SETCONTEXT
+        // (TRUE, ISC_SHOWUIALL), then IMN_OPENSTATUSWINDOW, before
+        // WM_SETFOCUS (measured by claude-2's Imm.cs on task/L21-boot; L43's
+        // probe sees the same two messages)
+        send(m, cpu, hwnd, WM_IME_SETCONTEXT, 1, ISC_SHOWUIALL);
+        send(m, cpu, hwnd, WM_IME_NOTIFY, IMN_OPENSTATUSWINDOW, 0);
+    }
     desk(|d| d.focus = hwnd);
     send(m, cpu, hwnd, WM_SETFOCUS, old_focus, 0);
 }
@@ -889,6 +897,27 @@ pub fn time_get_time(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// The thread's input context (HIMC values are opaque; any nonzero one).
 pub const HIMC_DEFAULT: u32 = 0x7FB0_0004;
 const ERROR_INVALID_HANDLE: u32 = 6;
+const ERROR_INVALID_WINDOW_HANDLE: u32 = 1400;
+pub const WM_IME_SETCONTEXT: u32 = 0x0281;
+pub const WM_IME_NOTIFY: u32 = 0x0282;
+const ISC_SHOWUIALL: u32 = 0xC000_000F;
+const IMN_OPENSTATUSWINDOW: u32 = 0x2;
+const IMN_SETOPENSTATUS: u32 = 0x8;
+const IMN_SETCANDIDATEPOS: u32 = 0x9;
+const IMN_SETCOMPOSITIONWINDOW: u32 = 0xB;
+
+fn set_error(e: u32) {
+    with_state(|s| s.last_error = e);
+}
+
+/// Tell the window that has the context (the focus window) about a change,
+/// as Windows does once the window is shown and focused (none before).
+fn ime_notify(m: &mut dyn Mem, cpu: &mut Cpu, command: u32, data: u32) {
+    let focus = desk(|d| d.focus);
+    if focus != 0 && window(focus).is_some() {
+        send(m, cpu, focus, WM_IME_NOTIFY, command, data);
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Ime {
@@ -912,22 +941,38 @@ pub fn ime_window() -> u32 {
 }
 
 /// ImmGetDefaultIMEWnd(hwnd): the thread's default IME window (also for
-/// NULL), NULL before the thread has a top-level window.
+/// NULL), NULL before the thread has a top-level window; NULL with
+/// ERROR_INVALID_WINDOW_HANDLE for a handle that is no window.
 pub fn imm_get_default_ime_wnd(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = desk(|d| d.ime.window);
+    let hwnd = arg(m, cpu, 0);
+    cpu.eax = if hwnd == 0 || window(hwnd).is_some() {
+        desk(|d| d.ime.window)
+    } else {
+        set_error(ERROR_INVALID_WINDOW_HANDLE);
+        0
+    };
     ret(m, cpu, 4);
 }
 
 /// ImmGetContext(hwnd): the thread's default input context for any of its
-/// windows (the same one each time); NULL for NULL (measured) and for a
-/// handle that is no window.
+/// windows (the same one each time, the last error untouched); NULL for
+/// NULL, and NULL with ERROR_INVALID_WINDOW_HANDLE for a handle that is no
+/// window.
 pub fn imm_get_context(m: &mut dyn Mem, cpu: &mut Cpu) {
     let hwnd = arg(m, cpu, 0);
-    cpu.eax = if window(hwnd).is_some() { HIMC_DEFAULT } else { 0 };
+    cpu.eax = if window(hwnd).is_some() {
+        HIMC_DEFAULT
+    } else {
+        if hwnd != 0 {
+            set_error(ERROR_INVALID_WINDOW_HANDLE);
+        }
+        0
+    };
     ret(m, cpu, 4);
 }
 
-/// ImmReleaseContext(hwnd, himc): TRUE (also for NULL or a second release).
+/// ImmReleaseContext(hwnd, himc): TRUE (also for NULL or a second
+/// release), the last error untouched.
 pub fn imm_release_context(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = 1;
     ret(m, cpu, 8);
@@ -937,58 +982,73 @@ fn read_words<const N: usize>(m: &dyn Mem, p: u32) -> [u32; N] {
     std::array::from_fn(|k| m.u32(p + 4 * k as u32))
 }
 
-/// ImmSetCompositionWindow(himc, COMPOSITIONFORM*): kept, TRUE; FALSE with
-/// ERROR_INVALID_HANDLE for NULL.
+/// ImmSetCompositionWindow(himc, COMPOSITIONFORM*): kept, the focus
+/// window told (IMN_SETCOMPOSITIONWINDOW), TRUE with the last error 0;
+/// FALSE with ERROR_INVALID_HANDLE for NULL.
 pub fn imm_set_composition_window(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (c, form) = (arg(m, cpu, 0), arg(m, cpu, 1));
     cpu.eax = if himc_valid(c) {
         let f = read_words::<7>(m, form);
         desk(|d| d.ime.composition = Some(f));
+        ime_notify(m, cpu, IMN_SETCOMPOSITIONWINDOW, 0);
+        set_error(0);
         1
     } else {
-        with_state(|s| s.last_error = ERROR_INVALID_HANDLE);
+        set_error(ERROR_INVALID_HANDLE);
         0
     };
     ret(m, cpu, 8);
 }
 
-/// ImmSetCandidateWindow(himc, CANDIDATEFORM*): kept per dwIndex, TRUE;
-/// FALSE with ERROR_INVALID_HANDLE for NULL. A dwIndex above 3 (outside
-/// the documented 0..3) is refused (not measured).
+/// ImmSetCandidateWindow(himc, CANDIDATEFORM*): kept per dwIndex, the
+/// focus window told (IMN_SETCANDIDATEPOS, 1 << dwIndex), TRUE with the
+/// last error 0; FALSE with ERROR_INVALID_HANDLE for NULL. A dwIndex above
+/// 3 (outside the documented 0..3) is refused (not measured).
 pub fn imm_set_candidate_window(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (c, form) = (arg(m, cpu, 0), arg(m, cpu, 1));
     let f = read_words::<8>(m, form);
     cpu.eax = if himc_valid(c) && f[0] < 4 {
         desk(|d| d.ime.candidates[f[0] as usize] = Some(f));
+        ime_notify(m, cpu, IMN_SETCANDIDATEPOS, 1 << f[0]);
+        set_error(0);
         1
     } else {
         if !himc_valid(c) {
-            with_state(|s| s.last_error = ERROR_INVALID_HANDLE);
+            set_error(ERROR_INVALID_HANDLE);
         }
         0
     };
     ret(m, cpu, 8);
 }
 
-/// ImmSetOpenStatus(himc, open): TRUE; FALSE with ERROR_INVALID_HANDLE for
-/// NULL. Only closing is measured; an opened status is kept and reported
-/// back (no IME then converts anything).
+/// ImmSetOpenStatus(himc, open): kept, TRUE with the last error 0; a
+/// change tells the focus window (IMN_SETOPENSTATUS); FALSE with
+/// ERROR_INVALID_HANDLE for NULL. Opening is kept and read back, as
+/// measured; no IME then converts anything.
 pub fn imm_set_open_status(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let (c, open) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    let (c, open) = (arg(m, cpu, 0), arg(m, cpu, 1) != 0);
     cpu.eax = if himc_valid(c) {
-        desk(|d| d.ime.open = open != 0);
+        let changed = desk(|d| std::mem::replace(&mut d.ime.open, open) != open);
+        if changed {
+            ime_notify(m, cpu, IMN_SETOPENSTATUS, 0);
+        }
+        set_error(0);
         1
     } else {
-        with_state(|s| s.last_error = ERROR_INVALID_HANDLE);
+        set_error(ERROR_INVALID_HANDLE);
         0
     };
     ret(m, cpu, 8);
 }
 
-/// ImmGetOpenStatus(himc): FALSE with no IME open, and for NULL (no error).
+/// ImmGetOpenStatus(himc): the status kept (FALSE with no IME opened),
+/// the last error 0; FALSE for NULL.
 pub fn imm_get_open_status(m: &mut dyn Mem, cpu: &mut Cpu) {
     let c = arg(m, cpu, 0);
     cpu.eax = (himc_valid(c) && desk(|d| d.ime.open)) as u32;
+    if himc_valid(c) {
+        set_error(0);
+    }
     ret(m, cpu, 4);
 }
 
