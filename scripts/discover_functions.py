@@ -231,6 +231,72 @@ def vtables(pe, md, roots, known=frozenset(), stores=None, vptr_stores=None):
             yield a, dict(source='vtable', table=start, slot=slot, index=k, **tables[start])
 
 
+def text_like(v):
+    """A dword that reads as three printable characters and a NUL ("shp\\0")
+    is no evidence of a pointer, whatever it would point at."""
+    b = struct.pack('<I', v)
+    return b[3] == 0 and all(32 <= c < 127 for c in b[:3])
+
+
+def callback_tables(pe, md, known, extents=()):
+    """L54: tables of callbacks in data (the libvorbis floor and
+    residue export tables at 0x014701E0 and 0x01470210; the emulator found
+    0x01325580, 0x01325830 and 0x013271E0 called through the first). A run
+    of aligned dwords that are each 0 (an unused callback) or an executable
+    address, holding at least two code pointers of which one is a known
+    entry, whose first slot's address is referenced somewhere in the image
+    (a table is used through its base). Every other code pointer must be at
+    a function boundary, inside no known function and not text-like, or
+    the run is no table and none of it is admitted. Writable data counts
+    too: its initial pointers are code the image names, even where startup
+    code may rewrite the table (the dispatch table at 0x0163537C); the
+    evidence says which."""
+    image = b''.join(pe.read(s['va'], min(s['virtual_size'], s['raw_size'])) for s in pe.sections)
+    for s in pe.sections:
+        if s['flags'] & 0x20000000:  # code, not data
+            continue
+        writable = bool(s['flags'] & 0x80000000)
+        end = s['va'] + min(s['virtual_size'], s['raw_size'])
+        a = s['va']
+        while a + 4 <= end:
+            run = []
+            while a + 4 <= end:
+                v = struct.unpack('<I', pe.read(a, 4))[0]
+                if v and not pe.executable(v):
+                    break
+                run.append((a, v))
+                a += 4
+            if not run:
+                a += 4
+                continue
+            code = [(slot, v) for slot, v in run if v]
+            if len(code) < 2 or not any(v in known for _, v in code):
+                continue
+            # the table's base: a referenced slot among the leading NULLs
+            # (zero padding before it, or an unused first callback) and its
+            # first code pointer
+            bases = [slot for slot, _ in run[:run.index(code[0]) + 1]
+                     if struct.pack('<I', slot) in image]
+            if not bases:
+                continue
+            run = run[run.index(next(r for r in run if r[0] == bases[-1])):]
+            new = [(slot, v) for slot, v in code if v not in known]
+            if all(function_boundary(pe, md, v) and not inside(extents, v) and not text_like(v) for _, v in new):
+                for slot, v in new:
+                    yield v, dict(source='callback_table', table=run[0][0], slot=slot,
+                                  **({'writable': True} if writable else {}))
+
+
+def runtime_entries(path):
+    """L54: indirect-call targets the original reached at run time (the
+    emulator fallback's log, given as private evidence): [{"target",
+    "caller", "instruction"}], addresses as integers or hex strings."""
+    rows = json.loads(Path(path).read_text(encoding='utf-8'))
+    n = lambda v: int(v, 16) if isinstance(v, str) else int(v)
+    for r in rows:
+        yield n(r['target']), dict(source='runtime', caller=n(r['caller']), instruction=n(r['instruction']))
+
+
 def inside(extents, a):
     """Whether `a` lies strictly inside a known function's extent."""
     import bisect
@@ -238,7 +304,7 @@ def inside(extents, a):
     return k >= 0 and extents[k][0] < a < extents[k][0] + extents[k][1]
 
 
-def discover(pe, known, lifted, extents=()):
+def discover(pe, known, lifted, extents=(), runtime=()):
     md = decoder()
     evidence, rejected = collections.defaultdict(list), []
     init = list(initializers(pe, md))
@@ -278,6 +344,10 @@ def discover(pe, known, lifted, extents=()):
                 candidates.append((i.operands[0].imm & 0xffffffff,
                                    dict(source='call', caller=f['addr'], instruction=pc)))
     candidates += list(vtables(pe, md, {a for a, _ in init}, known, stores, vptr_stores))
+    candidates += list(callback_tables(pe, md, known, extents))
+    # runtime evidence passes the same boundary checks as an address-taken entry
+    candidates += [(a, ev) for a, ev in runtime
+                   if pe.executable(a) and not inside(extents, a) and function_boundary(pe, md, a)]
     for a, ev in candidates:
         if a in known:
             continue
@@ -309,6 +379,7 @@ def main():
     ap.add_argument('--export', type=Path, default=Path('E:/ddda-re/notes/inventory/functions.tsv'))
     ap.add_argument('--lifted', type=Path, required=True)
     ap.add_argument('--out', type=Path, required=True)
+    ap.add_argument('--runtime', type=Path, help='private JSON: indirect-call targets observed at run time')
     args = ap.parse_args()
     if args.out.resolve().is_relative_to(ROOT):
         ap.error('derived entries belong in private data, outside the repository')
@@ -321,7 +392,7 @@ def main():
     with args.lifted.open() as f:
         lifted = json.load(f)
     pe = Image(args.exe)
-    rows, rejected = discover(pe, known, lifted, extents)
+    rows, rejected = discover(pe, known, lifted, extents, list(runtime_entries(args.runtime)) if args.runtime else ())
     with args.out.open('w', encoding='utf-8', newline='') as f:
         w = csv.DictWriter(f, fieldnames=['address', 'size', 'size_kind', 'sources', 'evidence'], delimiter='\t')
         w.writeheader(); w.writerows(rows)
@@ -329,7 +400,7 @@ def main():
     report = dict(image_sha256=hashlib.sha256(pe.data).hexdigest(),
                   export_sha256=hashlib.sha256(args.export.read_bytes()).hexdigest(),
                   lifted_sha256=hashlib.sha256(args.lifted.read_bytes()).hexdigest(),
-                  discovered=len(rows), per_source={s: counts[s] for s in ('c_initializer', 'cpp_initializer', 'vtable', 'call', 'address_taken')},
+                  discovered=len(rows), per_source={s: counts[s] for s in ('c_initializer', 'cpp_initializer', 'vtable', 'call', 'address_taken', 'callback_table', 'runtime')},
                   size_kinds=dict(collections.Counter(r['size_kind'] for r in rows)), rejected=rejected)
     args.out.with_suffix('.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k != 'rejected'}, indent=2))

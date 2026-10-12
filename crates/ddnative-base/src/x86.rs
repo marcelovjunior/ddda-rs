@@ -152,8 +152,43 @@ pub fn set_lifted_lookup(lookup: LiftLookup) {
 /// Copy the function pointer before calling, so nested calls are reentrant.
 #[inline]
 pub fn call_lifted(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
+    if PREEMPT.load(std::sync::atomic::Ordering::Relaxed) {
+        preempt_point();
+    }
     let f = lifted_target(target);
     f(m, cpu);
+}
+
+/// Set by the runtime while another guest thread waits for the guest lock
+/// (serial mode). Lifted calls are then preemption points: without them a
+/// thread whose loops make no service call (the game's Vorbis decoder)
+/// holds the lock for seconds and starves the main loop. The real OS may
+/// switch threads at any instruction, so a call boundary is a legal point.
+pub static PREEMPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PREEMPT_HOOK: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// The runtime's preemption check (it yields when the time slice is used).
+pub fn set_preempt_hook(hook: fn()) {
+    let _ = PREEMPT_HOOK.set(hook);
+}
+
+#[cold]
+#[inline(never)]
+fn preempt_point() {
+    thread_local! {
+        static CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    // the hook reads the clock: once per 1,024 lifted calls is plenty
+    let due = CALLS.with(|c| {
+        let n = c.get().wrapping_add(1);
+        c.set(n);
+        n % 1024 == 0
+    });
+    if due {
+        if let Some(hook) = PREEMPT_HOOK.get() {
+            hook();
+        }
+    }
 }
 
 /// Slots of the per-thread cache of resolved lifted targets.
