@@ -687,7 +687,30 @@ pub fn internet_get_connected_state(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 8);
 }
 
+/// ole32 `StringFromGUID2(rguid, lpsz, cchMax)` (Microsoft Learn
+/// "StringFromGUID2 function (combaseapi.h)"): the GUID as
+/// "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}" (upper-case hex, Data1..Data3
+/// as numbers, Data4 as bytes) and a NUL, returning 39; a buffer shorter
+/// than 39 characters gets nothing and the result is 0 (measured,
+/// research/runtime/windows/Guid.cs). Caller: the DirectInput device
+/// enumeration callback around 0x00DF599C (a pad's product GUID).
+pub fn string_from_guid2(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (g, out, cch) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2) as i32);
+    cpu.eax = if cch < 39 {
+        0
+    } else {
+        let d4: String = (0..8).map(|k| format!("{:02X}", m.u8(g + 8 + k))).collect();
+        let text = format!("{{{:08X}-{:04X}-{:04X}-{}-{}}}", m.u32(g), m.u16(g + 4), m.u16(g + 6), &d4[..4], &d4[4..]);
+        for (k, u) in text.encode_utf16().chain([0]).enumerate() {
+            m.set_u16(out + 2 * k as u32, u);
+        }
+        39
+    };
+    ret(m, cpu, 12);
+}
+
 pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
+    ("ole32.dll", "StringFromGUID2", string_from_guid2),
     ("KERNEL32.dll", "GetTimeZoneInformation", get_time_zone_information),
     ("KERNEL32.dll", "FileTimeToSystemTime", file_time_to_system_time),
     ("KERNEL32.dll", "FileTimeToLocalFileTime", file_time_to_local_file_time),

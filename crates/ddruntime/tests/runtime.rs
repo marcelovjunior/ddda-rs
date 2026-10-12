@@ -1900,3 +1900,20 @@ fn virtual_memory_reserves_commits_and_frees_as_windows_measured() {
     // the freed space is reused bottom-up
     assert_eq!(va(&mut m, 0, 0x2000_0000, 0x2000, 4).0, base);
 }
+
+#[test]
+fn string_from_guid2_formats_as_windows_measured() {
+    let mut m = guest();
+    let (g, out) = (0x0030_0000, 0x0030_0100);
+    for k in 0..16u32 {
+        m.set_u8(g + k, (0x10 * k + 0xA + k) as u8);
+    }
+    fill(&mut m, out, 100, 0xEE);
+    let cpu = call_service(system::string_from_guid2, &mut m, &[g, out, 40]);
+    assert_eq!((cpu.eax, cpu.esp), (39, 0x0011_0000));
+    let text: Vec<u16> = units(&m, out, 39);
+    assert_eq!(String::from_utf16(&text).unwrap(), "{3D2C1B0A-5F4E-8170-92A3-B4C5D6E7F809}\0");
+    fill(&mut m, out, 100, 0xEE);
+    assert_eq!(call_service(system::string_from_guid2, &mut m, &[g, out, 38]).eax, 0);
+    assert_eq!(m.u16(out), 0xEEEE, "nothing written");
+}
