@@ -367,21 +367,21 @@ fn fixture_stat(m: &mut dyn Mem, c: &mut Cpu) {
     fixture_stream(m, c, 12)
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "game"))]
 #[test]
 #[ignore = "requires DDDA_EXE, DDDA_MOVIE and installed generated native program; real system WMVCore"]
 fn installed_movie_delay_and_guest_stream() {
     installed(false);
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "game"))]
 #[test]
 #[ignore = "requires the original IStream AddRef/Release/Seek lifts, DDDA_EXE and DDDA_MOVIE"]
 fn installed_movie_original_stream() {
     installed(true);
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "game"))]
 fn installed(original: bool) {
     use ddruntime::session::{Outcome, Session};
     let mut s = Session::new(&std::env::var("DDDA_EXE").expect("DDDA_EXE")).unwrap();
@@ -769,7 +769,7 @@ fn installed(original: bool) {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "game"))]
 fn get_media(m: &mut dyn Mem, r: &Registry, props: u32) -> u32 {
     assert_eq!(method(m, r, props, 4, &[0, DATA + 12]), 0);
     assert!(m.u32(DATA + 12) < 0x1000);

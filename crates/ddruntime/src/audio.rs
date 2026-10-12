@@ -1,9 +1,11 @@
-//! XAudio2 2.7's guest ABI and silent, clocked audio graph.
+//! XAudio2 2.7's guest ABI and clocked audio graph.
 //!
 //! 0x00DCE0E0 creates the engine; 0x00DCE600 creates AudioReverb 2.7.
 //! Source formats/callbacks come from 0x00DCE1F0 / 0x00DCE2E0 / 0x00DCE530.
 //! Contracts and the call-site census are in the L16 brief. No host audio
 //! device is opened. The explicit null endpoint is stereo, 48 kHz.
+//! The clock here decides what each source voice consumes per pass and
+//! when callbacks fire; `ddaudio` mixes the consumed samples (brief L19).
 use crate::dispatch::{Conflict, Registry};
 use crate::input::{guid, write_guid, IUNKNOWN};
 use crate::interfaces::{self, Spec, Tokens};
@@ -31,8 +33,7 @@ pub struct AudioBlock {
     pub channels: u32,
     pub samples: Vec<f32>,
 }
-/// A bounded output seam. The null renderer publishes silence; a later DSP
-/// renderer can publish its mixed samples at the same processing boundary.
+/// A bounded output seam: the mastering voice's mix, one block per pass.
 /// A slow host drops output blocks, never stalls the guest audio callback.
 pub fn output() -> Receiver<AudioBlock> {
     let (tx, rx) = mpsc::sync_channel(8);
@@ -48,6 +49,8 @@ struct Format {
     align: u32,
     bits: u32,
     samples_per_block: u32,
+    /// ADPCMWAVEFORMAT coefficient pairs (mmreg.h).
+    coefs: Vec<(i16, i16)>,
 }
 impl Format {
     fn read(m: &dyn Mem, p: u32) -> Result<Self, u32> {
@@ -65,6 +68,14 @@ impl Format {
             } else {
                 0
             },
+            coefs: if m.u16(p) == 2 && m.u16(p + 16) >= 4 {
+                let n = (m.u16(p + 20) as u32).min((m.u16(p + 16) as u32 - 4) / 4);
+                (0..n)
+                    .map(|i| (m.u16(p + 22 + 4 * i) as i16, m.u16(p + 24 + 4 * i) as i16))
+                    .collect()
+            } else {
+                vec![]
+            },
         };
         if f.channels == 0 || f.channels > 64 || !(1000..=200000).contains(&f.rate) || f.align == 0 {
             return Err(INVALID);
@@ -77,6 +88,17 @@ impl Format {
         }
         Ok(f)
     }
+    fn dsp(&self) -> ddaudio::Format {
+        ddaudio::Format {
+            tag: self.tag,
+            channels: self.channels,
+            rate: self.rate,
+            block_align: self.align,
+            bits: self.bits,
+            samples_per_block: if self.tag == 2 { self.samples_per_block } else { 1 },
+            coefs: self.coefs.clone(),
+        }
+    }
     fn samples(&self, bytes: u32) -> u64 {
         if self.tag == 2 {
             (bytes / self.align) as u64 * self.samples_per_block as u64
@@ -88,6 +110,7 @@ impl Format {
 #[derive(Clone)]
 struct Buffer {
     context: u32,
+    data: u32,
     flags: u32,
     end: u64,
     loop_start: u64,
@@ -157,6 +180,11 @@ pub(crate) struct Audio {
     voices: BTreeMap<u32, Voice>,
     effects: BTreeMap<u32, u32>,
     output: Option<SyncSender<AudioBlock>>,
+    mixer: ddaudio::Mixer,
+    /// Guest XAPOs by (voice, effect index, object): the locked IXAPO, or
+    /// None when it cannot run (QueryInterface failed, or its code is not
+    /// lifted yet).
+    xapos: BTreeMap<(u32, usize, u32), Option<u32>>,
 }
 
 const ENGINE_NAMES: &[&str] = &[
@@ -417,7 +445,11 @@ fn callback(m: &mut dyn Mem, c: &mut Cpu, object: u32, slot: u32, args: &[u32]) 
 }
 // IXAPOParameters is a separate COM interface, not an IXAPO vtable slot.
 // xapobase.h / xapo.h: QueryInterface, SetParameters (slot 3), Release.
-const IID_PARAMETERS: [u32; 4] = [0x26d95c66, 0x499a80f2, 0xe75a54ad, 0x986d1cf0];
+// The 2.7-era IIDs (DirectX SDK xapo.h), not the Windows SDK's 2.8+ ones:
+// the game's XAPO QueryInterface 0x00DCF480 compares with the
+// IXAPOParameters IID at 0x0142AF38, its base 0x00DCF350 with the IXAPO
+// IID at 0x0142AF28: A90BC001-E897-E897-55E4-9E470000000{1,0}.
+const IID_PARAMETERS: [u32; 4] = [0xa90bc001, 0xe897e897, 0x479ee455, 0x01000000];
 fn effect_parameters(m: &mut dyn Mem, c: &mut Cpu, this: u32, value: &Change) {
     let Change::EffectParameters(index, data) = value else {
         return;
@@ -622,6 +654,9 @@ fn process(m: &mut dyn Mem, c: &mut Cpu, engine: u32) {
                 }
                 let boundary = if b.loops != 0 { b.loop_end } else { b.end };
                 let n = samples.min(boundary.saturating_sub(b.cursor));
+                // Decode what the clock consumes now: once a buffer-end
+                // callback runs, the guest may reuse the memory.
+                feed(&mut s.mixer, &*m, id, &v.format, b.data, b.cursor, n);
                 b.cursor += n;
                 v.played += n;
                 samples -= n;
@@ -657,19 +692,292 @@ fn process(m: &mut dyn Mem, c: &mut Cpu, engine: u32) {
             callback(m, c, cb, 1, &[]);
         }
     }
+    let block = render(m, c, engine);
     state(|s| {
-        if let Some(tx) = &s.output {
-            let _ = tx.try_send(AudioBlock {
-                sample_rate: RATE,
-                channels: CHANNELS,
-                samples: vec![0.0; (RATE / 100 * CHANNELS) as usize],
-            });
+        if let (Some(tx), Some(block)) = (&s.output, block) {
+            let _ = tx.try_send(block);
         }
     });
     for cb in callbacks {
         if state(|s| s.engines.get(&engine).is_some_and(|e| e.callbacks.contains(&cb))) {
             callback(m, c, cb, 1, &[]);
         }
+    }
+}
+
+/// Decodes frames `first .. first + n` of a source buffer at guest `data`
+/// into the voice's mixer input.
+fn feed(mixer: &mut ddaudio::Mixer, m: &dyn Mem, voice: u32, f: &Format, data: u32, first: u64, n: u64) {
+    if n == 0 {
+        return;
+    }
+    let format = f.dsp();
+    let spb = format.samples_per_block as u64;
+    let (block0, block1) = (first / spb, (first + n).div_ceil(spb));
+    let base = data.wrapping_add((block0 * f.align as u64) as u32);
+    let bytes: Vec<u8> = (0..((block1 - block0) * f.align as u64) as u32)
+        .map(|i| m.u8(base.wrapping_add(i)))
+        .collect();
+    let mut frames = Vec::new();
+    format.decode(&bytes, first - block0 * spb, n, &mut frames);
+    mixer.feed(voice, f.channels, &frames);
+}
+
+/// One voice of the graph as the mixer sees it, owned so that no runtime
+/// borrow is held while guest effects run.
+struct Snapshot {
+    id: u32,
+    kind: ddaudio::Kind,
+    channels: u32,
+    rate: u32,
+    stage: u32,
+    running: bool,
+    ratio: f32,
+    volume: f32,
+    volumes: Vec<f32>,
+    /// (reverb parameters for the runtime's AudioReverb, object, enabled,
+    /// output channels)
+    effects: Vec<(Option<Vec<u8>>, u32, bool, u32)>,
+    sends: Vec<(u32, Option<Vec<f32>>)>,
+}
+
+/// Mixes the pass for `engine`: the mastering voice's output block.
+fn render(m: &mut dyn Mem, c: &mut Cpu, engine: u32) -> Option<AudioBlock> {
+    const KINDS: [ddaudio::Kind; 3] = [
+        ddaudio::Kind::Source,
+        ddaudio::Kind::Submix,
+        ddaudio::Kind::Mastering,
+    ];
+    let (snapshot, mut mixer) = state(|s| {
+        let snapshot: Vec<Snapshot> = s
+            .voices
+            .iter()
+            .filter(|(_, v)| v.engine == engine)
+            .map(|(&id, v)| Snapshot {
+                id,
+                kind: KINDS[v.kind as usize],
+                channels: v.format.channels,
+                rate: v.format.rate,
+                stage: v.stage,
+                running: v.running,
+                ratio: v.ratio,
+                volume: v.volume,
+                volumes: v.volumes.clone(),
+                effects: v
+                    .effects
+                    .iter()
+                    .map(|e| {
+                        let reverb = s.effects.contains_key(&e.object).then(|| e.parameters.clone());
+                        (reverb, e.object, e.enabled, e.channels)
+                    })
+                    .collect(),
+                sends: v
+                    .sends
+                    .iter()
+                    .map(|d| {
+                        // A matrix set with a NULL destination applies to
+                        // the only destination.
+                        let single = v.sends.len() == 1;
+                        let m = v
+                            .matrices
+                            .get(d)
+                            .or_else(|| v.matrices.get(&0).filter(|_| single));
+                        (*d, m.cloned())
+                    })
+                    .collect(),
+            })
+            .collect();
+        (snapshot, std::mem::take(&mut s.mixer))
+    });
+    let master = snapshot
+        .iter()
+        .find(|n| n.kind == ddaudio::Kind::Mastering)
+        .map(|n| (n.channels, n.rate));
+    let nodes: Vec<ddaudio::Node> = snapshot
+        .iter()
+        .map(|n| ddaudio::Node {
+            id: n.id,
+            kind: n.kind,
+            channels: n.channels,
+            rate: n.rate,
+            stage: n.stage,
+            running: n.running,
+            ratio: n.ratio,
+            volume: n.volume,
+            channel_volumes: &n.volumes,
+            effects: n
+                .effects
+                .iter()
+                .map(|(reverb, object, enabled, channels)| ddaudio::Effect {
+                    kind: match reverb {
+                        Some(p) => ddaudio::EffectKind::Reverb(p),
+                        None => ddaudio::EffectKind::Guest(*object),
+                    },
+                    enabled: *enabled,
+                    channels: *channels,
+                })
+                .collect(),
+            sends: n
+                .sends
+                .iter()
+                .map(|(d, m)| ddaudio::Send {
+                    dest: *d,
+                    matrix: m.as_deref(),
+                })
+                .collect(),
+        })
+        .collect();
+    let out = mixer.render(&nodes, &mut GuestEffects { m, c });
+    state(|s| s.mixer = mixer);
+    let (channels, sample_rate) = master?;
+    Some(AudioBlock {
+        sample_rate,
+        channels,
+        samples: out?,
+    })
+}
+
+// IXAPO (xapo.h): QueryInterface 0, Release 2, LockForProcess 8,
+// UnlockForProcess 9, Process 10 (the game's vtable 0x0142B138 has Process
+// 0x00DCF4F0 at slot 10); the 2.7 IID (see IID_PARAMETERS).
+const IID_IXAPO: [u32; 4] = [0xa90bc001, 0xe897e897, 0x479ee455, 0x00000000];
+// KSDATAFORMAT_SUBTYPE_IEEE_FLOAT (ksmedia.h)
+const SUBTYPE_FLOAT: [u32; 4] = [0x00000003, 0x00100000, 0xaa000080, 0x719b3800];
+
+/// Runs the game's own XAPOs the way XAudio2 does: QueryInterface for
+/// IXAPO, LockForProcess once with the voice's float format (the
+/// WAVEFORMATEXTENSIBLE, channel masks and 480-frame maximum the host's
+/// XAudio2 passes, measured in the L19 brief), then in-place Process each
+/// pass with the input's buffer flag.
+struct GuestEffects<'a> {
+    m: &'a mut dyn Mem,
+    c: &'a mut Cpu,
+}
+
+impl GuestEffects<'_> {
+    /// Calls slot `slot` of `object`; `None` when the call reaches code that
+    /// is not lifted (the effect then passes audio through, reported once).
+    fn call(&mut self, object: u32, slot: u32, args: &[u32]) -> Option<u32> {
+        let saved = (self.c.esp, self.c.ebx, self.c.ebp, self.c.esi, self.c.edi);
+        let target = self.m.u32(self.m.u32(object) + 4 * slot);
+        let mut all = vec![object];
+        all.extend_from_slice(args);
+        let (m, c) = (&mut *self.m, &mut *self.c);
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call_guest(m, c, target, &all))) {
+            Ok(r) => Some(r),
+            Err(p) => match p.downcast::<crate::dispatch::Unbound>() {
+                Ok(u) => {
+                    (self.c.esp, self.c.ebx, self.c.ebp, self.c.esi, self.c.edi) = saved;
+                    eprintln!("audio: guest XAPO {object:#010x} passes audio through: {u}");
+                    None
+                }
+                Err(p) => std::panic::resume_unwind(p),
+            },
+        }
+    }
+
+    fn lock(&mut self, object: u32, channels: u32, rate: u32) -> Option<u32> {
+        let saved = self.c.esp;
+        self.c.esp -= 96;
+        let p = self.c.esp;
+        write_guid(self.m, p, IID_IXAPO);
+        self.m.set_u32(p + 16, 0);
+        let qi = self.call(object, 0, &[p, p + 16]);
+        let xapo = self.m.u32(p + 16);
+        let result = if qi == Some(0) && xapo != 0 {
+            // WAVEFORMATEXTENSIBLE at p + 24 (40 bytes).
+            let f = p + 24;
+            let mask = match channels {
+                1 => 0x4,
+                2 => 0x3,
+                6 => 0x60f,
+                _ => 0,
+            };
+            for (o, v) in [
+                (0, 0xfffe),
+                (2, channels),
+                (12, channels * 4),
+                (14, 32),
+                (16, 22),
+                (18, 32),
+            ] {
+                self.m.set_u16(f + o, v as u16);
+            }
+            self.m.set_u32(f + 4, rate);
+            self.m.set_u32(f + 8, rate * channels * 4);
+            self.m.set_u32(f + 20, mask);
+            write_guid(self.m, f + 24, SUBTYPE_FLOAT);
+            // XAPO_LOCKFORPROCESS_BUFFER_PARAMETERS, input and output.
+            for q in [p + 64, p + 72] {
+                self.m.set_u32(q, f);
+                self.m.set_u32(q + 4, rate / 100);
+            }
+            match self.call(xapo, 8, &[1, p + 64, 1, p + 72]) {
+                Some(0) => Some(xapo),
+                _ => {
+                    // Drop the reference QueryInterface added.
+                    self.call(xapo, 2, &[]);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        self.c.esp = saved;
+        result
+    }
+}
+
+impl ddaudio::EffectHost for GuestEffects<'_> {
+    fn process(
+        &mut self,
+        voice: u32,
+        index: usize,
+        object: u32,
+        buffer: &mut [f32],
+        channels: u32,
+        frames: u32,
+        valid: bool,
+        enabled: bool,
+    ) -> bool {
+        let key = (voice, index, object);
+        let xapo = match state(|s| s.xapos.get(&key).copied()) {
+            Some(x) => x,
+            None => {
+                let x = self.lock(object, channels, frames * 100);
+                state(|s| s.xapos.insert(key, x));
+                x
+            }
+        };
+        let Some(xapo) = xapo else { return valid };
+        let bytes = buffer.len() as u32 * 4;
+        let saved = self.c.esp;
+        self.c.esp = (self.c.esp - bytes - 32) & !15;
+        let (data, params) = (self.c.esp, self.c.esp + bytes);
+        for (i, x) in buffer.iter().enumerate() {
+            self.m.set_u32(data + 4 * i as u32, x.to_bits());
+        }
+        // XAPO_PROCESS_BUFFER_PARAMETERS, input and output: pBuffer (the
+        // same memory: in-place), BufferFlags, ValidFrameCount.
+        for q in [params, params + 12] {
+            self.m.set_u32(q, data);
+            self.m.set_u32(q + 4, valid as u32);
+            self.m.set_u32(q + 8, frames);
+        }
+        let out_valid = match self.call(xapo, 10, &[1, params, 1, params + 12, enabled as u32]) {
+            Some(_) => {
+                for (i, x) in buffer.iter_mut().enumerate() {
+                    *x = f32::from_bits(self.m.u32(data + 4 * i as u32));
+                }
+                self.m.u32(params + 16) != 0
+            }
+            None => {
+                state(|s| s.xapos.insert(key, None));
+                valid
+            }
+        };
+        self.c.esp = saved;
+        out_valid
     }
 }
 
@@ -753,7 +1061,17 @@ fn retain_effects(m: &mut dyn Mem, c: &mut Cpu, fx: &[Effect], release: bool) {
     }
 }
 fn destroy(m: &mut dyn Mem, c: &mut Cpu, this: u32) {
+    // XAudio2 unlocks and releases a destroyed voice's effects.
+    let locked: Vec<u32> = state(|s| {
+        let keys: Vec<_> = s.xapos.keys().filter(|k| k.0 == this).copied().collect();
+        keys.iter().filter_map(|k| s.xapos.remove(k).flatten()).collect()
+    });
+    for xapo in locked {
+        callback(m, c, xapo, 9, &[]);
+        callback(m, c, xapo, 2, &[]);
+    }
     let old = state(|s| {
+        s.mixer.remove(this);
         let old = s.voices.remove(&this);
         for e in s.engines.values_mut() {
             e.changes.retain(|(_, id, _)| *id != this);
@@ -992,6 +1310,7 @@ fn create_voice(m: &mut dyn Mem, c: &mut Cpu, engine: u32, slot: u32) -> u32 {
             align: channels * 4,
             bits: 32,
             samples_per_block: 0,
+            coefs: vec![],
         };
         (
             if slot == 9 { 1 } else { 2 },
@@ -1124,6 +1443,7 @@ fn submit(m: &dyn Mem, this: u32, p: u32, wma: u32) -> u32 {
         }
         v.queue.push_back(Buffer {
             context,
+            data,
             flags,
             end,
             loop_start,
@@ -1195,6 +1515,9 @@ fn voice<const SLOT: u32>(m: &mut dyn Mem, c: &mut Cpu) {
                             let v = s.voices.get_mut(&this).unwrap();
                             v.sends = x;
                             v.output_filters = filters;
+                            // "A voice's current send levels will be replaced
+                            // by a default send matrix" (SetOutputVoices).
+                            v.matrices.clear();
                         });
                         0
                     } else {
@@ -1402,15 +1725,13 @@ fn voice<const SLOT: u32>(m: &mut dyn Mem, c: &mut Cpu) {
                     Err(e) => e,
                 }
             } else {
-                let matrix = state(|s| s.voices[&this].matrices.get(&dest).cloned());
-                if let Some(matrix) = matrix {
-                    for (i, x) in matrix.into_iter().enumerate() {
-                        m.set_u32(p + 4 * i as u32, x.to_bits());
-                    }
-                    0
-                } else {
-                    INVALID
+                // Without SetOutputMatrix: XAudio2's default matrix.
+                let matrix = state(|s| s.voices[&this].matrices.get(&dest).cloned())
+                    .unwrap_or_else(|| ddaudio::mixer::default_matrix(src, dst));
+                for (i, x) in matrix.into_iter().enumerate() {
+                    m.set_u32(p + 4 * i as u32, x.to_bits());
                 }
+                0
             }
         }
         18 => {
