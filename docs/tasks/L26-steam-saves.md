@@ -197,3 +197,37 @@ it.
     is never overwritten;
   - makes the folder's account the sandbox user's, so the game's SteamID
     check on load passes.
+
+### Verification and what is left
+
+- **Verified on the branch.** The census (script output, cross-checked
+  against Ghidra). `ddruntime` with the new `steam.rs` compiles without
+  warnings (one full build in the heavy slot). That build stopped on five
+  borrow errors in the test file only; those are fixed in 5ddf15e and not
+  yet recompiled.
+- **Unverified, waiting for the merge train** (batched verification
+  rule): `cargo test -p ddruntime --test steam_saves`, seven tests:
+  - the census bindings and slot names;
+  - the local user, friends, utils and apps answers;
+  - callbacks and their registration flags;
+  - call results, their sizes and the offline failures;
+  - RunCallbacks not nesting and deferring requests made inside a
+    callback;
+  - remote storage in the sandbox, including the refused names;
+  - the import keeping the player's folder untouched and taking its
+    account.
+  - The last test needs the installed exe: the lifted container writer
+    0x0040F1A0 plus FileWrite produce a 0x80000-byte `DDDA.sav` that
+    `ddsave` parses (a synthetic XML, and the private save's own stream
+    reproducing its header and stream byte for byte). It then imports the
+    private save and checks GetSteamID against its `mSteamID`, printing
+    neither value.
+- **Not done:**
+  - A save written by the rebuilt game as a whole. The boot does not reach
+    gameplay yet, so the test covers the game's container writer and the
+    Steam path, not the MtDTI serialisation 0x0040F6E0.
+  - Achievement names are not checked against Steam's schema.
+  - The import does not read the player's persona name (it lives in
+    Steam's `loginusers.vdf`; the default is "Arisen").
+  - Nothing is compared yet against the original game running on real
+    Steam.
