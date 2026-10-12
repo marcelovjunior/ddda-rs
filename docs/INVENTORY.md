@@ -315,6 +315,10 @@ After trains 10-12 (2026-10-12, main above): Codex's recipes (boot stops
 verified (99.8%, 99.4% of code bytes).** The remaining functions, with
 class, blocker and owner, are in docs/RESIDUALS.md (Codex, train 13).
 
+After train 13 (2026-10-12): Codex's residual batches add 44 functions.
+**59,375 of 59,440 verified (99.9%, 99.6% of code bytes)**; 65 remain
+(docs/RESIDUALS.md has each one's class, blocker and owner).
+
 The L15 table above and its notes below are
 kept for history.
 
