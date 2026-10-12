@@ -94,5 +94,69 @@ debug = 1
 opt-level = 0
 debug = 1
 
+[profile.dev.package.ddlift-16]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-17]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-18]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-19]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-20]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-21]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-22]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-23]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-24]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-25]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-26]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-27]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-28]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-29]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-30]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-31]
+opt-level = 0
+debug = 1
+
 [profile.dev.package.ddnative-base]
 debug = 1

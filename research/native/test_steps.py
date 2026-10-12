@@ -68,7 +68,7 @@ class StepTests(unittest.TestCase):
                 stamps = {p: p.stat().st_mtime_ns for p in root.rglob('*.rs')}
                 lift.gen(instructions=True)
                 self.assertEqual(stamps, {p: p.stat().st_mtime_ns for p in stamps})
-            index = (root / 'crates/ddlift/lift_05/src/generated/mod.rs').read_text()
+            index = (root / f'crates/ddlift/lift_{lift.shard(0x00510000):02}/src/generated/mod.rs').read_text()
             self.assertIn('(0x0040200C, s_00510000)', index)
             self.assertNotIn('(0x0040200B,', index)
             facade = (out / 'lifted.rs').read_text()
