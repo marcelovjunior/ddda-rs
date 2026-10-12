@@ -9,6 +9,7 @@
 //! An address without a binding stops with an [`Unbound`] report: the
 //! target, the return address on the guest stack and the registers. It
 //! never resumes at an invented return.
+use ddnative_base::execution::{Lookup, Step};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::{self, Cpu, LiftFn};
 use std::collections::HashMap;
@@ -33,11 +34,6 @@ pub enum Binding {
 }
 
 impl Binding {
-    fn function(self) -> LiftFn {
-        match self {
-            Binding::Lifted(f) | Binding::Service(f) | Binding::LockFree(f) => f,
-        }
-    }
     fn kind(self) -> &'static str {
         match self {
             Binding::Lifted(_) => "lifted",
@@ -103,10 +99,59 @@ impl std::hash::Hasher for AddrHasher {
     }
 }
 
+/// What runs at an address: its binding, and its step entry (the program's
+/// instruction lookup's answer there, resolved once).
+#[derive(Clone, Copy)]
+struct Entry {
+    binding: Option<Binding>,
+    step: Option<Step>,
+}
+
+/// The step entries from `at` on, into `entries`: one per instruction, so a
+/// step-lifted body ends where 16 bytes in a row (more than the longest x86
+/// instruction) hold none. Stops early at an entry already indexed (a scan
+/// from there has indexed what follows).
+fn index_steps(entries: &mut Entries, lookup: Lookup, mut at: u32) {
+    // only a step entry starts a body (most bound addresses are not one)
+    if lookup(at).is_none() {
+        return;
+    }
+    let mut gap = 0;
+    while gap < 16 {
+        match lookup(at) {
+            Some(s) => {
+                let e = entries.entry(at).or_insert(Entry { binding: None, step: None });
+                if e.step.is_some() {
+                    return;
+                }
+                e.step = Some(s);
+                gap = 0;
+            }
+            None => gap += 1,
+        }
+        at = match at.checked_add(1) {
+            Some(a) => a,
+            None => return,
+        };
+    }
+}
+
+type Entries = HashMap<u32, Entry, std::hash::BuildHasherDefault<AddrHasher>>;
+
+/// L70: every call_ext reaches [`Registry::call`], so the address is looked
+/// up once, in one table holding both the bindings and the step entries.
+/// Before, the generated `instruction` lookup asked all 32 shards in turn
+/// (32 calls, each a binary search over its shard's table) on every call,
+/// for the few hundred step-lifted functions, and then the bindings were
+/// probed separately. The table holds every bound address with its step
+/// entry resolved, and the interior step entries of step-lifted bodies
+/// ([`index_steps`]); an address it lacks asks the program's lookup, so the
+/// answers are exactly the program's.
 #[derive(Default)]
 pub struct Registry {
-    instructions: Option<ddnative_base::execution::Lookup>,
-    bindings: HashMap<u32, Binding, std::hash::BuildHasherDefault<AddrHasher>>,
+    instructions: Option<Lookup>,
+    entries: Entries,
+    bound: usize,
     names: HashMap<u32, String>,
 }
 
@@ -131,17 +176,30 @@ impl Registry {
 
     /// Add a binding; an address can have only one.
     pub fn insert(&mut self, addr: u32, b: Binding) -> Result<(), Conflict> {
-        if let Some(old) = self.bindings.get(&addr) {
+        if let Some(old) = self.get(addr) {
             return Err(Conflict { addr, existing: old.kind(), new: b.kind() });
         }
-        self.bindings.insert(addr, b);
+        self.replace(addr, b);
         Ok(())
     }
 
     /// Bind `addr` to `b`, replacing what was there (the runtime's own
     /// services over platform models, e.g. fastmem's memcpy).
     pub fn replace(&mut self, addr: u32, b: Binding) {
-        self.bindings.insert(addr, b);
+        match self.entries.get_mut(&addr) {
+            Some(e) => {
+                // its step entry is resolved already (with the lookup set)
+                self.bound += e.binding.is_none() as usize;
+                e.binding = Some(b);
+            }
+            None => {
+                self.entries.insert(addr, Entry { binding: Some(b), step: None });
+                self.bound += 1;
+                if let Some(lookup) = self.instructions {
+                    index_steps(&mut self.entries, lookup, addr);
+                }
+            }
+        }
     }
 
     /// Names for diagnostics (e.g. from the RTTI class names or the inventory).
@@ -150,25 +208,38 @@ impl Registry {
     }
 
     pub fn get(&self, addr: u32) -> Option<Binding> {
-        self.bindings.get(&addr).copied()
+        self.entries.get(&addr).and_then(|e| e.binding)
     }
 
     /// Install the generated, exact instruction-address resolver. Services
     /// retain precedence; whole-function lifts are not instruction fallbacks.
-    pub fn set_instruction_lookup(&mut self, lookup: ddnative_base::execution::Lookup) {
+    pub fn set_instruction_lookup(&mut self, lookup: Lookup) {
         self.instructions = Some(lookup);
+        // resolve the step entries again, from every bound address
+        self.entries.retain(|_, e| e.binding.is_some());
+        for e in self.entries.values_mut() {
+            e.step = None;
+        }
+        let bound: Vec<u32> = self.entries.keys().copied().collect();
+        for addr in bound {
+            index_steps(&mut self.entries, lookup, addr);
+        }
     }
 
-    pub(crate) fn instruction(&self, ip: u32) -> Option<ddnative_base::execution::Step> {
-        self.instructions.and_then(|lookup| lookup(ip))
+    pub(crate) fn instruction(&self, ip: u32) -> Option<Step> {
+        let lookup = self.instructions?;
+        match self.entries.get(&ip) {
+            Some(e) => e.step,
+            None => lookup(ip),
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.bindings.len()
+        self.bound
     }
 
     pub fn is_empty(&self) -> bool {
-        self.bindings.is_empty()
+        self.bound == 0
     }
 
     /// Run whatever is bound at `target` (return address already pushed),
@@ -177,33 +248,34 @@ impl Registry {
         // The step executor only where gen emitted restartable instruction
         // entries (L27b, LIFT_INSTRUCTIONS); whole-function bindings run
         // directly below.
-        if self.instructions.is_some() && self.instruction(target).is_some() {
-            crate::executor::run(self, m, cpu, target);
+        let binding = match self.entries.get(&target) {
+            Some(Entry { step: Some(_), .. }) => None,
+            Some(Entry { binding: Some(b), .. }) => Some(*b),
+            // not indexed: no binding, and a step entry only if the
+            // program's lookup has one (a body index_steps did not reach)
+            _ => match self.instructions {
+                Some(lookup) if lookup(target).is_some() => None,
+                _ => return self.call_unbound(m, cpu, target),
+            },
+        };
+        match binding {
+            None => crate::executor::run(self, m, cpu, target),
+            Some(Binding::Service(f)) => self.run_service(f, m, cpu, target, true),
+            Some(Binding::LockFree(f)) => self.run_service(f, m, cpu, target, false),
+            Some(Binding::Lifted(f)) => f(m, cpu),
+        }
+        Ok(())
+    }
+
+    #[cold]
+    fn call_unbound(&self, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) -> Result<(), Unbound> {
+        // L51: the diagnostic emulator runs untranslated exe code
+        #[cfg(feature = "emu")]
+        if crate::emu::enabled() && crate::emu::in_text(target) {
+            crate::emu::run(self, m, cpu, target);
             return Ok(());
         }
-        match self.get(target) {
-            Some(Binding::Service(f)) => {
-                self.run_service(f, m, cpu, target, true);
-                Ok(())
-            }
-            Some(Binding::LockFree(f)) => {
-                self.run_service(f, m, cpu, target, false);
-                Ok(())
-            }
-            Some(b) => {
-                b.function()(m, cpu);
-                Ok(())
-            }
-            None => {
-                // L51: the diagnostic emulator runs untranslated exe code
-                #[cfg(feature = "emu")]
-                if crate::emu::enabled() && crate::emu::in_text(target) {
-                    crate::emu::run(self, m, cpu, target);
-                    return Ok(());
-                }
-                Err(self.unbound(m, cpu, target))
-            }
-        }
+        Err(self.unbound(m, cpu, target))
     }
 
     /// Run the service bound at `target` (its return address pushed), the
@@ -354,5 +426,166 @@ mod trace {
         if flush || t.lines % 1000 == 0 || t.lines == t.max {
             let _ = t.out.flush();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::{GuestMemory, READ, WRITE};
+    use ddnative_base::execution::{Flow, Step};
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    const FUNCTIONS: u32 = 56_000;
+    const TEXT: u32 = 0x0040_1000;
+    const STEP5: u32 = 0x012E_D1F5;
+    const STEP6: u32 = 0x0130_4000;
+
+    fn ret(_: &mut dyn Mem, c: &mut Cpu) {
+        c.esp += 4;
+    }
+    fn step(_: &mut dyn Mem, _: &mut Cpu, ip: u32) -> Flow {
+        Flow::Next(ip + 1)
+    }
+
+    /// A model of the generated facade's `instruction` (ddnative
+    /// generated/lifted.rs): each of the 32 shards binary-searches its own
+    /// table, in turn. As in the current gen, two shards (the CRT's) hold
+    /// step entries, 2,157 and 823 of them, one per instruction (5 bytes
+    /// apart here).
+    fn shard_tables() -> &'static [Vec<(u32, Step)>] {
+        static T: OnceLock<Vec<Vec<(u32, Step)>>> = OnceLock::new();
+        T.get_or_init(|| {
+            (0..32)
+                .map(|k| match k {
+                    5 => (0..2157).map(|i| (STEP5 + 5 * i, step as Step)).collect(),
+                    6 => (0..823).map(|i| (STEP6 + 5 * i, step as Step)).collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
+        })
+    }
+    #[inline(never)]
+    fn shard_instruction(k: usize, ip: u32) -> Option<Step> {
+        let t = &shard_tables()[k];
+        t.binary_search_by_key(&ip, |e| e.0).ok().map(|i| t[i].1)
+    }
+    fn modeled_instruction(ip: u32) -> Option<Step> {
+        (0..32).find_map(|k| shard_instruction(k, ip))
+    }
+
+    /// 56,000 lifted functions (the program's count) and the step-lifted
+    /// functions' entries (every 40th step entry here).
+    fn registry(lookup_first: bool) -> Registry {
+        let mut r = Registry::new();
+        if lookup_first {
+            r.set_instruction_lookup(modeled_instruction);
+        }
+        for k in 0..FUNCTIONS {
+            r.insert(TEXT + 16 * k, Binding::Lifted(ret)).unwrap();
+        }
+        for i in (0..2157).step_by(40) {
+            r.insert(STEP5 + 5 * i, Binding::Lifted(ret)).unwrap();
+        }
+        for i in (0..823).step_by(40) {
+            r.insert(STEP6 + 5 * i, Binding::Lifted(ret)).unwrap();
+        }
+        if !lookup_first {
+            r.set_instruction_lookup(modeled_instruction);
+        }
+        r
+    }
+
+    fn same(a: Option<Step>, b: Option<Step>) -> bool {
+        a.map(|f| f as usize) == b.map(|f| f as usize)
+    }
+
+    /// The registry answers exactly as the program's lookup and its
+    /// bindings do, at every address: function entries, step entries
+    /// (entries and interiors), the bytes between them, and outside; also
+    /// when the lookup is installed after the bindings, and after a
+    /// replace.
+    #[test]
+    fn lookups_answer_as_the_program_does() {
+        for lookup_first in [true, false] {
+            let mut r = registry(lookup_first);
+            let ranges = [(TEXT - 64, TEXT + 4096), (TEXT + 16 * FUNCTIONS - 64, TEXT + 16 * FUNCTIONS + 64),
+                          (STEP5 - 64, STEP5 + 5 * 2157 + 64), (STEP6 - 64, STEP6 + 5 * 823 + 64), (0, 64),
+                          (u32::MAX - 64, u32::MAX)];
+            for &(lo, hi) in &ranges {
+                for a in lo..=hi {
+                    assert!(same(r.instruction(a), modeled_instruction(a)), "instruction({a:#x})");
+                    let bound = (a >= TEXT && a < TEXT + 16 * FUNCTIONS && (a - TEXT) % 16 == 0)
+                        || (a >= STEP5 && a < STEP5 + 5 * 2157 && (a - STEP5) % 200 == 0)
+                        || (a >= STEP6 && a < STEP6 + 5 * 823 && (a - STEP6) % 200 == 0);
+                    assert_eq!(r.get(a).is_some(), bound, "get({a:#x})");
+                }
+            }
+            r.replace(TEXT, Binding::LockFree(ret));
+            assert!(matches!(r.get(TEXT), Some(Binding::LockFree(_))));
+            r.replace(STEP5 + 5, Binding::Service(ret));
+            assert!(matches!(r.get(STEP5 + 5), Some(Binding::Service(_))));
+            assert!(same(r.instruction(STEP5 + 5), modeled_instruction(STEP5 + 5)));
+        }
+    }
+
+    /// The CRT's two shards (crt-check): with their real functions and step
+    /// entries, the registry answers as their lookups at every address of
+    /// their range, and indexes (rather than falls back for) their step
+    /// entries.
+    #[cfg(feature = "crt-check")]
+    #[test]
+    fn lookups_answer_as_the_crt_shards_do() {
+        fn lookup(ip: u32) -> Option<Step> {
+            ddlift_05::instruction(ip).or_else(|| ddlift_06::instruction(ip))
+        }
+        let mut r = Registry::new();
+        r.set_instruction_lookup(lookup);
+        for &(a, f) in ddlift_05::FUNCTIONS.iter().chain(ddlift_06::FUNCTIONS) {
+            r.insert(a, Binding::Lifted(f)).unwrap();
+        }
+        let all: Vec<u32> = ddlift_05::INSTRUCTIONS.iter().chain(ddlift_06::INSTRUCTIONS).map(|e| e.0).collect();
+        let functions = ddlift_05::FUNCTIONS.iter().chain(ddlift_06::FUNCTIONS).map(|e| e.0);
+        let lo = functions.clone().chain(all.iter().copied()).min().unwrap();
+        let hi = functions.chain(all.iter().copied()).max().unwrap();
+        for a in lo - 64..=hi + 64 {
+            assert!(same(r.instruction(a), lookup(a)), "instruction({a:#x})");
+        }
+        let indexed = all.iter().filter(|a| r.entries.get(a).is_some_and(|e| e.step.is_some())).count();
+        eprintln!("{indexed} of {} step entries indexed, {:#x}..{:#x} checked", all.len(), lo, hi);
+        assert_eq!(indexed, all.len());
+    }
+
+    /// Calls per second through Registry::call to lifted targets (as
+    /// call_ext's virtual calls arrive), and the step executor's lookups at
+    /// interior step entries. Numbers with `-- --nocapture`.
+    #[test]
+    fn dispatch_speed() {
+        let t0 = Instant::now();
+        let r = registry(true);
+        let build = t0.elapsed();
+        let mut m = GuestMemory::new();
+        m.map(0x0010_0000, 0x1000, READ | WRITE).unwrap();
+        let mut c = Cpu::default();
+        let n = 1_000_000u32;
+        let mut x = 1u32;
+        let t = Instant::now();
+        for _ in 0..n {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            c.esp = 0x0010_0800;
+            r.call(&mut m, &mut c, TEXT + 16 * ((x >> 8) % FUNCTIONS)).unwrap();
+        }
+        let calls = n as f64 / t.elapsed().as_secs_f64();
+        let t = Instant::now();
+        let mut found = 0;
+        for k in 0..n {
+            found += r.instruction(STEP5 + 5 * (k % 2157)).is_some() as u32;
+        }
+        let steps = n as f64 / t.elapsed().as_secs_f64();
+        assert_eq!(found, n);
+        eprintln!("Registry::call to a lifted function: {:.1} M calls/s ({:.1} ns each)", calls / 1e6, 1e9 / calls);
+        eprintln!("instruction() at a step entry:       {:.1} M lookups/s ({:.1} ns each)", steps / 1e6, 1e9 / steps);
+        eprintln!("registry built in {:.1} ms", build.as_secs_f64() * 1e3);
     }
 }
