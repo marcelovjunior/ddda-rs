@@ -3,6 +3,23 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x011EDA20 (DDDA.exe 2017-12-13 Steam), Global::FUN_011eda20.
+pub fn f_011eda20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x11EDA20;
+    loop {
+        match pc {
+            0x11EDA20 => { cpu.edx = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.eax = (m.fast_u8(pt, cpu.edx.wrapping_add(0x4C)) as u32); { let r = cpu.fl.alu_sub(cpu.eax, 0x0u32, 32); cpu.eax = r; } pc = if cpu.fl.cond("e") { 0x11EDA4C } else { 0x11EDA2D }; continue; }
+            0x11EDA2D => { { let a = cpu.eax & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.eax = r; } pc = if cpu.fl.cond("e") { 0x11EDA3C } else { 0x11EDA30 }; continue; }
+            0x11EDA30 => { { let a = cpu.eax & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.eax = r; } pc = if cpu.fl.cond("ne") { 0x11EDA4C } else { 0x11EDA33 }; continue; }
+            0x11EDA33 => { m.fast_set_u32(pt, cpu.esp.wrapping_add(0x4), cpu.edx);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x11EA850))(m, cpu); return; }
+            0x11EDA3C => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x8)); { let v = cpu.eax; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, v); } { let v = cpu.edx; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, v); } { let t = 0x11EA6E0u32; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, 0x11EDA47);  x86::call_ext(m, cpu, t);  } cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x11EDA4C => { { let v = cpu.edx; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, v); } cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, 0x11EDA52);  super::lifted::f_011e2730(m, cpu);  cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x011EDA60 (DDDA.exe 2017-12-13 Steam), Global::FUN_011eda60.
 pub fn f_011eda60(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
