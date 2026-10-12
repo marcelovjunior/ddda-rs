@@ -264,6 +264,18 @@ class WrapperTests(unittest.TestCase):
                     caller.replace(bytes.fromhex('c9 c3'),bytes.fromhex('90 c3'))):
             self.assertEqual(sites(bad),set())
 
+    def test_borrowed_frame_checks_every_branch_and_rejects_cycles(self):
+        def sites(code):
+            data=bytes.fromhex(code)
+            body=[i.address for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(data,0)]
+            return borrowed_frame_pushes(0,body,lambda a,n:data[a:a+n],lambda a:0,set())
+        self.assertEqual(sites('55 8bec 55 8be9 85c0 7402 89c0 5d c9 c3'), {3})
+        for code in ('55 8bec 55 8be9 85c0 7401 5d c9 c3',
+                     '55 8bec 55 8be9 85c0 74fc 5d c9 c3',
+                     '55 8bec 55 8be9 eb7f 5d c9 c3',
+                     '55 8bec 8beb 55 8be9 5d c9 c3'):
+            self.assertEqual(sites(code),set())
+
     def test_aligned_frame_pointer_save_is_not_an_outgoing_argument(self):
         prefix = '55 8bec 83e4f8 83ec18 8b01 53 55 56 57 '
         suffix = '5f 5e 5d 5b 8be5 5d c3'
