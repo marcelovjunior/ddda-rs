@@ -1,5 +1,19 @@
 # Milestones
 
+### L28c inventory fixture batch (2026-10-12, pending replay)
+
+- Thirteen more non-verified inventory functions record three normal-return
+  cases each under existing zero-call rules. Private native-L28c grows
+  **59,560 -> 59,573 records / 177,274 -> 177,313 cases**; the per-address
+  audit proves every old record and case unchanged.
+- **22549c3b** adds opt-in, alias-checked caller-argument facts to the finite
+  bound proof. **0x0075BAD0 records 3/3**, pending the next adoption.
+  **105 light tests pass**; no full Rust replay. The owner's cleanup fix
+  is integrated as **13446abb**.
+- Results classify all 211 non-verified inventory entries, reserving the
+  44 gaps and boot stop 12 for claude-6. **Next action:** finish the serial
+  residual/one-hop trials, append and audit; data remains open for head.
+
 ### L28c register-object fixture (2026-10-12, pending replay)
 
 - **0x00478600 records 3/3** after separating entry register objects from

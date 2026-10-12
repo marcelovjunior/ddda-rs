@@ -961,3 +961,71 @@ generation remain intact. No generated code was authored by this batch;
 the merge retains main's already committed generated files.
 The same **102 light tests pass after the merge**. The worktree is ready
 for review; recording jobs have exited and accepted data remains open.
+
+### L28c train-4 residual census (2026-10-12, in progress)
+
+The read-only inventory has **211 non-verified non-thunks**: 91 documented,
+53 untouched, 57 translated and ten platform. Cross-checking the private
+accepted set, prepared candidates, quarantine and `verification_gaps.json`
+gives the following disjoint classes (before this batch):
+
+| Class | Count | Treatment |
+|---|---:|---|
+| L48 verification gaps | 44 | Reserved for claude-6 |
+| Boot stop 12, 0x00DB8B90 | 1 | Reserved for claude-6 |
+| Already recorded privately, 0x00478600 | 1 | Keep unchanged |
+| Prior invalid-return quarantine | 3 | Keep excluded: 0x00C1D790, 0x00D9EF20, 0x00FB9A10 |
+| Cached lift rejections | 4 | Lifter lane: 0x00736370 (`bound`), 0x00F83C00 / 0x013156B0 (x87 overflow), 0x012F1C9D (x87 return) |
+| Not in prepared candidates | 5 | 0x0047B950, 0x0047B9C0, 0x00736730, 0x012EDC70, 0x012FE5C9; sent to the lifter owner for classification |
+| Recorder failures | 153 | Seven eligible direct-route entries, 21 inventoried one-hop entries, 125 other entries |
+
+The recorder group comprises **82 documented, 48 untouched, 13 translated
+and ten platform** entries. Its address-level evidence is private
+`L28c/train4-inventory-census.json`; this is a census against train 4's
+inventory, not a claim that every supplementary one-hop address is a real
+function. The prior one-hop queue has additional entries absent from this
+non-thunk inventory census.
+
+**Direct route:** re-lifted 0x00491340, 0x00493AA0, 0x00494D80,
+0x004A06B0, 0x0075BAD0, 0x0081C330 and 0x00DD5ED0 with the merged
+train-4 lifter. All lift; none has a static terminal site. Retried each
+with terminal acceptance enabled under guarded-objects-v1,
+guarded-bounded-v1, zero-call-v1, image-v1 and small-v1 (three seeds,
+24 seconds per function). None recorded. Ordinary instruction, page,
+return and indirect-mock guards remain unchanged. Exact failure events
+are in the five `structured-*-terminal.jsonl` logs and
+`L28c/train4-retry.log`. The eighth residual, 0x00DB8B90, was not retried.
+
+Baseline hash manifest: `L28c/train4-retry-before-hashes.json`, **59,560
+records / 177,274 cases**. Comparison base for head adoption is now
+**native-train3-orig**, read-only; native-L17 remains frozen.
+The unchanged-source light suite passes **102 tests**. No full Rust replay.
+
+**First inventory batch ready:** the 125 other recorder candidates were
+re-lifted without a refusal, then tried with zero-call-v1, image-v1,
+small-v1 and guarded-objects-v1 (three seeds, 12 seconds per function,
+terminal acceptance enabled). **Thirteen functions recorded three cases
+each under zero-call-v1; every case returns normally**, rather than using
+a terminal shortcut:
+0x0085B520, 0x0085E220, 0x0086D7E0, 0x008757B0, 0x00878250,
+0x00AFD8D0, 0x00CE8C50, 0x00CE8CC0, 0x00EAFD90, 0x00F20620,
+0x00F77CC0, 0x011D2CE0 and 0x012E1DA1.
+They use existing input/recorder rules; this result does not attribute
+normal returns to terminal acceptance. Private accepted data is now
+**59,573 records / 177,313 cases**, +13/+39. The hash audit
+`L28c/train4-census-audit.json` proves **all 59,560 old records and their
+case multisets unchanged**, with no promotions, removals or stale mocks.
+
+**Bounded caller arguments:** source **22549c3b** adds opt-in
+`guarded-stack-v1`. It has guarded-objects-v1's distribution but allows
+the proof to read the actual initial **[ESP+4, ESP+132)** bytes. Entry
+GPRs, flags, the saved return and callee locals remain unknown. Known
+stores override these facts; unknown writes must satisfy the same runtime
+non-aliasing guard. This admits the finite branch at **0x0075BCA8** in
+0x0075BAD0 without assuming its caller's flags or registers. Original
+recording now passes **3/3**, pending adoption with the rest of this batch.
+Tests cover the window boundaries, exact counts, preceding writes, old
+policy refusal and a runtime alias write. **105 light tests pass**.
+The owner's unchanged `static_pop` padding fix **a1f09162** was integrated
+as **13446abb** before these new-policy trials. No edits to his slot-sweep
+layout handling, decoder, frame-tail, EH4 or step-emission code.
