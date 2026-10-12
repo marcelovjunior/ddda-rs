@@ -260,7 +260,7 @@ pub fn test_pattern(device: wgpu::Device, queue: wgpu::Queue, adapter: wgpu::Ada
     gpu.read_frames = false;
     gpu.present_sink = Some(Box::new(Sink::new(window)));
     let (w, h) = (1280u32, 720u32);
-    let bb = Target { surface: 0x100, format: 21, width: w, height: h, texture: None, level: 0 };
+    let bb = Target { surface: 0x100, format: 21, width: w, height: h, texture: None, level: 0, samples: 0, quality: 0 };
     for k in 0u32.. {
         gpu.clear(&ClearCall {
             rects: vec![], flags: 1, colour: 0xFF10_1828, z: 1.0, stencil: 0,
