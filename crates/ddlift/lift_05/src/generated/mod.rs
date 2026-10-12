@@ -1185,6 +1185,7 @@ pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x012F4AC3, f_012f4ac3),
 (0x012F4D01, f_012f4d01),
 (0x012F4E6A, f_012f4e6a),
+(0x012F4E74, f_012f4e74),
 (0x012F4E90, f_012f4e90),
 (0x012F4EA6, f_012f4ea6),
 (0x012F4EBC, f_012f4ebc),
