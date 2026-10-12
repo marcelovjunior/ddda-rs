@@ -14,3 +14,7 @@ cpal = "0.17.3"
 wgpu = "29.0.4"
 winit = "0.30.13"
 windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_XboxController"] }
+
+[features]
+# the diagnostic emulator fallback (ddruntime/src/emu.rs, L51); needs CMake on PATH
+emu = ["ddruntime/emu"]
