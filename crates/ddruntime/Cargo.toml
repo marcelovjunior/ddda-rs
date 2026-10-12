@@ -10,6 +10,10 @@ publish.workspace = true
 unicorn-engine = { version = "=2.0.1", optional = true }
 ddnative-base = { path = "../ddnative-base" }
 ddnative = { path = "../ddnative", optional = true }
+# `crt-check` (L67): only the two shards holding the CRT routines, for
+# tests/crtfast.rs against their lifted originals without building all 32
+ddlift-05 = { path = "../ddlift/lift_05", optional = true }
+ddlift-06 = { path = "../ddlift/lift_06", optional = true }
 ddexe = { path = "../ddexe" }
 d3d9shader = { path = "../d3d9shader" }
 d3d9cmd = { path = "../d3d9cmd" }
@@ -23,6 +27,7 @@ hostdisplay = { path = "../hostdisplay" }
 # and binds every service, and a call into game code stops as untranslated.
 default = ["game"]
 game = ["dep:ddnative"]
+crt-check = ["dep:ddlift-05", "dep:ddlift-06"]
 # `emu`: the diagnostic emulator fallback for untranslated functions
 # (src/emu.rs, L51; also needs DDRUNTIME_EMU_FALLBACK=1 at run time).
 # Builds Unicorn's C sources, so CMake must be on PATH (VS Build Tools has it).

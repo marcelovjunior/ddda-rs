@@ -3062,6 +3062,8 @@ dependencies = [
  "d3dxref",
  "ddaudio",
  "ddexe",
+ "ddlift-05",
+ "ddlift-06",
  "ddnative",
  "ddnative-base",
  "ddsave",
