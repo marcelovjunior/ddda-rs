@@ -35,6 +35,57 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Remaining recorder review: nine set aside (2026-10-12)
+
+**No new records.** Private **59,685 functions / 177,649 cases** are
+unchanged byte-for-byte per record/case in `L28c/opaque-numeric-audit.json`;
+no additions, promotions, removals, unexpected changes or stale mocks.
+All diagnostic runs used heavy.py serially and have exited. Latest main
+**17add4c7** is merged; no generation or Rust build.
+
+**56a434b8** adds a general finite-proof rule for **SHUFPS, SHUFPD and
+FXCH**: integer control flow survives numeric reordering, while numeric
+outputs remain unknown and prior zero-vector facts are invalidated.
+**78 focused tests pass**, including an original-emulator integer-loop
+comparison and refusal to infer a shuffled value from a prior zero.
+No floating comparison, instruction ceiling or recorder guard was relaxed.
+
+The five bound diagnostics identify these stopping points:
+
+| Entry | Finite-proof blocker after the supported rules |
+|---|---|
+| 004EE720 | First indirect CALL EDX at 4EE736; outgoing argument count is unestablished before the first root call. |
+| 00689960 | COMISS XMM0,[EAX+4], next PC 68D945; floating comparison facts unknown. |
+| 00815C60 | COMISS at 816522; checked-constructor proof previously reaches it after 9,319 instructions. |
+| 012A5B30 | SHUFPS now traversed; COMISS 12A47C0 stops all three proofs after 105 steps. |
+| 01314A90 | FXCH now traversed; FCOMP ST(3) at 1314B7B stops all three proofs after 108 steps. |
+
+Each diagnostic target run reaches the ordinary instruction limit. The
+last two have three fresh attempts each; none produced an accepted case.
+Private evidence: `L28c/remaining-proof-diagnostics.jsonl` and the final
+`structured-guarded-values-v1.jsonl` entries. These rows are set aside
+until their stated dispatch or floating comparison facts can be proved.
+
+The existing setup evidence also sets aside **493AA0** (both setup orders
+change accepted observations), **4A0C00** (unknown linked-object facts),
+**D29AF0** (exact caller replay succeeds, but target bound remains
+unproved), and **12EFA1E** (requires an evidenced exception continuation
+frame and destination). RESIDUALS retains the detailed blocker and what
+would permit each recipe to resume; no speculative fixture was forced.
+
+Per claude-6 **#9859**, **565308 and 56532A** belong to the **cross-entry
+boundary** class with owner **5652E0**. They need no standalone fixture:
+inventory credits them when the parent is verified. Existing 565308 data
+remains unchanged; the head may dispose of that stale standalone record
+when integrating the recorded parent.
+
+**Map:** 49 residual rows, 23 with private cases awaiting replay;
+**nine recorder rows set aside**, two transferred to the lifter owner.
+**Next action:** prioritize entries from the title/gameplay emulator log;
+resume a set-aside row only when new state or proof evidence addresses
+its recorded blocker. The prior +7 batch remains snapshotted for train 17.
+
+
 ### Shared continuation inputs: +7/+21 (2026-10-12, pending replay)
 
 Train 15 main **79c22a5b** merged as **0dd0c196**; generated output was

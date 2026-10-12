@@ -1,5 +1,17 @@
 # Milestones
 
+### L28c remaining recorder review (2026-10-12)
+
+- **+0 functions / +0 cases**; audit preserves all **59,685 / 177,649**.
+- **56a434b8**, **78 tests pass**: finite integer proofs can cross opaque
+  vector shuffles and x87 exchanges. Two recipes now reach explicit
+  floating-comparison blockers; no numeric branch facts are guessed.
+- RESIDUALS documents **nine recorder set-asides** and moves **565308 /
+  56532A** to the lifter owner for credit through recorded parent 5652E0.
+  Main **17add4c7** merged; no generation or Rust build.
+- **Next action:** recorder entries from the title/gameplay emulator log;
+  revisit set-asides when new evidence addresses their stated blockers.
+
 ### L28c shared continuation inputs (2026-10-12, pending replay)
 
 - **+7 functions / +21 cases**, all 3/3; private **59,685 / 177,649**.
