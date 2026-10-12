@@ -309,6 +309,12 @@ After train 9 (2026-10-12, main b88555c9): Codex's lazy memset ranges and
 tail-wrapper inputs add 10 functions (boot stop 15). **59,292 of 59,440
 verified (99.8%)**; 59,605 entries with 177,713 cases.
 
+After trains 10-12 (2026-10-12, main above): Codex's recipes (boot stops
+15-16, division/tail and constructed-copy fixtures) and claude-6's L49
+(caller-state inputs, more table proofs: 5 gaps left). **59,331 of 59,440
+verified (99.8%, 99.4% of code bytes).** The remaining functions, with
+class, blocker and owner, are in docs/RESIDUALS.md (Codex, train 13).
+
 The L15 table above and its notes below are
 kept for history.
 

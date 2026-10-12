@@ -1591,3 +1591,23 @@ opening (codex-31), route perf (codex-29).
   - a page-wise `read_bytes`;
   - a release-build frame rate;
   - ddplay's window: what the game shows (logos, movies, title).
+
+## Batch 2026-10-12 (trains 11-12: 59,331 verified)
+
+- **Train 11 (a6fb8349):** Codex's division/tail and constructed-copy
+  fixtures (10 functions).
+- **Train 12:** claude-6's L49:
+  - `caller-state-v1` records a helper from a verified caller's exact
+    state at the call (the CRT x87 error handlers);
+  - new table proofs: caller-checked bounds, compares on copies, je/jne
+    edges, stack slots across pushes. 16 gaps down to 5.
+  claude-2's runtime tooling also landed: page-wise `read_bytes`, a
+  service trace (`DDRUNTIME_TRACE_SERVICES`), visible guest-thread stops,
+  the host-stack sampler and capture statistics.
+- **59,331 of 59,440 verified (99.8%, 99.4% of code bytes).**
+- **Boot:** the main loop presents frames (~5.4/s in a debug build), but
+  the screen is static and untextured. The archive loader thread stops at
+  boot stop 17 (0x01146410 jumps into 0x01146420, a body Ghidra split
+  off; 7 such live cases). claude-6 is fixing the rule (L50).
+- **One next action:** L50's stop 17, then the loader reads all of
+  `rom\bbs_rpg.arc` and the title should start drawing textured frames.
