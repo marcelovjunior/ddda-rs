@@ -1449,3 +1449,13 @@ opening (codex-31), route perf (codex-29).
 - **One next action:** claude-2's boot past stop 14. Meanwhile claude-6
   works on L49 (lifter-side residuals) and Codex on input recipes for the
   37 residuals.
+
+## Batch 2026-10-12 (train 9: 99.8%)
+
+- **Train 9 landed on main b88555c9: 59,292 of 59,440 verified (99.8%).**
+  Codex now records a bounded memset as one lazy, exact byte range, so a
+  1 MiB clear no longer hits the recorder's page limit. It also has
+  argument inputs for virtual tail wrappers and keeps fixed local frames
+  apart from mock arguments. Boot stop 15 (0x00DC7D00, a sound-object
+  reset) is among its 10 functions.
+- **One next action:** claude-2's boot past stop 15.

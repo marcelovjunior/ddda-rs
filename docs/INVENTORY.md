@@ -305,6 +305,10 @@ by general rules and slot-sweeps 16 input-indexed switches to full
 coverage (30 re-credited, 16 gaps left); Codex records boot stop 14.
 **59,282 of 59,440 verified (99.7%)**; 59,595 entries with 177,683 cases.
 
+After train 9 (2026-10-12, main b88555c9): Codex's lazy memset ranges and
+tail-wrapper inputs add 10 functions (boot stop 15). **59,292 of 59,440
+verified (99.8%)**; 59,605 entries with 177,713 cases.
+
 The L15 table above and its notes below are
 kept for history.
 
