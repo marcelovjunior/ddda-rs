@@ -74,6 +74,9 @@ pub(crate) struct PipelineKey {
     pub ps: ModuleKey,
     pub buffers: Vec<BufferLayout>,
     pub topology: wgpu::PrimitiveTopology,
+    /// the index format of an indexed strip draw (wgpu needs it on the
+    /// pipeline; None for lists and non-indexed strips)
+    pub strip_index: Option<wgpu::IndexFormat>,
     pub cull: Option<wgpu::Face>,
     pub polygon_mode: wgpu::PolygonMode,
     pub targets: Vec<Option<wgpu::ColorTargetState>>,

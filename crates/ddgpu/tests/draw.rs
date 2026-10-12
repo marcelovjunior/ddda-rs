@@ -978,3 +978,25 @@ fn explore_d3d9_semantics() {
         }
     }
 }
+
+#[test]
+fn indexed_strips_match_the_d3d9_driver() {
+    // DrawIndexedPrimitive(TRIANGLESTRIP) with 16-bit indices: a full-screen
+    // quad as two strip triangles (wgpu needs the strip index format)
+    if d3d9ref::Oracle::new().is_none() || ddgpu::WgpuBackend::headless().is_none() {
+        eprintln!("skipped: no D3D9 or no adapter");
+        return;
+    }
+    let quad: [[f32; 6]; 4] = [[-1.0, -1.0, 0.0, 1.0, 0.0, 1.0], [-1.0, 1.0, 0.0, 1.0, 0.0, 0.0],
+                               [1.0, -1.0, 0.0, 1.0, 1.0, 1.0], [1.0, 1.0, 0.0, 1.0, 1.0, 0.0]];
+    let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    c.f[0] = [0.25f32.to_bits(), 0.75f32.to_bits(), 0.5f32.to_bits(), 1f32.to_bits()];
+    let mut d = draw(ps_constant(), c, vec![]);
+    d.primitive = 5;
+    d.primitives = 2;
+    d.vertex_count = 4;
+    d.vertices = Vertices::Inline { bytes: quad.iter().flatten().flat_map(|f| f.to_le_bytes()).collect(), stride: 24 };
+    d.indices = Indices::Inline { bytes: [3u16, 2, 1, 0].iter().flat_map(|i| i.to_le_bytes()).collect(), format: 101 };
+    let (ours, driver) = compare(&[], &blue_clear(), &[d]);
+    assert_eq!(ours, driver);
+}
