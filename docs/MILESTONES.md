@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c exact-input fixtures (2026-10-12, pending replay)
+
+- **+3/+9**: 0x004A06B0, 0x00495150, 0x0050A110 record 3/3 each.
+  **155 tests pass**; all 59,592 baseline records / 177,370 cases unchanged.
+- Native-L28c **59,595 / 177,379**. Main train 10 merged; Rust replay is
+  head's next step. **Next action:** remaining IMUL/ROL proof gaps.
+
 ### L28c standalone input proofs (2026-10-12)
 
 - Exact-input proof now also supports standalone recorder distributions.

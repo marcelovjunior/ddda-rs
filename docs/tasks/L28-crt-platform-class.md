@@ -35,6 +35,33 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Exact-input recording batch (2026-10-12, pending train replay)
+
+**+3 functions / +9 normal-return cases**, all 3/3 under guarded-input-v1:
+
+| Function | Proved instructions | Recorder limit |
+|---|---:|---:|
+| 0x004A06B0 | 37,740 | 57,740 |
+| 0x00495150 | 308,534 | 328,534 |
+| 0x0050A110 | 23,595 | 43,595 |
+
+0x00495150 needed 120 seconds of wall time to finish three cases; its
+instruction limit remains proof-derived. Adoption selected the complete
+three-case trial for each new body without editing earlier trial history.
+`L28c/standalone-adopt-audit.json`: **all 59,592 records / 177,370 cases
+unchanged**, zero promotions, stale mocks or unexpected edits. Native-L28c
+now **59,595 / 177,379**. **155 tests pass**; no Rust build or replay.
+Main train 10 merged before handoff. Sources: 6850c602, 3449543b,
+542f9d42, c000069d. Twelve original recipes remain, including 0x00493AA0
+set aside per head.
+
+Remaining proof stops are recorded in `standalone-proof-stops.log`.
+0x00494D80 reaches IMUL at 0x00495010 (69,678 instructions); 0x0046A150
+and 0x0046A2D0 stop on ROL. 0x00DBA780 reaches a root tail to 0x00DC5C00
+after 102,460 instructions. Other cases still need call/state facts;
+0x00D29AF0 still raises its original CPU exception with this input.
+**Next:** general multiplication/rotate proof semantics, boot route first.
+
 ### Standalone exact-input proof (2026-10-12)
 
 `guarded-input-v1` makes the same bounded initial-page proof available
