@@ -1658,7 +1658,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     image_budget = None
-    if (initial_state is None or input_strategy == 'guarded-stores-v1') and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and body is not None and max_insn < 2_000_000:
+    if (initial_state is None or input_strategy != 'image-bounded-v1') and input_strategy in ('image-bounded-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1') and body is not None and max_insn < 2_000_000:
         # Opt-in only. A finite abstract trace with unknown entry GPRs and
         # original image bytes must establish the entire path. Guarded mode
         # additionally traces closed calls and checks unknown output aliases.
@@ -1691,10 +1691,13 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                 # Unknown writes still cannot alias these read facts.
                                 caller_stack=(bytes(uc.mem_read(regs_in['esp']+4,128))
                                               if input_strategy in ('guarded-stack-v1','guarded-stores-v1') else None),
-                                entry_pointers=regs_in if input_strategy == 'guarded-stores-v1' else None,
+                                entry_pointers=regs_in if initial_state is not None or input_strategy == 'guarded-stores-v1' else None,
                                 initial_writes=({a:v for a,v in initial_state.get('writes',{}).items()
                                                  if not regs_in['esp'] <= a < regs_in['esp']+4}
-                                                if initial_state is not None else None))
+                                                if initial_state is not None else None),
+                                # Only explicit bindings from checked setup
+                                # cases are values; other entry GPRs remain unknown.
+                                entry_values=initial_state['registers'] if initial_state is not None else None)
             bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:
                 max_insn += bound  # keep the ordinary overhead allowance

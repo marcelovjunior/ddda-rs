@@ -51,6 +51,81 @@ class ConstructedTests(unittest.TestCase):
         self.assertNotIn('image_budget', result)
         self.assertEqual(result['regs_out']['esp'], result['regs_in']['esp']+4)
 
+    def chain(self):
+        phases=[]
+        for address,seed in ((0x400000,1),(0x400100,2)):
+            f=dict(addr=address)
+            accepted=dict(addr=address,seed=seed,body_key='test',
+                          **self.run_body(f,seed,input_strategy='zero-call-v1'))
+            phases.append((f,accepted,'test'))
+        return c.construct_chain(phases,{},self.run_body)
+
+    def test_sequence_retains_disjoint_pages_and_written_facts(self):
+        self.fixture('c7050000002003000000 c3','c7050010002004000000 c3')
+        state,recipe=self.chain()
+        self.assertEqual(state['pages'][0x20000000][:4],struct.pack('<I',3))
+        self.assertEqual(state['pages'][0x20001000][:4],struct.pack('<I',4))
+        self.assertEqual(state['writes'][0x20000000],3)
+        self.assertEqual(state['writes'][0x20001000],4)
+        self.assertEqual(len(recipe['setups']),2)
+        self.assertEqual(recipe['rule'],'constructed-chain-v1')
+
+    def test_sequence_binds_earlier_output_without_rebinding_later_producers(self):
+        self.fixture('b811000000 c3','b822000000 c3')
+        phases=[]
+        for address,seed in ((0x400000,1),(0x400100,2)):
+            f=dict(addr=address)
+            accepted=dict(addr=address,seed=seed,body_key='test',**self.run_body(f,seed))
+            phases.append((f,accepted,'test'))
+        state,recipe=c.construct_chain(phases,{'edi':['0','regs_out','eax'],
+                                              'ecx':['regs_out','eax']},self.run_body)
+        self.assertEqual(state['registers'],{'edi':17,'ecx':34})
+        self.assertEqual(recipe['setups'][0]['bindings'],{'edi':['regs_out','eax']})
+        for phase in ('-1','2','invalid'):
+            with self.assertRaisesRegex(ValueError,'setup binding phase'):
+                c.construct_chain(phases,{'edi':[phase,'regs_out','eax']},self.run_body)
+
+    def test_sequence_retains_legacy_random_distribution(self):
+        self.fixture('c3','c3')
+        phases=[]
+        for address,seed in ((0x400000,1),(0x400100,2)):
+            f=dict(addr=address)
+            accepted=dict(addr=address,seed=seed,body_key='test',**self.run_body(f,seed))
+            phases.append((f,accepted,'test'))
+        c.construct_chain(phases,{},self.run_body)
+
+    def test_sequence_reproves_bounded_producer_on_prior_state(self):
+        self.fixture('c7050000002003000000 c3', 'b9401f0000 31c0 40 49 75fc c3')
+        phases=[]
+        for address,seed,strategy in ((0x400000,1,'zero-call-v1'),
+                                      (0x400100,2,'guarded-bounded-v1')):
+            f=dict(addr=address)
+            accepted=dict(addr=address,seed=seed,body_key='test',
+                          **self.run_body(f,seed,input_strategy=strategy))
+            phases.append((f,accepted,'test'))
+        self.assertEqual(phases[1][1]['regs_out']['eax'],8000)
+        self.assertIn('image_budget',phases[1][1])
+        state,_=c.construct_chain(phases,{},self.run_body)
+        self.assertEqual(state['writes'][0x20000000],3)
+
+    def test_sequence_orders_overwrites_but_rejects_changed_read_dependencies(self):
+        self.fixture('c7050000002003000000 c3','c7050000002004000000 c3')
+        state,_=self.chain()
+        self.assertEqual(state['writes'][0x20000000],4)
+        self.assertEqual(state['pages'][0x20000000][:4],struct.pack('<I',4))
+        self.fixture('c7050000002003000000 c3','a100000020 40 a304000020 c3')
+        with self.assertRaisesRegex(h.Rejected,'replay differs'):
+            self.chain()
+
+    def test_sequence_rejects_register_rebinding_and_keeps_heap_reservations(self):
+        self.fixture('c3','c3')
+        state,_,accepted=self.build()
+        with self.assertRaisesRegex(ValueError,'accepted register distribution'):
+            c.construct(dict(addr=0x400000),accepted,{},self.run_body,'test',initial_state=state)
+        state={**state,'registers':{},'heap':h.HEAP_BASE+32}
+        actual,_=c.construct(dict(addr=0x400000),accepted,{},self.run_body,'test',initial_state=state)
+        self.assertEqual(actual['heap'],h.HEAP_BASE+32)
+
     def test_capture_is_observational_and_replay_mismatch_refuses(self):
         self.fixture('c7410409000000 c3', 'c3')
         state, _, case = self.build()
@@ -84,6 +159,16 @@ class ConstructedTests(unittest.TestCase):
                           input_strategy='guarded-stores-v1')
         with self.assertRaisesRegex(ValueError, 'differs from captured'):
             c.validate_state({**state, 'writes': {address: 1}})
+
+    def test_explicit_setup_return_binding_is_a_proof_value(self):
+        self.fixture('b8401f0000 c3','31c0 40 49 75fc c3')
+        f=dict(addr=0x400000)
+        accepted=dict(addr=f['addr'],seed=1,body_key='test',
+                      **self.run_body(f,1,input_strategy='zero-call-v1'))
+        state,_=c.construct(f,accepted,{'ecx':['regs_out','eax']},self.run_body,'test')
+        result=self.run_body(dict(addr=0x400100),2,initial_state=state,input_strategy='guarded-stores-v1')
+        self.assertEqual(result['regs_out']['eax'],8000)
+        self.assertIn('image_budget',result)
 
     def test_method_overwrite_invalidates_setup_count(self):
         self.fixture('c74104401f0000 c3',

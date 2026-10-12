@@ -1,5 +1,51 @@
 # Milestones
 
+### L28c earlier producer bindings (2026-10-12)
+
+- Method inputs can select any checked setup phase without rebinding later
+  producers. **148 light tests pass**, audit unchanged beyond boot16 +1/+3.
+- Both output/manager orderings for 0x00493AA0 change accepted observations
+  and reject. **Next action:** resolve those shared input dependencies.
+
+### L28c bounded producer replay (2026-10-12)
+
+- Guarded constructors re-prove their budgets on accumulated setup state.
+  **147 light tests pass**; no further additions or changed records.
+- Destination producer 0x004915A0 returns, but changed observations reject
+  the sequence. **Next action:** establish independent producer ordering.
+
+### L28c boot stop 16 (2026-10-12, pending replay)
+
+- **0x00DC8270 records 3/3** on checked 0x00DD5ED0 constructor state.
+  Proof: **49,933 instructions**, limit 69,933. **145 light tests pass.**
+- Private native-L28c **59,592 / 177,370** (+1/+3); all prior records
+  unchanged. **Next action:** head replay, then remaining input recipes.
+
+### L28c explicit setup bindings (2026-10-12)
+
+- Checked setup outputs can supply explicit method-register proof facts.
+  **145 light tests pass; accepted records unchanged (59,591 / 177,367).**
+- Three-producer 0x00493AA0 remains 0/3; priority moves to boot stop 16,
+  0x00DC8270. **Next action:** checked sound-engine constructor state.
+
+### L28c affine proof checkpoint (2026-10-12)
+
+- Symbolic pointer cancellation advances the manager-backed 0x00493AA0
+  proof without treating random register values as constants. **143 light
+  tests pass**; no new fixture or accepted-data change.
+- **Next action:** destination constructor 0x004915A0 and an explicit
+  checked output-register binding; the next proof stop tests that pointer.
+
+### L28c checked producer sequences (2026-10-12)
+
+- Setup producers can run sequentially only when each replay matches its
+  accepted case; prior state and overlapping writes retain execution order.
+  **140 light tests pass**, accepted data unchanged at **59,591 / 177,367**.
+- Save/player manager setup passes three seeds; 0x00493AA0 remains 0/3.
+  Its proof now reaches pointer cancellation at 0x00493C24.
+- **Next action:** prove that affine cancellation without making unknown
+  input registers or their flags concrete; boot stops retain priority.
+
 ### L28c fixed-frame checkpoint (2026-10-12, pending replay)
 
 - **0x0081C330 records 3/3** after separating its fixed local frame from
