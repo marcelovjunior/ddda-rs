@@ -849,3 +849,35 @@ claude-6 (15):
       there.
     - Emulated entries, unchanged: 0x01146420, 0x01325580, 0x01325830,
       0x013271E0, 0x012F4E74.
+20. The `play` build (`C:/ddda-targets/play`, main with train 17, L56's
+    cheaper emulator calls and both draw fixes), windowed, with the save
+    imported; diagnostics off (EMU_LOG and screenshots only).
+    - **Serial.** 60.0 FPS for the first 15 s, then about 0.5 FPS from
+      the title movie on.
+      - The lock holder is the sound streaming thread running the lifted
+        Vorbis decoder (0x01320320, 0x01320590, 0x01320700, 0x01313780),
+        mostly native now.
+      - The lock changes hands only at service calls, so its long
+        service-free stretches starve the main loop.
+    - **Parallel** (`DDRUNTIME_PARALLEL=1`). 24 FPS at the start, then 2
+      to 6 FPS in the title movie and 8 to 10 FPS on the notices.
+      - The main thread still waits for the guest lock at most service
+        calls, and itself holds it inside draws.
+    - **Progress in parallel mode.**
+      - One Enter passes "PRESS ANY BUTTON", and the Auto-Save notice
+        passes by itself.
+      - "Checking saved data" finishes after about 3 min, run by the
+        worker 0x00CFE6B0 → 0x0040FB40 → … → 0x00CF73F0.
+    - **Stop** on the first frames after it (black screen, presumably the
+      main menu): "wgpu error: Validation Error … Texture with conflicting
+      usages. Current usage RESOURCE and new usage COLOR_TARGET".
+      - A draw from 0x00DAB480 samples a texture that is also its render
+        target. D3D9 allows it; wgpu forbids it within a pass.
+      - Owner: ddgpu.
+    - **New emulated entries**, all from 0x0112DA14 (`call ecx` in
+      0x0112D970): 0x0112BB40, 0x0112BB60, 0x0112BB80, 0x0112BBA0,
+      0x0112BBC0 and 0x0112BBE0.
+      - They are x87-returning field getters from a {size, getter,
+        handler} table at 0x01441CF0 to 0x01441DB0.
+      - Its 8 getters, 0x0112BB20 to 0x0112BC00, are not inventory
+        functions. Owner: claude-6.
