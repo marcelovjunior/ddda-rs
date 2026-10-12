@@ -408,6 +408,8 @@ def refresh(root, strategies, seeds, seconds, only=None):
         finally:
             lift.release_body(a, f['size'])
         goals, reached, new, start = table_goals(g), set(), [], time.monotonic()
+        # keep the record's acceptance mode: terminal-v1 if any old case ended at a noreturn call
+        terminal = any(e.get('terminal') for c in old for e in c.get('calls') or [])
         key = lift.vector_key(g)
         for strategy in [_inputs(old) if old else {}] + [
                 dict(zero_inputs=True) if s == 'zero' else ({} if s == 'random' else dict(input_strategy=s))
@@ -424,7 +426,8 @@ def refresh(root, strategies, seeds, seconds, only=None):
                                      noreturn_targets=noreturn, original_entry=g.get('original_entry', False),
                                      x87_entry=g.get('x87_entry', 0),
                                      max_insn=g.get('insn_budget') or lift.INSN_BUDGET,
-                                     frame_contracts=frames, max_seconds=remaining, visited=seen, **strategy)
+                                     frame_contracts=frames, max_seconds=remaining, visited=seen,
+                                     terminal=terminal, **strategy)
                 except h.Rejected:
                     continue
                 except Exception:  # noqa: BLE001  (emulator errors: no case)
