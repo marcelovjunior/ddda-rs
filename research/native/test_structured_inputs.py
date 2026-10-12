@@ -229,7 +229,7 @@ class InputTests(unittest.TestCase):
                 raise h.Rejected('runaway')
             return dict(regs_in={},fresh=True)
         lifts=[]
-        def relift(a,size,callable,ext=False):
+        def relift(a,size,callable,ext=False,x87_inputs=False):
             lifts.append((a,ext,0x20 in callable));return ['closed arm' if not ext else 'ext arm']
         with (patch.object(trials.lift,'seed_closed_contracts',return_value=set()),
               patch.object(trials.lift,'lift',side_effect=relift),
@@ -246,6 +246,40 @@ class InputTests(unittest.TestCase):
             (root/'structured-random.jsonl').unlink()
             trials.promote(root)
         return {f['addr']:f for f in trials.read(root/'patterns/lift.json')},trials.read(root/'vectors/lift.json'),runs
+
+    def test_promotion_of_a_mocked_x87_helper_by_address(self):
+        # L46: no candidate calls 0x80 (its caller cannot lift until it is
+        # closed); --address names it. Its arms do x87 work, so a mock is no
+        # stand-in: it is promoted although 0x90 mocks it, keeping its x87
+        # entry contract, and 0x90 is re-lifted and re-recorded.
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'patterns').mkdir();(root/'vectors').mkdir()
+            helper=dict(addr=0x80,size=4,body=[0x80],calls=[],arms=['arm'],ext=True,x87_entry=1)
+            caller=dict(addr=0x90,size=4,body=[0x90],calls=[],arms=['{ let t = 0x80u32; x86::call_ext(m, cpu, t); }'],ext=True)
+            trials.write(root/'patterns/lift.json',[helper,caller])
+            trials.write(root/'vectors/lift.json',[dict(addr=0x80),dict(addr=0x90,calls=[{'target':0x80}])])
+            trials.write(root/'patterns/structured_candidates.json',[])
+            seen=[]
+            def relift(a,size,callable,ext=False,x87_inputs=False):
+                seen.append((a,ext,x87_inputs));return ['{ st.register::<0xf0d9>(); }'] if not ext else ['ext arm']
+            with (patch.object(trials.lift,'seed_closed_contracts',return_value=set()),
+                  patch.object(trials.lift,'lift',side_effect=relift),
+                  patch.object(trials.lift,'release_body'),
+                  patch.object(trials.lift,'noreturn_entries',return_value=set()),
+                  patch.dict(trials.lift.BODY_INFO,{0x80:dict(body=[0x80],x87_entry=1),0x90:dict(body=[0x90])}),
+                  patch.object(h,'run_sparse',return_value=dict(regs_in={},fresh=True)),
+                  patch.object(h,'frame_exit',return_value=('esp',4,())),
+                  patch.object(h,'moves_frame',return_value=False),
+                  contextlib.redirect_stdout(io.StringIO())):
+                trials.promote(root)
+                self.assertEqual(trials.read(root/'patterns/lift.json')[0].get('ext'),True)  # not a target
+                trials.promote(root,targets=[0x80])
+            selected={f['addr']:f for f in trials.read(root/'patterns/lift.json')}
+            self.assertNotIn('ext',selected[0x80])
+            self.assertEqual(selected[0x80]['x87_entry'],1)
+            self.assertIn((0x80,False,True),seen)
+            self.assertEqual(selected[0x90]['arms'],['ext arm'])
+            self.assertTrue(all(c.get('fresh') for c in trials.read(root/'vectors/lift.json')))
 
     def test_promotion_rerecords_mocking_callers(self):
         with tempfile.TemporaryDirectory() as folder:

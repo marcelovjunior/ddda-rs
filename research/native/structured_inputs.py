@@ -315,7 +315,7 @@ def refresh_closed(root, seeds=3, seconds=20):
           f'{len(selected)} functions / {len(cases)} cases; Rust replay still required', flush=True)
 
 
-def promote(root, seeds=3, seconds=20):
+def promote(root, seeds=3, seconds=20, targets=None):
     """Promote verified call-free ext entries that unverified candidates call.
 
     An entry qualifies when its arms make no call at all (no closed callee,
@@ -334,6 +334,12 @@ def promote(root, seeds=3, seconds=20):
     caller records again; otherwise it stays ext (repeat until stable), so
     no verified function is lost.
     The closed boundary changes: prepare again in fresh trial logs.
+    `targets` (promote --address) names the entries to consider instead of
+    the candidates' callees (L46: x87 helpers of a function no candidate
+    lift can reach until they are closed). A helper doing x87 work is
+    promoted even when mocked: a mock leaves the x87 stack and control word
+    alone (only a returns_float push), so it is no faithful stand-in. Its
+    x87 entry contract is kept (lift x87_inputs; callers' depths are checked).
     """
     selected = read(root/'patterns/lift.json'); cases = read(root/'vectors/lift.json')
     candidates = read(root/'patterns/structured_candidates.json')
@@ -341,6 +347,8 @@ def promote(root, seeds=3, seconds=20):
         raise ValueError('archive the trial logs first: promotion changes the closed boundary')
     closed = lift.seed_closed_contracts(selected)
     wanted = set().union(*(direct_targets(f['arms']) for f in candidates)) if candidates else set()
+    if targets:
+        wanted = set(targets)
     old, index = {}, {f['addr']: k for k, f in enumerate(selected)}
     for c in cases:
         old.setdefault(c['addr'], []).append(c)
@@ -355,12 +363,12 @@ def promote(root, seeds=3, seconds=20):
                 or a not in wanted or f.get('calls') or any('call_ext' in arm for arm in f['arms'])):
             continue
         try:
-            arms = lift.lift(a, f['size'], closed, ext=False)
+            arms = lift.lift(a, f['size'], closed, ext=False, x87_inputs=bool(f.get('x87_entry')))
         except lift.Unsupported:
             continue
         finally:
             lift.release_body(a, f['size'])
-        g = {key: value for key, value in f.items() if key != 'ext'}
+        g = {key: value for key, value in f.items() if key not in ('ext', 'x87_entry')}
         g.update(arms=arms, calls=lift.callees(arms), x87_push=lift.X87_PUSH_SITES.get(a, []), **lift.BODY_INFO[a])
         if g['calls']:
             continue
@@ -369,7 +377,7 @@ def promote(root, seeds=3, seconds=20):
             g['frame_exit'] = contract
         elif h.moves_frame(a, g['body']):
             g['frame_exit'] = 'return-pc'
-        elif a in mocked:
+        elif a in mocked and not any('st.' in arm for arm in arms):
             continue
         new = _rerecord_any(g, closed, base_frames, noreturn, _inputs(old.get(a, [])), seeds, seconds)
         if new:
@@ -448,7 +456,8 @@ def refresh(root, strategies, seeds, seconds, only=None):
     frames = frame_contracts(selected)
     noreturn = lift.noreturn_entries()
     gaps = lift.verification_gaps(selected)
-    stale = [f for f in selected if any(r.startswith('stale body') for r in gaps.get(f['addr'], []))
+    stale = [f for f in selected if any(r.startswith(('stale body', 'tail call into its own inlined code'))
+                                        for r in gaps.get(f['addr'], []))
              and (only is None or f['addr'] in only)]
     report = dict(closed_stale=[f['addr'] for f in stale if not f.get('ext')], functions={})
     position = {f['addr']: k for k, f in enumerate(selected)}
@@ -468,13 +477,17 @@ def refresh(root, strategies, seeds, seconds, only=None):
         # keep the record's acceptance mode: terminal-v1 if any old case ended at a noreturn call
         terminal = any(e.get('terminal') for c in old for e in c.get('calls') or [])
         key = lift.vector_key(g)
+        reasons = Counter()
         for strategy in [_inputs(old) if old else {}] + [
                 dict(zero_inputs=True) if s == 'zero' else ({} if s == 'random' else dict(input_strategy=s))
                 for s in strategies]:
+            found = len(new)
             for index in range(1, 256):
                 remaining = seconds - (time.monotonic() - start)
                 if remaining <= 0 or (len(new) >= seeds and goals <= reached):
                     break
+                if index > seeds * 8 and len(new) == found:
+                    break  # this distribution gives nothing: leave the time to the next
                 seen = set()
                 seed = (a << 8) ^ index
                 try:
@@ -485,16 +498,18 @@ def refresh(root, strategies, seeds, seconds, only=None):
                                      max_insn=g.get('insn_budget') or lift.INSN_BUDGET,
                                      frame_contracts=frames, max_seconds=remaining, visited=seen,
                                      terminal=terminal, **strategy)
-                except h.Rejected:
+                except h.Rejected as e:
+                    reasons[str(e).split(' at ')[0][:60]] += 1
                     continue
-                except Exception:  # noqa: BLE001  (emulator errors: no case)
+                except Exception as e:  # noqa: BLE001  (emulator errors: no case)
+                    reasons[f'error {type(e).__name__}: {e}'[:80]] += 1
                     continue
                 finally:
                     gc.collect()
                 if len(new) < seeds or (goals & seen) - reached:
                     new.append(dict(addr=a, seed=seed, body_key=key, **r))
                     reached |= goals & seen
-        report['functions'][a] = dict(cases=len(new), old_cases=len(old), goals=len(goals),
+        report['functions'][a] = dict(cases=len(new), old_cases=len(old), goals=len(goals), reasons=dict(reasons.most_common(4)),
                                       reached=len(goals & reached),
                                       unreached=[f'0x{t:08X}' for t in sorted(goals - reached)])
         if not new:
@@ -531,7 +546,7 @@ if __name__ == '__main__':
     ap.add_argument('--seconds',type=float,default=20)
     ap.add_argument('--limit',type=int)
     ap.add_argument('--layout',type=Path,help='JSON record-range layout with evidence-derived bindings/stride/fields')
-    ap.add_argument('--address',type=lambda s:int(s,0),action='append',help='record only these candidate addresses (repeatable)')
+    ap.add_argument('--address',type=lambda s:int(s,0),action='append',help='record: only these candidate addresses; promote: consider these entries (repeatable)')
     ap.add_argument('--retry',help='regex: re-run functions whose logged attempts failed with a matching reason')
     ap.add_argument('--terminal',action='store_true',help='accept terminal-v1 cases (end at a root noreturn call)')
     args=ap.parse_args();root=Path(lift.N)
@@ -543,7 +558,7 @@ if __name__ == '__main__':
     elif args.command=='record':record(root,args.strategy,args.seeds,args.seconds,args.limit,args.retry,args.terminal,
                                       read(args.layout) if args.layout else None,args.address)
     elif args.command=='refresh-closed':refresh_closed(root,args.seeds,args.seconds)
-    elif args.command=='promote':promote(root,args.seeds,args.seconds)
+    elif args.command=='promote':promote(root,args.seeds,args.seconds,args.address)
     elif args.command=='refresh':refresh(root,args.strategies.split(','),args.seeds,args.seconds,
                                          {int(a,16) for a in args.addresses.split(',')} if args.addresses else None)
     else:adopt(root,args.strategy,args.terminal)

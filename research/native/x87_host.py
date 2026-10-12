@@ -168,6 +168,38 @@ def initial_state(control=0x037F):
     return bytes(state)
 
 
+# ---- x87 state save/restore (L46)
+
+# FNSAVE/FSAVE and FRSTOR move the whole 108-byte state; control
+# instructions keep the instruction pointer (x87_state_oracle.c E3).
+STATE_SAVE = {"fnsave", "fsave"}
+STATE_RESTORE = {"frstor"}
+POINTER_KEEPING = {"fnstcw", "fstcw", "fldcw", "fnstsw", "fstsw", "fnclex", "fclex", "fwait", "wait",
+                   "fnstenv", "fstenv", "fldenv"}
+
+
+def save_image(state, pointers):
+    """The image FNSAVE stores for `state` (an FSAVE image as kept by the
+    recorder) in a 32-bit WOW64 process, as measured on the hardware:
+    reserved words FFFFh, FIP/FCS/FOP of the last non-control x87
+    instruction, FDP/FDS (2Bh) of its last memory operand, all zero after
+    FNINIT. ddnative-base X87::fnsave writes the same bytes."""
+    image = bytearray(state)
+    for k in (2, 6, 10, 26):
+        image[k:k + 2] = bytes((0xFF, 0xFF))
+    fip, fcs, fop, fdp = pointers or (0, 0, 0, None)
+    struct.pack_into("<IHHIH", image, 12, fip, fcs, fop & 0x7FF, fdp or 0, 0x2B if fdp is not None else 0)
+    return bytes(image)
+
+
+def normalized(image):
+    """FRSTOR then FNSAVE of `image` on the host: the tags the hardware
+    keeps for the loaded registers (L46 E5: a non-empty register's tag is
+    recomputed from its contents)."""
+    code = bytes.fromhex("4883ec78" "dd3424" "dd21" "dd31" "dd2424" "4883c478" "c3")
+    return native(code, bytes(image))
+
+
 # ---- recorder oracle
 
 # Results that differ between processor models (Intel SDM: approximations
@@ -294,6 +326,7 @@ class Oracle:
         self.used = False
         self.cpu_dependent = False
         self.mxcsr_touched = False  # an SSE oracle step or LDMXCSR ran: record the final MXCSR
+        self.pointers = None  # (FIP, FCS, FOP, FDP or None) since the last FNINIT (L46)
 
     def decode(self, uc, addr, size):
         if addr not in self.decoded:
@@ -323,10 +356,21 @@ class Oracle:
                 uc.emu_stop()
             return
         self.cpu_dependent |= i.mnemonic in CPU_DEPENDENT
+        if i.mnemonic in STATE_SAVE | STATE_RESTORE:
+            self.state_transfer(uc, i, addr)
+            return
         enc = encoding(i)
         if enc is None:
             return
         opcode, modrm, op = enc
+        if i.mnemonic in ("fninit", "finit"):
+            self.pointers = None
+        elif i.mnemonic not in POINTER_KEEPING:
+            # FIP/FOP of the last non-control instruction, FDP of its last
+            # memory operand (L46, research/runtime/x87_state_oracle.c)
+            fip, _, fop, fdp = self.pointers or (0, 0, 0, None)
+            self.pointers = (addr, 0x23, ((opcode & 7) << 8) | self.modrm_byte(i),
+                             self.address_of(uc, i, op) if op is not None else fdp)
         if not supported(opcode, modrm):
             if (opcode, modrm) != (0xDF, 0xE0):  # fnstsw ax reads the corrected status
                 self.problem = f"x87 instruction outside the host oracle at {addr:#010x}: {i.mnemonic}"
@@ -343,6 +387,32 @@ class Oracle:
         self.used = True
         self.pending = (state, target and (target[0], out[:target[1]]),
                         flags & 0x45 if i.mnemonic in COMPARE_FLAGS else None, addr)
+
+    @staticmethod
+    def modrm_byte(i):
+        raw = bytes(i.bytes)
+        while raw and raw[0] in (0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65, 0x9B):
+            raw = raw[1:]
+        return raw[1]
+
+    def state_transfer(self, uc, i, addr):
+        """FNSAVE/FRSTOR m108 (L46): the hardware image (save_image) and
+        the FNINIT state after a save; on a restore the loaded state with
+        the tags the hardware recomputes (normalized), its pointers kept
+        for a following save."""
+        op = next(o for o in i.operands if o.type == X86_OP_MEM)
+        a = self.address_of(uc, i, op)
+        self.used = True
+        if i.mnemonic in STATE_RESTORE:
+            image = bytes(uc.mem_read(a, 108))
+            fip, fcs, fop, fdp = struct.unpack_from("<IHHI", image, 12)
+            self.pointers = (fip, fcs, fop, fdp) if any((fip, fcs, fop, fdp)) else None
+            state = bytearray(normalized(image))
+            state[12:28] = bytes(16)
+            self.pending = (bytes(state), None, None, addr)
+        else:
+            self.pending = (initial_state(), (a, save_image(unicorn_state(uc), self.pointers)), None, addr)
+            self.pointers = None
 
     def sse(self, uc, i):
         """A flag-setting SSE instruction (or an approximation): run the

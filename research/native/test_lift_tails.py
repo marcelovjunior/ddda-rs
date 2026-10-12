@@ -119,6 +119,37 @@ class FrameTailTests(unittest.TestCase):
         self.assertTrue(lift.frame_tail(0x1010, entries, frozenset(), read, is_code))
         self.assertFalse(lift.frame_tail(0x1030, entries, frozenset(), read, is_code))
 
+    def test_a_jump_into_an_inlined_tail_is_emitted_locally(self):
+        # L46: push ebp; push edi; jmp 0x1010 (frame tail: pop edi; pop ebp; ret).
+        # The lifted body must continue there, not tail-call the entry.
+        code = bytearray(b"\xcc" * 0x20)
+        code[0x00:0x04] = bytes.fromhex("5557eb0c")
+        code[0x10:0x13] = bytes.fromhex("5f5dc3")
+        read, is_code = image_fixture(bytes(code), {})
+        with patch.object(h, "code", read), patch.object(h, "executable", is_code), \
+                patch.object(lift, "function_entries", lambda: frozenset({0x1000, 0x1010})), \
+                patch.object(lift, "noreturn_entries", lambda: frozenset()):
+            arms = lift.lift(0x1000, 4, ext=True)
+            lift.release_body(0x1000, 4)
+        text = " ".join(arms)
+        self.assertIn("pc = 0x1010; continue;", text)
+        self.assertNotIn("call_ext", text)
+
+    def test_frame_tails_with_calls_and_underestimated_pops(self):
+        # L46: 0x1010: call 0x1030 (ret); pop edx; ret -- a frame tail with a
+        # call (the CRT x87 tail 0x01300749 reports errors through calls).
+        # 0x1020: push 1; push 1; call 0x1038 (an unknown-pop callee); ret --
+        # the underestimated pop gives a negative exit, which is no tail.
+        code = bytearray(b"\xcc" * 0x48)
+        code[0x10:0x17] = bytes.fromhex("e81b0000005ac3")
+        code[0x20:0x2a] = bytes.fromhex("6a016a01e80f000000c3")
+        code[0x30:0x31] = bytes.fromhex("c3")
+        code[0x38:0x3a] = bytes.fromhex("ffe0")  # jmp eax: no proven pop
+        read, is_code = image_fixture(bytes(code), {})
+        entries = frozenset({0x1010, 0x1020, 0x1030, 0x1038})
+        self.assertTrue(lift.frame_tail(0x1010, entries, frozenset(), read, is_code))
+        self.assertFalse(lift.frame_tail(0x1020, entries, frozenset(), read, is_code))
+
 
 class Eh4ScopeTests(unittest.TestCase):
     def scope(self, level_store, records):
