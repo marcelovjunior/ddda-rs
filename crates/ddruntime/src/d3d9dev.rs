@@ -728,6 +728,22 @@ pub fn presentation() -> Option<Presentation> {
     })
 }
 
+thread_local! {
+    static PRESENTED: std::cell::Cell<Option<Presentation>> = const { std::cell::Cell::new(None) };
+}
+
+/// The presentation of the frame this thread is presenting: for a
+/// presentation host's sink, which runs inside Present without the guest
+/// lock in parallel mode (L64), so it must not read the session's state
+/// ([`presentation`]) itself.
+pub fn presented() -> Option<Presentation> {
+    PRESENTED.with(std::cell::Cell::get)
+}
+
+pub(crate) fn set_presented(p: Option<Presentation>) {
+    PRESENTED.with(|c| c.set(p));
+}
+
 /// Frames presented on a swap chain (tests, diagnostics).
 pub fn presents(chain: u32) -> u64 {
     with_chain(chain, |_, _, _, n| *n)

@@ -100,21 +100,43 @@ impl Default for Graphics {
 pub fn set_backend(backend: Box<dyn GraphicsBackend>) {
     // the backend replaced (the default recorder's capture included) is
     // dropped, and its file closed, before the new capture creates it again
-    crate::runtime::with(|rt| rt.graphics.with(|g| g.0 = Box::new(Recorder::default())));
+    crate::runtime::with(|rt| graphics(rt).0 = Box::new(Recorder::default()));
     let backend = d3d9frame::Capture::from_env(backend);
-    crate::runtime::with(|rt| rt.graphics.with(|g| g.0 = backend));
+    crate::runtime::with(|rt| graphics(rt).0 = backend);
+}
+
+fn graphics(rt: &crate::runtime::Runtime) -> std::sync::MutexGuard<'_, Graphics> {
+    rt.graphics.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 pub(crate) fn backend<R>(f: impl FnOnce(&mut dyn GraphicsBackend) -> R) -> R {
-    crate::runtime::with(|rt| rt.graphics.with(|g| f(g.0.as_mut())))
+    crate::runtime::with(|rt| f(graphics(rt).0.as_mut()))
+}
+
+/// Backend work that reads no runtime state (a draw's or Present's commands,
+/// complete in their arguments), in parallel mode without the guest lock
+/// (crate::threads::unlocked; L64: Present waits for the display there).
+/// The backend's own lock is taken first, under the guest lock, so commands
+/// reach the backend in the order the guest issued them; it is released
+/// before the guest lock is taken back, so the two locks never wait on each
+/// other.
+pub(crate) fn backend_unlocked<R>(f: impl FnOnce(&mut dyn GraphicsBackend) -> R) -> R {
+    let rt = crate::runtime::current();
+    let mut g = graphics(&rt);
+    crate::threads::unlocked(move || {
+        let r = f(g.0.as_mut());
+        drop(g);
+        r
+    })
 }
 
 /// Run `f` on the recording backend (tests); None if another is installed.
 pub fn recorded<R>(f: impl FnOnce(&Recorder) -> R) -> Option<R> {
-    crate::runtime::with(|rt| rt.graphics.with(|g| {
+    crate::runtime::with(|rt| {
+        let g = graphics(rt);
         let any: &dyn std::any::Any = g.0.as_ref();
         any.downcast_ref::<Recorder>().map(f)
-    }))
+    })
 }
 
 // --- uploads -------------------------------------------------------------------
@@ -317,7 +339,7 @@ pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) => {
             let d = snapshot(m, dev, ty, count, start, 0, 0, n, None, Some(Indices::None));
-            backend(|b| b.draw(&d));
+            backend_unlocked(|b| b.draw(&d));
             D3D_OK
         }
         _ => D3DERR_INVALIDCALL,
@@ -333,7 +355,7 @@ pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = match vertex_count(ty, a[6]) {
         Some(_) if in_scene(dev) && with_device(dev, |d| d.state.indices != 0) => {
             let d = snapshot(m, dev, ty, a[6], a[5], a[2] as i32, a[3], a[4], None, None);
-            backend(|b| b.draw(&d));
+            backend_unlocked(|b| b.draw(&d));
             D3D_OK
         }
         _ => D3DERR_INVALIDCALL,
@@ -363,7 +385,7 @@ pub fn draw_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
         Some(n) if in_scene(dev) && data != 0 => {
             let bytes = read_bytes(m, data, n * stride);
             let d = snapshot(m, dev, ty, count, 0, 0, 0, n, Some(Vertices::Inline { bytes, stride }), Some(Indices::None));
-            backend(|b| b.draw(&d));
+            backend_unlocked(|b| b.draw(&d));
             reset_after_up(dev, false);
             D3D_OK
         }
@@ -384,7 +406,7 @@ pub fn draw_indexed_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
             let vertices = read_bytes(m, vdata, (min + nverts) * stride);
             let d = snapshot(m, dev, ty, count, 0, 0, min, nverts,
                              Some(Vertices::Inline { bytes: vertices, stride }), Some(Indices::Inline { bytes: indices, format: ifmt }));
-            backend(|b| b.draw(&d));
+            backend_unlocked(|b| b.draw(&d));
             reset_after_up(dev, true);
             D3D_OK
         }
@@ -408,7 +430,7 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
         rects, flags: a[3], colour: a[4], z: f32::from_bits(a[5]), stencil: a[6],
         targets: std::array::from_fn(|k| target(rts[k])), depth: target(ds), viewport, scissor, srgb,
     };
-    backend(|b| b.clear(&c));
+    backend_unlocked(|b| b.clear(&c));
     cpu.eax = D3D_OK;
     ret(m, cpu, 28);
 }
@@ -417,6 +439,8 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn present_back_buffer(m: &dyn Mem, back_buffer: u32) {
     flush(m, back_buffer);
     if let Some(t) = target(back_buffer) {
-        backend(|b| b.present(&t));
+        // read under the guest lock for the host's sink (d3d9dev::presented)
+        crate::d3d9dev::set_presented(crate::d3d9dev::presentation());
+        backend_unlocked(|b| b.present(&t));
     }
 }

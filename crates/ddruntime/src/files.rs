@@ -246,28 +246,36 @@ pub fn create_file_w(m: &mut dyn Mem, cpu: &mut Cpu) {
     create_file(m, cpu, true)
 }
 
+/// Copy host bytes into guest memory (a word at a time where aligned).
+fn put_bytes(m: &mut dyn Mem, at: u32, data: &[u8]) {
+    crate::fastmem::write_bulk(m, at, data);
+}
+
 /// ReadFile(handle, buffer, count, read*, overlapped): synchronous reads
 /// only (an OVERLAPPED argument is refused until asynchronous I/O exists).
 pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, buf, count, read_out, overlapped) =
         (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     assert_eq!(overlapped, 0, "ReadFile with OVERLAPPED: asynchronous I/O is not implemented");
-    let data = with_files(|f| match f.handles.get_mut(&h) {
-        Some(Open::File(file)) => {
+    // L64: the host read and the copy run without the guest lock in parallel
+    // mode, on a duplicate of the handle (it shares the file position)
+    let file = with_files(|f| match f.handles.get_mut(&h) {
+        Some(Open::File(file)) => file.try_clone().ok(),
+        _ => None,
+    });
+    let read = file.map(|mut file| {
+        crate::threads::unlocked(|| {
             let mut v = vec![0u8; count as usize];
             let n = file.read(&mut v).unwrap_or(0);
             v.truncate(n);
-            Some(v)
-        }
-        _ => None,
+            put_bytes(m, buf, &v);
+            n as u32
+        })
     });
-    cpu.eax = match data {
-        Some(v) => {
-            for (k, &b) in v.iter().enumerate() {
-                m.set_u8(buf.wrapping_add(k as u32), b);
-            }
+    cpu.eax = match read {
+        Some(n) => {
             if read_out != 0 {
-                m.set_u32(read_out, v.len() as u32);
+                m.set_u32(read_out, n);
             }
             1
         }
@@ -290,26 +298,28 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, buf, count, ov, routine) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     let offset = m.u32(ov + 8) as u64 | (m.u32(ov + 12) as u64) << 32;
-    let data = with_files(|f| match f.handles.get_mut(&h) {
-        Some(Open::File(file)) => {
+    let file = with_files(|f| match f.handles.get_mut(&h) {
+        Some(Open::File(file)) => file.try_clone().map_err(|_| ERROR_INVALID_HANDLE),
+        _ => Err(ERROR_INVALID_HANDLE),
+    });
+    // L64: the host read and the copy without the guest lock (parallel mode)
+    let data = file.and_then(|mut file| {
+        crate::threads::unlocked(|| {
             let size = file.metadata().map(|md| md.len()).unwrap_or(0);
             if offset >= size {
                 return Err(ERROR_HANDLE_EOF);
             }
             let mut v = vec![0u8; count.min((size - offset) as u32) as usize];
             file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(&mut v)).map_err(|_| ERROR_HANDLE_EOF)?;
-            Ok(v)
-        }
-        _ => Err(ERROR_INVALID_HANDLE),
+            put_bytes(m, buf, &v);
+            Ok(v.len() as u32)
+        })
     });
     cpu.eax = match data {
-        Ok(v) => {
-            for (k, &b) in v.iter().enumerate() {
-                m.set_u8(buf.wrapping_add(k as u32), b);
-            }
+        Ok(n) => {
             m.set_u32(ov, 0); // Internal: STATUS_SUCCESS
-            m.set_u32(ov + 4, v.len() as u32); // InternalHigh: bytes
-            crate::threads::queue_apc(crate::threads::current_tid(), routine, [0, v.len() as u32, ov]);
+            m.set_u32(ov + 4, n); // InternalHigh: bytes
+            crate::threads::queue_apc(crate::threads::current_tid(), routine, [0, n, ov]);
             set_error(0);
             1
         }

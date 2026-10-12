@@ -29,6 +29,7 @@ impl Input {
             .name("host pads".into())
             .spawn(move || pads(events, rumble))
             .expect("the pad thread");
+        autokeys(host.events.clone());
         Input { events: host.events, held: Vec::new(), alt: false, cursor: (0, 0), buttons: [false; 8] }
     }
 
@@ -167,4 +168,45 @@ fn pads(events: Sender<Event>, rumble: std::sync::mpsc::Receiver<ddruntime::inpu
         }
         std::thread::sleep(std::time::Duration::from_millis(4));
     }
+}
+
+/// `DDPLAY_AUTOKEYS=secs:key[,secs:key...]`: press and release keys at
+/// those times (seconds after the game's input connects), for unattended
+/// runs (e.g. `100:enter` past "PRESS ANY BUTTON"). Keys: enter, esc,
+/// space, up, down, left, right, or a virtual-key code in hex (`0x0d`).
+fn autokeys(events: Sender<Event>) {
+    let Ok(spec) = std::env::var("DDPLAY_AUTOKEYS") else { return };
+    let mut plan: Vec<(f64, u8, u8, bool)> = Vec::new();
+    for item in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let Some((t, key)) = item.split_once(':') else { continue };
+        let Ok(t) = t.parse::<f64>() else { continue };
+        // (vk, scan, extended)
+        let (vk, scan, extended) = match key.to_ascii_lowercase().as_str() {
+            "enter" => (0x0d, 0x1c, false),
+            "esc" => (0x1b, 0x01, false),
+            "space" => (0x20, 0x39, false),
+            "up" => (0x26, 0x48, true),
+            "down" => (0x28, 0x50, true),
+            "left" => (0x25, 0x4b, true),
+            "right" => (0x27, 0x4d, true),
+            k => match u8::from_str_radix(k.trim_start_matches("0x"), 16) {
+                Ok(vk) => (vk, 0, false),
+                Err(_) => continue,
+            },
+        };
+        plan.push((t, vk, scan, extended));
+    }
+    plan.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let start = std::time::Instant::now();
+    let _ = std::thread::Builder::new().name("autokeys".into()).spawn(move || {
+        for (t, vk, scan, extended) in plan {
+            let due = start + std::time::Duration::from_secs_f64(t);
+            std::thread::sleep(due.saturating_duration_since(std::time::Instant::now()));
+            eprintln!("ddplay autokey t={t}s vk={vk:#04x}");
+            for down in [true, false] {
+                let _ = events.send(Event::Key { hwnd: 0, vk, scan, down, extended, system: false });
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+        }
+    });
 }

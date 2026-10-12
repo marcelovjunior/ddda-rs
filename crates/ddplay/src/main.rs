@@ -177,6 +177,9 @@ impl App {
                     report.push_str(&format!("\n{t}"));
                 }
                 eprintln!("{report}");
+                if let Some(stats) = ddruntime::threads::lock_stats() {
+                    eprint!("{stats}");
+                }
                 status(format!("stopped in {}", started.step));
             })
             .expect("the guest main thread");
@@ -189,6 +192,11 @@ impl App {
                 let mut stats = g.window.stats.lock().unwrap();
                 if let Some(r) = stats.take(Instant::now()) {
                     self.rate = format!("{:.1} FPS, {:.2} ms/frame (longest {:.1} ms)", r.fps, r.mean_ms, r.longest_ms);
+                    // DDPLAY_RATE_LOG=1: the rate on stderr too, for timed runs
+                    static LOG: std::sync::OnceLock<Option<Instant>> = std::sync::OnceLock::new();
+                    if let Some(t0) = LOG.get_or_init(|| std::env::var_os("DDPLAY_RATE_LOG").map(|_| Instant::now())) {
+                        eprintln!("ddplay rate t={:.0}s frames={} {}", t0.elapsed().as_secs_f64(), stats.frames, self.rate);
+                    }
                 } else if stats.last_present.is_none_or(|t| t.elapsed() > TITLE_INTERVAL) {
                     self.rate = "not presenting".into();
                 }
@@ -274,7 +282,13 @@ impl ApplicationHandler<GameEvent> for App {
             input.window_event(&event, (size.width, size.height), client);
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // DDRUNTIME_LOCK_STATS=1: the guest lock per service (L64)
+                if let Some(stats) = ddruntime::threads::lock_stats() {
+                    eprint!("{stats}");
+                }
+                event_loop.exit()
+            }
             WindowEvent::Resized(size) => {
                 if let Some(g) = &self.gpu {
                     g.window.resized(size.width, size.height);

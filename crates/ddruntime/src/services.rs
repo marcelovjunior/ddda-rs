@@ -237,7 +237,7 @@ pub fn enter_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
         if owner == 0 || owner == me {
             break;
         }
-        crate::threads::block(None);
+        crate::threads::block_on(&[crate::threads::key::critical_section(cs)], None);
     }
     m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_add(1));
     m.set_u32(cs.wrapping_add(8), m.u32(cs.wrapping_add(8)).wrapping_add(1));
@@ -255,7 +255,7 @@ pub fn leave_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_sub(1));
     if rec == 1 {
         m.set_u32(cs.wrapping_add(12), 0);
-        crate::threads::signal();
+        crate::threads::signal_key(crate::threads::key::critical_section(cs));
     }
     ret(m, cpu, 4);
 }
@@ -363,12 +363,36 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
         registry.name(i.token, i.full_name());
         let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::d3dx::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).chain(crate::net::APIS).chain(crate::seh::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
-            registry.insert(i.token, Binding::Service(*f))?;
+            let lock_free = LOCK_FREE.iter().any(|(d, n)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
+            registry.insert(i.token, if lock_free { Binding::LockFree(*f) } else { Binding::Service(*f) })?;
             bound += 1;
         }
     }
     Ok(bound)
 }
+
+/// Imports whose services touch no runtime state (only guest memory, host
+/// atomics, the host clock or the caller's thread id): they run without
+/// the guest lock in parallel mode (L65, dispatch::Binding::LockFree). The
+/// game calls the Interlocked family and the timers every frame from
+/// several threads.
+pub const LOCK_FREE: &[(&str, &str)] = &[
+    ("KERNEL32.dll", "InterlockedIncrement"),
+    ("KERNEL32.dll", "InterlockedDecrement"),
+    ("KERNEL32.dll", "InterlockedExchange"),
+    ("KERNEL32.dll", "InterlockedExchangeAdd"),
+    ("KERNEL32.dll", "InterlockedCompareExchange"),
+    ("KERNEL32.dll", "EncodePointer"),
+    ("KERNEL32.dll", "DecodePointer"),
+    ("KERNEL32.dll", "GetTickCount"),
+    ("KERNEL32.dll", "QueryPerformanceCounter"),
+    ("KERNEL32.dll", "QueryPerformanceFrequency"),
+    ("KERNEL32.dll", "GetCurrentThreadId"),
+    ("KERNEL32.dll", "GetCurrentProcessId"),
+    ("KERNEL32.dll", "GetCurrentProcess"),
+    ("KERNEL32.dll", "IsDebuggerPresent"),
+    ("WINMM.dll", "timeGetTime"),
+];
 
 /// Map the heap region and bind every service at its address.
 pub fn install(mem: &mut GuestMemory, registry: &mut Registry) -> Result<(), InstallError> {
