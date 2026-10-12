@@ -225,6 +225,25 @@ pub(crate) fn unlocked<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// Run `f` holding the guest lock: from inside [`unlocked`] (parallel
+/// mode) it takes the lock for `f` only; where the thread holds it already
+/// (or in the serial mode) `f` just runs. No time slice ends here.
+pub(crate) fn with_lock<R>(f: impl FnOnce() -> R) -> R {
+    let rt = runtime::current();
+    if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
+        return f();
+    }
+    enter(&rt);
+    struct Leave(Arc<Runtime>);
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            leave(&self.0);
+        }
+    }
+    let _leave = Leave(rt);
+    f()
+}
+
 /// Per-service guest-lock statistics (L64), on with `DDRUNTIME_LOCK_STATS=1`:
 /// for each service, its calls, how long it held the guest lock and how long
 /// it waited to take it (lock contention; not the time a wait function
@@ -334,8 +353,12 @@ pub fn lock_stats() -> Option<String> {
     Some(out)
 }
 
+/// Whether this host thread holds the guest lock (tests, diagnostics).
+pub fn holds_guest_lock() -> bool {
+    holds_lock()
+}
+
 /// Whether this host thread holds the guest lock.
-#[cfg(test)]
 pub(crate) fn holds_lock() -> bool {
     let rt = runtime::current();
     let s = rt.lock.lock();
@@ -366,6 +389,18 @@ pub(crate) fn service() -> ServiceLock {
     }
     enter(&rt);
     ServiceLock(Some(rt))
+}
+
+/// A lock-free service's entry (crate::dispatch::Binding::LockFree): no
+/// lock in parallel mode; in the serial mode the API call where a time
+/// slice may end, as for any service.
+pub(crate) fn service_lock_free() -> ServiceLock {
+    if !ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed)
+        || !runtime::current().lock.parallel.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        maybe_yield();
+    }
+    ServiceLock(None)
 }
 
 impl Drop for ServiceLock {
@@ -403,7 +438,7 @@ fn leave(rt: &Runtime) {
 /// Run guest code from a thread that holds the lock outside any service
 /// (a session's top-level call): in parallel mode without the lock, so
 /// the other threads' services can run meanwhile.
-pub(crate) fn without_lock<R>(f: impl FnOnce() -> R) -> R {
+pub fn without_lock<R>(f: impl FnOnce() -> R) -> R {
     let rt = runtime::current();
     let release = rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) && {
         let s = rt.lock.lock();
@@ -1185,6 +1220,7 @@ pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
 mod tests {
     use super::*;
     use crate::dispatch::{Binding, Registry};
+    use ddnative_base::x86::LiftFn;
     use crate::memory::{GuestMemory, READ, WRITE};
     use d3d9cmd::*;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1236,19 +1272,34 @@ mod tests {
     /// duration of each call.
     fn guest_thread(rt: Arc<Runtime>, r: Arc<Registry>, tid: u32, target: u32, calls: u32,
                     done: Arc<AtomicBool>, pause: Duration) -> std::thread::JoinHandle<Vec<Duration>> {
+        guest_thread_on(GuestMemory::new(), rt, r, tid, target, calls, done, pause)
+    }
+
+    /// As guest_thread, on (a handle to) `m`: each thread's stack at its
+    /// own 64 KiB below 0x0100_0000 + tid * 0x10000, the argument at
+    /// [esp+4] = 0x0090_0000 (an operand page all threads share).
+    #[allow(clippy::too_many_arguments)]
+    fn guest_thread_on(mut m: GuestMemory, rt: Arc<Runtime>, r: Arc<Registry>, tid: u32, target: u32, calls: u32,
+                       done: Arc<AtomicBool>, pause: Duration) -> std::thread::JoinHandle<Vec<Duration>> {
         std::thread::spawn(move || {
             runtime::enter(rt);
             CURRENT_TID.with(|c| c.set(tid));
-            let mut m = GuestMemory::new();
-            m.map(0x10000, 0x10000, READ | WRITE).unwrap();
-            let mut c = Cpu { esp: 0x1F000, ..Cpu::default() };
-            let Some(Binding::Service(f)) = r.get(target) else { unreachable!() };
+            let stack = 0x0100_0000 + tid * 0x1_0000;
+            let _ = m.map(stack, 0x1_0000, READ | WRITE);
+            let top = stack + 0xF000;
+            let mut c = Cpu { esp: top, ..Cpu::default() };
+            let (f, locked) = match r.get(target) {
+                Some(Binding::Service(f)) => (f, true),
+                Some(Binding::LockFree(f)) => (f, false),
+                _ => unreachable!(),
+            };
             let mut took = Vec::new();
             while if calls == 0 { !done.load(Ordering::SeqCst) } else { took.len() < calls as usize } {
-                c.esp = 0x1F000;
+                c.esp = top;
                 m.set_u32(c.esp, 0xFFFF_0000);
+                m.set_u32(c.esp + 4, 0x0090_0000);
                 let t = Instant::now();
-                r.run_service(f, &mut m, &mut c, target);
+                r.run_service(f, &mut m, &mut c, target, locked);
                 took.push(t.elapsed());
                 std::thread::sleep(pause);
             }
@@ -1303,5 +1354,95 @@ mod tests {
         eprintln!("before, {before_stats}after, {after_stats}");
         assert!(after.0 * 4.0 < before.0, "the other thread no longer waits for Present: {before:?} -> {after:?}");
         assert!(after.2 > before.2, "and gets more calls done: {before:?} -> {after:?}");
+    }
+
+    /// A service that holds the guest lock for 4 ms (a long locked call).
+    fn hog(m: &mut dyn Mem, c: &mut Cpu) {
+        std::thread::sleep(PRESENT);
+        crate::services::ret(m, c, 0);
+    }
+    /// Whether the guest lock was held inside the service.
+    static HELD_INSIDE: AtomicBool = AtomicBool::new(false);
+    fn probe(m: &mut dyn Mem, c: &mut Cpu) {
+        HELD_INSIDE.store(holds_lock(), Ordering::SeqCst);
+        crate::services::ret(m, c, 0);
+    }
+
+    /// L65: a Binding::LockFree service runs without the guest lock in
+    /// parallel mode; in the serial mode it runs under the caller's lock
+    /// like any service (and its call stays a yield point).
+    #[test]
+    fn a_lock_free_service_takes_no_guest_lock_in_parallel_mode() {
+        for parallel in [true, false] {
+            let rt = Arc::new(Runtime::default());
+            runtime::enter(rt.clone());
+            set_parallel(parallel);
+            let mut r = Registry::new();
+            r.insert(0x7000_0030, Binding::LockFree(probe)).unwrap();
+            r.insert(0x7000_0040, Binding::Service(probe)).unwrap();
+            let mut m = GuestMemory::new();
+            m.map(0x10000, 0x10000, READ | WRITE).unwrap();
+            for (target, locked) in [(0x7000_0030, false), (0x7000_0040, true)] {
+                let mut c = Cpu { esp: 0x1F000, ..Cpu::default() };
+                m.set_u32(c.esp, 0xFFFF_0000);
+                let call = |m: &mut GuestMemory, c: &mut Cpu| r.call(m, c, target).unwrap();
+                if parallel {
+                    without_lock(|| call(&mut m, &mut c));
+                    assert_eq!(HELD_INSIDE.load(Ordering::SeqCst), locked, "parallel, locked binding {locked}");
+                } else {
+                    call(&mut m, &mut c);
+                    assert!(HELD_INSIDE.load(Ordering::SeqCst), "serial: the caller holds the lock");
+                }
+            }
+        }
+    }
+
+    /// One thread holds the guest lock 4 ms per call (50 calls) while
+    /// another calls InterlockedIncrement bound as `binding`: the second
+    /// thread's mean and longest call (µs), its calls, and whether the
+    /// counter equals its calls.
+    fn interlocked_scenario(binding: fn(LiftFn) -> Binding) -> (f64, f64, usize, bool) {
+        let rt = Arc::new(Runtime::default());
+        runtime::enter(rt.clone());
+        set_parallel(true);
+        let mut r = Registry::new();
+        r.insert(0x7000_0010, Binding::Service(hog)).unwrap();
+        r.name(0x7000_0010, "TEST.dll!Hog");
+        r.insert(0x7000_0020, binding(crate::win32::interlocked_increment)).unwrap();
+        r.name(0x7000_0020, "KERNEL32.dll!InterlockedIncrement");
+        let r = Arc::new(r);
+        let mut m = GuestMemory::new();
+        m.map(0x0090_0000, 0x1000, READ | WRITE).unwrap();
+        let done = Arc::new(AtomicBool::new(false));
+        without_lock(|| {
+            let hogs = guest_thread_on(m.share(), rt.clone(), r.clone(), 0x10, 0x7000_0010, 50, done.clone(), Duration::ZERO);
+            let other = guest_thread_on(m.share(), rt.clone(), r.clone(), 0x14, 0x7000_0020, 0, done.clone(), Duration::from_micros(200));
+            hogs.join().unwrap();
+            let took = other.join().unwrap();
+            let us = |d: &Duration| d.as_secs_f64() * 1e6;
+            let mean = took.iter().map(us).sum::<f64>() / took.len().max(1) as f64;
+            let max = took.iter().map(us).fold(0.0, f64::max);
+            (mean, max, took.len(), m.u32(0x0090_0000) as usize == took.len())
+        })
+    }
+
+    /// L65: InterlockedIncrement (and the other lock-free services) no
+    /// longer wait for another thread's long locked service. Numbers with
+    /// `-- --nocapture`.
+    #[test]
+    fn interlocked_does_not_wait_for_the_guest_lock() {
+        stats::force_on();
+        let before = interlocked_scenario(Binding::Service);
+        let before_stats = lock_stats().unwrap();
+        stats::force_on();
+        let after = interlocked_scenario(Binding::LockFree);
+        let after_stats = lock_stats().unwrap();
+        eprintln!("InterlockedIncrement while another thread holds the lock 4 ms per call (50 calls):");
+        eprintln!("  before (Service):  mean {:8.1} us, max {:8.1} us, {} calls", before.0, before.1, before.2);
+        eprintln!("  after  (LockFree): mean {:8.1} us, max {:8.1} us, {} calls", after.0, after.1, after.2);
+        eprintln!("before, {before_stats}after, {after_stats}");
+        assert!(before.3 && after.3, "every increment counted: {before:?} {after:?}");
+        assert!(after.0 * 4.0 < before.0, "{before:?} -> {after:?}");
+        assert!(after.2 > before.2, "{before:?} -> {after:?}");
     }
 }

@@ -54,8 +54,9 @@ impl Session {
         mem.map_lazy(STACK_TOP - STACK_SIZE, STACK_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
         crate::seh::initialize_teb(&mut mem, crate::services::MAIN_THREAD_ID, STACK_TOP - STACK_SIZE, STACK_TOP);
         let mut registry = Registry::with_lifted_program();
-        registry.replace(crate::fastmem::MEMCPY, crate::dispatch::Binding::Service(crate::fastmem::memcpy));
-        registry.replace(crate::fastmem::MEMSET, crate::dispatch::Binding::Service(crate::fastmem::memset));
+        // guest memory only: no guest lock in parallel mode (L65)
+        registry.replace(crate::fastmem::MEMCPY, crate::dispatch::Binding::LockFree(crate::fastmem::memcpy));
+        registry.replace(crate::fastmem::MEMSET, crate::dispatch::Binding::LockFree(crate::fastmem::memset));
         crate::services::install(&mut mem, &mut registry).map_err(|e| format!("{e:?}"))?;
         crate::services::set_exe_path(exe_path);
         let install = std::path::Path::new(exe_path).parent().ok_or("exe has no directory")?;

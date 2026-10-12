@@ -24,18 +24,25 @@ pub enum Binding {
     /// same ABI as a lifted function (starts with the return address at
     /// [esp], ends with the original's `ret`).
     Service(LiftFn),
+    /// A service that touches only guest memory, host atomics, the host
+    /// clock or the calling thread's own id: no runtime state. In parallel
+    /// mode it runs without the guest lock (L65; the Interlocked family,
+    /// memcpy/memset, the timers); in the serial mode it is an API call
+    /// like any other (a time slice may end there).
+    LockFree(LiftFn),
 }
 
 impl Binding {
     fn function(self) -> LiftFn {
         match self {
-            Binding::Lifted(f) | Binding::Service(f) => f,
+            Binding::Lifted(f) | Binding::Service(f) | Binding::LockFree(f) => f,
         }
     }
     fn kind(self) -> &'static str {
         match self {
             Binding::Lifted(_) => "lifted",
             Binding::Service(_) => "service",
+            Binding::LockFree(_) => "lock-free service",
         }
     }
 }
@@ -176,7 +183,11 @@ impl Registry {
         }
         match self.get(target) {
             Some(Binding::Service(f)) => {
-                self.run_service(f, m, cpu, target);
+                self.run_service(f, m, cpu, target, true);
+                Ok(())
+            }
+            Some(Binding::LockFree(f)) => {
+                self.run_service(f, m, cpu, target, false);
                 Ok(())
             }
             Some(b) => {
@@ -198,7 +209,9 @@ impl Registry {
     /// Run the service bound at `target` (its return address pushed), the
     /// one way every caller runs a service: [`Registry::call`] and the step
     /// executor (crate::executor) alike.
-    pub(crate) fn run_service(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+    /// `locked`: whether it takes the guest lock in parallel mode (a
+    /// [`Binding::Service`]; a [`Binding::LockFree`] does not).
+    pub(crate) fn run_service(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32, locked: bool) {
         // L22: a service is Rust: it runs under the host default MXCSR and
         // the guest's (live while lifted code runs) waits in cpu.mxcsr, so
         // neither sees nor changes the other's rounding or sticky flags.
@@ -211,7 +224,7 @@ impl Registry {
         // (crate::threads); an API call is also where a guest thread's time
         // slice may end
         let stats = crate::threads::stats::on().then(crate::threads::stats::totals);
-        let lock = crate::threads::service();
+        let lock = if locked { crate::threads::service() } else { crate::threads::service_lock_free() };
         let traced = trace::start(self, m, cpu, target);
         let scope = crate::threads::ServiceScope::enter();
         f(m, cpu);
