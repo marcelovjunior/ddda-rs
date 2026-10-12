@@ -812,3 +812,40 @@ claude-6 (15):
         verified: 0x01322540, 0x013239F0, 0x01324EA0, 0x01325580,
         0x01325830, 0x013271E0, 0x013273F0, 0x01327650 and 0x01327680.
       - Owner: claude-6 (functions reached only through data).
+19. Release ddplay `--features emu` (scratch tree main 79c22a5b +
+    task/L21-boot + task/L53-indexed-strips; 32 shards at opt-level 1).
+    The cold release build took 2,557 s.
+    - **Frame rate.** 54 to 60 FPS (16.7 to 18.5 ms per frame) for the
+      first 15 s (logos, ESRB). From the title movie on it drops to 0.4
+      to 2 FPS (819 frames in 600 s). The title screen is up after about
+      90 s.
+    - **Why so slow.** Sampled with the release PDB (`stack_sampler.py`
+      now also reads v0-mangled names, 692935ea). The run is in serial
+      mode, and guest thread 7580, the sound streaming thread, holds the
+      guest lock nearly all the time:
+      - its chain is 0x00CFE6B0 → 0x00DDDFA0 → 0x00DDB860 → 0x00DC77A0 →
+        0x00DC0160 → 0x012EC5E0 → 0x012EB690 → 0x01314570 → 0x01323460 →
+        an emulated slot of the 0x01467D38 table;
+      - its host top frame is `uc_emu_start → vm_start →
+        tcg_flush_softmmu_tlb → tb_invalidate_phys_range`, so every
+        emulator entry flushes and re-translates;
+      - every other guest thread waits in `GuestLock::acquire_locked`, so
+        the main loop gets about one frame a second.
+      - Owners: L51 (the head) for the per-call cost; claude-6 for the
+        table's 9 slot functions, which would remove the emulation here.
+    - **Input works.** WM_KEYDOWN/WM_KEYUP posted to the ddplay window (no
+      SendInput, no focus), Enter held 1.5 to 3 s at this frame rate:
+      - the title's "PRESS ANY BUTTON" takes the press (the pressed-text
+        animation) and fades out;
+      - next comes the Auto-Save notice ("This game uses an Auto-Save
+        function…");
+      - Enter then gives "Checking saved data. Please do not turn off
+        your computer."
+    - **Save.** `DDRUNTIME_IMPORT_SAVE` (the player's Steam `remote`
+      folder, only read) with account 124651925: "steam: imported 0 to 7
+      and DDDA.sav for account 124651925".
+    - **Stall.** The save check did not finish in 795 s: the main loop
+      advanced 16 frames in 135 s, starved as above. The run was stopped
+      there.
+    - Emulated entries, unchanged: 0x01146420, 0x01325580, 0x01325830,
+      0x013271E0, 0x012F4E74.
