@@ -589,3 +589,23 @@ claude-6 (15):
         0x004606A0, 0x004B72B0, 0x00789010, 0x00797BA0, 0x00BC1A00,
         0x00FA0130, 0x00441FB0, 0x0044D1F0, 0x004594A0, 0x0047A2A0).
       - One "tail call into its own inlined code" (0x00786CA0).
+12. Scratch preview (not committed): main + task/L21-boot +
+    task/L46-x87-state. Generated from the head's merged preview data,
+    native-preview5 (59,572 records: main, claude-6's native-L46 and
+    Codex's native-L28c). gen writes `patterns/verification_gaps.json`
+    into LIFT_DATA, so it ran on a hard-linked copy. Runtime game tests
+    46/46. The boot passes 0x00E0FB80 on main's executor, and more of
+    `sBbsRpgMain`'s constructor.
+    - Stop: untranslated 0x00DB8B90, called from just before 0x0044F67A
+      (constructor 0x0044F500). Registers: eax = ecx = edi = 0x68000060,
+      esp 0x7EFFD19C, ebp 0x7EFFD1A8.
+    - 0x00DB8B90 is a 73-byte base constructor (vtable 0x0142A428) with
+      20+ callers, and it has no fixture (`lift_novector.json`).
+    - Codex's L28 Results give the cause. It pushes one argument for
+      0x00DB8AC0. That function's normal exit reuses the argument slot
+      and tail-jumps to LeaveCriticalSection through IAT 0x0139D164,
+      which pops four bytes. Its failure path calls 0x004080A0 (which
+      calls `__invoke_watson`, then INT3), so the recorder's static
+      cleanup analysis returns zero.
+    - Cause 2. Owners: claude-6 (noreturn evidence for 0x004080A0), then
+      Codex (the recording).
