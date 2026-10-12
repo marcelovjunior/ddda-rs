@@ -232,3 +232,68 @@ compared against the host's D3D9 driver; ddgpu examples build.
 `a_clear_carries_the_viewport_scissor_and_srgb_write` in
 `crates/ddruntime/tests/d3d9_device.rs`. Under the batched-verification
 rule they were not built here. No private data to adopt.
+
+### 6. MSAA census (groundwork for a later brief; Ghidra only)
+
+- **Option.** "AntiAlias" (ANTIALIAS_NONE / MSAA2X / MSAA4X / MSAA8X,
+  strings 0x01428F44..). It is a property of sRender registered in its
+  ctor (0x00DB1FE9, setter `FUN_00DA7D20`) and stored at sRender+0xEC. The
+  setter accepts a mode only if it is in the available-mode list at
+  +0x43CD70, then sets flag 0x80 in +0x433E54 so the targets are rebuilt.
+  "AltAntiAlias" (ANTIALIAS_ALT_NONE / FXAA / FXAA3 / FXAA3HQ) is a
+  shader post-process, not a target property.
+- **Modes.** Nine modes. The table at 0x01440450 holds the
+  (D3DMULTISAMPLE_TYPE, quality) pairs:
+
+  | Mode | Type, quality |
+  |---|---|
+  | 0 | NONE |
+  | 1 | 2 samples, 0 |
+  | 2 | 4, 0 |
+  | 3 | 8, 0 |
+  | 4 | 4, 2 |
+  | 5 | 8, 0 |
+  | 6 | 4, 4 |
+  | 7 | 8, 2 |
+  | 8 | 8, 4 |
+
+  Modes 4-8 are NVIDIA's CSAA qualities. The table at 0x01442EF0 maps
+  mode k to texture flags `k << 8` and a support bit.
+- **Support.** `FUN_011487C0(mode, format)` keeps a mode only if
+  `FUN_00DA9EC0` found it for the format:
+  - modes 0-3 against the CheckDeviceMultiSampleType bits at sRender+0x43CBF2
+    (A16B16G16R16F), +0x43CBF4 (A8R8G8B8), +0x43CBF6 (A2B10G10R10) and
+    +0x43CC08 (MT 0x26);
+  - modes 4-8 against the CSAA bits (+0x43CBF8/0x43CBFA/0x43CBFC/0x43CC0A),
+    filled only on NVIDIA (vendor 0x10DE) by comparing the returned
+    quality levels.
+
+  D24S8 is asked as well (as the depth match).
+- **Targets.** In `FUN_011488C0` (nDraw::Scene) the MSAA flags go on:
+  - the scene colour target (param_1[0x9C], A16B16G16R16F in HDR mode,
+    else A8R8G8B8);
+  - the scene depth (param_1[0x97], D24S8);
+  - "ZPrepass Dummy".
+
+  No other target. A texture with MSAA flags is kind 8: `FUN_01105240`
+  creates no texture for it, and its views create surfaces with
+  CreateRenderTarget / CreateDepthStencilSurface at the table's type and
+  quality (`FUN_011042B0`, `nDraw::DepthStencilView::ctor`).
+- **Resolve.** Draw-command case 5 in `FUN_00DAB480` resolves:
+  - **Colour:** StretchRect(bound render-target slot k, source rect, a
+    texture level's surface, dest rect, D3DTEXF_NONE).
+  - **Depth:** for slot 4 and up, outside the scene (EndScene, StretchRect
+    of the depth-stencil surface to another depth-stencil surface, NULL
+    rects, BeginScene), as D3D9 requires for depth-stencil StretchRect.
+- **What a later brief needs:**
+  - the driver profile's multisample answers for these formats (recorded
+    already: CheckDeviceMultiSampleType, `crates/ddruntime/data`);
+  - wgpu multisampled targets (sample counts 2/4/8; CSAA qualities have no
+    wgpu equivalent, so they would be reported or mapped to the sample
+    count);
+  - StretchRect from a multisampled surface as a resolve (D3D9's resolve
+    filter against the driver);
+  - depth-stencil StretchRect.
+
+  The runtime already creates the surfaces with their multisample type
+  (`d3d9res.rs`); the backend renders them single-sampled.
