@@ -1678,3 +1678,13 @@ opening (codex-31), route perf (codex-29).
   off; 7 such live cases). claude-6 is fixing the rule (L50).
 - **One next action:** L50's stop 17, then the loader reads all of
   `rom\bbs_rpg.arc` and the title should start drawing textured frames.
+
+## Batch 2026-10-12 (train 13: 99.9%)
+
+- **Train 13: 59,375 of 59,440 verified (99.9%, 99.6% of code bytes).**
+  Codex's residual batches add 44 functions: tail-wrapper argument
+  inputs, finite-trace budget proofs and sentinel inputs.
+  `docs/RESIDUALS.md` lists every remaining function with its class,
+  blocker and owner.
+- **One next action:** claude-6's L50 (boot stop 17, the archive loader),
+  then the title screen.
