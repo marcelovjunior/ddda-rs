@@ -16,7 +16,9 @@ miniz_oxide = "0.8"
 # Third-party crates (naga, wgpu, miniz_oxide, ...) optimised in dev and
 # test builds: the workspace's own code keeps opt-level 0 and its debug
 # info. d3d9wgsl's driver comparison went from 745 s to 52 s (one-time
-# dependency build: 134 s).
+# dependency build: 134 s). Cargo counts the ddlift shards as
+# non-members here (crates/ddlift is excluded), so their sections below
+# pin opt-level 0.
 [profile.dev.package."*"]
 opt-level = 2
 
@@ -29,51 +31,67 @@ opt-level = 2
 debug = 1
 
 [profile.dev.package.ddlift-00]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-01]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-02]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-03]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-04]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-05]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-06]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-07]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-08]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-09]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-10]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-11]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-12]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-13]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-14]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddlift-15]
+opt-level = 0
 debug = 1
 
 [profile.dev.package.ddnative-base]

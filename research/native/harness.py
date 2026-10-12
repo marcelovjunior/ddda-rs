@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'zero-call-v1', 'record-range-v1', *RETURN_STRATEGIES)
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'zero-call-v1', 'record-range-v1', *RETURN_STRATEGIES)
 
 
 # Callee cleanup (bytes) of imported functions, from their documented x86
@@ -838,7 +838,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # Opt in: preserve every old distribution and every return guard.
     # __alloca_probe_16/_8 (0x012F4E90/0x012F4EA6) align ESP+4; with
     # zero EAX this input exercises their zero-allocation return path.
-    call_stack = input_strategy == 'zero-call-v1'
+    call_stack = input_strategy in ('zero-call-v1','guarded-bounded-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -911,12 +911,22 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # Stack dwords written by `push imm32` and not overwritten since: a model
     # size argument found here is a constant of the code, not a random input.
     const_slots, pending_push = {}, [None]
+    budget_guard = None
+
+    def budget_write_ok(a, size):
+        if budget_guard is not None and budget_guard.conflicts(uc.reg_read(UC_X86_REG_EIP),a,size):
+            bad.append('image budget: unknown output aliases a protected byte')
+            uc.emu_stop()
+            return False
+        return True
 
     def forget_constants(addr, size):
         for slot in [a for a in const_slots if a < addr + size and addr < a + 4]:
             del const_slots[slot]
 
     def note(uc_, access, addr, size, value, _):
+        if access != 16 and not budget_write_ok(addr,size):
+            return
         for p in {addr & ~0xFFF, (addr + size - 1) & ~0xFFF}:
             if p not in pages_in:
                 pages_in[p] = bytes(uc_.mem_read(p, 0x1000))
@@ -1300,6 +1310,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         return cur
 
     def mwrite(a, data):
+        if not budget_write_ok(a,len(data)):
+            return
         forget_constants(a, len(data))
         ensure(a, len(data))
         uc.mem_write(a, data)
@@ -1540,13 +1552,21 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
     image_budget = None
-    if input_strategy == 'image-bounded-v1' and body is not None and max_insn < 2_000_000:
+    if input_strategy in ('image-bounded-v1','guarded-bounded-v1') and body is not None and max_insn < 2_000_000:
         # Opt-in only. A finite abstract trace with unknown entry GPRs and
-        # original image bytes must establish the entire call-free path.
+        # original image bytes must establish the entire path. Guarded mode
+        # additionally traces closed calls and checks unknown output aliases.
         # Unknown control flow retains the ordinary instruction limit.
-        from image_budget import image_bound
+        from image_budget import image_bound, WriteGuard
         proof_md = Cs(CS_ARCH_X86, CS_MODE_32)
         proof_md.detail = True
+        def proof_decode(pc):
+            if not executable(pc):
+                return None
+            try:
+                return next(proof_md.disasm(code(pc,15),pc,count=1),None)
+            except KeyError:
+                return None
         proof_body = []
         for pc in sorted(body):
             try:
@@ -1555,12 +1575,18 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 break
             proof_body.append(decoded_proof)
         if len(proof_body) == len(body):
-            bound = image_bound(proof_body, code, regs_in['esp'], entry=address,
+            guarded = input_strategy == 'guarded-bounded-v1'
+            certificate = image_bound(proof_body, code, regs_in['esp'], entry=address,
                                 ceiling=2_000_000-max_insn, deadline=deadline,
-                                max_bytes=MAX_PAGES*4096)
+                                max_bytes=MAX_PAGES*4096,guarded=guarded,
+                                decode=proof_decode,closed=lifted,models=PLATFORM,pop_for=static_pop)
+            bound = certificate['instructions'] if guarded and certificate else certificate
             if bound is not None and bound > max_insn:
                 max_insn += bound  # keep the ordinary overhead allowance
-                image_budget = dict(rule='image-trace-v1', instructions=bound, limit=max_insn)
+                if guarded:
+                    budget_guard = WriteGuard(certificate)
+                image_budget = dict(rule='guarded-image-trace-v1' if guarded else 'image-trace-v1',
+                                    instructions=bound, limit=max_insn)
     try:
         uc.emu_start(address, RET)
     except UcError as e:

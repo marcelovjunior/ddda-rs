@@ -18,13 +18,13 @@
 //! command encoder and submitted every 128 draws or before anything else
 //! uses the queue (tests/cache.rs: a long-lived backend draws every frame
 //! like a fresh one).
-use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TexKind, TextureBinding, Upload, Vertices};
+use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TargetTexture, TexKind, TextureBinding, USAGE_DEPTHSTENCIL, USAGE_RENDERTARGET, Upload, Vertices};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 mod cache;
 pub mod present;
-use cache::{PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
+use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
 use std::future::Future;
 
 fn block_on<F: Future>(f: F) -> F::Output {
@@ -253,6 +253,25 @@ struct Tex {
     width: u32,
     height: u32,
     depth: u32,
+    /// created with D3DUSAGE_RENDERTARGET or D3DUSAGE_DEPTHSTENCIL: stored
+    /// in the target format, a render attachment from creation
+    target: bool,
+}
+
+/// The channels (bit k: channel k of RGBA) a render-target texture of
+/// D3D9 format `format` lacks in its wgpu target format, which D3D9 samples
+/// as 1 (as the sampled formats' conversions fill them; compared with the
+/// driver in tests/targets.rs render_to_texture).
+fn missing_channels(format: u32) -> u8 {
+    match format {
+        // X8R8G8B8, X8B8G8R8: alpha
+        22 | 33 => 0b1000,
+        // R32F, R16F (wgpu samples G and B as 0)
+        114 | 111 => 0b1110,
+        // G32R32F, G16R16F, G16R16
+        115 | 112 | 34 => 0b1100,
+        _ => 0,
+    }
 }
 
 struct Rt {
@@ -294,8 +313,9 @@ pub struct WgpuBackend {
     /// standalone surfaces used as targets (back buffers, render targets,
     /// depth-stencil)
     surfaces: HashMap<u32, Rt>,
-    /// translated shaders by (shader hash, linked vertex shader hash, depth bias)
-    modules: HashMap<(u64, u64, bool), (wgpu::ShaderModule, d3d9wgsl::Interface)>,
+    /// translated shaders by (shader hash, linked vertex shader hash, depth
+    /// bias, channels sampled as 1)
+    modules: HashMap<ModuleKey, (wgpu::ShaderModule, d3d9wgsl::Interface)>,
     samplers: HashMap<[u32; 14], wgpu::Sampler>,
     blits: HashMap<(wgpu::TextureFormat, u32), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// clears of part of a target, by (colour formats per slot, depth
@@ -537,7 +557,7 @@ impl WgpuBackend {
 
     /// target_view, cached (release() drops the cache).
     fn cached_target_view(&mut self, t: &Target, srgb: bool) -> Option<(wgpu::TextureView, wgpu::TextureFormat)> {
-        let key = (t.surface, t.texture, t.level, t.format, srgb);
+        let key = (t.surface, t.texture.map(|x| x.resource), t.level, t.format, srgb);
         if let Some(v) = self.target_views.get(&key) {
             return v.clone();
         }
@@ -595,45 +615,75 @@ impl WgpuBackend {
     }
 
     fn texture_for(&mut self, b: &TextureBinding) -> Option<&Tex> {
-        if !self.textures.contains_key(&b.resource) {
-            let (format, _, _, block) = sampled_format(b.format)?;
-            let (layers, dimension) = match b.kind {
-                TexKind::Flat => (1, wgpu::TextureDimension::D2),
-                TexKind::Cube => (6, wgpu::TextureDimension::D2),
-                TexKind::Volume => (b.depth, wgpu::TextureDimension::D3),
-            };
-            let size = wgpu::Extent3d {
-                width: b.width.next_multiple_of(block),
-                height: b.height.next_multiple_of(block),
-                depth_or_array_layers: layers,
-            };
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: None,
-                size,
-                mip_level_count: b.levels,
-                sample_count: 1,
-                dimension,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
-                // D3DSAMP_SRGBTEXTURE reads through the sRGB view
-                view_formats: &[format.add_srgb_suffix()],
-            });
-            self.textures.insert(b.resource, Tex {
-                texture, kind: b.kind, format: b.format, gpu_format: format, levels: b.levels,
-                width: b.width, height: b.height, depth: b.depth,
-            });
-            for u in self.pending.remove(&b.resource).unwrap_or_default() {
-                self.write_image(&u);
-            }
-        }
+        let desc = TargetTexture { resource: b.resource, kind: b.kind, width: b.width, height: b.height, depth: b.depth, levels: b.levels, usage: b.usage };
+        self.create_texture(&desc, b.format)?;
         self.textures.get(&b.resource)
+    }
+
+    /// Create a texture (once): a sampled texture in its sampled format, or
+    /// a render-target or depth-stencil texture (D3DUSAGE_RENDERTARGET,
+    /// D3DUSAGE_DEPTHSTENCIL) in its target format, a render attachment
+    /// from creation whether it is first drawn into or first bound.
+    fn create_texture(&mut self, t: &TargetTexture, d3d_format: u32) -> Option<()> {
+        if self.textures.contains_key(&t.resource) {
+            return Some(());
+        }
+        let target = t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0;
+        let (format, block, usage) = if target {
+            (target_format(d3d_format, false)?, 1,
+             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST)
+        } else {
+            let (format, _, _, block) = sampled_format(d3d_format)?;
+            (format, block, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC)
+        };
+        let (layers, dimension) = match t.kind {
+            TexKind::Flat => (1, wgpu::TextureDimension::D2),
+            TexKind::Cube => (6, wgpu::TextureDimension::D2),
+            TexKind::Volume => (t.depth, wgpu::TextureDimension::D3),
+        };
+        let size = wgpu::Extent3d {
+            width: t.width.next_multiple_of(block),
+            height: t.height.next_multiple_of(block),
+            depth_or_array_layers: layers,
+        };
+        // D3DSAMP_SRGBTEXTURE reads, and SRGBWRITEENABLE writes, through the
+        // sRGB view
+        let srgb = format.add_srgb_suffix();
+        let views: &[wgpu::TextureFormat] = if srgb != format { &[srgb] } else { &[] };
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size,
+            mip_level_count: t.levels,
+            sample_count: 1,
+            dimension,
+            format,
+            usage,
+            view_formats: views,
+        });
+        if block_on(scope.pop()).is_some() {
+            return None;
+        }
+        self.textures.insert(t.resource, Tex {
+            texture, kind: t.kind, format: d3d_format, gpu_format: format, levels: t.levels,
+            width: t.width, height: t.height, depth: t.depth, target,
+        });
+        for u in self.pending.remove(&t.resource).unwrap_or_default() {
+            self.write_image(&u);
+        }
+        Some(())
     }
 
     /// Write an image upload into its (existing) texture.
     fn write_image(&mut self, u: &Upload) {
         let Upload::Image { resource, index, format, width, height, depth, pitch, slice: _, bytes } = u else { return };
         let Some(t) = self.textures.get(resource) else { return };
-        let Some((_, conv, bpp, block)) = sampled_format(*format) else { return };
+        let Some((sampled, conv, bpp, block)) = sampled_format(*format) else { return };
+        if t.target && (conv != Conversion::Direct || sampled != t.gpu_format) {
+            // a render-target texture is stored in its target format
+            self.errors.push(format!("an image upload into render-target texture {resource:#x} of format {format} is not implemented"));
+            return;
+        }
         let (face, level) = match t.kind {
             TexKind::Cube => (index / t.levels, index % t.levels),
             _ => (0, *index),
@@ -675,8 +725,9 @@ impl WgpuBackend {
 
     /// The texture, mip level, array layer, format and size behind a target.
     fn target_texture(&mut self, t: &Target) -> Option<(wgpu::Texture, u32, u32, wgpu::TextureFormat, u32, u32)> {
-        if let Some(tex) = t.texture {
-            let tx = self.textures.get(&tex)?;
+        if let Some(tt) = t.texture {
+            self.create_texture(&tt, t.format)?;
+            let tx = self.textures.get(&tt.resource)?;
             let (face, level) = match tx.kind {
                 TexKind::Cube => (t.level / tx.levels, t.level % tx.levels),
                 _ => (0, t.level),
@@ -1058,13 +1109,21 @@ impl WgpuBackend {
     /// The texture a target renders into: a standalone surface's own, or a
     /// render-target texture's level.
     fn target_view(&mut self, t: &Target, srgb: bool) -> Option<(wgpu::TextureView, wgpu::TextureFormat)> {
-        if let Some(tex) = t.texture {
-            let tx = self.textures.get(&tex)?;
+        if let Some(tt) = t.texture {
+            // a level of a render-target texture, created here when it is
+            // drawn into before it is bound
+            self.create_texture(&tt, t.format)?;
+            let tx = self.textures.get(&tt.resource)?;
+            if !tx.target {
+                return None;
+            }
             let (face, level) = match tx.kind {
                 TexKind::Cube => (t.level / tx.levels, t.level % tx.levels),
                 _ => (0, t.level),
             };
+            let format = if srgb { tx.gpu_format.add_srgb_suffix() } else { tx.gpu_format };
             let view = tx.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(format),
                 dimension: Some(wgpu::TextureViewDimension::D2),
                 base_mip_level: level,
                 mip_level_count: Some(1),
@@ -1072,7 +1131,7 @@ impl WgpuBackend {
                 array_layer_count: Some(1),
                 ..Default::default()
             });
-            return Some((view, tx.gpu_format));
+            return Some((view, format));
         }
         let format = target_format(t.format, false)?;
         if !self.surfaces.contains_key(&t.surface) {
@@ -1174,7 +1233,7 @@ impl WgpuBackend {
         Ok(s)
     }
 
-    fn module(&mut self, tokens: &[u32], options: d3d9wgsl::Options, key: (u64, u64, bool)) -> Result<(wgpu::ShaderModule, d3d9wgsl::Interface), String> {
+    fn module(&mut self, tokens: &[u32], options: d3d9wgsl::Options, key: ModuleKey) -> Result<(wgpu::ShaderModule, d3d9wgsl::Interface), String> {
         if let Some((m, i)) = self.modules.get(&key) {
             return Ok((m.clone(), i.clone()));
         }
@@ -1280,14 +1339,17 @@ impl WgpuBackend {
             types.push(ty);
             elements.push((u16::from_le_bytes([e[0], e[1]]) as u32, u16::from_le_bytes([e[2], e[3]]) as u64, format, k as u32));
         }
-        let (vs_module, vs_iface) = self.module(vs_tokens, d3d9wgsl::Options { vs_input_types: Some(types), half_pixel: true, ..Default::default() }, (vh, 0, false))?;
+        let (vs_module, vs_iface) = self.module(vs_tokens, d3d9wgsl::Options { vs_input_types: Some(types), half_pixel: true, ..Default::default() }, (vh, 0, false, 0))?;
         // link the pixel inputs to the vertex outputs
         let locations: Vec<Option<u32>> = self.ps_inputs[&ph].iter()
             .map(|&(u, n)| vs_iface.outputs_vs.iter().position(|o| o.0 == u && o.1 == n).map(|p| p as u32)).collect();
         // D3D9's depth bias in the pixel shader (see d3d9wgsl Options::depth_bias)
         let depth_bias = d.depth.is_some() && state(7) != 0 && (state(195) != 0 || state(175) != 0);
-        let ps_options = d3d9wgsl::Options { ps_input_locations: Some(locations), alpha_test: true, lod_bias: true, depth_bias, ..Default::default() };
-        let (ps_module, ps_iface) = self.module(ps_tokens, ps_options, (ph, vh, depth_bias))?;
+        // render-target textures lack channels D3D9 samples as 1
+        let ones = d.textures.iter().filter(|t| t.sampler < 16 && t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0)
+            .fold(0u64, |m, t| m | (missing_channels(t.format) as u64) << (4 * t.sampler));
+        let ps_options = d3d9wgsl::Options { ps_input_locations: Some(locations), alpha_test: true, lod_bias: true, depth_bias, sampler_ones: ones, ..Default::default() };
+        let (ps_module, ps_iface) = self.module(ps_tokens, ps_options, (ph, vh, depth_bias, ones))?;
 
         // targets
         let srgb = state(194) != 0;
@@ -1428,8 +1490,8 @@ impl WgpuBackend {
         let layout1 = self.tex_layout(false, &ps_kinds);
         let layout2 = self.tex_layout(true, &vs_kinds);
         let key = PipelineKey {
-            vs: (vh, 0, false),
-            ps: (ph, vh, depth_bias),
+            vs: (vh, 0, false, 0),
+            ps: (ph, vh, depth_bias, ones),
             buffers,
             topology,
             cull,
@@ -1593,7 +1655,7 @@ impl WgpuBackend {
             uses.extend(vbufs.iter().filter_map(|v| v.3));
             uses.extend(index.iter().filter_map(|v| v.3));
             uses.extend(d.textures.iter().map(|t| t.resource));
-            uses.extend(d.targets.iter().chain(std::iter::once(&d.depth)).flatten().filter_map(|t| t.texture));
+            uses.extend(d.targets.iter().chain(std::iter::once(&d.depth)).flatten().filter_map(|t| t.texture.map(|x| x.resource)));
         }
         let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
         {

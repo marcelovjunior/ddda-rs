@@ -190,28 +190,34 @@ class CodegenTests(unittest.TestCase):
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod generated {{ use super::*; {generated} }}
         ''' + r'''
-            struct Paged { t: Box<std::cell::UnsafeCell<mem::PageTable>>, fast: bool, calls: std::cell::Cell<u32> }
+            struct Paged { t: Box<mem::PageTable>, fast: bool, calls: std::cell::Cell<u32> }
             impl Paged {
                 fn new(fast: bool) -> Paged {
-                    let mut t = mem::PageTable::default();
-                    t.perms.fill(mem::READ | mem::WRITE);
-                    Paged { t: Box::new(std::cell::UnsafeCell::new(t)), fast, calls: std::cell::Cell::new(0) }
+                    let t = mem::PageTable::default();
+                    for p in 0..mem::PAGES {
+                        t.set_perm(p, mem::READ | mem::WRITE);
+                    }
+                    Paged { t: Box::new(t), fast, calls: std::cell::Cell::new(0) }
                 }
                 fn page(&self, p: usize) -> Vec<u8> {
-                    unsafe { (*self.t.get()).pages[p].as_ref().map(|b| b.to_vec()).unwrap_or_default() }
+                    let page = self.t.page(p);
+                    if page.is_null() { return Vec::new(); }
+                    (0..mem::PAGE as usize).map(|k| unsafe { mem::load_at(page.add(k), 1) as u8 }).collect()
                 }
             }
             impl Mem for Paged {
                 fn u8(&self, a: u32) -> u8 {
                     self.calls.set(self.calls.get() + 1);
-                    unsafe { (*self.t.get()).pages[(a >> 12) as usize].as_ref().map_or(0, |p| p[(a & 0xFFF) as usize]) }
+                    let page = self.t.page((a >> 12) as usize);
+                    if page.is_null() { 0 } else { unsafe { mem::load_at(page.add((a & 0xFFF) as usize), 1) as u8 } }
                 }
                 fn set_u8(&mut self, a: u32, v: u8) {
                     self.calls.set(self.calls.get() + 1);
-                    unsafe { (*self.t.get()).pages[(a >> 12) as usize].get_or_insert_with(mem::zero_page)[(a & 0xFFF) as usize] = v; }
+                    let page = self.t.backed_page((a >> 12) as usize);
+                    unsafe { mem::store_at(page.add((a & 0xFFF) as usize), 1, v as u32) }
                 }
                 fn page_table(&self) -> Option<std::ptr::NonNull<mem::PageTable>> {
-                    if self.fast { std::ptr::NonNull::new(self.t.get()) } else { None }
+                    if self.fast { Some(std::ptr::NonNull::from(&*self.t)) } else { None }
                 }
             }
             #[test] fn fast_and_trait_paths_agree() {

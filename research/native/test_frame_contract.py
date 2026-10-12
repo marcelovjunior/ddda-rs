@@ -299,5 +299,21 @@ class FrameContractTests(unittest.TestCase):
                     with self.assertRaises(h.Rejected):
                         h.run_sparse(0x400000,3,body=body,end=0x400000+len(code))
 
+    def test_split_callee_and_caller_cleanup_preserves_own_return_check(self):
+        # Eight bytes of outgoing space: the callee may remove four and
+        # the caller four, even with flag/register work before ADD ESP.
+        # Removing twelve at the caller remains an actual imbalance.
+        for cleanup,pop in ((8,0),(4,4),(12,None)):
+            code=bytes.fromhex('8b018b501083ec0889f1ffd231c083c4')+bytes([cleanup])+b'\xc3'
+            body,(p1,p2)=self.image(code)
+            with p1,p2:
+                if pop is None:
+                    with self.assertRaises(h.Rejected):
+                        h.run_sparse(0x400000,17,zero_inputs=True,body=body,end=0x400000+len(code))
+                else:
+                    c=h.run_sparse(0x400000,17,zero_inputs=True,body=body,end=0x400000+len(code))
+                    self.assertEqual(c['calls'][0]['out']['pop'],pop)
+                    self.assertEqual(c['regs_out']['esp'],c['regs_in']['esp']+4)
+
 
 if __name__=='__main__':unittest.main()
