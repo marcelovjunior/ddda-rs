@@ -386,7 +386,7 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
       if not added:
           # every edge-proven table is complete even when nothing new was added
           for pc in found:
-              if isinstance(switches.get(pc), TableTargets) and edge_slots(found, pc, addr, switches) is not None:
+              if isinstance(switches.get(pc), TableTargets) and edge_slots(found, pc, addr, switches, read) is not None:
                   switches[pc].proven = True
           break
       for target in added:
@@ -405,19 +405,28 @@ def decode_body(addr, size, entries=None, noreturn=None, read=None, is_code=None
     return ins, switches, stops, ranges
 
 
-def edge_slots(found, pc, entry=None, switches=None):
+def edge_slots(found, pc, entry=None, switches=None, read=None):
     """Slot indices a dword table jump at `pc` (`jmp [R*4 + T]`) can select,
-    proven on every path into it (L45). Walking back from the jump (past an
-    optional `neg R` directly before it), each path must reach, before any
-    other write to R, the function entry or a call that clobbers R:
-    `and R, imm` ([0, imm]), `mov R, imm`, `xor R, R`, or an edge bound -
-    and `and R, x` passes through (the result is at most R's value before) -
-    the taken edge of `jb`/`jbe` or the fall-through of `ja`/`jae` directly
-    after `cmp R, imm` ([0, bound]), or the taken `jb` after `sub R, imm`
-    ([-imm, -1]); the immediate may also be a register that holds one
-    constant on every path (constant_before). The union over all paths is used; None if any path is
-    unproven or the walk exceeds 512 instructions."""
+    proven on every path into it (L45, L48). Walking back from the jump
+    (past an optional `neg R` directly before it), each path must reach,
+    before any other write to R, a bound:
+    - `and R, imm` ([0, imm]), `mov R, imm`, `xor R, R`; `and R, x` passes
+      through (the result is at most R's value before);
+    - an edge: the taken `jb`/`jbe` or the fall-through of `ja`/`jae`
+      directly after `cmp R, imm` ([0, bound]), or the taken `jb` after
+      `sub R, imm` ([-imm, -1]); the immediate may be a register holding
+      one constant on every path (constant_before);
+    - L48: `mov R, [base + d]` continues on that memory slot, which is
+      bounded the same way by `cmp dword [base + d], imm` edges or set by
+      `mov dword [base + d], imm`; any write to `base`, any call and any
+      store that may alias the slot end the proof;
+    - L48: `movzx R, byte [R2 + T]` (a byte remap) bounds R2 and takes the
+      table's bytes T[v] for every proven v.
+    Reaching the function entry, an unknown write or 512 steps per walk
+    gives None. The union over all paths is returned, sorted."""
     from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
+    import harness as h
+    read = h.code if read is None else read
     jump = found[pc]
     if jump.mnemonic != "jmp" or not jump.operands:
         return None
@@ -426,8 +435,6 @@ def edge_slots(found, pc, entry=None, switches=None):
             or op.mem.base or not op.mem.index or op.mem.scale != 4):
         return None
     index = op.mem.index
-    name = jump.reg_name(index)
-    aliases = _aliases(name)
     by_end = {i.address + i.size: i for i in found.values()}
     sources = {}
     for i in found.values():
@@ -444,10 +451,18 @@ def edge_slots(found, pc, entry=None, switches=None):
             and prev.operands[0].reg == index and prev.operands[0].size == 4):
         start, negate = prev.address, True
 
+    def predecessors(at):
+        preds = [(b, True) for b in sources.get(at, [])]
+        before = by_end.get(at)
+        if before is not None and before.mnemonic not in ("jmp", "ret", "retn", "repz ret", "int3", "ud2"):
+            preds.append((before, False))
+        return preds
+
     def constant_before(at, reg):
         """The value 32-bit register `reg` holds before the instruction at
-        `at` on every path into it: each path must set it with `mov reg, imm`
-        or `xor reg, reg` (one value for all) before any other write, call
+        `at` on every path into it: each path must set it with `mov reg, imm`,
+        `xor reg, reg`, `push imm ... pop reg` or (L48) `lea reg, [r + d]`
+        with r constant (one value for all) before any other write, call
         clobber or the function entry; None otherwise (512 steps at most)."""
         names = _aliases(found[at].reg_name(reg))
         values, seen, todo, steps = set(), set(), [at], 0
@@ -458,13 +473,10 @@ def edge_slots(found, pc, entry=None, switches=None):
             seen.add(here)
             if here == entry:
                 return None
-            preds = list(sources.get(here, []))
-            before = by_end.get(here)
-            if before is not None and before.mnemonic not in ("jmp", "ret", "retn", "repz ret", "int3", "ud2"):
-                preds.append(before)
+            preds = predecessors(here)
             if not preds:
                 return None
-            for b in preds:
+            for b, _ in preds:
                 steps += 1
                 if steps > 512:
                     return None
@@ -489,6 +501,13 @@ def edge_slots(found, pc, entry=None, switches=None):
                     if pushed is None:
                         return None
                     values.add(pushed)
+                elif (b.mnemonic == "lea" and ops[0].type == X86_OP_REG and ops[0].reg == reg
+                      and ops[1].mem.base and ops[1].mem.base != reg and not ops[1].mem.index
+                      and not ops[1].mem.segment):
+                    base = constant_before(b.address, ops[1].mem.base)
+                    if base is None:
+                        return None
+                    values.add((base + ops[1].mem.disp) & 0xffffffff)
                 else:
                     return None
         return values.pop() if len(values) == 1 else None
@@ -514,18 +533,55 @@ def edge_slots(found, pc, entry=None, switches=None):
             at = b.address
         return None
 
-    def edge_range(branch, taken):
-        """The bound a predecessor branch proves on the edge, or None. The
-        compared bound is an immediate or a register holding a constant on
-        every path (`mov edx, 3; cmp eax, edx; ja default`)."""
-        setter = by_end.get(branch.address)
-        if (setter is None or setter.mnemonic not in ("cmp", "sub") or setter.operands[0].type != X86_OP_REG
-                or setter.operands[0].reg != index or setter.operands[0].size != 4):
+    def slot_of(i, o):
+        """('mem', base, disp) of a plain dword memory operand, or None."""
+        if o.type != X86_OP_MEM or o.size != 4 or o.mem.index or o.mem.segment or not o.mem.base:
+            return None
+        return ("mem", o.mem.base, o.mem.disp)
+
+    def matches(i, o, key):
+        if key[0] == "reg":
+            return o.type == X86_OP_REG and o.reg == key[1] and o.size == 4
+        return slot_of(i, o) == key
+
+    def flag_setter(branch, key):
+        """The instruction whose flags `branch` tests: the last flag writer
+        on the straight line before it (L48: flag-neutral moves such as
+        `movss` stores may sit between `cmp` and `ja`), provided nothing in
+        between enters the line or writes `key`."""
+        at = branch.address
+        for _ in range(6):
+            if at != branch.address and sources.get(at):
+                return None
+            i = by_end.get(at)
+            if i is None:
+                return None
+            try:
+                written = {i.reg_name(r) for r in i.regs_access()[1]}
+            except Exception:  # noqa: BLE001
+                return None
+            if "eflags" in written or "flags" in written:
+                return i
+            if i.mnemonic.startswith(("j", "ret", "call", "loop", "int")):
+                return None
+            if key[0] == "reg" and written & _aliases(i.reg_name(key[1])):
+                return None
+            if key[0] == "mem" and (written & _aliases(i.reg_name(key[1])) or stores_may_alias(i, key)):
+                return None
+            at = i.address
+        return None
+
+    def edge_range(branch, taken, key):
+        """The bound a predecessor branch proves for `key` on the edge."""
+        setter = flag_setter(branch, key)
+        if setter is None or setter.mnemonic not in ("cmp", "sub") or not matches(setter, setter.operands[0], key):
+            return None
+        if setter.mnemonic == "sub" and key[0] != "reg":
             return None
         bound_op = setter.operands[1]
         if bound_op.type == X86_OP_IMM:
             imm = bound_op.imm & 0xffffffff
-        elif bound_op.type == X86_OP_REG and bound_op.size == 4 and bound_op.reg != index:
+        elif bound_op.type == X86_OP_REG and bound_op.size == 4 and not (key[0] == "reg" and bound_op.reg == key[1]):
             imm = constant_before(setter.address, bound_op.reg)
             if imm is None or imm >= 4096:
                 return None
@@ -534,72 +590,119 @@ def edge_slots(found, pc, entry=None, switches=None):
         if setter.mnemonic == "cmp":
             bound = {("jb", True): imm - 1, ("jbe", True): imm,
                      ("ja", False): imm, ("jae", False): imm - 1}.get((branch.mnemonic, taken))
-            return (0, bound) if bound is not None and bound >= 0 else None
-        return (-imm, -1) if (branch.mnemonic, taken) == ("jb", True) and 0 < imm <= 4096 else None
+            return set(range(0, bound + 1)) if bound is not None and 0 <= bound < 4096 else None
+        return set(range(-imm, 0)) if (branch.mnemonic, taken) == ("jb", True) and 0 < imm <= 4096 else None
 
-    lo = hi = None
-    # A path state is (address, masked): masked once an `and R, x` was
-    # passed, whose result never exceeds the value R had before it.
-    seen, todo, steps = set(), [(start, False)], 0
-    while todo:
-        at, masked = todo.pop()
-        if (at, masked) in seen:
-            continue
-        seen.add((at, masked))
-        if at == entry:
-            return None  # R is an input of the function
-        preds = [(b, True) for b in sources.get(at, [])]
-        before = by_end.get(at)
-        if before is not None and before.mnemonic not in ("jmp", "ret", "retn", "repz ret", "int3", "ud2"):
-            preds.append((before, False))
-        if not preds:
+    def stores_may_alias(b, key):
+        """Whether `b` may write the memory slot `key`."""
+        for o in b.operands:
+            if o.type == X86_OP_MEM and o.access & 2:
+                if o.mem.index or o.mem.segment or o.mem.base != key[1]:
+                    return True  # another base may point anywhere
+                if o.mem.disp < key[2] + 4 and key[2] < o.mem.disp + max(o.size, 1):
+                    return True
+        return b.mnemonic.startswith("rep")  # string stores show es:[edi] operands
+
+    def bound(start_at, key, depth=0):
+        """Values `key` holds before the instruction at `start_at` on every
+        path (see edge_slots), as a set, or None."""
+        if depth > 4:
             return None
-        for b, taken in preds:
-            steps += 1
-            if steps > 512:
+        values = set()
+        seen, todo, steps = set(), [(start_at, False)], 0
+        reg_names = _aliases(found[start_at].reg_name(key[1])) if key[0] == "reg" else set()
+        base_names = _aliases(found[start_at].reg_name(key[1])) if key[0] == "mem" else set()
+        while todo:
+            at, masked = todo.pop()
+            if (at, masked) in seen:
+                continue
+            seen.add((at, masked))
+            if at == entry:
+                return None  # an input of the function
+            preds = predecessors(at)
+            if not preds:
                 return None
-            rng = None
-            if b.mnemonic.startswith("j") and b.mnemonic != "jmp":
-                rng = edge_range(b, taken)
-            if rng is None:
-                # walk through the predecessor instruction itself
-                if b.mnemonic == "call":
-                    if name in ("eax", "ecx", "edx"):
-                        return None  # a callee may clobber a volatile register
-                    todo.append((b.address, masked))
-                    continue
-                written = _writes(b)
-                if written is None:
+            for b, taken in preds:
+                steps += 1
+                if steps > 512:
                     return None
-                if written & aliases:
-                    ops = b.operands
-                    if (b.mnemonic == "and" and ops[0].type == X86_OP_REG and ops[0].reg == index
-                            and ops[0].size == 4 and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 4096):
-                        rng = (0, ops[1].imm & 0xffffffff)
-                    elif (b.mnemonic == "mov" and ops[0].type == X86_OP_REG and ops[0].reg == index
-                          and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 4096):
-                        rng = (ops[1].imm & 0xffffffff,) * 2
-                    elif (b.mnemonic == "xor" and len(ops) == 2 and all(o.type == X86_OP_REG and o.reg == index for o in ops)):
-                        rng = (0, 0)
-                    elif b.mnemonic == "and" and ops[0].type == X86_OP_REG and ops[0].reg == index and ops[0].size == 4:
-                        todo.append((b.address, True))  # R & x <= R (unsigned)
+                rng = None
+                if b.mnemonic.startswith("j") and b.mnemonic != "jmp":
+                    rng = edge_range(b, taken, key)
+                if rng is None:
+                    if b.mnemonic == "call":
+                        if key[0] == "mem" or reg_names & {"eax", "ecx", "edx"}:
+                            return None  # a callee may clobber it
+                        todo.append((b.address, masked))
                         continue
-                    else:
+                    written = _writes(b)
+                    if written is None:
                         return None
-                else:
-                    todo.append((b.address, masked))
-                    continue
-            if masked:
-                if rng[0] < 0:
-                    return None  # a negative (wrapped) range has no small unsigned mask bound
-                rng = (0, rng[1])
-            lo = rng[0] if lo is None else min(lo, rng[0])
-            hi = rng[1] if hi is None else max(hi, rng[1])
-    if lo is None or hi - lo >= 4096:
+                    ops = b.operands
+                    if key[0] == "mem":
+                        if written & base_names or stores_may_alias(b, key):
+                            if (b.mnemonic == "mov" and slot_of(b, ops[0]) == key
+                                    and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 4096):
+                                rng = {ops[1].imm & 0xffffffff}
+                            else:
+                                return None
+                        else:
+                            todo.append((b.address, masked))
+                            continue
+                    elif written & reg_names:
+                        if (b.mnemonic == "and" and matches(b, ops[0], key) and ops[1].type == X86_OP_IMM
+                                and (ops[1].imm & 0xffffffff) < 4096):
+                            rng = set(range(0, (ops[1].imm & 0xffffffff) + 1))
+                        elif (b.mnemonic == "mov" and ops[0].type == X86_OP_REG and ops[0].reg == key[1]
+                              and ops[1].type == X86_OP_IMM and (ops[1].imm & 0xffffffff) < 4096):
+                            rng = {ops[1].imm & 0xffffffff}
+                        elif (b.mnemonic == "xor" and len(ops) == 2
+                              and all(o.type == X86_OP_REG and o.reg == key[1] for o in ops)):
+                            rng = {0}
+                        elif (b.mnemonic == "and" and matches(b, ops[0], key) and ops[1].type == X86_OP_REG
+                              and ops[1].size == 4 and ops[1].reg != key[1]
+                              and (c := constant_before(b.address, ops[1].reg)) is not None and c < 4096):
+                            rng = set(range(0, c + 1))  # L48: and R, R2 with R2 constant
+                        elif b.mnemonic == "and" and matches(b, ops[0], key):
+                            todo.append((b.address, True))  # R & x <= R (unsigned)
+                            continue
+                        elif (b.mnemonic == "mov" and matches(b, ops[0], key) and ops[1].type == X86_OP_REG
+                              and ops[1].size == 4):
+                            rng = bound(b.address, ("reg", ops[1].reg), depth + 1)  # L48: a register copy
+                            if rng is None:
+                                return None
+                        elif b.mnemonic == "mov" and matches(b, ops[0], key) and slot_of(b, ops[1]):
+                            rng = bound(b.address, slot_of(b, ops[1]), depth + 1)  # L48: a memory slot
+                            if rng is None:
+                                return None
+                        elif (b.mnemonic == "movzx" and ops[0].type == X86_OP_REG and ops[0].reg == key[1]
+                              and ops[1].type == X86_OP_MEM and ops[1].size == 1 and ops[1].mem.base
+                              and not ops[1].mem.index and not ops[1].mem.segment):
+                            inner = bound(b.address, ("reg", ops[1].mem.base), depth + 1)  # L48: a byte remap
+                            if inner is None or any(v < 0 for v in inner):
+                                return None
+                            try:
+                                rng = {read((ops[1].mem.disp + v) & 0xffffffff, 1)[0] for v in inner}
+                            except (KeyError, IndexError):
+                                return None
+                        else:
+                            return None
+                    else:
+                        todo.append((b.address, masked))
+                        continue
+                if masked:
+                    if any(v < 0 for v in rng):
+                        return None  # a negative (wrapped) range has no small unsigned mask bound
+                    rng = set(range(0, max(rng) + 1))
+                values |= rng
+        return values if values and max(values) - min(values) < 4096 else None
+
+    values = bound(start, ("reg", index))
+    if values is None:
         return None
     if negate:
-        lo, hi = -hi, -lo
-    return list(range(lo, hi + 1))
+        values = {-v for v in values}
+    return sorted(values)
 
 
 def edge_bounded_tables(found, switches, addr, entries, read, is_code):
@@ -607,7 +710,7 @@ def edge_bounded_tables(found, switches, addr, entries, read, is_code):
     decoded body; returns the new targets not yet decoded."""
     added = set()
     for pc in list(found):
-        slots = edge_slots(found, pc, addr, switches)
+        slots = edge_slots(found, pc, addr, switches, read)
         if slots is None:
             continue
         table = found[pc].operands[0].mem.disp & 0xffffffff

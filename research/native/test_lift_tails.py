@@ -77,6 +77,39 @@ class EdgeBoundTests(unittest.TestCase):
         body(code, {0x2000: dwords(0x1010, 0x1011, 0x1012, 0x1013, 0)})
         self.assertEqual(lift.TABLE_PROOF[0x1000], {0x1008: False})
 
+    def slots(self, code, tables, jump):
+        read, is_code = image_fixture(code, tables)
+        ins, switches, _, _ = lift.decode_body(0x1000, len(code), entries=frozenset({0x1000}), noreturn=frozenset(),
+                                               read=read, is_code=is_code, ext=True)
+        found = {i.address: i for i in ins}
+        return lift.edge_slots(found, jump, 0x1000, switches, read)
+
+    def test_l48_memory_slot_bound(self):
+        # cmp dword [esp+4],2; movss [esp+0x10],xmm0; ja default; mov ecx,[esp+4];
+        # jmp [ecx*4+0x2000]; ret x5 -- the flag-neutral store sits between
+        code = bytes.fromhex("837c240402" "f30f11442410" "770b" "8b4c2404" "ff248d00200000") + b"\xc3" * 5
+        tables = {0x2000: dwords(0x1019, 0x101A, 0x101B, 0)}
+        self.assertEqual(self.slots(code, tables, 0x1011), [0, 1, 2])
+        # a store to the slot after the compare ends the proof
+        code = bytes.fromhex("837c240402" "770f" "89442404" "8b4c2404" "ff248d00200000") + b"\xc3" * 5
+        self.assertIsNone(self.slots(code, {0x2000: dwords(0x1016, 0x1017, 0x1018, 0)}, 0x100F))
+
+    def test_l48_byte_remap_behind_a_register_bound(self):
+        # mov ecx,3; cmp eax,ecx; ja default; movzx eax,byte [eax+0x3000];
+        # jmp [eax*4+0x2000] -- only the bytes T[0..3] = 1,0,1,0 are slots
+        code = bytes.fromhex("b903000000" "39c8" "770e" "0fb68000300000" "ff248500200000") + b"\xc3" * 4
+        tables = {0x2000: dwords(0x1018, 0x1019, 0x101A, 0), 0x3000: bytes((1, 0, 1, 0, 2))}
+        self.assertEqual(self.slots(code, tables, 0x1010), [0, 1])
+
+    def test_l48_lea_constant_and_and_with_a_constant_register(self):
+        # mov edx,3; lea ecx,[edx+1]; cmp eax,ecx; ja default; jmp [eax*4+0x2000]
+        code = bytes.fromhex("ba03000000" "8d4a01" "39c8" "7707" "ff248500200000") + b"\xc3" * 6
+        tables = {0x2000: dwords(*range(0x1018, 0x101D), 0)}
+        self.assertEqual(self.slots(code, tables, 0x100C), [0, 1, 2, 3, 4])
+        # mov ecx,1; and eax,ecx; jmp [eax*4+0x2000]
+        code = bytes.fromhex("b901000000" "21c8" "ff248500200000") + b"\xc3" * 2
+        self.assertEqual(self.slots(code, {0x2000: dwords(0x100E, 0x100F, 0)}, 0x1007), [0, 1])
+
     def test_register_bound_set_on_one_path_only_is_unproven(self):
         # test ecx,ecx; je skip; mov edx,3; skip: cmp eax,edx; ja default; jmp [eax*4+0x2000]
         code = bytes.fromhex("85c9" "7405" "ba03000000" "39d0" "7707" "ff248500200000") + b"\xc3" * 5
