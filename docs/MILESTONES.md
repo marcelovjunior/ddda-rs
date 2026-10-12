@@ -1747,3 +1747,23 @@ opening (codex-31), route perf (codex-29).
   - ddplay with the fallback, a screenshot of the title (claude-2);
   - the 5 entries translated (claude-6);
   - train 15 (L51, L52).
+
+## Milestone 2026-10-12: the title screen
+
+- ddplay (debug, `--features emu`; main + L21 + L51 + 24eaf3bb) reaches the
+  title screen. claude-2's DPI-aware PrintWindow screenshots show:
+  - the ESRB "MATURE 17+" rating screen (t=120 s);
+  - the title movie with its music (the Dragon's Dogma wyrm logo, ©CAPCOM);
+  - at t=900 s the title, "DRAGON'S DOGMA / DARK ARISEN", the red wyrm
+    over the forest, "PRESS ANY BUTTON".
+  It ran at 0.1-2 fps in the debug build with the service trace and
+  capture on; the release build runs the main loop at 60 fps.
+- Emulated on the way: stop 17 (L50 fixes it) and four entries that
+  Ghidra never made functions for:
+  - three are slots of a function-pointer table at 0x01467D38, which
+    looks like libvorbis backends;
+  - one is 0x012F4E74, reached from 0x013046B0.
+  These go to claude-6 as L54.
+- Rendering: DrawPrimitive no longer draws with the device's index buffer
+  (24eaf3bb, claude-2), and indexed strips carry their index format on the
+  pipeline (b392b767, head; equals the D3D9 driver).
