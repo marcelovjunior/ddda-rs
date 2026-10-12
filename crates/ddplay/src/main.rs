@@ -177,6 +177,9 @@ impl App {
                     report.push_str(&format!("\n{t}"));
                 }
                 eprintln!("{report}");
+                if let Some(stats) = ddruntime::threads::lock_stats() {
+                    eprint!("{stats}");
+                }
                 status(format!("stopped in {}", started.step));
             })
             .expect("the guest main thread");
@@ -274,7 +277,13 @@ impl ApplicationHandler<GameEvent> for App {
             input.window_event(&event, (size.width, size.height), client);
         }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // DDRUNTIME_LOCK_STATS=1: the guest lock per service (L64)
+                if let Some(stats) = ddruntime::threads::lock_stats() {
+                    eprint!("{stats}");
+                }
+                event_loop.exit()
+            }
             WindowEvent::Resized(size) => {
                 if let Some(g) = &self.gpu {
                     g.window.resized(size.width, size.height);

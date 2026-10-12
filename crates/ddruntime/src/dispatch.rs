@@ -207,12 +207,19 @@ impl Registry {
         // a service runs holding the guest lock in parallel mode
         // (crate::threads); an API call is also where a guest thread's time
         // slice may end
-        let _lock = crate::threads::service();
+        let stats = crate::threads::stats::on().then(crate::threads::stats::totals);
+        let lock = crate::threads::service();
         let traced = trace::start(self, m, cpu, target);
-        let _scope = crate::threads::ServiceScope::enter();
+        let scope = crate::threads::ServiceScope::enter();
         f(m, cpu);
         if let Some(line) = traced {
             trace::finish(line, cpu);
+        }
+        drop(scope);
+        drop(lock);
+        if let Some(before) = stats {
+            let name = self.names.get(&target).cloned().unwrap_or_else(|| format!("{target:#010x}"));
+            crate::threads::stats::record(name, before);
         }
         x86::ldmxcsr(cpu.mxcsr.0);
     }
