@@ -4,6 +4,12 @@
 //! differential tests run it over the byte image the original ran on and
 //! compare the whole result. (docs/NATIVE_PIPELINE.md, "Memory-model ports")
 pub trait Mem {
+    /// Preflight an instruction access without reading or publishing bytes.
+    /// Returns the first inaccessible byte. Runtime adapters must forward
+    /// this hook; legacy vector memories deliberately do not opt in.
+    fn probe(&self, _addr: u32, _width: u32, _write: bool) -> Result<(), u32> {
+        panic!("this Mem does not support restartable instructions")
+    }
     fn u8(&self, addr: u32) -> u8;
     fn set_u8(&mut self, addr: u32, v: u8);
     fn u16(&self, addr: u32) -> u16 {

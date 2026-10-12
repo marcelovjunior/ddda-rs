@@ -3,6 +3,36 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00BE7E70 (DDDA.exe 2017-12-13 Steam), uShlFunnelCtrl::vf16.
+pub fn f_00be7e70(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0xBE7E70;
+    loop {
+        match pc {
+            0xBE7E70 => { { let v = cpu.esi; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, v); } cpu.esi = cpu.ecx; { let t = 0xBD2CC0u32; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, 0xBE7E78);  x86::call_ext(m, cpu, t);  } cpu.ecx = cpu.esi.wrapping_add(0x2BA8); cpu.esi = 0x2u32; { let r = cpu.fl.alu_xor(cpu.edx, cpu.edx, 32); cpu.edx = r; } pc = 0xBE7E85; continue; }
+            0xBE7E85 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0xFFFFFFFC)); { let r = cpu.fl.alu_sub(cpu.eax, cpu.edx, 32); } pc = if cpu.fl.cond("e") { 0xBE7E9F } else { 0xBE7E8C }; continue; }
+            0xBE7E8C => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); { let r = cpu.fl.alu_and(cpu.eax, 0x7u32, 32); cpu.eax = r; } { let r = cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); } pc = if cpu.fl.cond("e") { 0xBE7E9F } else { 0xBE7E97 }; continue; }
+            0xBE7E97 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); } pc = if cpu.fl.cond("e") { 0xBE7E9F } else { 0xBE7E9C }; continue; }
+            0xBE7E9C => { m.fast_set_u32(pt, cpu.ecx.wrapping_add(0xFFFFFFFC), cpu.edx); pc = 0xBE7E9F; continue; }
+            0xBE7E9F => { cpu.eax = m.fast_u32(pt, cpu.ecx); { let r = cpu.fl.alu_sub(cpu.eax, cpu.edx, 32); } pc = if cpu.fl.cond("e") { 0xBE7EB7 } else { 0xBE7EA5 }; continue; }
+            0xBE7EA5 => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); { let r = cpu.fl.alu_and(cpu.eax, 0x7u32, 32); cpu.eax = r; } { let r = cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); } pc = if cpu.fl.cond("e") { 0xBE7EB7 } else { 0xBE7EB0 }; continue; }
+            0xBE7EB0 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); } pc = if cpu.fl.cond("e") { 0xBE7EB7 } else { 0xBE7EB5 }; continue; }
+            0xBE7EB5 => { m.fast_set_u32(pt, cpu.ecx, cpu.edx); pc = 0xBE7EB7; continue; }
+            0xBE7EB7 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x4)); { let r = cpu.fl.alu_sub(cpu.eax, cpu.edx, 32); } pc = if cpu.fl.cond("e") { 0xBE7ED1 } else { 0xBE7EBE }; continue; }
+            0xBE7EBE => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); { let r = cpu.fl.alu_and(cpu.eax, 0x7u32, 32); cpu.eax = r; } { let r = cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); } pc = if cpu.fl.cond("e") { 0xBE7ED1 } else { 0xBE7EC9 }; continue; }
+            0xBE7EC9 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); } pc = if cpu.fl.cond("e") { 0xBE7ED1 } else { 0xBE7ECE }; continue; }
+            0xBE7ECE => { m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x4), cpu.edx); pc = 0xBE7ED1; continue; }
+            0xBE7ED1 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x8)); { let r = cpu.fl.alu_sub(cpu.eax, cpu.edx, 32); } pc = if cpu.fl.cond("e") { 0xBE7EEB } else { 0xBE7ED8 }; continue; }
+            0xBE7ED8 => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); { let r = cpu.fl.alu_and(cpu.eax, 0x7u32, 32); cpu.eax = r; } { let r = cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); } pc = if cpu.fl.cond("e") { 0xBE7EEB } else { 0xBE7EE3 }; continue; }
+            0xBE7EE3 => { { let r = cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); } pc = if cpu.fl.cond("e") { 0xBE7EEB } else { 0xBE7EE8 }; continue; }
+            0xBE7EE8 => { m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x8), cpu.edx); pc = 0xBE7EEB; continue; }
+            0xBE7EEB => { { let r = cpu.fl.alu_add(cpu.ecx, 0x10u32, 32); cpu.ecx = r; } { let a = cpu.esi & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; let cf = cpu.fl.cf(); cpu.fl = Flags::new(x86::DEC, a, 1, r, 32); cpu.fl.cf_in = cf; cpu.esi = r; } pc = if cpu.fl.cond("ne") { 0xBE7E85 } else { 0xBE7EF1 }; continue; }
+            0xBE7EF1 => { { let v = m.fast_u32(pt, cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.esi = v; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x00BE7F00 (DDDA.exe 2017-12-13 Steam), uShlFunnelCtrl::vf108.
 pub fn f_00be7f00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();

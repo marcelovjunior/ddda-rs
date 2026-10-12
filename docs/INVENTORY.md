@@ -273,6 +273,25 @@ re-recorded) merged per address with `merge_lift_data3.py`: 59,533
 entries with 177,188 cases. **59,248 of 59,500 verified (99.6%, 99.0% of
 code bytes).**
 
+After L45 (2026-10-12, task/L45-function-tails; **expected, pending the
+train-4 replay**): `gen` declares a function verified only without a
+verification gap (unbound direct target, unproven table, stale body).
+44 previously verified functions keep unproven tables
+(`patterns/verification_gaps.json`). On the train-2 base this gives
+**59,173 of 59,500**; on train 3 it gives train 3's count − 44 + 12 boot
+additions. The function-boundary rule removes 58 non-code supplementary
+admissions (6 of them lifted) on the next inventory rebuild
+([L45 Results](tasks/L45-function-tails.md#results)).
+
+After train 4 (2026-10-12, main 863f6817): L45's rules (edge-proven
+table slots, frame tails, verification gaps), L27b, the boot triage and
+Codex's next batches; 59,571 entries with 177,344 cases. The boundary
+rule removed 60 non-code supplementary entries (59,440 non-thunks).
+**59,229 of 59,440 verified (99.6%)**. 44 functions with a verification
+gap (`patterns/verification_gaps.json`, mostly unproven tables) are no
+longer credited. Known overcount of at most 6: memcpy-family records
+that still tail-call the inlined frame tail 0x012F9D82 (fixed in L46).
+
 The L15 table above and its notes below are
 kept for history.
 

@@ -146,9 +146,15 @@ class RemainingTests(unittest.TestCase):
         _,_,c=self.program('8b018b501083ec0889f1ffd231c083c408c3',True)
         self.assertEqual(c['calls'][0]['out']['pop'],0)
         self.assertEqual(c['regs_out']['esp'],c['regs_in']['esp']+4)
-        # A mismatched epilogue still rejects; no guard is bypassed.
+        # add esp,4 after the call is a split cleanup (the callee pops 4 of
+        # the 8 outgoing bytes, the caller the rest), balanced since Codex's
+        # indirect-call pop rules (111bbe4e/92f14963).
+        _,_,c=self.program('8b018b501083ec0889f1ffd231c083c404c3',True)
+        self.assertEqual(c['calls'][0]['out']['pop'],4)
+        self.assertEqual(c['regs_out']['esp'],c['regs_in']['esp']+4)
+        # A real imbalance still rejects; no guard is bypassed.
         with self.assertRaises(h.Rejected):
-            self.program('8b018b501083ec0889f1ffd231c083c404c3',True)
+            self.program('8b018b501083ec0889f1ffd231c083c40cc3',True)
 
     def test_initialized_outgoing_space_is_not_a_local_hint(self):
         code=bytes.fromhex('9083ec08c7042401000000ffd083c408c3')

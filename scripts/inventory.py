@@ -151,6 +151,15 @@ def build():
     # doc comments are not verified by it)
     ported, tested = native_declarations(REPO)
     untested = ported - tested
+    # gen's verification gaps (L45): generated but deliberately not declared
+    # verified (unbound direct target, unproven table, stale body); their
+    # reasons are in patterns/verification_gaps.json, so they are reported,
+    # not an error
+    gaps_file = Path(os.environ.get("LIFT_DATA", str(EXPORT.parent / "native"))) / "patterns/verification_gaps.json"
+    gaps = {int(a, 16) for a in json.loads(gaps_file.read_text())} if gaps_file.exists() else set()
+    if untested & gaps:
+        print(f"verification gaps (not credited, reasons in {gaps_file.name}): {len(untested & gaps)}")
+    untested -= gaps
     if untested:
         print("ported without a declared test (not credited):", sorted(hex(a) for a in untested))
     ported &= tested
