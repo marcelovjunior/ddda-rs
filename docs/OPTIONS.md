@@ -53,9 +53,11 @@ on the maintainer's machine, and research/runtime/options_census.py
      check (0x00DBE120);
    - it reads every option item (0x00DF39E0);
    - it reads the PC options menu's state (0x00EDE0F0);
-   - only when the byte at 0x018D0158 is set, it writes the menu
-     (0x00EDDB20). Nothing in the exe writes that byte directly
-     (unresolved).
+   - only on a first run, it writes the menu (0x00EDDB20). The byte it
+     tests, 0x018D0158, is MtRegistry's "config.ini did not exist" flag:
+     0x018CFF48 + 0x210, set by MtRegistry's constructor 0x00CFFF00 when
+     GetFileAttributesW fails (found in L43). So a new config.ini starts
+     with the menu's keys, in the menu's order.
    - It then sets the clock's base rate `mFps` to 30.
 3. The options menu writes every key it shows when the player applies it:
    0x00EDDB20, called from 0x006A8AC0.
@@ -187,5 +189,5 @@ property group of `sMain`, not a config.ini option.
   - In that test, the game's own writers produce config.ini as the
     original wrote it.
   - The game's readers read it back, including from an imported file.
-- **Not compared live:** the start-up order, the 0x018D0158 flag, and
+- **Not compared live:** the start-up order, the first-run menu write, and
   the effect of each option on the image.

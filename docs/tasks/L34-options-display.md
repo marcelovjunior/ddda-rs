@@ -121,8 +121,10 @@ every registrar call site with unicorn. That gives 16 items:
 1. MaxFPS is read.
 2. The items are read.
 3. The menu state is read.
-4. The menu is written, only when the BSS byte 0x018D0158 is set. It has
-   no direct writer (unresolved).
+4. The menu is written, only on a first run. The byte tested,
+   0x018D0158, is MtRegistry +0x210 (0x018CFF48 + 0x210): the
+   constructor 0x00CFFF00 sets it when config.ini does not exist
+   (resolved in L43).
 5. `mFps` = 30.
 6. The items are read again (mask 0xFFFF).
 7. Every item is written back.
@@ -228,5 +230,4 @@ the modes, each mode once).
   - `tests/d3d9_device.rs:133` (claude-5 agreed, #9330) now Resets full
     screen at the host's desktop mode (419fd70).
 - **Not done:**
-  - the 0x018D0158 flag's writer;
   - per-option effects compared live with the original.
