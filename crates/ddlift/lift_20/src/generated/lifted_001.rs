@@ -3,6 +3,12 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00A1C6F0 (DDDA.exe 2017-12-13 Steam), cEm5500_00ActAtckLiftCatch::getDTI.
+pub fn f_00a1c6f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199E9B4u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x00A1C700 (DDDA.exe 2017-12-13 Steam), cEm5500_00ActAtckLiftCatch::dtor_deleting.
 pub fn f_00a1c700(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -7498,10 +7504,4 @@ pub fn f_00a31970(m: &mut dyn Mem, cpu: &mut Cpu) {
             _ => unreachable!(),
         }
     }
-}
-
-// Translated from 0x00A319E0 (DDDA.exe 2017-12-13 Steam), cEm5501ActRunStop::getDTI.
-pub fn f_00a319e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = 0x199F0BCu32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
