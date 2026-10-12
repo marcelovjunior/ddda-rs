@@ -298,8 +298,8 @@ E:/ddda-re/tools/pyenv/Scripts/python.exe E:/ddda-re/tools/heavy.py <who> -- \
 `l28d.sh` archives the trial logs to `L28/trials-run4/`, then runs
 `structured_inputs.py promote`, `prepare`, and record+adopt for: the 9
 strategies at 3 seeds / 20 s; the 3 zero-return strategies at 12 seeds /
-60 s; random/zero/mockzero-v1 with `--terminal`. All use
-`LIFT_DATA=INVENTORY_DB-dir=E:/ddda-re/notes/native-L17` and 6 workers.
+60 s; random/zero/mockzero-v1 with `--terminal`. It sets `LIFT_DATA`,
+`INVENTORY_DB` and `INVENTORY_EXTRA` to native-L17's copies and 6 workers.
 Then hand the pair to the train; no local Rust replay (batched rule).
 
 **Remaining candidate classes** (323 before run 4; about 318 now):
