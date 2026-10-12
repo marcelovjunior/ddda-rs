@@ -1413,3 +1413,21 @@ opening (codex-31), route perf (codex-29).
   a constructed-object input strategy: run the verified constructor first,
   then the method. claude-6 is on L48 (re-credit the 46 gaps).
 - **One next action:** claude-2's boot run past stop 13.
+
+## Batch 2026-10-12 (trains 7-8: 59,282 verified)
+
+- **Train 7 (2c93b524):** L48 (claude-6) re-credits 30 of the 46 gaps:
+  - memory-slot bounds, byte-remap tables and register or constant
+    bounds prove 14 tables;
+  - 16 input-indexed switches are slot-swept: every discovered slot has a
+    case, with the table's end evidenced (the `slot-sweep-v1` strategy).
+  16 gaps remain.
+- **Train 8 (5525e431):** Codex records boot stop 14 (0x00DD5ED0: a
+  vtable the constructor writes itself, resolved statically, from
+  claude-2's evidence) and 0x00F7DE40.
+- **59,282 of 59,440 verified (99.7%).**
+- Codex moved to a fresh session (the old one, ~7M tokens, kept tripping
+  the provider's content filter on x86 trace work).
+- **One next action:** claude-2's boot past stop 14. Meanwhile claude-6
+  works on L49 (lifter-side residuals) and Codex on input recipes for the
+  37 residuals.
