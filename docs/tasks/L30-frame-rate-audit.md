@@ -118,3 +118,42 @@ sources, with no build and no live measurement.
   - the remaining `cCamImp` lerps.
 - 687 functions that load 30, 60, 1/30 or 1/60 are listed as candidates
   (mostly unit conversions); only samples were classified.
+
+### Follow-up (L30b)
+
+The open list of FRAME_RATE.md, closed where possible:
+
+- **Long chains.**
+  - `uChain::vf09` (0x00F0C160) scales the unit step (clamped to 2.0) by
+    `+0xCC` and splits it into `+0x88` substeps per frame. The solver
+    therefore iterates ×(fps/60) as often per second: dt-approximate.
+    The iteration loop itself is not traced.
+  - `uCnsChain` has no time input.
+- **FRAME.md's 150-frame AI-sense timer** is `uCharacterBase::vf10`
+  (0x0084C6A0): `+0x2EC0 +=` unit step, firing at 150 base frames. It is
+  dt-correct.
+- **Real-time timers.**
+  - Network: the `sDDCaProto` code (0x00CA20A0, 0x00CA4270, 0x00CA4310)
+    uses `GetTickCount`.
+  - Movies use `timeGetTime`.
+  - `sEventManager` has a 5-s `GetTickCount` throttle (0x00435D90).
+  - All three are locked to real time.
+- **`cCamImp` lerps.** The camera's angle and position helper
+  (0x007B5030) clamps to a maximum lag and then runs the dt-scaled
+  spring. Offsets ramp by the step. There are no frame-counted lerps.
+- **The 687 constant candidates, all decompiled:**
+  - 97 scripted away (with the step, angles, unit conversions);
+  - 23 integer or indirect;
+  - 479 constants used as values;
+  - 71 updates in functions that read a step;
+  - 17 checked by hand.
+
+  One new frame-counted bug: `cEm5501ActAtckRushBite::vf06` (0x00A36DF0)
+  moves the enemy by a fixed distance per frame during its lunge. The
+  other 16 are one-shots (hit callbacks, action starts, setup) or
+  positional fixes.
+- **Still open:**
+  - live checks;
+  - the `uChain` iteration loop;
+  - a line-by-line pass over the 71;
+  - integer frame counters outside the constant candidates.
