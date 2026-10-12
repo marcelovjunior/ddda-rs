@@ -39,14 +39,18 @@ first commit) lets the executor run a `Lifted` binding without steps and
 continue at its return. Faults inside such a callee are not restartable
 instructions; only step bodies get precise SEH resumption.
 
-**Size (shared data, 59,571 functions).** 44 functions have steps, in
-two shards: lift_02 gets 279,792 bytes of step code and 2,157 table rows
-(+1.4% of its 20.25 MB), lift_03 gets 108,640 bytes and 823 rows (+0.8% of
-13.47 MB). The other 14 shards are unchanged. Overall growth is +0.12% of
-about 312 MB, against roughly +200% with every function stepped.
-Peak rustc RSS for lift_02 with steps: 3,726 MB (`RUSTC_BOOTSTRAP=1 cargo
-rustc -p ddlift-02 --lib -- -Z time-passes`). The no-steps figure for the
-same shard is below.
+**Size (shared data, 59,571 functions).** 44 functions have steps, in two
+shards. Against the same gen with `LIFT_INSTRUCTIONS=0`:
+- **lift_02:** 19,911,163 → 20,251,697 bytes (+1.7%: 279,792 bytes of
+  step code plus the 2,157-row table).
+- **lift_03:** 13,333,889 → 13,465,690 bytes (+1.0%, 823 rows).
+- **Other 14 shards:** unchanged. Overall growth is +0.12% of about
+  312 MB, against roughly +200% with every function stepped.
+
+lift_02 with `RUSTC_BOOTSTRAP=1 cargo rustc -p ddlift-02 --lib -- -Z
+time-passes`:
+- **Peak RSS:** 3,634 MB without steps, 3,726 MB with steps (+2.5%).
+- **Compile time:** 84.5 s without steps, 93.9 s with steps.
 
 **Tests** (heavy, own target dir, gen on the shared data):
 `cargo test -p ddruntime --test runtime --test seh --test steam_saves
