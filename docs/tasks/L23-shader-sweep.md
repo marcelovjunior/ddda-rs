@@ -217,7 +217,29 @@ that instruction's inputs in context, and runs it alone on both sides:
 - "driver rewrite";
 - "wgpu rewrite".
 
-On Stage405 all 11 inexact shaders are "driver rewrite" (the factoring above, 1-13 ULP at the first differing instruction). The attribution of all 710 was started but paused by the head (the player was gaming) before it wrote results; it reruns with the command above.
+Two further outcomes exist:
+- "inputs differ": the first differing instruction already reads
+  different inputs in context, so it cannot be run alone;
+- "not located": no instruction differs before the output.
+
+**All 710 inexact shaders, attributed (L23b):**
+
+| Cause | Shaders | Vertex | Pixel | Largest shader ULP |
+|---|---:|---:|---:|---:|
+| driver rewrite | 666 | 31 | 635 | 332 |
+| inputs differ | 27 | 3 | 24 | 16 |
+| wgpu rewrite | 14 | 11 | 3 | 23 |
+| not located | 3 | 0 | 3 | 1 |
+| **instruction (a translation rule)** | **0** | | | |
+
+- No inexact shader comes from a missing translation rule.
+- The 44 that are not "driver rewrite" are concentrated: Stage100 13,
+  root 9, Stage400 8, Stage380_PROLOGUE 4, Stage430 3, Stage436 3, and
+  one each in Stage240, Stage413, Stage450, Stage701.
+- The run was resumable (`DDDA_SHADER_ATTRIBUTE_SKIP`, commit
+  c1e9f48). It took three runs: the first two stopped at the 2-hour
+  limit and the third was detached. Merged by shader (stage kind and
+  tag), the later run wins. The output is private scratch.
 
 Neither rewrite is a D3D9 rule. Imitating NVIDIA's optimiser would tie the
 translation to one vendor's compiler, so the translation stays literal.
@@ -250,7 +272,8 @@ ULP counts come from cancellation after a 1-2 ULP rewrite.
 
 ### Not done, limits
 
-- The attribution over all 710 inexact shaders (paused; Stage405's 11 are done, all driver rewrites).
+- The attribution of all 710 inexact shaders: done (above). The 27
+  "inputs differ" and 3 "not located" shaders are not split further.
 - Coverage limits of the sweep:
   - Random constants only: loop counts are 0-4 and a0 indices are random.
   - Textures are 4x4, single level and point-sampled. Filtering and mips
