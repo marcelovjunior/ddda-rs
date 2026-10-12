@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'zero-call-v1', *RETURN_STRATEGIES)
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'zero-call-v1', 'record-range-v1', *RETURN_STRATEGIES)
 
 
 # Callee cleanup (bytes) of imported functions, from their documented x86
@@ -732,7 +732,7 @@ def frame_text(contract):
 def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero_inputs=False, size=None,
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
-               terminal=False, visited=None):
+               terminal=False, input_layout=None, visited=None):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -772,6 +772,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     for non-image pages, registers and mocked returns. It is mutually
     exclusive with zero_inputs and recorded in successful vectors. Original
     image bytes, executed instructions and rejection checks never change.
+    `record-range-v1` requires `input_layout`: evidence-supplied record stride,
+    first/last/result bindings, and finite key fields. The layout is recorded
+    with the case; its stack arguments are part of the initial memory image.
     `max_seconds` bounds a trial at instruction boundaries (no resume).
 
     `terminal` (terminal-v1) accepts a root call at a noreturn site into a
@@ -820,6 +823,11 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
+    if (input_strategy == 'record-range-v1') != (input_layout is not None):
+        raise ValueError('record-range-v1 requires a layout; other strategies do not use one')
+    if input_layout is not None:
+        from record_inputs import RecordRangeInputs
+        inputs = RecordRangeInputs(input_layout, seed)
     mock_zero = input_strategy in MOCKZERO
     deadline = time.monotonic()+max_seconds if max_seconds is not None else None
     md = Cs(CS_ARCH_X86, CS_MODE_32)
@@ -1411,10 +1419,19 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 elif cleanup.mnemonic == 'push':
                     later += 4
                 elif (later and cleanup.mnemonic == 'call' and cleanup.operands[0].type == 2
-                      and (cleanup.operands[0].imm & 0xffffffff) not in noreturn_targets
-                      and static_pop(cleanup.operands[0].imm & 0xffffffff) == 0):
-                    pass  # a callee that leaves its arguments to us
-                elif later and not writes_esp and not cleanup.mnemonic.startswith('j')                         and cleanup.mnemonic not in ('call', 'ret', 'retn', 'repz ret', 'int3', 'ud2'):
+                      and (cleanup.operands[0].imm & 0xffffffff) not in noreturn_targets):
+                    consumed = static_pop(cleanup.operands[0].imm & 0xffffffff)
+                    if consumed > later:
+                        # Arguments for this later callee can precede the
+                        # indirect call's own arguments (e.g. a diagnostic
+                        # string, then COM arguments, then HRESULT). Its
+                        # ret N consumes the saved prefix as well as the
+                        # intervening pushes. Keep that prefix on the stack.
+                        pop = max(0, pop - (consumed - later))
+                        break
+                    later -= consumed
+                elif not writes_esp and not cleanup.mnemonic.startswith('j') \
+                        and cleanup.mnemonic not in ('call', 'ret', 'retn', 'repz ret', 'int3', 'ud2'):
                     pass
                 else:
                     break
@@ -1484,6 +1501,9 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     stack_page = regs_in["esp"] & ~0xFFF
     page = bytearray(pages_in[stack_page])
     struct.pack_into("<I", page, regs_in["esp"] - stack_page, RET)
+    if input_strategy == 'record-range-v1':
+        for offset, value in inputs.stack.items():
+            struct.pack_into('<I', page, regs_in['esp'] - stack_page + offset, value)
     pages_in[stack_page] = bytes(page)
     uc.mem_write(stack_page, bytes(page))
     # L22 x87 entry contract (lift.x87_deficit): the caller left `x87_entry`
@@ -1500,6 +1520,28 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             state, _, _ = x87_host.execute(state, 0xDD, 0x00, struct.pack("<d", value))
         x87_host.set_unicorn_state(uc, state)
         st_in = [list(struct.unpack_from("<QH", state, 28 + 10 * k)) for k in range(x87_entry)]
+    image_budget = None
+    if input_strategy == 'image-bounded-v1' and body is not None and max_insn < 2_000_000:
+        # Opt-in only. A finite abstract trace with unknown entry GPRs and
+        # original image bytes must establish the entire call-free path.
+        # Unknown control flow retains the ordinary instruction limit.
+        from image_budget import image_bound
+        proof_md = Cs(CS_ARCH_X86, CS_MODE_32)
+        proof_md.detail = True
+        proof_body = []
+        for pc in sorted(body):
+            try:
+                decoded_proof = next(proof_md.disasm(code(pc, 15), pc, count=1))
+            except (KeyError, StopIteration):
+                break
+            proof_body.append(decoded_proof)
+        if len(proof_body) == len(body):
+            bound = image_bound(proof_body, code, regs_in['esp'], entry=address,
+                                ceiling=2_000_000-max_insn, deadline=deadline,
+                                max_bytes=MAX_PAGES*4096)
+            if bound is not None and bound > max_insn:
+                max_insn += bound  # keep the ordinary overhead allowance
+                image_budget = dict(rule='image-trace-v1', instructions=bound, limit=max_insn)
     try:
         uc.emu_start(address, RET)
     except UcError as e:
@@ -1580,5 +1622,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             **({"nan_guard_retired": sorted(retired)} if retired else {}),
             **({"calls": calls} if end is not None else {}), **({"zero_inputs": True} if zero_inputs else {}),
             **({"input_strategy": input_strategy} if input_strategy else {}),
+            **({"image_budget": image_budget} if image_budget is not None else {}),
+            **({"input_layout": input_layout} if input_layout is not None else {}),
             **({"stack_contract": stack_contract} if stack_contract else {}),
             **({"terminal": True} if stopped[0] else {})}

@@ -13,6 +13,13 @@ publish = false
 [workspace.dependencies]
 miniz_oxide = "0.8"
 
+# Third-party crates (naga, wgpu, miniz_oxide, ...) optimised in dev and
+# test builds: the workspace's own code keeps opt-level 0 and its debug
+# info. d3d9wgsl's driver comparison went from 745 s to 52 s (one-time
+# dependency build: 134 s).
+[profile.dev.package."*"]
+opt-level = 2
+
 # The lifted test compiles tens of thousands of machine-level functions.
 # Keep backtrace line tables, without debug metadata for every local.
 # Set on dev, which test inherits, so `cargo build` and `cargo test` share

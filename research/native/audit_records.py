@@ -2,7 +2,9 @@
 
 baseline stores no arms, memory bytes, registers or vectors. compare fails
 on removals, missing cases or edits outside newly closed helpers and the
-existing cases that mocked those helpers. The head owns data snapshots.
+existing cases that mocked those helpers. --refresh-closed explicitly permits
+stale callers of an already closed target to refresh after a data-set merge.
+The head owns data snapshots.
 """
 import argparse
 from collections import defaultdict
@@ -49,20 +51,23 @@ def fingerprint(root):
                 mocked={a: sorted(v) for a, v in mocked.items() if v})
 
 
-def compare(before, after):
+def compare(before, after, refresh_closed=()):
     old, new = before['functions'], after['functions']
     missing = old.keys() - new.keys()
     added = new.keys() - old.keys()
     promoted = {a for a in old.keys() & new.keys() if old[a]['ext'] and not new[a]['ext']}
-    promoted_ints = {int(a) for a in promoted}
-    affected = {a for a, targets in before['mocked'].items() if promoted_ints.intersection(targets)}
+    refresh_closed = set(refresh_closed)
+    if any(str(a) not in old or old[str(a)]['ext'] or str(a) not in new or new[str(a)]['ext'] for a in refresh_closed):
+        raise ValueError('refresh targets must already be closed in both pairs')
+    closed_targets = {int(a) for a in promoted} | refresh_closed
+    affected = {a for a, targets in before['mocked'].items() if closed_targets.intersection(targets)}
     changed = {a for a in old.keys() & new.keys()
                if old[a]['hash'] != new[a]['hash'] or before['cases'][a] != after['cases'][a]}
     unexpected = changed - promoted - affected
     # Even when a selected body's IR is unchanged, cases that mocked a newly
     # closed helper cannot survive unchanged across the dispatch boundary.
     stale = {a for a in affected if a in new and before['cases'][a] == after['cases'][a]}
-    still_mocked = {a for a, targets in after['mocked'].items() if promoted_ints.intersection(targets)}
+    still_mocked = {a for a, targets in after['mocked'].items() if closed_targets.intersection(targets)}
     addresses = lambda values: [f'0x{int(a):08X}' for a in sorted(values, key=int)]
     return dict(ok=not (missing or unexpected or stale or still_mocked),
                 before_functions=len(old), after_functions=len(new),
@@ -70,6 +75,7 @@ def compare(before, after):
                 after_cases=sum(map(len, after['cases'].values())),
                 unchanged=len(old)-len(missing)-len(changed),
                 added=addresses(added), promoted=addresses(promoted),
+                refresh_closed=addresses(map(str,refresh_closed)),
                 affected_callers=addresses(affected), changed=addresses(changed),
                 missing=addresses(missing), unexpected_changes=addresses(unexpected),
                 stale_mock_cases=addresses(stale), still_mocking_promoted=addresses(still_mocked))
@@ -81,6 +87,8 @@ def main():
     ap.add_argument('--root', required=True, type=Path)
     ap.add_argument('--manifest', required=True, type=Path)
     ap.add_argument('--report', type=Path)
+    ap.add_argument('--refresh-closed',type=lambda s:int(s,0),action='append',default=[],
+                    help='allow only stale callers of this already closed target to refresh')
     args = ap.parse_args()
     current = fingerprint(args.root)
     if args.command == 'baseline':
@@ -89,7 +97,7 @@ def main():
             json.dump(current, stream)
         print(f"hashes only: {len(current['functions'])} functions / {sum(map(len,current['cases'].values()))} cases")
     else:
-        report = compare(read(args.manifest), current)
+        report = compare(read(args.manifest), current, args.refresh_closed)
         text = json.dumps(report, indent=2)
         if args.report:
             args.report.write_text(text+'\n', encoding='utf-8')

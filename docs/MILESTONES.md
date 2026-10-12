@@ -1,5 +1,78 @@
 # Milestones
 
+### L28c archive boot stop recorded (2026-10-12, pending replay)
+
+- `0x00419100` now records **3/3** cases. A conservative image-only
+  abstract trace proves its **78,453-instruction** return path; the opt-in
+  `image-bounded-v1` policy uses that proof plus the existing 20,000
+  allowance. Unknown/input-dependent control retains the ordinary guard.
+- Every original case registers all **13,061** entries from ten image
+  tables correctly. Private native-L28c: **59,547 → 59,548 records /
+  177,235 → 177,238 cases**. Hash audit: every old record/case unchanged.
+  **49 light tests pass**; no full Rust replay or shared-data writes.
+- **Next action:** boot preview, then the remaining constructor route;
+  merge the lifter owner's integration branch before budget-area edits.
+
+### L28c title-route batch audited (2026-10-12, pending integration replay)
+
+- Final pointer-route trials add `0x00860A60`, `0x00874F90`, and
+  `0x00B54BE0`, three fixtures each, using the same delayed-callee cleanup
+  rule. Its no-stack-arguments regression passes: **43 light tests** total.
+- This batch adds **13 functions / 39 cases** overall: native-L28c
+  **59,534 → 59,547 records / 177,196 → 177,235 cases**. Cumulative hash
+  audit proves all old records and case multisets unchanged. All four
+  requested boot-route functions are recorded and reported for preview.
+- **Next action:** integration replay/boot preview; coordinate remaining
+  constructor budget proofs with the lifter owner. Trials covered all 32
+  eligible one-hop and 29 two-hop candidates; 77 tested title/pointer
+  residuals retain rejection evidence. No guard relaxed or quarantine
+  overridden. The data set remains open per head's latest instruction.
+
+### L28c next boot route recorded (2026-10-12, pending integration replay)
+
+- `0x00DA9EC0` and `0x01104470` now have three original-code fixtures
+  each. The indirect-call cleanup scan now crosses neutral register setup
+  before the later argument push; branch and ESP barriers remain. The
+  constructor's image-backed inputs avoid its byte-divisor zero at
+  `0x01104491`. **42 light tests pass** including the new barrier test.
+- Private native-L28c: **59,542 → 59,544 records / 177,220 → 177,226
+  cases**; all old records/case multisets unchanged by hash audit. All
+  four requested boot-route functions now have fixtures. The set remains
+  open for preview, with full replay deferred to the integration train.
+- **Next action:** resume boot and continue the remaining no-fixture queue.
+
+### L28c render-call fixtures (2026-10-12, pending integration replay)
+
+- Fixed mock cleanup when a later direct callee consumes arguments pushed
+  before an indirect call. At `0x01128F55`, the saved diagnostic string
+  belongs to `0x00DA89B0` (`ret 8`), not the COM call. The general rule has
+  two synthetic regression tests; all **41** relevant light tests pass.
+- Eight render functions now record, including boot-route `0x01129030`
+  and `0x01129460`: **59,534 → 59,542 records / 177,196 → 177,220 cases**.
+  Hash audit proves every old record/case multiset unchanged. Private
+  native-L28c remains open for head's requested boot preview and additions.
+- **Next action:** trace remaining boot stop `0x00DA9EC0`, then
+  `0x01104470`; constructor loop budgets remain unresolved. No Rust replay
+  here; the head verifies the integration train.
+
+### L28c boot-blocker fixtures (2026-10-12, pending integration replay)
+
+- `0x00DAFED0` now records **8/8** bounded record-range inputs, including
+  ascending, descending, equal and mixed finite keys. Original recorded
+  writes pass bounds, permutation and partition checks; no execution
+  budget or recorder guard was relaxed. The reusable layout strategy
+  seeds related first/last/output arguments before execution.
+- Refreshed `0x00F6A380`, the sole imported caller still mocking closed
+  `__alloca_probe` (`0x012F2280`). Private native-L28c:
+  **59,533 → 59,534 entries**, **177,188 → 177,196 cases**; missing
+  candidate fixtures **229 → 228**. Separate hash audits prove the refresh
+  changed only that caller and the partition addition changed no old
+  records. **39 light tests pass**; Rust replay is the head's train.
+- **Next action:** integrate this frozen pair and resume the real boot;
+  use its next executed missing function to prioritize the remaining
+  title-path queue. Evidence and merge notes are in
+  [L28 Results](tasks/L28-crt-platform-class.md).
+
 ### L45 function tails, gate and boot triage (2026-10-12, pending train 4)
 
 - **Evidence:** table jumps proven on every path (both memcpy variants
@@ -38,6 +111,7 @@
   recorder-budget blockers; see [L28 Results](tasks/L28-crt-platform-class.md).
 - **One next action:** integrate and replay the boundary-changing pair;
   refresh any other lane's cases that still mock 0x012F2280.
+
 
 L27b continuation batch (2026-10-12): production instruction emission and
 Registry/Session routing now deliver transactional AV/#DE and transfer across
@@ -1064,3 +1138,48 @@ opening (codex-31), route perf (codex-29).
     services (L43, L37).
 - **One next action:** run train 2 (L28 + L22 data adoption, L31, L33, L34,
   L37, the L25 prototypes, L32), then rerun the boot.
+
+## Batch 2026-10-12 (train 2: 99.5% verified; build fixes)
+
+- **Train 2 landed on main 1be373e7.** It contains:
+  - L28 batches 1-2 (CRT start-up rows, claude-3) and L22 (lifter
+    rejections: MXCSR, SSE oracle, x87 forms, budget and switch rules,
+    RTTI-less vtables; claude-6). Their data was merged with
+    `merge_lift_data.py` (59,502 entries / 177,102 cases). **Gate: 59,217
+    of 59,500 verified (99.5%, 98.2% of code bytes).**
+  - L21 (boot, TIB/TEB unification), L27 (SEH dispatch), L31 (MSAA), L32
+    (network), L33 (readable mtcore), L34/L34b (options, window), L37
+    (D3DX), L39 (readable frame systems), L43 (IMM32), L44 (deflake), and
+    the L25 prototypes (call-target cache, inline memory fast path).
+  - Suites: ddruntime (all but one), `--no-default-features`, the light
+    crates and ddgpu all green; ddplay builds.
+- **Build fixes** (cba09f1e):
+  - The L25 fast-path accessors were `#[inline(always)]`. At opt-level 0
+    that copied the page-table check into every lifted memory access: the
+    shard rlibs grew 4x, to ~280 MB, and the runtime examples went past the
+    2 GB image limit (LNK1248). They are plain `#[inline]` now (a shard is
+    50 MB), with a rule in AGENT-RULES.
+  - The shards' debug=1 overrides moved from the test profile to dev, so
+    `cargo build` and `cargo test` share one build. After the gate, the
+    ddruntime tests and ddplay took under a minute to build.
+  - Measured on one 22 MB shard (`-Z time-passes`, one job):
+    - debug info: full 84 s, line tables 76 s, none 71 s; typeck plus
+      borrowck take ~37 s regardless;
+    - opt-level 1: 492 s, of which crate-local ThinLTO is 339 s;
+    - release at opt-level 3: 661 s; 528 s with LTO off;
+    - peak RSS ~3 GB per shard compiler.
+    heavy.py now gives a slot that runs alone with 20 GB free five cargo
+    jobs, and runs every job in a Windows Job Object (orphaned rustc/cargo
+    die with it; the idle watchdog uses the job's CPU accounting).
+- **Found by the train:** `tests/options.rs` (L34, first run) stops at
+  0x012EE130. That is a jump-table tail of the CRT memcpy variant
+  0x012EDE40, past Ghidra's end of the function. The lifted body treats it
+  as external, yet the function counts as verified because its vectors
+  never reach it. The test is ignored with that reason; brief L45
+  (claude-6) fixes the rule and the verification hole.
+- **Train 3** (worktree `E:\ddda-rs-wt\train3`, assembled): L28-crt, L41
+  (frame oracle), L25-results, L42 (parallel guest threads; conflicts with
+  train 2 resolved by the head). Waiting for L27b (claude-6, after L45) and
+  Codex's L28b recorder batches.
+- **One next action:** claude-2 reruns the boot on main (`__fpmath`, the
+  sine-table initializers and `__aulldvrm` are fixed by train 2's data).
