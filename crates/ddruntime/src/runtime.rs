@@ -49,6 +49,7 @@ pub struct Runtime {
     pub(crate) machine: GuestCell<Option<crate::threads::Machine>>,
     pub(crate) state: GuestCell<crate::services::State>,
     pub(crate) files: GuestCell<crate::files::Files>,
+    pub(crate) steam: GuestCell<crate::steam::Steam>,
     pub(crate) desktop: GuestCell<crate::user32::Desktop>,
     pub(crate) d3d: GuestCell<crate::d3d9dev::Objects>,
     pub(crate) graphics: GuestCell<crate::d3d9draw::Graphics>,
