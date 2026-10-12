@@ -3,6 +3,11 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x004AE750 (DDDA.exe 2017-12-13 Steam), Global::FUN_004ae750.
+pub fn f_004ae750(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.ecx = m.u32(0u32.wrapping_add(0x18D0BD8)); { let v = 0x0u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = 0xFFFFFFFFu32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = 0xFFFFFFFFu32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = 0x0u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let t = 0xDD34D0u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0x4AE763);  x86::call_ext(m, cpu, t);  }  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x4AE8E0))(m, cpu); return;
+}
+
 // Translated from 0x004AE770 (DDDA.exe 2017-12-13 Steam), Global::FUN_004ae770.
 pub fn f_004ae770(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x4AE770;
@@ -6968,9 +6973,4 @@ pub fn f_004c83d0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x004C83E0 (DDDA.exe 2017-12-13 Steam), uEm5500_00::vf231.
 pub fn f_004c83e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = 0x104u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x004C83F0 (DDDA.exe 2017-12-13 Steam), uEm5500_00::vf232.
-pub fn f_004c83f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x126u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

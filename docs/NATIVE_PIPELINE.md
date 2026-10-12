@@ -483,6 +483,19 @@ real object layouts, allocator behavior or game constants:
   small, and non-image words mix small values with object pointers (one
   choice in eight). Mocked EAX is an object pointer, ECX/EDX are small.
 
+Zero-return strategies (L17) keep a page distribution and make every
+mocked callee return zero (EAX, ECX, EDX, xmm0 and any st0 push; the
+inferred stack pop is unchanged). They exist for worker-thread loops that
+wait until a call returns 0 and then break on a flag in memory: random
+returns almost never leave the wait, all-zero inputs leave it but keep the
+flag clear.
+
+- `mockzero-v1`: default random pages and registers.
+- `small-mockzero-v1`, `objects-mockzero-v1`: small-v1 / objects-v1 pages
+  and registers, for such loops that also walk a count read from memory
+  (the resource worker's queue). Up to the first mocked call each run is
+  identical to its page strategy's.
+
 Each page is filled once, before the guest reads it, using a seed and page
 address. The recorder never changes a previously read value to influence
 a branch. Image bytes and original instructions are preserved. The vector
@@ -876,10 +889,28 @@ in source. The GDT page is emulator configuration, not fixture memory.
 SEH helpers are not ordinary callee frames: `__SEH_prolog4` 0x012F71E0
 returns with ESP equal to entry ESP minus 24 minus the allocation size
 from entry `[esp+8]`; `__SEH_epilog4` 0x012F7225 returns with ESP equal to
-entry EBP plus 4. They can return to the recorder sentinel but fail its
-ordinary positive stack-delta guard. A caller-frame entry/exit contract
-and paired-frame fixtures are needed; L15 does not relax that guard or
-special-case their addresses. Exception dispatch remains a runtime task.
+entry EBP plus 4. They return to the recorder sentinel but failed its
+ordinary stack-delta guard (ESP 4..0x404 above entry).
+
+**Caller-frame contract (L17).** `harness.frame_exit(address, body)`
+derives a function's exit ESP from its code: it walks every path with
+symbolic values (entry ESP or EBP plus a constant, plus or minus entry
+stack dwords `[esp+k]`, k >= 0, read before any write) and returns the one
+value every `ret` agrees on. Any call, indirect or outward jump, trap,
+unmodelled ESP write (`leave`, `and esp`, ...), store through an unknown
+pointer before a stack load, or disagreement gives None. When the result
+is frame-relative (entry EBP, or entry stack slots), `run_sparse` checks the
+observed ESP exactly against it, the slot values taken from the case's
+recorded input bytes, instead of the range; the case is tagged
+`"stack_contract": {"rule": "caller-frame-v1", "exit_esp": ...}`. All
+other guards stay, in particular the own-return check: the helper's `ret`
+must still reach the sentinel. Every other function keeps the range check,
+including plain `entry ESP + constant` exits outside it (misdecoded data at
+0x004E4843 ends in `ret 0x57e` and stays rejected).
+The three CRT helpers derive `esp - 0x18 - [esp+0x8]` (0x012F71E0),
+`ebp + 0x4` (0x012F7225) and `esp - 0x18 - [esp+0x4]` (`__EH_prolog3`
+body 0x01306F7F). Replay needs nothing new: it compares all registers.
+Exception dispatch remains a runtime task.
 
 **Image inputs and mock cleanup (L15).** `image-v1` explicitly tags the
 image-backed input policy, with seeded random inputs elsewhere. Existing
