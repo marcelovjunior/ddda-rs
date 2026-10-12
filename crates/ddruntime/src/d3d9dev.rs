@@ -65,6 +65,8 @@ pub enum Kind {
     Buffer { device: u32, data: Box<crate::d3d9res::BufferData> },
     /// IDirect3DQuery9: D3DQUERYTYPE, how far it is issued, the sampled value
     Query { device: u32, ty: u32, state: QueryState, value: u64 },
+    /// ID3DXConstantTable (D3DX9_43; crate::d3dx)
+    ConstantTable { data: Box<crate::d3dx::Table> },
 }
 
 /// Where a query is: never issued, between D3DISSUE_BEGIN and
@@ -170,6 +172,10 @@ pub(crate) fn release_of(object: u32) -> u32 {
                 vec![]
             }
             Kind::Shader { .. } | Kind::Declaration { .. } | Kind::Query { .. } => vec![],
+            Kind::ConstantTable { data } => {
+                data.free();
+                vec![]
+            }
         };
         for h in held {
             release_of(h);
@@ -888,7 +894,7 @@ pub const INTERFACES: &[Spec] = &[
 /// at run time.
 pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) -> Result<(), Conflict> {
     objects(|o| *o = Objects::default());
-    for spec in INTERFACES {
+    for spec in INTERFACES.iter().chain(crate::d3dx::INTERFACES) {
         let v = interfaces::vtable(m, registry, tokens, spec)?;
         objects(|o| o.vtables.insert(spec.name, v));
     }

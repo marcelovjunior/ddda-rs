@@ -20,6 +20,7 @@ pub mod d3d9dev;
 pub mod d3d9draw;
 pub mod d3d9res;
 pub mod d3d9state;
+pub mod d3dx;
 pub mod dispatch;
 pub mod files;
 pub mod image;

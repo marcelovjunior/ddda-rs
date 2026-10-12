@@ -118,3 +118,14 @@ fn every_game_shader_reflects_like_d3dx9_43() {
     }
     assert!(compared > 0 && differ == 0);
 }
+
+/// The DLL's answers outside the game's use (prints): a shader without a
+/// constant table, and flags 0.
+#[test]
+fn edge_cases() {
+    let Some(dll) = d3dxref::D3dx::load() else { return };
+    // vs_3_0: dcl_position v0; dcl_position o0; mov o0, v0
+    let bare = [0xFFFE_0300u32, 0x0200_001F, 0x8000_0000, 0x900F_0000, 0x0200_001F, 0x8000_0000, 0xE00F_0000, 0x0200_0001, 0xE00F_0000, 0x90E4_0000, 0x0000_FFFF];
+    eprintln!("no constant table, flags 0x20000: {:?}", dll.constant_table(&bare, FLAGS).map(|t| t.constants.len()).map_err(|e| format!("{:#x}", e as u32)));
+    eprintln!("no constant table, output semantics: {:?}", dll.output_semantics(&bare));
+}
