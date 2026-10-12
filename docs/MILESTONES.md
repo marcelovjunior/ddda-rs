@@ -1,7 +1,23 @@
 # Milestones
 
+### L55/L56 integrated emulator gate (2026-10-12)
+
+- Main `b4462b88` / L56 merged with the L55 state fixes. Corrected root
+  dispatch: 573 roots / 1,704 earlier cases could use native bindings;
+  the new gate executes those roots in the emulator.
+- **7,764/7,764 cases**, **2,615 functions**, **zero mismatches or skips**;
+  release sample **174.98 seconds**, **22 synthetic checks pass**.
+- **100,000 calls: 396 ms; 3-million-iteration loop: 20 ms.** Candidate
+  instruction hooks preserve numeric correctness and L56 integer speed.
+- Shared input SHA-256/size/mtime audit **unchanged**; native-L28c untouched.
+  Evidence and scope: [L55 integration](tasks/L55-emu-differential.md#l56-integration).
+- **Next action:** head merges and rechecks the title-screen boot.
+
 ### L55 emulator differential validation (2026-10-12)
 
+- **Coverage correction during L56 integration:** 1,704 initial cases could
+  dispatch a bound root natively. The initial count below is a mixed-root
+  baseline, superseded by the corrected integration gate above.
 - **7,764/7,764 recorded cases**, **2,615 verified functions**: FS 43,
   flags/calls 592, x87 580, SSE 596, random 5,953; no mismatches or skips.
 - **16 synthetic checks pass.** Fixed selector/CPL transfer, page-spanning
@@ -11,6 +27,41 @@
   Final EFLAGS/full XMM are absent from recordings and checked synthetically.
   Details and remaining protocol limits: [L55](tasks/L55-emu-differential.md#results).
 - **Next action:** head merges the batch and rechecks title-screen boot.
+
+### L28c remaining recorder review (2026-10-12)
+
+- **+0 functions / +0 cases**; audit preserves all **59,685 / 177,649**.
+- **56a434b8**, **78 tests pass**: finite integer proofs can cross opaque
+  vector shuffles and x87 exchanges. Two recipes now reach explicit
+  floating-comparison blockers; no numeric branch facts are guessed.
+- RESIDUALS documents **nine recorder set-asides** and moves **565308 /
+  56532A** to the lifter owner for credit through recorded parent 5652E0.
+  Main **17add4c7** merged; no generation or Rust build.
+- **Next action:** recorder entries from the title/gameplay emulator log;
+  revisit set-asides when new evidence addresses their stated blockers.
+
+### L28c shared continuation inputs (2026-10-12, pending replay)
+
+- **+7 functions / +21 cases**, all 3/3; private **59,685 / 177,649**.
+  Audit preserves every **59,678 / 177,628** baseline record/case.
+- Train 15 merged; owner boundary rule integrated as **2d1a4f80**.
+  **205 light tests**, then **76 focused tests** for checked-caller bounds.
+- D29AF0 caller replays pass, but ordinary and proof-enabled target trials
+  still reach the limit. RESIDUALS: **49 rows, 23 pending, 11 unfinished
+  recorder rows**. No generation or Rust build; head replay required.
+- **Next action:** remaining finite-bound inputs, boot requests first;
+  coordinate the two inherited-frame entries with the lifter owner.
+
+### L28c frame and scalar input batches (2026-10-12, pending replay)
+
+- **+16 functions / +48 cases**, all 3/3; private **59,678 / 177,628**.
+  Every audit preserves all **59,662 / 177,580** baseline records/cases.
+- Latest main **1ed8c4aa** merged; **202 light tests pass**. All recorders
+  exited. RESIDUALS: **49 rows, 16 pending**, 34 recorder / 15 lifter or gap.
+- **Next action:** prepare shared CRT tails with the owner-confirmed L50
+  rule; remaining bound/caller-state trials still hit the instruction limit.
+
+
 
 ### L28c bounded callee cleanup batch (2026-10-12, pending replay)
 

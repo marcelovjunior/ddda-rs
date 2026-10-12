@@ -196,7 +196,7 @@ PAGE_STRATEGIES = ('small-v1', 'objects-v1', 'zero-objects-v1')
 # come from the named page strategy (None: the default random fill).
 MOCKZERO = {'mockzero-v1': None, 'small-mockzero-v1': 'small-v1', 'objects-mockzero-v1': 'objects-v1'}
 RETURN_STRATEGIES = tuple(MOCKZERO)
-INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'frame-call-v1', 'body-call-v1', 'record-range-v1',
+INPUT_STRATEGIES = (*PAGE_STRATEGIES, 'image-v1', 'image-bounded-v1', 'guarded-bounded-v1', 'guarded-objects-v1', 'guarded-stack-v1', 'guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1', 'zero-call-v1', 'bulk-call-v1', 'wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1', 'record-range-v1',
                     'slot-sweep-v1', *RETURN_STRATEGIES)
 # Strategies that take an evidence-derived input_layout (record_inputs.py,
 # sentinel_inputs.py, body_cleanup.py, L48 slot_sweep_layout).
@@ -775,7 +775,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                x87_push=frozenset(), body=None, noreturn_sites=frozenset(), noreturn_targets=frozenset(),
                max_seconds=None, input_strategy=None, original_entry=False, x87_entry=0, frame_contracts=None,
                terminal=False, input_layout=None, visited=None, initial_state=None, capture_state=None,
-               capture_call=None):
+               capture_call=None, x87_pop=()):
     """Run `address` with every general register random (ESP points into a
     random stack page holding the return address), every untouched page
     mapped on first access and filled with seeded random bytes. Returns
@@ -803,7 +803,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     taken to return a float in st0 (lift.returns_float): there the mock
     pushes a random finite float onto the x87 stack (through a trampoline,
     `fld dword [X87_SLOT]; jmp [X87_SLOT + 4]`) and records it as
-    "st_push"; the replay pushes the same bits.
+    "st_push"; the replay pushes the same bits. `x87_pop` (L50, lift's
+    X87_POP_SITES: [return address, n] pairs) pops the n x87 values such a
+    callee takes, before any push, through a sled of `fstp st(0)` on the
+    same page, recorded as "st_pop"; the replay pops as many.
 
     `zero_inputs` is an opt-in boundary fixture: non-image memory, initial
     general registers except ESP, and mocked return values are zero. Image
@@ -873,6 +876,22 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     It leaves all older input distributions and mock contracts unchanged.
     `frame-call-v1` additionally recognizes the second EBP save in aligned
     frames with matching restores, excluding it from outgoing mock arguments.
+    `prefix-call-v1` permits register arithmetic around a fixed entry-frame
+    allocation only when every return has matching cleanup.
+    `ebp-call-v1` also recognizes a stable aligned EBP frame restored at
+    every return, with matching saved-register order.
+    `outgoing-call-v1` also counts an entry allocation when all finite
+    paths end in an indirect call followed immediately by a return.
+    `tail-frame-v1` also recognizes fixed local cleanup before an external
+    tail jump; conditional exits without cleanup remain refused.
+    `one-call-v1` uses the same frame hints but returns scalar EAX=1 from
+    ordinary mocks; all other volatile mock outputs retain zero values.
+    `null-call-v1` additionally uses a null-memory fast return only when
+    the actual generated memory selects the checked EAX=0/RET path.
+    `exception-frame-v1` excludes inline exception-frame pushes when the
+    entry FS link and every return unlink have matching stack layouts.
+    `borrowed-frame-v1` also tracks paired EBP saves while a function
+    temporarily uses another frame, requiring restoration before LEAVE.
     `body-call-v1` adds a mock cleanup hint from supplied callee bodies only
     when their control flow is complete and all return immediates agree.
     Unknown edges retain the existing fallback; the layout is recorded.
@@ -890,6 +909,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     import time
     from capstone import Cs, CS_ARCH_X86, CS_MODE_32
     rnd = random.Random(seed)
+    x87_pops = {r: n for r, n in (x87_pop or ())}
     if initial_state is not None:
         from constructed_inputs import validate_state
         validate_state(initial_state)
@@ -907,7 +927,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     # zero EAX this input exercises their zero-allocation return path.
     if input_strategy == 'guarded-state-v1' and initial_state is None:
         raise ValueError('guarded-state-v1 requires checked setup state')
-    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1', 'frame-call-v1', 'body-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1')
+    call_stack = input_strategy in ('zero-call-v1','bulk-call-v1','wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1','guarded-bounded-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1', 'sentinel-records-v1')
     zero_values = zero_inputs or call_stack
     page_strategy = MOCKZERO.get(input_strategy, input_strategy)
     inputs = SparseInputs(page_strategy) if page_strategy in PAGE_STRATEGIES else None
@@ -1481,13 +1501,32 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
     own = {}
     saved_pushes = saved_push_sites(address, body) if end is not None else set()
     local_allocations = local_alloc_sites(address, body) if end is not None else set()
-    if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'body-call-v1') and end is not None:
+    if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1') and end is not None:
         from wrapper_inputs import fixed_frame_allocations
-        local_allocations |= fixed_frame_allocations(address,body,code)
+        local_allocations |= fixed_frame_allocations(address,body,code,
+            arithmetic_prefix=input_strategy in ('prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1'),
+            tail_exits=input_strategy in ('tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1'))
 
-    if input_strategy in ('frame-call-v1', 'body-call-v1') and end is not None:
+    if input_strategy in ('frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1') and end is not None:
         from wrapper_inputs import aligned_frame_saves
         saved_pushes |= aligned_frame_saves(address, body, code)
+
+    if input_strategy in ('ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1') and end is not None:
+        from wrapper_inputs import ebp_frame_allocation
+        local_allocations |= ebp_frame_allocation(address, body, code)
+
+    if input_strategy == 'exception-frame-v1' and end is not None:
+        from wrapper_inputs import exception_frame_pushes
+        saved_pushes |= exception_frame_pushes(address, body, code)
+
+    if input_strategy == 'borrowed-frame-v1' and end is not None:
+        from wrapper_inputs import borrowed_frame_pushes
+        saved_pushes |= borrowed_frame_pushes(address, body, code, static_pop, saved_pushes)
+
+    outgoing_allocations = set()
+    if input_strategy in ('outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1') and end is not None:
+        from wrapper_inputs import initial_outgoing_allocation
+        outgoing_allocations = initial_outgoing_allocation(address, body, code)
 
     def on_ext(uc_, pc, size, _):
         if stopped[0]:
@@ -1511,6 +1550,8 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 pending_call[0] = (i.address+i.size, uc_.reg_read(UC_X86_REG_ESP), pushed[0])
                 pushed[2], pushed[0] = pushed[0], 0
             prologue = (i.mnemonic == "push" and i.operands[0].type == 1) or                 (i.mnemonic == "mov" and i.op_str == "ebp, esp") or                 (i.mnemonic in ("sub", "and") and i.op_str.startswith("esp, "))
+            if i.address in outgoing_allocations:
+                pushed[1] = True
             if not pushed[1] and not prologue:
                 pushed[1] = True
             if pushed[1]:  # argument space: pushes and `sub esp, N` (float args stored with movss)
@@ -1525,7 +1566,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                     pushed[0] = max(0, pushed[0] - 4)
             return
         i, branch[0] = branch[0], None
-        if i is None and not (0x00400000 <= pc < 0x02000000) and pc != 0x0DEAF000                 and not X87_TRAMP <= pc < X87_TRAMP + 12:
+        if i is None and not (0x00400000 <= pc < 0x02000000) and pc != 0x0DEAF000                 and not X87_TRAMP <= pc < X87_TRAMP + 0x60:
             # running code outside the exe: a mocked callee's stack pop was
             # wrong and a `ret` went astray. Not a valid case.
             bad.append(f"execution outside the image at {pc:#010x}")
@@ -1541,10 +1582,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                                          registers={n: v for n, v in ev["regs"].items() if n != "esp"}, esp=esp)
         direct = i.operands[0].type == 2  # X86_OP_IMM
         wrapper = False
-        if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'body-call-v1') and direct and i.mnemonic == 'call':
+        if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1') and direct and i.mnemonic == 'call':
             from wrapper_inputs import virtual_tail_wrapper
             wrapper = virtual_tail_wrapper(pc,code)
         pop = static_pop(pc) if direct or i.mnemonic != "call" else pushed[2]
+        if input_strategy == 'null-call-v1' and direct and i.mnemonic == 'call':
+            from wrapper_inputs import null_leaf_cleanup
+            null_pop = null_leaf_cleanup(pc, code, ev['regs'], mread)
+            if null_pop is not None:
+                pop = null_pop
         if wrapper:
             pop = pushed[2]
         if cleanup_inputs is not None and direct and i.mnemonic == 'call':
@@ -1572,7 +1618,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 writes_esp = any(cleanup.reg_name(r) == 'esp' for r in cleanup.regs_access()[1])
                 if (cleanup.mnemonic == "add"
                         and cleanup.op_str.startswith("esp, ") and cleanup.operands[1].type == 2):
-                    if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'body-call-v1'):
+                    if input_strategy in ('wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1'):
                         following = next(dmd.disasm(code(after+cleanup.size,15),after+cleanup.size,count=1),None)
                         frame_sizes = {next(dmd.disasm(code(site,15),site,count=1)).operands[1].imm
                                        for site in local_allocations}
@@ -1619,10 +1665,15 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             out.update(inputs.returns(rnd))
         if mock_zero:
             out.update(eax=0, ecx=0, edx=0, xmm0=[0] * 4)
+        if input_strategy == 'one-call-v1':
+            out['eax'] = 1
         for n, r in (("eax", UC_X86_REG_EAX), ("ecx", UC_X86_REG_ECX), ("edx", UC_X86_REG_EDX)):
             uc_.reg_write(r, out[n])
         uc_.reg_write(UC_X86_REG_XMM0, sum(v << (32 * k) for k, v in enumerate(out["xmm0"])))
         uc_.reg_write(UC_X86_REG_ESP, (esp + 4 + pop) & 0xFFFFFFFF)
+        pops = x87_pops.get(ret, 0)
+        if pops:
+            out["st_pop"] = pops  # the callee takes these x87 values (L50)
         if ret in x87_push:  # the callee returns a float: push it on the way back
             v = struct.unpack("<I", struct.pack("<f", rnd.uniform(-1000, 1000)))[0]
             if inputs:
@@ -1631,7 +1682,10 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
                 v = 0
             out["st_push"] = v
             uc_.mem_write(X87_SLOT, struct.pack("<II", v, ret))
-            ret = X87_TRAMP
+            ret = X87_TRAMP + (0x30 - 2 * pops if pops else 0)
+        elif pops:
+            uc_.mem_write(X87_SLOT + 4, struct.pack("<I", ret))
+            ret = X87_TRAMP + 0x50 - 2 * pops
         uc_.reg_write(UC_X86_REG_EIP, ret)
         calls.append({**ev, "out": out})
 
@@ -1641,13 +1695,18 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
         uc.hook_add(UC_HOOK_CODE, on_ext)
     if visited is not None:
         uc.hook_add(UC_HOOK_CODE, lambda uc_, pc, size, _: visited.add(pc))
-    if x87_push:
+    if x87_push or x87_pops:
         # fixed code on its own page (Unicorn caches translated code per
-        # page): fld dword [X87_SLOT]; jmp dword [X87_SLOT + 4]
+        # page): fld dword [X87_SLOT]; jmp dword [X87_SLOT + 4]. L50: at
+        # +0x20 and +0x40 eight `fstp st(0)` lead into the same push and
+        # return, and into a plain return; n pops enter 2n bytes early.
+        fld = bytes([0xD9, 0x05]) + struct.pack("<I", X87_SLOT)
+        back = bytes([0xFF, 0x25]) + struct.pack("<I", X87_SLOT + 4)
         uc.mem_map(X87_TRAMP, 0x1000)
         uc.mem_map(X87_SLOT, 0x1000)
-        uc.mem_write(X87_TRAMP, bytes([0xD9, 0x05]) + struct.pack("<I", X87_SLOT)
-                     + bytes([0xFF, 0x25]) + struct.pack("<I", X87_SLOT + 4))
+        uc.mem_write(X87_TRAMP, fld + back)
+        uc.mem_write(X87_TRAMP + 0x20, bytes([0xDD, 0xD8]) * 8 + fld + back)
+        uc.mem_write(X87_TRAMP + 0x40, bytes([0xDD, 0xD8]) * 8 + back)
         pages_in[X87_TRAMP] = bytes(0x1000)  # premap: already mapped
         pages_in[X87_SLOT] = bytes(0x1000)
     uc.hook_add(UC_HOOK_MEM_UNMAPPED, on_unmapped)
@@ -1663,7 +1722,7 @@ def run_sparse(address, seed, max_insn=20000, end=None, lifted=frozenset(), zero
             v = 0
         if inputs:
             v = inputs.register(rnd, name)
-        if input_strategy in ('bulk-call-v1','wrapper-call-v1', 'frame-call-v1', 'body-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1') and name != 'esp':
+        if input_strategy in ('bulk-call-v1','wrapper-call-v1', 'frame-call-v1', 'prefix-call-v1', 'ebp-call-v1', 'outgoing-call-v1', 'tail-frame-v1', 'one-call-v1', 'null-call-v1', 'exception-frame-v1', 'borrowed-frame-v1', 'body-call-v1','guarded-objects-v1','guarded-stack-v1','guarded-stores-v1', 'guarded-state-v1', 'guarded-input-v1', 'guarded-values-v1') and name != 'esp':
             # Register-passed objects must not all alias zero-return mocks
             # at address zero. Reuse the existing register-pointer palette.
             v = SparseInputs('zero-objects-v1').register(rnd,name)

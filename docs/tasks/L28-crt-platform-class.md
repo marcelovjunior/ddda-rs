@@ -35,6 +35,157 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Remaining recorder review: nine set aside (2026-10-12)
+
+**No new records.** Private **59,685 functions / 177,649 cases** are
+unchanged byte-for-byte per record/case in `L28c/opaque-numeric-audit.json`;
+no additions, promotions, removals, unexpected changes or stale mocks.
+All diagnostic runs used heavy.py serially and have exited. Latest main
+**17add4c7** is merged; no generation or Rust build.
+
+**56a434b8** adds a general finite-proof rule for **SHUFPS, SHUFPD and
+FXCH**: integer control flow survives numeric reordering, while numeric
+outputs remain unknown and prior zero-vector facts are invalidated.
+**78 focused tests pass**, including an original-emulator integer-loop
+comparison and refusal to infer a shuffled value from a prior zero.
+No floating comparison, instruction ceiling or recorder guard was relaxed.
+
+The five bound diagnostics identify these stopping points:
+
+| Entry | Finite-proof blocker after the supported rules |
+|---|---|
+| 004EE720 | First indirect CALL EDX at 4EE736; outgoing argument count is unestablished before the first root call. |
+| 00689960 | COMISS XMM0,[EAX+4], next PC 68D945; floating comparison facts unknown. |
+| 00815C60 | COMISS at 816522; checked-constructor proof previously reaches it after 9,319 instructions. |
+| 012A5B30 | SHUFPS now traversed; COMISS 12A47C0 stops all three proofs after 105 steps. |
+| 01314A90 | FXCH now traversed; FCOMP ST(3) at 1314B7B stops all three proofs after 108 steps. |
+
+Each diagnostic target run reaches the ordinary instruction limit. The
+last two have three fresh attempts each; none produced an accepted case.
+Private evidence: `L28c/remaining-proof-diagnostics.jsonl` and the final
+`structured-guarded-values-v1.jsonl` entries. These rows are set aside
+until their stated dispatch or floating comparison facts can be proved.
+
+The existing setup evidence also sets aside **493AA0** (both setup orders
+change accepted observations), **4A0C00** (unknown linked-object facts),
+**D29AF0** (exact caller replay succeeds, but target bound remains
+unproved), and **12EFA1E** (requires an evidenced exception continuation
+frame and destination). RESIDUALS retains the detailed blocker and what
+would permit each recipe to resume; no speculative fixture was forced.
+
+Per claude-6 **#9859**, **565308 and 56532A** belong to the **cross-entry
+boundary** class with owner **5652E0**. They need no standalone fixture:
+inventory credits them when the parent is verified. Existing 565308 data
+remains unchanged; the head may dispose of that stale standalone record
+when integrating the recorded parent.
+
+**Map:** 49 residual rows, 23 with private cases awaiting replay;
+**nine recorder rows set aside**, two transferred to the lifter owner.
+**Next action:** prioritize entries from the title/gameplay emulator log;
+resume a set-aside row only when new state or proof evidence addresses
+its recorded blocker. The prior +7 batch remains snapshotted for train 17.
+
+
+### Shared continuation inputs: +7/+21 (2026-10-12, pending replay)
+
+Train 15 main **79c22a5b** merged as **0dd0c196**; generated output was
+not regenerated. Per owner confirmation #9844, integrated the unchanged
+L50 boundary rule **ff91ed8f** as **2d1a4f80**. It includes the actual
+shared frame restoration in six CRT bodies and both continuations in
+0x005652E0 (11 -> 33 instructions).
+
+Existing **zero-call-v1** records **3/3** for **005652E0, 012F693F,
+012F6948, 012F6A6F, 012F6A78, 01300DFF, 01329888**. The inferred
+one-value x87 entry contracts of 012F6948, 012F6A78 and 01329888 are
+supplied by the existing finite x87 input generator. No return or CPU
+check changed. Private totals: **59,685 functions / 177,649 cases**.
+`L28c/shared-tail-audit.json` preserves every baseline **59,678 / 177,628**;
+no changed records, promotions, removals or stale mocks. Frozen comparison
+base remains **native-train3-orig**; additions remain in **native-L28c**.
+
+**General checked-caller input improvement:** **295beb39** identifies
+caller-replay rejections separately from target rejections. **f413a2b7**
+adds `caller_state.py --bounded`: the caller still replays every accepted
+observation exactly, then guarded-state-v1 may establish a finite target
+bound from captured state. The original limit remains when no proof fits.
+A synthetic 12,000-trip loop rejects at the ordinary limit and returns
+with the proved bound while reading the caller's saved local.
+
+For **D29AF0**, nine exact caller replays from six callers pass; all nine
+target runs reach the instruction limit. Three bounded-state target trials
+also reach that limit: no finite bound or replacement fixture was adopted.
+This resolves the earlier ambiguity about which phase failed.
+
+**Validation:** 205 light tests after the merge/boundary integration;
+76 focused caller/setup/bound tests after the new opt-in. All recording
+runs went serially through heavy.py; all workers exited. No Rust build or
+replay: head integration remains required. RESIDUALS has **49 rows, 23
+pending replay**, leaving **11 unfinished recorder rows**. 493AA0 stays
+set aside. Owner disposition of standalone 565308/56532A, now decoded
+inside 5652E0, was requested in board #9849; existing 565308 records remain
+unchanged. **Next action:** remaining finite-bound inputs, with boot
+requests first; resolve the continuation rows with the lifter owner.
+
+
+### Frame and scalar inputs: +16/+48 (2026-10-12, pending replay)
+
+Latest main **1ed8c4aa** merged before handoff (train 14 still credits
+**59,391 / 59,440**). Every addition below records **3/3**:
+
+| General input strategy | Added functions | Commit / existing strategy |
+|---|---|---|
+| Fixed frame with interleaved arithmetic | 4644D0, 691AE0, 691E50, 692A40 | 093c5223 |
+| Aligned locals restored through stable EBP | 7BEA60, 9D0E70, A195D0, BD45C0 | 4e20bc48 |
+| Entry outgoing area consumed by final call | B75EC0 | 496bd72e |
+| Fixed local cleanup before a tail jump | 7126C0 | 912d5ba2 |
+| Checked null-memory return path | CED240 | 347fae6e |
+| Inline exception frame with matching unlink | CEEBC0 | 50cdbee2 |
+| Scalar-one ordinary mock returns | 410000, E0D750 | 7b862033 |
+| Checked global initializer state | DA46C0 | existing constructed-v1 |
+| Paired temporary EBP saves | 12FF0F0 | 01297649, tests d44e4adb |
+
+**202 light tests pass after merging main.** Private totals are
+**59,678 functions / 177,628 cases**, **+16/+48**. Every per-batch audit
+preserves all **59,662 functions / 177,580 cases** from
+`L28c/prefix-before.json`. Final `L28c/floating-one-call-v1-audit.json`
+confirms no changed records/cases, promotions, removals or stale mocks.
+All recording workers have exited. Original instruction limits and global
+return/memory/CPU guards remain unchanged; full Rust replay is still pending.
+
+The null-return rule checks the actual generated dword before using the
+decoded EAX=0/RET path; it makes no cleanup claim for the virtual branch.
+The scalar-one strategy covers an input value absent from the earlier
+multiples-of-four palette, completing two waits without raising the limit.
+DA46C0 uses exact replay of verified initializer **137E5C0**, which seeds the
+global state through verified **D006C0**. Every accepted setup observation
+matches before its state is used. Temporary EBP saves are tracked on every
+acyclic path; direct cleanup may consume only arguments, indirect calls have
+no pending arguments, and each frame save must be restored before LEAVE.
+
+**Unresolved trials:** EBP-frame inputs for 4EE720, 689960 and 815C60, and
+scalar-one inputs for those three plus 12A5B30 and 1314A90, all reach the
+instruction limit (3/3 attempts each). D29AF0's checked-caller attempts from
+C9DDF0, C9DF30 and C9EDD0 also reach that limit. No replacement cases were
+adopted for these rows. **493AA0 remains set aside.** These observations do
+not establish that the underlying functions are unbounded.
+
+**Updated map and next action:** RESIDUALS has **49 rows, 16 pending replay**.
+Owner confirmations #9784/#9823 move the three independent CRT tail entries
+12F693F, 12F6A6F and 1300DFF to the recorder lane: **34 recorder / 15 lifter
+or gap**, with **18 recorder rows unfinished**. L50 **a395f418** now includes
+130070B inside 12F693F, 12F6A6F, 1329888 and 12F6948. Prepare with that rule
+for the next shared-tail batch; check 12F6A78's body at the same time. Boot
+requests take priority. L50 also flags currently verified 7128B0, 712D90 and
+A68400 for possible input refresh after the x87 contract change; they remain
+outside this non-verified census and were not changed in this append batch.
+
+**Handoff:** `E:/ddda-re/notes/native-L28c`, frozen base
+`E:/ddda-re/notes/native-train3-orig` untouched. Receipt:
+`L28c/frame-input-handoff.json`. SHA-256:
+
+- `patterns/lift.json`: `acaa685ddec1f9c15410d8faec9da80cd261bfb569e8a52667c2f2722ac4243c`
+- `vectors/lift.json`: `b038e3777a8a5102a069a108f31d884afc4f871667e0c72497df29009bd64115`
+
 ### Bounded callee cleanup inputs: +9/+27 (2026-10-12, pending replay)
 
 **All nine targeted dispatchers record 3/3:** 685B40, 83FFF0, B952C0,

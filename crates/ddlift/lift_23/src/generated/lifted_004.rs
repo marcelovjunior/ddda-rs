@@ -3,6 +3,21 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00BF1070 (DDDA.exe 2017-12-13 Steam), uShlIceBlock::vf60.
+pub fn f_00bf1070(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0xBF1070;
+    loop {
+        match pc {
+            0xBF1070 => { cpu.edx = m.fast_u32(pt, cpu.esp.wrapping_add(0x8)); cpu.eax = 0x2u32; { let r = cpu.fl.alu_and((m.fast_u8(pt, cpu.edx.wrapping_add(0x206C)) as u32), ((cpu.eax >> 0) & 0xFF), 8); } pc = if cpu.fl.cond("e") { 0xBF1090 } else { 0xBF1081 }; continue; }
+            0xBF1081 => { { let r = cpu.fl.alu_sub(m.fast_u32(pt, cpu.ecx.wrapping_add(0x29F4)), 0x1u32, 32); } pc = if cpu.fl.cond("ne") { 0xBF1090 } else { 0xBF108A }; continue; }
+            0xBF108A => { m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x29F4), cpu.eax); pc = 0xBF1090; continue; }
+            0xBF1090 => { cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x00BF10A0 (DDDA.exe 2017-12-13 Steam), uShlIceBlock::vf59.
 pub fn f_00bf10a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();

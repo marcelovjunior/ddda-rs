@@ -491,3 +491,187 @@ fn observed_integer_loop_reaches_the_diagnostic_deadline() {
         .unwrap()
         .contains("diagnostic time limit"));
 }
+
+#[test]
+fn a_hot_emulated_loop_runs_fast() {
+    // 3 million iterations of a 2-instruction loop: the per-block hook must
+    // stay cheap (L56: the audio decoder's emulated loops starved the game)
+    std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    // mov ecx, 3000000; l: dec ecx; jnz l; mov eax, 7; ret
+    let code = [
+        0xB9, 0xC0, 0xC6, 0x2D, 0x00, 0x49, 0x75, 0xFD, 0xB8, 0x07, 0x00, 0x00, 0x00, 0xC3,
+    ];
+    for (k, b) in code.iter().enumerate() {
+        m.set_u8(CODE + k as u32, *b);
+    }
+    let registry = Registry::new();
+    let mut cpu = Cpu {
+        esp: STACK - 0x100,
+        ..Cpu::default()
+    };
+    cpu.esp -= 4;
+    m.set_u32(cpu.esp, RETURN);
+    let t0 = std::time::Instant::now();
+    registry.call(&mut m, &mut cpu, CODE).expect("emulated");
+    let took = t0.elapsed();
+    assert_eq!((cpu.eax, cpu.ecx), (7, 0));
+    eprintln!("3M-iteration loop: {took:?}");
+}
+
+#[test]
+fn many_short_emulated_calls_are_cheap() {
+    // a decoder calls short untranslated functions per packet: the cost of
+    // entering the emulator must stay small (L56)
+    std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    for (k, b) in [0x8B, 0x44, 0x24, 0x04, 0x40, 0xC3].iter().enumerate() {
+        m.set_u8(CODE + k as u32, *b); // mov eax, [esp+4]; inc eax; ret
+    }
+    let registry = Registry::new();
+    let t0 = std::time::Instant::now();
+    for n in 0..100_000u32 {
+        let mut cpu = Cpu {
+            esp: STACK - 0x100,
+            ..Cpu::default()
+        };
+        cpu.esp -= 4;
+        m.set_u32(cpu.esp, n);
+        cpu.esp -= 4;
+        m.set_u32(cpu.esp, RETURN);
+        registry.call(&mut m, &mut cpu, CODE).expect("emulated");
+        assert_eq!(cpu.eax, n + 1);
+    }
+    eprintln!("100k short calls: {:?}", t0.elapsed());
+}
+
+#[test]
+fn x87_and_sse_state_cross_the_emulator() {
+    // fld1; fldpi; faddp st1 (st0 = 1 + pi); addps xmm0, xmm0; ret
+    std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    for (k, b) in [0xD9, 0xE8, 0xD9, 0xEB, 0xDE, 0xC1, 0x0F, 0x58, 0xC0, 0xC3]
+        .iter()
+        .enumerate()
+    {
+        m.set_u8(CODE + k as u32, *b);
+    }
+    let registry = Registry::new();
+    let mut cpu = Cpu {
+        esp: STACK - 0x100,
+        ..Cpu::default()
+    };
+    cpu.xmm[0] = [1.5f32.to_bits(), 2.0f32.to_bits(), (-3.0f32).to_bits(), 0];
+    cpu.xmm[3] = [7, 8, 9, 10];
+    cpu.esp -= 4;
+    m.set_u32(cpu.esp, RETURN);
+    registry.call(&mut m, &mut cpu, CODE).expect("emulated");
+    assert_eq!(
+        cpu.xmm[0],
+        [3.0f32.to_bits(), 4.0f32.to_bits(), (-6.0f32).to_bits(), 0],
+        "addps"
+    );
+    assert_eq!(cpu.xmm[3], [7, 8, 9, 10], "untouched XMM survives");
+    assert_eq!(cpu.st.depth(), 1, "one value left on the x87 stack");
+    let top = f32::from_bits(cpu.st.top_f32().expect("st0"));
+    assert!(
+        (top - (1.0 + std::f32::consts::PI)).abs() < 1e-6,
+        "st0 = 1 + pi, got {top}"
+    );
+}
+
+#[test]
+fn changed_code_is_reclassified_for_numeric_state() {
+    use ddnative_base::x86;
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    let helper = CODE + 0x100;
+    // First execute NOPs, then write ADDPS XMM0,XMM0 at the same address.
+    // The old block classification must not hide the new numeric instruction.
+    let mut code = vec![0xb8, 0x0f, 0x58, 0xc0, 0]; // numeric-looking immediate
+    code.push(0xe8);
+    code.extend(helper.wrapping_sub(CODE + code.len() as u32 + 4).to_le_bytes());
+    for (k, byte) in [0x0f, 0x58, 0xc0].into_iter().enumerate() {
+        code.extend([0xc6, 0x05]);
+        code.extend((helper + k as u32).to_le_bytes());
+        code.push(byte);
+    }
+    code.push(0xe8);
+    code.extend(helper.wrapping_sub(CODE + code.len() as u32 + 4).to_le_bytes());
+    code.push(0xc3);
+    m.poke(CODE, &code).unwrap();
+    m.poke(helper, &[0x90, 0x90, 0x90, 0xc3]).unwrap();
+    let mut cpu = Cpu {
+        esp: STACK - 0x100,
+        ..Cpu::default()
+    };
+    cpu.xmm[0] = [f32::MAX.to_bits(); 4];
+    m.set_u32(cpu.esp, RETURN);
+    x86::ldmxcsr(x86::MXCSR_DEFAULT);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ddruntime::emu::run(&Registry::new(), &mut m, &mut cpu, CODE);
+    }));
+    let mxcsr = x86::stmxcsr();
+    x86::ldmxcsr(x86::MXCSR_DEFAULT);
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+    assert_eq!(cpu.eax, 0x00c0580f, "immediate bytes are not instructions");
+    assert_eq!(cpu.xmm[0], [f32::INFINITY.to_bits(); 4]);
+    assert_eq!(mxcsr, 0x1fa8, "overflow and precision flags survive");
+}
+
+#[test]
+fn reused_instance_reloads_a_changed_teb() {
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    m.map(TEB, 0x2000, READ | WRITE).unwrap();
+    m.poke(CODE, &[0x64, 0xa1, 0x18, 0, 0, 0, 0xc3]).unwrap();
+    for base in [TEB, TEB, TEB + 0x1000, TEB] {
+        m.set_u32(base + 0x18, base);
+        let mut cpu = Cpu {
+            esp: STACK - 0x100,
+            fs_base: base,
+            ..Cpu::default()
+        };
+        m.set_u32(cpu.esp, RETURN);
+        ddruntime::emu::run(&Registry::new(), &mut m, &mut cpu, CODE);
+        assert_eq!(cpu.eax, base);
+        assert_eq!(cpu.fs_base, base);
+    }
+}
+
+#[test]
+fn requested_root_stays_emulated_even_when_it_has_a_native_binding() {
+    fn must_not_run(_: &mut dyn Mem, _: &mut Cpu) {
+        panic!("selected root reached its native binding");
+    }
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    // ADDSS XMM0,XMM1; DEC ECX; JNZ entry; RET. Resuming after a numeric
+    // instruction must not turn a loop back to the root into a native call.
+    m.poke(CODE, &[0xf3, 0x0f, 0x58, 0xc1, 0x49, 0x75, 0xf9, 0xc3])
+        .unwrap();
+    let mut cpu = Cpu {
+        esp: STACK - 0x100,
+        ecx: 3,
+        ..Cpu::default()
+    };
+    cpu.xmm[0][0] = 1f32.to_bits();
+    cpu.xmm[1][0] = 1f32.to_bits();
+    m.set_u32(cpu.esp, RETURN);
+    let mut registry = Registry::new();
+    registry.insert(CODE, Binding::Lifted(must_not_run)).unwrap();
+    ddruntime::emu::run(&registry, &mut m, &mut cpu, CODE);
+    assert_eq!(cpu.ecx, 0);
+    assert_eq!(cpu.xmm[0][0], 4f32.to_bits());
+}

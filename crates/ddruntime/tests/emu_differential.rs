@@ -237,7 +237,9 @@ fn compare(c: &Value, m: &mut Memory, closed: &HashMap<u32, x86::LiftFn>) -> Res
     }
     let mut registry = Registry::new();
     for (&a, &f) in closed {
-        registry.insert(a, Binding::Lifted(f)).unwrap();
+        if a != addr {
+            registry.insert(a, Binding::Lifted(f)).unwrap();
+        }
     }
     for &a in &targets {
         if registry.get(a).is_some() {
@@ -265,7 +267,10 @@ fn compare(c: &Value, m: &mut Memory, closed: &HashMap<u32, x86::LiftFn>) -> Res
             addr,
             written.clone(),
             Duration::from_secs(60),
-            |a| CALL_TARGET.with(|target| target.set(a)),
+            move |a| {
+                assert_ne!(a, addr, "selected root must execute original instructions");
+                CALL_TARGET.with(|target| target.set(a));
+            },
         );
     }));
     m.touched.extend(written.borrow().iter().map(|a| a & !4095));

@@ -750,8 +750,15 @@ it does not dispatch the tested root to a lifted function body.
 
 The recording format lacks final EFLAGS and full XMM outputs. Those fields,
 DF and extended x87 values are checked separately by synthetic call-out
-tests, rather than claimed as recorded coverage. **7,764 recorded cases in
-2,615 functions and 16 synthetic checks pass**, with zero sample exceptions
-and unchanged shared input hashes. The full sample's class
-counts, exceptions and reproduction commands are maintained in
-[L55 Results](tasks/L55-emu-differential.md#results).
+tests. Integration review found 1,704 initial cases could dispatch a bound
+root natively. The corrected runner excludes the root binding and rejects
+root call-outs; the emulator preserves original execution at entry and
+loop-back. The corrected release gate passes **7,764 cases / 2,615 functions**
+and **22 synthetic checks**, with unchanged shared input hashes.
+
+The L56 state-transfer optimizations remain: direct register reads, a
+host-backed scratch page and selective segment reloads. Numeric instruction
+hooks cover candidate addresses, keeping integer loops cheap. Release
+measurements: **100,000 calls in 396 ms**, **3 million loop iterations in
+20 ms**; full differential sample **174.98 seconds**. Class counts, scope
+and receipts are in [L55 Results](tasks/L55-emu-differential.md#l56-integration).

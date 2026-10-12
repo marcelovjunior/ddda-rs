@@ -3,6 +3,12 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00E6B070 (DDDA.exe 2017-12-13 Steam), Global::FUN_00e6b070.
+pub fn f_00e6b070(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    { let v = cpu.esi; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, v); } cpu.esi = cpu.ecx; cpu.esp = cpu.esp.wrapping_sub(4); m.fast_set_u32(pt, cpu.esp, 0xE6B078);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00DE0AA0))(m, cpu);  { for k in 0..4 { let (d, s) = (cpu.xmm[0][k], cpu.xmm[0][k]); cpu.xmm[0][k] = d ^ s; } } { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } m.fast_set_u32(pt, cpu.esi.wrapping_add(0xCC), cpu.eax); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xD8), cpu.eax); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xDC), cpu.eax); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xE0), cpu.eax); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xE4), cpu.eax); m.fast_set_u32(pt, cpu.esi, 0x14310A4u32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x4C), 0x1010u32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xD0), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xD4), cpu.xmm[0][0]); cpu.eax = cpu.esi; { let v = m.fast_u32(pt, cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.esi = v; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x00E6B0C0 (DDDA.exe 2017-12-13 Steam), rTexture::getDTI.
 pub fn f_00e6b0c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();

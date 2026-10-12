@@ -51,7 +51,7 @@ def trace(function, closed, strategy, seed, seconds=5, limit=64, frames=None):
         kw['input_strategy'] = strategy
     try:
         c = h.run_sparse(f['addr'], (f['addr']<<8)^seed, end=f['addr']+f['size'],
-                         body=f['body'], lifted=closed, x87_push=f.get('x87_push',[]),
+                         body=f['body'], lifted=closed, x87_push=f.get('x87_push',[]), x87_pop=f.get('x87_pop', ()),
                          noreturn_sites=f.get('noreturn_sites',[]),
                          original_entry=f.get('original_entry',False), x87_entry=f.get('x87_entry',0), max_insn=f.get('insn_budget') or lift.INSN_BUDGET,
                          frame_contracts=frames,

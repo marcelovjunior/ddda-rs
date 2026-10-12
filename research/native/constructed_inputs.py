@@ -181,7 +181,7 @@ def main():
     gc.collect()
 
     def run(f, seed, **inputs):
-        mode = dict(end=f['addr']+f['size'], lifted=closed, x87_push=f.get('x87_push', [])) if f.get('ext') else dict(size=f['size'])
+        mode = dict(end=f['addr']+f['size'], lifted=closed, x87_push=f.get('x87_push', []), x87_pop=f.get('x87_pop', ())) if f.get('ext') else dict(size=f['size'])
         return h.run_sparse(f['addr'], seed, body=f['body'], original_entry=f.get('original_entry', False),
                             noreturn_sites=f.get('noreturn_sites', []), noreturn_targets=lift.noreturn_entries(),
                             x87_entry=f.get('x87_entry', 0), frame_contracts=frames,

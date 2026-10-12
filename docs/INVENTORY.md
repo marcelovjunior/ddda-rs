@@ -319,6 +319,11 @@ After train 13 (2026-10-12): Codex's residual batches add 44 functions.
 **59,375 of 59,440 verified (99.9%, 99.6% of code bytes)**; 65 remain
 (docs/RESIDUALS.md has each one's class, blocker and owner).
 
+After train 16 (2026-10-12): L50 decodes function bodies Ghidra split
+(boot stop 17) and makes mocked calls pop their callee's x87 arguments;
+Codex's batches add 16 more. **59,414 of 59,440 verified** (99.96%); 26
+remain (docs/RESIDUALS.md), 5 of them verification gaps.
+
 The L15 table above and its notes below are
 kept for history.
 

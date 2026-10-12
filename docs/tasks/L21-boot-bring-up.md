@@ -745,3 +745,70 @@ claude-6 (15):
       Eight more are already covered on main (0x0057D24D, 0x00786D74,
       0x00BB922B, 0x00E0FB9C, 0x012F9D82, 0x013006FE, 0x0130070B,
       0x01300749).
+    - **Release build** (winmain, 16 shards at opt-level 3): 1.6 h until
+      heavy.py's 90-minute watchdog stopped it, then 3,809 s more,
+      about 2.6 h cold in all; each rustc used 2 to 3 GB.
+      - The captured release boot presents its first frames within
+        seconds: 1,475 Presents at t = 30 s, then 1,813 to 1,828 per 30 s.
+      - That is 60.5 to 60.9 Presents/s, a main-loop frame time of
+        about 16.5 ms: the game's own limiter (config.ini MaxFPS=60, the
+        default).
+18. ddplay, the window (`crates/ddplay`).
+    - **Release, no emulator** (main 3f3ca505 + task/L21-boot; the
+      ddplay part of the build took 123 s).
+      - The run stopped after 3 Presents with a black window. Title:
+        "stopped in WinMain - not presenting - no vsync - 3 frames".
+      - The stop: "wgpu error: Validation Error … For indexed drawing
+        with strip topology, RenderPipeline … strip index format None must
+        match index buffer format Uint16". Guest frames 0x00DAB480 ←
+        0x00DAED10 ← 0x0041DD60 ← 0x00DF0D20 ← WinMain.
+    - **Cause (runtime).** `d3d9draw::draw_primitive` took the device's
+      index buffer into its draw: `snapshot(…, None, None)` falls back to
+      the device state.
+      - The game sets indices and then calls DrawPrimitive(TRIANGLESTRIP)
+        each frame, so the backend drew an indexed strip.
+      - DrawPrimitive is nonindexed (Microsoft Learn,
+        IDirect3DDevice9::DrawPrimitive). It now draws with
+        `Indices::None`, and only draws that use the device's index
+        buffer upload it (24eaf3bb). The extended draw test fails without
+        the fix.
+      - Headless captures made before this carry the same wrong indices.
+      - The ddgpu side, indexed strips on the pipeline, is the head's
+        b392b767 (task/L53-indexed-strips).
+    - **Debug, emulator fallback.** Scratch tree main + task/L21-boot +
+      task/L51-emu-fallback b4494c54 + 24eaf3bb; the debug build took
+      827 s cold. Windowed run of 900 s with `DDRUNTIME_EMU_FALLBACK=1`,
+      `DDRUNTIME_EMU_LOG`, the service trace and a capture.
+    - **What it shows: the title screen.** PrintWindow shots of the
+      1280x720 client area (the helper had to be made DPI-aware: at 125%
+      scaling a DPI-unaware process captured only the top-left
+      1024x576):
+      - at 120 s, the ESRB rating screen (MATURE 17+: Blood and Gore,
+        Partial Nudity, Suggestive Themes, Violence);
+      - at about 330 s, the title movie: the Dragon's Dogma wyrm logo
+        over a misty river, letterboxed, "©CAPCOM CO., LTD. 2012, 2017
+        ALL RIGHTS RESERVED";
+      - at 900 s, the title screen: "DRAGON'S DOGMA / DARK ARISEN" with
+        the red wyrm over the forest, a dragon at the lower right, and
+        "PRESS ANY BUTTON".
+    - **Rate and output.** 2.0 FPS (500 ms per frame) at 120 s, 0.1 to
+      0.2 FPS during the movie, 494 frames in 900 s. This is the debug
+      build with the trace and capture running; the user saw the movie
+      play with music, with audio and video cutting out. The capture holds
+      1,430 blobs, 538 MiB raw. Nothing stopped.
+    - **Emulated entries** (untranslated code run by the fallback, with
+      callers):
+      - 0x01146420 from 0x000008F0 (stop 17);
+      - 0x01325580 from 0x01311DC4;
+      - 0x01325830 from 0x01312D36;
+      - 0x013271E0 from 0x013238BC;
+      - 0x012F4E74 from 0x013046B0.
+    - **The 0x0132xxxx entries** are slots of a function-pointer table at
+      0x01467D38, called through `call reg` from 0x01311CD0, 0x01312A80
+      and 0x01323460 (all verified).
+      - Its six structs have the shape of libvorbis's backend tables (2
+        floors, 3 residues, 1 mapping; a guess from the shape).
+      - Ghidra made no functions for the slot targets that are not
+        verified: 0x01322540, 0x013239F0, 0x01324EA0, 0x01325580,
+        0x01325830, 0x013271E0, 0x013273F0, 0x01327650 and 0x01327680.
+      - Owner: claude-6 (functions reached only through data).

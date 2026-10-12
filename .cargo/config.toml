@@ -1,0 +1,5 @@
+# rustc's main thread needs more stack for the largest generated lifted
+# functions at opt-level 1 (play profile: STATUS_STACK_OVERFLOW compiling
+# ddlift-09 with the default 8 MiB).
+[env]
+RUST_MIN_STACK = "268435456"

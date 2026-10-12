@@ -72,7 +72,7 @@ outputs, from the original program) of about 59,000 verified functions.
   different processor. These are reported separately from mismatches.
   Actual call-target observation supports arbitrary mock-target counts;
   target/order and register checks remain exact. A 60-second bound is
-  checked between call-outs and every 4,096 guest instructions; it cannot
+  checked between call-outs and every 4,096 guest blocks; it cannot
   interrupt a native lifted callee. This avoids creating/joining Unicorn's
   timer thread for each short segment.
 
@@ -133,7 +133,12 @@ Synthetic checks: `cargo test -p ddruntime --features emu --test emu`.
 Artifacts are under `E:/ddda-re/notes/L55`; no recordings or executable bytes
 are committed. Shared native data is read-only; native-L28c remains frozen.
 
-### Completed verification
+### Initial verification (coverage corrected during integration)
+
+The initial 7,764 passing comparisons included **573 bound roots / 1,704
+cases** that could take a native binding at their first instruction fetch.
+They are a mixed emulator/native baseline, not full original-root coverage.
+The L56 integration below excludes root bindings and reruns the sample.
 
 | Class (disjoint static classification) | Functions | Cases passed | Mismatches | Unsupported |
 | --- | ---: | ---: | ---: | ---: |
@@ -165,3 +170,68 @@ are committed. Shared native data is read-only; native-L28c remains frozen.
 - Remaining exceptions: **none in this sample**. The explicit protocol and
   CPU-state limitations above remain. Next action: head merges this batch
   and rechecks the title-screen boot with the corrected fallback.
+
+
+### L56 integration
+
+- Merged main through `b4462b88`, including L56 `38b05003`. Kept direct
+  register state-out, a host-backed scratch page, stable emulation stop
+  configuration and selective segment reloads. The selector cache tracks
+  the values read back after guest execution, including a changed FS base.
+- Numeric instruction hooks now cover candidate instruction addresses in
+  inspected blocks. Integer loops do not run an instruction callback.
+  Opcode-looking immediate bytes are harmless: Unicorn invokes these hooks
+  only at actual instruction boundaries, and the encoding is checked again.
+  Installing a batch of new hooks flushes translations once; normal repeated
+  calls retain their cache. Unicorn 2.0.1's range-cache removal and mapped-page
+  replacement each missed a synthetic case, so this uses its explicit
+  `UC_CTL_TB_FLUSH` control (absent from the pinned Rust wrapper). Guest code
+  stores clear the classification, and remapping or observed fixture
+  replacement removes cached hooks.
+- Added regressions for changing code into an SSE instruction and switching
+  TEBs on a reused instance. Existing L55 checks and all three L56 tests are
+  retained, alongside the root-binding regression below.
+- Integration review found that the unmapped-fetch hook could dispatch the
+  selected root natively if it also had a closed registry binding. Against
+  `d9847a07`, this affects 573 selected functions / 1,704 cases (FS 9, x87
+  132, SSE 163, random 1,400). `previous-bound-roots.json` lists them.
+  The runner now omits that binding and rejects any root call-out. The
+  emulator also keeps its explicitly requested root in original code on
+  first fetch and loop-back, including after numeric resumes. A synthetic
+  root with a failing native binding tests both entry and a three-iteration
+  SSE loop. The initial count above is superseded by the corrected run.
+
+
+#### Corrected release verification
+
+| Class | Functions | Cases passed | Mismatches | Unsupported |
+| --- | ---: | ---: | ---: | ---: |
+| FS | 15 | 43 | 0 | 0 |
+| Flags/calls | 200 | 592 | 0 | 0 |
+| x87 | 200 | 580 | 0 | 0 |
+| SSE | 200 | 596 | 0 | 0 |
+| Random remainder | 2,000 | 5,953 | 0 | 0 |
+| **Total** | **2,615** | **7,764** | **0** | **0** |
+
+- Final `--release --features emu` differential gate: **174.98 seconds**.
+  All selected roots execute through the corrected boundary; closed callees
+  retain the documented replay bindings. No selected case was skipped.
+- **21 integration tests plus one hook-lifetime unit test pass**, including
+  all L56 tests, the bound-root loop, changing code and changed-TEB cases.
+  Integration suite: **2.21 seconds**. Measured **100,000 short calls in
+  396.4775 ms** and the **3-million-iteration loop in 20.0241 ms**.
+- A redundant cache flush on entering a fresh memory raised the cold loop
+  to 325 ms. It was removed; the final full sample and synthetic gate above
+  reran on the restored fast path. Numeric hook installation still flushes
+  when required. The earlier corrected full pass (199.38 seconds) and the
+  interrupted extra-reset trial are retained as separate evidence.
+- Shared input audit: **UNCHANGED**, including SHA-256, size and mtime.
+  Patterns `fc10bf973d025461`, vectors `64eaf25a77dd43d3` (SHA-256 prefixes).
+  These are the current shared inputs; the older baseline's hashes above
+  predate the head's train updates. Native-L28c remains untouched.
+- Evidence: `E:/ddda-re/notes/L55/integration/full-release.jsonl`,
+  `full-release.log`, `unit-final.log`, `resource-final.log`, input audit
+  receipts and `handoff.json`. One cold-build compiler termination without
+  a Rust diagnostic was retried with lower concurrency; all 32 shards and
+  the final gates completed. No game generation or boot was performed.
+- **Next action:** head merges this L56-compatible batch and rechecks boot.

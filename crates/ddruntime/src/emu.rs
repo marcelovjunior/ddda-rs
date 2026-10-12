@@ -15,7 +15,7 @@
 //! line per newly emulated entry. Shipped code stays lifted and verified;
 //! this only keeps a run going.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
 
@@ -36,7 +36,6 @@ const TEXT: std::ops::Range<u32> = 0x0040_1000..0x0139_CDFB;
 /// can occupy this range, so an instance relocates it to unused guest pages.
 const STUBS: u32 = 0xFFFF_0000;
 const STUB_IN: u32 = STUBS;
-const STUB_OUT: u32 = STUBS + 0x100;
 const STUB_USER: u32 = STUBS + 0x200;
 const SCRATCH: u32 = STUBS + 0x1000;
 const FPU_IMAGE: u32 = SCRATCH; // 108 bytes (FNSAVE m108)
@@ -152,11 +151,21 @@ enum Exit {
     Bound(u32),
     /// Execute one hardware-dependent floating instruction with native helpers.
     Numeric(u32, u32),
+    /// Inspect a newly translated block before executing it.
+    Inspect(u32, u32),
 }
 
 struct Data {
     deadline: Option<std::time::Instant>,
     steps: u32,
+    scanned: HashSet<(u32, u32)>,
+    last_block: Option<(u32, u32)>,
+    code_pages: HashSet<u32>,
+    numeric_hooks: HashMap<u32, *mut std::ffi::c_void>,
+    // Direct host writes preserve translations of the state-in stub (L56).
+    scratch: Box<[u8; 0x1000]>,
+    // Cache the selectors and FS base actually read back from the emulator.
+    segment_state: Option<[(RegisterX86, u16, u32, bool); 6]>,
     hooks: Vec<*mut std::ffi::c_void>,
     cpl: u16,
     offset: u32,     // relocation of private descriptors and state stubs
@@ -168,8 +177,14 @@ struct Data {
     ret: u32,
     entry_esp: u32,
     resume: u32,
+    root: u32, // the explicitly requested entry stays in the emulator
     exit: Option<Exit>,
     fault: Option<String>,
+}
+
+fn scratch_write(uc: &mut Emu, addr: u32, bytes: &[u8]) {
+    let at = (addr - SCRATCH) as usize;
+    uc.get_data_mut().scratch[at..at + bytes.len()].copy_from_slice(bytes);
 }
 
 type Emu = Unicorn<'static, Data>;
@@ -190,6 +205,7 @@ impl Drop for Instance {
     fn drop(&mut self) {
         // unicorn-engine 2.0.1's hook wrappers own an Rc back to the engine.
         // Remove those hooks to break the cycle before dropping the engine.
+        clear_numeric_hooks(&mut self.0);
         for hook in std::mem::take(&mut self.0.get_data_mut().hooks) {
             let _ = self.0.remove_hook(hook);
         }
@@ -274,6 +290,12 @@ fn new_instance(offset: u32, cpl: u16) -> Instance {
     let data = Data {
         deadline: None,
         steps: 0,
+        scanned: HashSet::new(),
+        last_block: None,
+        code_pages: HashSet::new(),
+        numeric_hooks: HashMap::new(),
+        scratch: Box::new([0; 0x1000]),
+        segment_state: None,
         hooks: Vec::new(),
         cpl,
         offset,
@@ -283,15 +305,26 @@ fn new_instance(offset: u32, cpl: u16) -> Instance {
         ret: 0,
         entry_esp: 0,
         resume: 0,
+        root: 0,
         exit: None,
         fault: None,
     };
     let mut uc = Unicorn::new_with_data(Arch::X86, Mode::MODE_32, data).expect("unicorn");
-    uc.mem_map(a(STUBS), 0x2000, Permission::ALL).expect("stub pages");
+    uc.mem_map(a(STUBS), 0x1000, Permission::ALL).expect("stub page");
+    let scratch = uc.get_data_mut().scratch.as_mut_ptr();
+    // SAFETY: this fixed-size box lives for the lifetime of the instance.
+    unsafe {
+        uc.mem_map_ptr(
+            a(SCRATCH),
+            0x1000,
+            Permission::READ | Permission::WRITE,
+            scratch.cast(),
+        )
+    }
+    .expect("scratch page");
     uc.mem_map(a(GDT), 0x10000, Permission::ALL).expect("GDT pages");
-    let (stub_in, stub_out) = stubs(offset);
+    let stub_in = stub_in(offset);
     uc.mem_write(a(STUB_IN), &stub_in).unwrap();
-    uc.mem_write(a(STUB_OUT), &stub_out).unwrap();
     // GDTR (uc_x86_mmr: selector u16, base u64, limit u32, flags u32)
     let mut mmr = [0u8; 24];
     mmr[8..16].copy_from_slice(&(a(GDT)).to_le_bytes());
@@ -340,7 +373,7 @@ fn new_instance(offset: u32, cpl: u16) -> Instance {
                     uc.get_data_mut().exit = Some(Exit::Returned); // to a caller on an unmapped page
                     return false;
                 }
-                if registry(d.registry).get(a).is_some() {
+                if a != d.root && a != d.resume && registry(d.registry).get(a).is_some() {
                     uc.get_data_mut().exit = Some(Exit::Bound(a));
                     return false;
                 }
@@ -380,19 +413,34 @@ fn new_instance(offset: u32, cpl: u16) -> Instance {
 
     // returns and call-outs, at block starts inside the guest
     let block_hook = uc
-        .add_block_hook(|uc, addr, _| {
+        .add_block_hook(|uc, addr, size| {
             let a = addr as u32;
             if private_range(uc.get_data().offset).contains(&a) {
                 return;
             }
-            let esp = uc.reg_read(RegisterX86::ESP).unwrap_or(0) as u32;
             let d = uc.get_data();
-            let exit = if is_return(d, a, esp) {
+            let exit = if a == d.ret && is_return(d, a, uc.reg_read(RegisterX86::ESP).unwrap_or(0) as u32) {
                 Exit::Returned // ret or ret n
-            } else if a != d.resume && registry(uc.get_data().registry).get(a).is_some() {
+            } else if a != d.root && a != d.resume && registry(d.registry).get(a).is_some() {
                 Exit::Bound(a)
             } else {
-                return;
+                let d = uc.get_data_mut();
+                if d.deadline.is_some() {
+                    d.steps = d.steps.wrapping_add(1);
+                    if d.steps & 4095 == 0 && d.deadline.is_some_and(|end| std::time::Instant::now() >= end) {
+                        d.fault = Some("diagnostic time limit".into());
+                        let _ = uc.emu_stop();
+                        return;
+                    }
+                }
+                if d.last_block == Some((a, size)) {
+                    return;
+                }
+                if d.scanned.contains(&(a, size)) {
+                    d.last_block = Some((a, size));
+                    return;
+                }
+                Exit::Inspect(a, size)
             };
             if debug() {
                 eprintln!("emu hook at {a:#010x}: {exit:?}");
@@ -401,33 +449,98 @@ fn new_instance(offset: u32, cpl: u16) -> Instance {
             let _ = uc.emu_stop();
         })
         .expect("block hook");
-    let numeric_hook = uc
-        .add_code_hook(1, 0, |uc, address, size| {
-            if uc.get_data().exit.is_some() || private_range(uc.get_data().offset).contains(&(address as u32))
-            {
-                return;
+    // A guest store into an inspected code page makes its block classification
+    // stale. Unicorn already invalidates translated blocks for such stores.
+    let code_write_hook = uc
+        .add_mem_hook(HookType::MEM_WRITE, 1, 0, |uc, _, addr, size, _| {
+            let first = addr as u32 / 4096;
+            let last = (addr as u32).wrapping_add(size.max(1) as u32 - 1) / 4096;
+            if (first..=last).any(|p| uc.get_data().code_pages.contains(&p)) {
+                let d = uc.get_data_mut();
+                d.scanned.clear();
+                d.last_block = None;
             }
-            // Avoid a timer-thread creation/join on every short emulated
-            // segment. Check long integer loops here and call-outs below.
-            let d = uc.get_data_mut();
-            d.steps = d.steps.wrapping_add(1);
-            if d.steps & 4095 == 0 && d.deadline.is_some_and(|end| std::time::Instant::now() >= end) {
-                d.fault = Some("diagnostic time limit".into());
-                let _ = uc.emu_stop();
-                return;
-            }
-            let mut code = [0u8; 15];
-            if size <= 15
-                && uc.mem_read(address, &mut code[..size as usize]).is_ok()
-                && numeric::handles(&code[..size as usize])
-            {
-                uc.get_data_mut().exit = Some(Exit::Numeric(address as u32, size));
-                let _ = uc.emu_stop();
-            }
+            true
         })
-        .expect("numeric hook");
-    uc.get_data_mut().hooks = vec![memory_hook, block_hook, numeric_hook];
+        .expect("code write hook");
+    uc.get_data_mut().hooks = vec![memory_hook, block_hook, code_write_hook];
     Instance(uc)
+}
+
+/// Inspect each translated block once, then hook only possible numeric
+/// instruction starts. Byte scanning may find opcodes inside immediates, but
+/// Unicorn invokes a code hook only at an actual instruction boundary and the
+/// callback rechecks its full encoding. Integer loops have no instruction hook.
+fn inspect_block(uc: &mut Emu, address: u32, size: u32) {
+    assert!(size > 0 && size < 0x10000, "unexpected translated block size");
+    let code = uc.mem_read_as_vec(address as u64, size as usize).unwrap();
+    let mut added = false;
+    for k in 0..code.len() {
+        let at = address.wrapping_add(k as u32);
+        if !numeric::handles(&code[k..code.len().min(k + 15)])
+            || uc.get_data().numeric_hooks.contains_key(&at)
+        {
+            continue;
+        }
+        let hook = uc
+            .add_code_hook(at as u64, at as u64, |uc, pc, size| {
+                if debug() {
+                    eprintln!(
+                        "numeric candidate {pc:#010x} size {size}, exit {:?}",
+                        uc.get_data().exit
+                    );
+                }
+                if uc.get_data().exit.is_some() {
+                    return;
+                }
+                let mut code = [0u8; 15];
+                if size <= 15
+                    && uc.mem_read(pc, &mut code[..size as usize]).is_ok()
+                    && numeric::handles(&code[..size as usize])
+                {
+                    uc.get_data_mut().exit = Some(Exit::Numeric(pc as u32, size));
+                    let _ = uc.emu_stop();
+                }
+            })
+            .expect("numeric instruction hook");
+        if debug() {
+            eprintln!("installed numeric hook {at:#010x}");
+        }
+        uc.get_data_mut().numeric_hooks.insert(at, hook);
+        added = true;
+    }
+    if added {
+        rebuild_translations(uc);
+    }
+    let d = uc.get_data_mut();
+    d.scanned.insert((address, size));
+    d.last_block = Some((address, size));
+    d.code_pages
+        .extend(address / 4096..=address.wrapping_add(size - 1) / 4096);
+}
+
+/// Hook installation changes translated code. Unicorn 2.0.1's range removal
+/// and mem_map_ptr page remapping leave some cached blocks using old hooks;
+/// flush once after a batch of new hooks. Repeated calls do not flush.
+fn rebuild_translations(uc: &mut Emu) {
+    // The pinned Rust binding omits uc_ctl; signature/control from its
+    // include/unicorn/unicorn.h: UC_CTL_WRITE(UC_CTL_TB_FLUSH, 0).
+    extern "C" {
+        fn uc_ctl(engine: *mut std::ffi::c_void, control: u32, ...) -> i32;
+    }
+    // SAFETY: live engine and a documented control with no varargs.
+    let result = unsafe { uc_ctl(uc.get_handle().cast(), 10 | (1 << 30)) };
+    assert_eq!(result, 0, "rebuild translations after numeric hook installation");
+}
+
+fn clear_numeric_hooks(uc: &mut Emu) {
+    for (_, hook) in std::mem::take(&mut uc.get_data_mut().numeric_hooks) {
+        let _ = uc.remove_hook(hook);
+    }
+    let d = uc.get_data_mut();
+    d.scanned.clear();
+    d.last_block = None;
+    d.code_pages.clear();
 }
 
 /// Drop mappings whose guest page moved, changed permission or went away
@@ -444,6 +557,9 @@ fn revalidate(uc: &mut Emu) {
         })
         .map(|(p, _)| *p)
         .collect();
+    if !stale.is_empty() {
+        clear_numeric_hooks(uc);
+    }
     for p in stale {
         let _ = uc.mem_unmap(p as u64 * 0x1000, 0x1000);
         uc.get_data_mut().mapped.remove(&p);
@@ -462,7 +578,7 @@ impl Mem for Image {
     }
 }
 
-fn stubs(offset: u32) -> (Vec<u8>, Vec<u8>) {
+fn stub_in(offset: u32) -> Vec<u8> {
     let abs = |a: u32| a.wrapping_add(offset).to_le_bytes();
     let mut stub_in = Vec::new();
     stub_in.extend([0xDD, 0x25]); // frstor [FPU_IMAGE]
@@ -475,17 +591,29 @@ fn stubs(offset: u32) -> (Vec<u8>, Vec<u8>) {
     }
     stub_in.extend([0xFF, 0x25]); // jmp dword [JUMP_SLOT]
     stub_in.extend(abs(JUMP_SLOT));
-    let mut stub_out = Vec::new();
-    stub_out.extend([0xDD, 0x35]); // fnsave [FPU_IMAGE]
-    stub_out.extend(abs(FPU_IMAGE));
-    stub_out.extend([0x0F, 0xAE, 0x1D]); // stmxcsr [MXCSR_SLOT]
-    stub_out.extend(abs(MXCSR_SLOT));
-    for k in 0..8u32 {
-        stub_out.extend([0x0F, 0x11, (0x05 | (k << 3)) as u8]); // movups [slot], xmmK
-        stub_out.extend(abs(XMM_SLOTS + 16 * k));
-    }
-    (stub_in, stub_out)
+    stub_in
 }
+
+const ST: [RegisterX86; 8] = [
+    RegisterX86::ST0,
+    RegisterX86::ST1,
+    RegisterX86::ST2,
+    RegisterX86::ST3,
+    RegisterX86::ST4,
+    RegisterX86::ST5,
+    RegisterX86::ST6,
+    RegisterX86::ST7,
+];
+const XMM: [RegisterX86; 8] = [
+    RegisterX86::XMM0,
+    RegisterX86::XMM1,
+    RegisterX86::XMM2,
+    RegisterX86::XMM3,
+    RegisterX86::XMM4,
+    RegisterX86::XMM5,
+    RegisterX86::XMM6,
+    RegisterX86::XMM7,
+];
 
 const GPRS: [(RegisterX86, fn(&mut Cpu) -> &mut u32); 8] = [
     (RegisterX86::EAX, |c| &mut c.eax),
@@ -604,6 +732,7 @@ fn run_inner(
         observer,
     };
     if observed || uc.get_data().pages != table.as_ptr() as usize {
+        clear_numeric_hooks(&mut uc);
         // another memory: nothing mapped applies
         let pages: Vec<u32> = uc.get_data().mapped.keys().copied().collect();
         for p in pages {
@@ -620,9 +749,9 @@ fn run_inner(
         d.ret = m.u32(cpu.esp);
         d.entry_esp = cpu.esp;
         d.resume = target;
+        d.root = target;
         d.fault = None;
     }
-    let stub_out_end = a(STUB_OUT) + stubs(offset).1.len() as u64;
     loop {
         revalidate(&mut uc);
         // state in: registers, flags, FS, x87, MXCSR (live in the host while
@@ -633,31 +762,51 @@ fn run_inner(
         let (flags, _) = cpu.fl.snapshot();
         let eflags = (flags & 0x8D5) | ((cpu.df as u32) << 10) | 0x202 | (cpu.sys_flags & 0x24_4000);
         uc.reg_write(RegisterX86::EFLAGS, eflags as u64).unwrap();
-        segment_descriptors(&mut uc, cpu);
-        for (register, selector, _, _) in segments(cpu) {
-            // Legacy recorder fixtures use Unicorn's initial flat CS=0.
-            // Reloading a null CS clears its cached 32-bit code attribute.
-            if register == RegisterX86::CS && selector == 0 {
-                continue;
+        let desired = segments(cpu);
+        if uc.get_data().segment_state != Some(desired) {
+            segment_descriptors(&mut uc, cpu);
+            for (index, (register, selector, base, _)) in desired.iter().copied().enumerate() {
+                // Null CS is the legacy recorder's initial flat 32-bit state.
+                // Reloading it would clear Unicorn's cached code attribute.
+                if register == RegisterX86::CS && selector == 0 {
+                    continue;
+                }
+                if uc
+                    .get_data()
+                    .segment_state
+                    .is_some_and(|old| old[index].1 == selector && old[index].2 == base)
+                {
+                    continue;
+                }
+                uc.reg_write(register, u64::from(selector)).unwrap();
             }
-            uc.reg_write(register, u64::from(selector)).unwrap();
+            uc.get_data_mut().segment_state = Some(desired);
         }
         let mut image = Image([0; 108]);
         cpu.st.clone().fnsave(&mut image, 0, 0, 0, 0);
-        uc.mem_write(a(FPU_IMAGE), &image.0).unwrap();
-        uc.mem_write(a(MXCSR_SLOT), &x86::stmxcsr().to_le_bytes())
-            .unwrap();
+        scratch_write(&mut uc, FPU_IMAGE, &image.0);
+        scratch_write(&mut uc, MXCSR_SLOT, &x86::stmxcsr().to_le_bytes());
         for k in 0..8 {
             let bytes: Vec<u8> = cpu.xmm[k].iter().flat_map(|w| w.to_le_bytes()).collect();
-            uc.mem_write(a(XMM_SLOTS + 16 * k as u32), &bytes).unwrap();
+            scratch_write(&mut uc, XMM_SLOTS + 16 * k as u32, &bytes);
         }
         let resume = uc.get_data().resume;
-        uc.mem_write(a(JUMP_SLOT), &resume.to_le_bytes()).unwrap();
+        scratch_write(&mut uc, JUMP_SLOT, &resume.to_le_bytes());
         uc.get_data_mut().exit = None;
         if deadline.is_some_and(|end| std::time::Instant::now() >= end) {
             fail(format!("emulated {target:#010x}: diagnostic time limit"));
         }
-        let result = uc.emu_start(a(STUB_IN), 0, 0, 0);
+        let mut start = a(STUB_IN);
+        let result = loop {
+            let result = uc.emu_start(start, 0, 0, 0);
+            if let Some(Exit::Inspect(pc, size)) = uc.get_data().exit {
+                inspect_block(&mut uc, pc, size);
+                uc.get_data_mut().exit = None;
+                start = u64::from(pc);
+            } else {
+                break result;
+            }
+        };
         let mut exit = uc.get_data().exit;
         // Unicorn's `until=0` stops before its block hook at address zero.
         // Recorded indirect calls can bind zero just like any other token.
@@ -667,7 +816,7 @@ fn run_inner(
             let d = uc.get_data();
             exit = if is_return(d, eip, esp) {
                 Some(Exit::Returned)
-            } else if eip != d.resume && registry.get(eip).is_some() {
+            } else if eip != d.root && eip != d.resume && registry.get(eip).is_some() {
                 Some(Exit::Bound(eip))
             } else {
                 None
@@ -697,25 +846,32 @@ fn run_inner(
             gs: uc.reg_read(RegisterX86::GS).unwrap() as u16,
         };
         cpu.fs_base = uc.reg_read(RegisterX86::FS_BASE).unwrap() as u32;
-        let esp = cpu.esp;
-        uc.emu_start(a(STUB_OUT), stub_out_end, 0, 0).expect("state out");
-        cpu.esp = esp;
+        uc.get_data_mut().segment_state = Some(segments(cpu));
         x86::popfd(cpu, eflags & !0x100);
-        let mut image = Image([0; 108]);
-        uc.mem_read(a(FPU_IMAGE), &mut image.0).unwrap();
+        // x87, MXCSR and XMM straight from the registers (L56): a second
+        // emulation of a state stub cost ~30 us per call. The FNSAVE image:
+        // control, status (with TOP), the tag word per physical register,
+        // then ST0..ST7 in stack order, as Unicorn's ST registers are.
+        let mut image = Image([0xFF; 108]);
+        let word = |r| uc.reg_read(r).unwrap() as u16;
+        image.0[0..2].copy_from_slice(&word(RegisterX86::FPCW).to_le_bytes());
+        image.0[4..6].copy_from_slice(&word(RegisterX86::FPSW).to_le_bytes());
+        image.0[8..10].copy_from_slice(&word(RegisterX86::FPTAG).to_le_bytes());
+        for (k, r) in ST.iter().enumerate() {
+            let v = uc.reg_read_long(*r).unwrap();
+            image.0[28 + 10 * k..38 + 10 * k].copy_from_slice(&v[..10]);
+        }
         cpu.st.frstor(&image, 0);
-        let mut mxcsr = [0u8; 4];
-        uc.mem_read(a(MXCSR_SLOT), &mut mxcsr).unwrap();
-        x86::ldmxcsr(u32::from_le_bytes(mxcsr));
-        for k in 0..8 {
-            let mut bytes = [0u8; 16];
-            uc.mem_read(a(XMM_SLOTS + 16 * k as u32), &mut bytes).unwrap();
+        x86::ldmxcsr(uc.reg_read(RegisterX86::MXCSR).unwrap() as u32);
+        for (k, r) in XMM.iter().enumerate() {
+            let v = uc.reg_read_long(*r).unwrap();
             for w in 0..4 {
-                cpu.xmm[k][w] = u32::from_le_bytes(bytes[4 * w..4 * w + 4].try_into().unwrap());
+                cpu.xmm[k][w] = u32::from_le_bytes(v[4 * w..4 * w + 4].try_into().unwrap());
             }
         }
 
         match exit.unwrap() {
+            Exit::Inspect(..) => unreachable!(),
             Exit::Numeric(pc, size) => {
                 let code: Vec<u8> = (0..size).map(|k| m.u8(pc.wrapping_add(k))).collect();
                 numeric::execute(&code, m, cpu);
