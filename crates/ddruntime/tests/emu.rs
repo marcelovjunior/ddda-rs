@@ -63,5 +63,28 @@ fn untranslated_code_runs_in_the_emulator_with_call_outs() {
     assert_eq!(cpu.ecx, TEB, "FS reaches the guest TEB");
     assert_eq!(cpu.ebp, 0x1234_5678, "callee-saved EBP restored");
     assert_eq!(cpu.esp, entry_esp + 8, "ret 4 popped the return address and the argument");
-    assert!(ddruntime::emu::stats().iter().any(|&(a, n)| a == CODE && n == 1));
+    assert!(ddruntime::emu::stats().iter().any(|&(a, n)| a == CODE && n >= 1)); // tests share the counts
+}
+
+#[test]
+fn repeated_calls_reuse_one_emulator() {
+    // a call per frame must not allocate an emulator per call (the first
+    // boot run ran out of translation buffers after a few minutes)
+    std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x1000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    for (k, b) in [0x8B, 0x44, 0x24, 0x04, 0x40, 0xC3].iter().enumerate() {
+        m.set_u8(CODE + k as u32, *b); // mov eax, [esp+4]; inc eax; ret
+    }
+    let registry = Registry::new();
+    for n in 0..20_000u32 {
+        let mut cpu = Cpu { esp: STACK - 0x100, ..Cpu::default() };
+        cpu.esp -= 4;
+        m.set_u32(cpu.esp, n);
+        cpu.esp -= 4;
+        m.set_u32(cpu.esp, RETURN);
+        registry.call(&mut m, &mut cpu, CODE).expect("emulated");
+        assert_eq!(cpu.eax, n + 1);
+    }
 }

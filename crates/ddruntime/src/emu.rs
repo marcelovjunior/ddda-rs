@@ -119,12 +119,134 @@ enum Exit {
 }
 
 struct Data {
-    pages: usize, // the guest's PageTable (a raw pointer, see `run`)
+    registry: usize, // the &Registry of the current run (a raw pointer)
+    pages: usize,    // the guest's PageTable (a raw pointer, see `run`)
+    /// Guest pages mapped into this instance: page -> (host pointer, perm),
+    /// rechecked against the page table before each entry.
+    mapped: HashMap<u32, (usize, u8)>,
     ret: u32,
     entry_esp: u32,
     resume: u32,
     exit: Option<Exit>,
     fault: Option<String>,
+}
+
+type Emu = Unicorn<'static, Data>;
+
+thread_local! {
+    /// Idle emulator instances of this thread. One instance per nesting level
+    /// is kept: each owns a large translation buffer, so creating one per call
+    /// exhausts memory (first boot run: "Could not allocate dynamic
+    /// translator buffer" after a few minutes).
+    static POOL: std::cell::RefCell<Vec<Emu>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn registry<'r>(ptr: usize) -> &'r Registry {
+    // SAFETY: `run` sets the pointer for the duration of the emulation
+    unsafe { &*(ptr as *const Registry) }
+}
+
+fn new_instance() -> Emu {
+    let data = Data { registry: 0, pages: 0, mapped: HashMap::new(), ret: 0, entry_esp: 0, resume: 0, exit: None, fault: None };
+    let mut uc = Unicorn::new_with_data(Arch::X86, Mode::MODE_32, data).expect("unicorn");
+    uc.mem_map(STUBS as u64, 0x2000, Permission::ALL).expect("stub pages");
+    let (stub_in, stub_out) = stubs();
+    uc.mem_write(STUB_IN as u64, &stub_in).unwrap();
+    uc.mem_write(STUB_OUT as u64, &stub_out).unwrap();
+    // GDTR (uc_x86_mmr: selector u16, base u64, limit u32, flags u32)
+    let mut mmr = [0u8; 24];
+    mmr[8..16].copy_from_slice(&(GDT as u64).to_le_bytes());
+    mmr[16..20].copy_from_slice(&(4 * 8 - 1u32).to_le_bytes());
+    uc.mem_write((GDT + 8) as u64, &descriptor(0, 0x9A)).unwrap();
+    uc.mem_write((GDT + 16) as u64, &data_descriptor(0)).unwrap();
+    uc.reg_write_long(RegisterX86::GDTR, &mmr).unwrap();
+    for seg in [RegisterX86::SS, RegisterX86::DS, RegisterX86::ES, RegisterX86::GS] {
+        uc.reg_write(seg, DATA_SELECTOR).unwrap();
+    }
+
+    // guest pages, mapped in place on first touch; a fetch from a bound
+    // address (an import token outside the image) is a call-out
+    uc.add_mem_hook(HookType::MEM_UNMAPPED, 1, 0, |uc, kind, addr, size, _| {
+        let a = addr as u32;
+        if debug() {
+            eprintln!("mem {kind:?} {a:#010x} size {size}");
+        }
+        if kind == MemType::FETCH_UNMAPPED {
+            let esp = uc.reg_read(RegisterX86::ESP).unwrap_or(0) as u32;
+            let d = uc.get_data();
+            if a == d.ret && esp > d.entry_esp {
+                uc.get_data_mut().exit = Some(Exit::Returned); // to a caller on an unmapped page
+                return false;
+            }
+            if registry(d.registry).get(a).is_some() {
+                uc.get_data_mut().exit = Some(Exit::Bound(a));
+                return false;
+            }
+        }
+        // SAFETY: the page table outlives this call (page_table()'s
+        // contract), and backed pages never move or free while it lives
+        let table = unsafe { &*(uc.get_data().pages as *const ddnative_base::mem::PageTable) };
+        let first = a / 0x1000;
+        let last = a.wrapping_add(size.max(1) as u32 - 1) / 0x1000;
+        for p in first..=last {
+            let perm = table.perm(p as usize);
+            if perm & READ == 0 {
+                uc.get_data_mut().fault = Some(format!("{kind:?} of unmapped {addr:#010x}"));
+                return false;
+            }
+            let ptr = table.backed_page(p as usize);
+            let prot = if perm & WRITE != 0 { Permission::ALL } else { Permission::READ | Permission::EXEC };
+            // SAFETY: a backed guest page is 4 KiB and stays put
+            if unsafe { uc.mem_map_ptr(p as u64 * 0x1000, 0x1000, prot, ptr as *mut _) }.is_err() {
+                return false;
+            }
+            uc.get_data_mut().mapped.insert(p, (ptr as usize, perm));
+        }
+        true
+    })
+    .expect("memory hook");
+
+    // returns and call-outs, at block starts inside the guest
+    uc.add_block_hook(|uc, addr, _| {
+        let a = addr as u32;
+        if a >= STUBS {
+            return;
+        }
+        let esp = uc.reg_read(RegisterX86::ESP).unwrap_or(0) as u32;
+        let d = uc.get_data();
+        let exit = if a == d.ret && esp > d.entry_esp {
+            Exit::Returned // ret or ret n
+        } else if a != d.resume && registry(uc.get_data().registry).get(a).is_some() {
+            Exit::Bound(a)
+        } else {
+            return;
+        };
+        if debug() {
+            eprintln!("emu hook at {a:#010x}: {exit:?}");
+        }
+        uc.get_data_mut().exit = Some(exit);
+        let _ = uc.emu_stop();
+    })
+    .expect("block hook");
+    uc
+}
+
+/// Drop mappings whose guest page moved, changed permission or went away
+/// (VirtualFree, VirtualProtect, a re-backed page); they map again lazily.
+fn revalidate(uc: &mut Emu) {
+    // SAFETY: as in the memory hook
+    let table = unsafe { &*(uc.get_data().pages as *const ddnative_base::mem::PageTable) };
+    let stale: Vec<u32> = uc
+        .get_data()
+        .mapped
+        .iter()
+        .filter(|(p, (ptr, perm))| table.page(**p as usize) as usize != *ptr || table.perm(**p as usize) != *perm)
+        .map(|(p, _)| *p)
+        .collect();
+    for p in stale {
+        let _ = uc.mem_unmap(p as u64 * 0x1000, 0x1000);
+        uc.get_data_mut().mapped.remove(&p);
+    }
 }
 
 /// A 108-byte buffer as a `Mem`, for the x87 image (X87::fnsave/frstor).
@@ -185,88 +307,27 @@ fn fail(msg: String) -> ! {
 pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
     note(target);
     let Some(table) = m.page_table() else { fail(format!("emulated {target:#010x}: this memory has no page table")) };
-    let data = Data {
-        pages: table.as_ptr() as usize,
-        ret: m.u32(cpu.esp),
-        entry_esp: cpu.esp,
-        resume: target,
-        exit: None,
-        fault: None,
-    };
-    let mut uc = Unicorn::new_with_data(Arch::X86, Mode::MODE_32, data).expect("unicorn");
-    uc.mem_map(STUBS as u64, 0x2000, Permission::ALL).expect("stub pages");
-    let (stub_in, stub_out) = stubs();
-    uc.mem_write(STUB_IN as u64, &stub_in).unwrap();
-    uc.mem_write(STUB_OUT as u64, &stub_out).unwrap();
-    let stub_out_end = STUB_OUT + stub_out.len() as u32;
-    // GDTR (uc_x86_mmr: selector u16, base u64, limit u32, flags u32)
-    let mut mmr = [0u8; 24];
-    mmr[8..16].copy_from_slice(&(GDT as u64).to_le_bytes());
-    mmr[16..20].copy_from_slice(&(4 * 8 - 1u32).to_le_bytes());
-    uc.mem_write((GDT + 8) as u64, &descriptor(0, 0x9A)).unwrap();
-    uc.mem_write((GDT + 16) as u64, &data_descriptor(0)).unwrap();
-    uc.reg_write_long(RegisterX86::GDTR, &mmr).unwrap();
-    for seg in [RegisterX86::SS, RegisterX86::DS, RegisterX86::ES, RegisterX86::GS] {
-        uc.reg_write(seg, DATA_SELECTOR).unwrap();
+    let mut uc = POOL.with(|p| p.borrow_mut().pop()).unwrap_or_else(new_instance);
+    if uc.get_data().pages != table.as_ptr() as usize {
+        // another memory: nothing mapped applies
+        let pages: Vec<u32> = uc.get_data().mapped.keys().copied().collect();
+        for p in pages {
+            let _ = uc.mem_unmap(p as u64 * 0x1000, 0x1000);
+        }
+        uc.get_data_mut().mapped.clear();
     }
-
-    // guest pages, mapped in place on first touch; a fetch from a bound
-    // address (an import token outside the image) is a call-out
-    uc.add_mem_hook(HookType::MEM_UNMAPPED, 1, 0, move |uc, kind, addr, size, _| {
-        let a = addr as u32;
-        if debug() {
-            eprintln!("mem {kind:?} {a:#010x} size {size}");
-        }
-        if kind == MemType::FETCH_UNMAPPED && registry.get(a).is_some() {
-            uc.get_data_mut().exit = Some(Exit::Bound(a));
-            return false;
-        }
-        // SAFETY: the page table outlives this call (page_table()'s
-        // contract), and backed pages never move or free while it lives
-        let table = unsafe { &*(uc.get_data().pages as *const ddnative_base::mem::PageTable) };
-        let first = a / 0x1000;
-        let last = a.wrapping_add(size.max(1) as u32 - 1) / 0x1000;
-        for p in first..=last {
-            let perm = table.perm(p as usize);
-            if perm & READ == 0 {
-                uc.get_data_mut().fault = Some(format!("{kind:?} of unmapped {addr:#010x}"));
-                return false;
-            }
-            let ptr = table.backed_page(p as usize);
-            let prot = if perm & WRITE != 0 { Permission::ALL } else { Permission::READ | Permission::EXEC };
-            // SAFETY: a backed guest page is 4 KiB and stays put
-            if unsafe { uc.mem_map_ptr(p as u64 * 0x1000, 0x1000, prot, ptr as *mut _) }.is_err() {
-                return false;
-            }
-        }
-        true
-    })
-    .expect("memory hook");
-
-    // returns and call-outs, at block starts inside the guest
-    uc.add_block_hook(move |uc, addr, _| {
-        let a = addr as u32;
-        if a >= STUBS {
-            return;
-        }
-        let esp = uc.reg_read(RegisterX86::ESP).unwrap_or(0) as u32;
-        let d = uc.get_data();
-        let exit = if a == d.ret && esp > d.entry_esp {
-            Exit::Returned // ret or ret n
-        } else if a != d.resume && registry.get(a).is_some() {
-            Exit::Bound(a)
-        } else {
-            return;
-        };
-        if debug() {
-            eprintln!("emu hook at {a:#010x}: {exit:?}");
-        }
-        uc.get_data_mut().exit = Some(exit);
-        let _ = uc.emu_stop();
-    })
-    .expect("block hook");
-
+    {
+        let d = uc.get_data_mut();
+        d.registry = registry as *const Registry as usize;
+        d.pages = table.as_ptr() as usize;
+        d.ret = m.u32(cpu.esp);
+        d.entry_esp = cpu.esp;
+        d.resume = target;
+        d.fault = None;
+    }
+    let stub_out_end = STUB_OUT + stubs().1.len() as u32;
     loop {
+        revalidate(&mut uc);
         // state in: registers, flags, FS, x87, MXCSR (live in the host while
         // lifted code runs), XMM
         for (r, f) in GPRS {
@@ -322,6 +383,7 @@ pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         match exit.unwrap() {
             Exit::Returned => {
                 // the emulated ret already popped the return address
+                POOL.with(|p| p.borrow_mut().push(uc));
                 return;
             }
             Exit::Bound(callee) => {
@@ -330,6 +392,7 @@ pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
                     std::panic::panic_any(u);
                 }
                 if back == uc.get_data().ret && cpu.esp > uc.get_data().entry_esp {
+                    POOL.with(|p| p.borrow_mut().push(uc));
                     return; // a tail call out of the emulated function
                 }
                 uc.get_data_mut().resume = back;
