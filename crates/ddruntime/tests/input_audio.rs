@@ -825,6 +825,7 @@ fn extended_modifiers_mouse_extra_buttons_and_screen_coordinates() {
 
 /// Private integration fixture: uses the player's exe, never checked-in bytes.
 /// Run with DDDA_EXE set and `cargo test -p ddruntime --test input_audio -- --ignored`.
+#[cfg(feature = "game")]
 #[test]
 #[ignore = "requires the player's DDDA.exe and the generated lifted program"]
 fn original_engine_initialization() {
