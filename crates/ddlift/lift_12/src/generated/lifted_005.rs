@@ -3,6 +3,76 @@
 use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 
+// Translated from 0x00C7AE20 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C7AE20.
+pub fn f_00c7ae20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0xC7AE20;
+    loop {
+        match pc {
+            0xC7AE20 => { { let r = cpu.fl.alu_sub((m.u8(cpu.ecx.wrapping_add(0x2A4)) as u32), 0x3u32, 8); } pc = if cpu.fl.cond("be") { 0xC7AE30 } else { 0xC7AE29 }; continue; }
+            0xC7AE29 => { cpu.eax = m.u32(cpu.ecx.wrapping_add(0x248)); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0xC7AE30 => { { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x00C7AE40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C7AE40.
+pub fn f_00c7ae40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0xC7AE40;
+    loop {
+        match pc {
+            0xC7AE40 => { { let r = cpu.fl.alu_sub((m.u8(cpu.ecx.wrapping_add(0x2A4)) as u32), 0x4u32, 8); } pc = if cpu.fl.cond("be") { 0xC7AE50 } else { 0xC7AE49 }; continue; }
+            0xC7AE49 => { cpu.eax = m.u32(cpu.ecx.wrapping_add(0x24C)); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0xC7AE50 => { { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x00C7AE60 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C7AE60.
+pub fn f_00c7ae60(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0xC7AE60;
+    loop {
+        match pc {
+            0xC7AE60 => { { let r = cpu.fl.alu_sub((m.u8(cpu.ecx.wrapping_add(0x2A4)) as u32), 0x5u32, 8); } pc = if cpu.fl.cond("be") { 0xC7AE70 } else { 0xC7AE69 }; continue; }
+            0xC7AE69 => { cpu.eax = m.u32(cpu.ecx.wrapping_add(0x250)); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0xC7AE70 => { { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x00C7AE80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C7AE80.
+pub fn f_00c7ae80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0xC7AE80;
+    loop {
+        match pc {
+            0xC7AE80 => { { let r = cpu.fl.alu_sub((m.u8(cpu.ecx.wrapping_add(0x2A4)) as u32), 0x6u32, 8); } pc = if cpu.fl.cond("be") { 0xC7AE90 } else { 0xC7AE89 }; continue; }
+            0xC7AE89 => { cpu.eax = m.u32(cpu.ecx.wrapping_add(0x254)); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0xC7AE90 => { { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x00C7AEA0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C7AEA0.
+pub fn f_00c7aea0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let mut pc: u32 = 0xC7AEA0;
+    loop {
+        match pc {
+            0xC7AEA0 => { { let r = cpu.fl.alu_sub((m.u8(cpu.ecx.wrapping_add(0x2A4)) as u32), 0x7u32, 8); } pc = if cpu.fl.cond("be") { 0xC7AEB0 } else { 0xC7AEA9 }; continue; }
+            0xC7AEA9 => { cpu.eax = m.u32(cpu.ecx.wrapping_add(0x258)); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0xC7AEB0 => { { let r = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.eax = r; } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x00C7AEC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C7AEC0.
+pub fn f_00c7aec0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    cpu.eax = m.u32(cpu.esp.wrapping_add(0x4)); { let v = cpu.edi; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = cpu.eax; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = 0x0u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.edi = cpu.ecx; { let t = 0xC7E100u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC7AECF);  x86::call_ext(m, cpu, t);  } { let v = m.u32(cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.edi = v; } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return;
+}
+
 // Translated from 0x00C7AEE0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_00C7AEE0.
 pub fn f_00c7aee0(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = m.u32(cpu.esp.wrapping_add(0x4)); { let v = cpu.edi; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = cpu.eax; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let v = 0x1u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.edi = cpu.ecx; { let t = 0xC7E100u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC7AEEF);  x86::call_ext(m, cpu, t);  } { let v = m.u32(cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.edi = v; } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return;
@@ -4740,58 +4810,4 @@ pub fn f_00c8aab0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x00C8AAF0 (DDDA.exe 2017-12-13 Steam), cZoneCategoryEffectWind::getDTI.
 pub fn f_00c8aaf0(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = 0x19A7114u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00C8AB00 (DDDA.exe 2017-12-13 Steam), cZoneCategoryEffectWind::dtor_deleting.
-pub fn f_00c8ab00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let mut pc: u32 = 0xC8AB00;
-    loop {
-        match pc {
-            0xC8AB00 => { { let v = cpu.esi; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.esi = cpu.ecx; m.set_u32(cpu.esi, 0x16110F0u32); cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8AB0E);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x004038F0))(m, cpu);  { let r = cpu.fl.alu_and((m.u8(cpu.esp.wrapping_add(0x8)) as u32), 0x1u32, 8); } pc = if cpu.fl.cond("e") { 0xC8AB2C } else { 0xC8AB15 }; continue; }
-            0xC8AB15 => { { let v = 0x19A7114u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8AB1F);  super::lifted::f_00cf5e20(m, cpu);  cpu.edx = m.u32(cpu.eax); { let r = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.esp = r; } cpu.ecx = cpu.eax; cpu.eax = m.u32(cpu.edx.wrapping_add(0x24)); { let v = cpu.esi; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let t = cpu.eax; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8AB2C);  x86::call_ext(m, cpu, t);  } pc = 0xC8AB2C; continue; }
-            0xC8AB2C => { cpu.eax = cpu.esi; { let v = m.u32(cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.esi = v; } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x00C8AB40 (DDDA.exe 2017-12-13 Steam), cZCEffectWind::getDTI.
-pub fn f_00c8ab40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x19A6EB4u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00C8AB50 (DDDA.exe 2017-12-13 Steam), cZCEffectWind::dtor_deleting.
-pub fn f_00c8ab50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let mut pc: u32 = 0xC8AB50;
-    loop {
-        match pc {
-            0xC8AB50 => { { let v = cpu.esi; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.esi = cpu.ecx; m.set_u32(cpu.esi, 0x16110F0u32); cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8AB5E);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x004038F0))(m, cpu);  { let r = cpu.fl.alu_and((m.u8(cpu.esp.wrapping_add(0x8)) as u32), 0x1u32, 8); } pc = if cpu.fl.cond("e") { 0xC8AB7C } else { 0xC8AB65 }; continue; }
-            0xC8AB65 => { { let v = 0x19A6EB4u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8AB6F);  super::lifted::f_00cf5e20(m, cpu);  cpu.edx = m.u32(cpu.eax); { let r = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.esp = r; } cpu.ecx = cpu.eax; cpu.eax = m.u32(cpu.edx.wrapping_add(0x24)); { let v = cpu.esi; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let t = cpu.eax; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8AB7C);  x86::call_ext(m, cpu, t);  } pc = 0xC8AB7C; continue; }
-            0xC8AB7C => { cpu.eax = cpu.esi; { let v = m.u32(cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.esi = v; } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x00C8AB90 (DDDA.exe 2017-12-13 Steam), cZCGrassWind::getDTI.
-pub fn f_00c8ab90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x19A6E54u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x00C8ABA0 (DDDA.exe 2017-12-13 Steam), cZCGrassWind::dtor_deleting.
-pub fn f_00c8aba0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let mut pc: u32 = 0xC8ABA0;
-    loop {
-        match pc {
-            0xC8ABA0 => { { let v = cpu.esi; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.esi = cpu.ecx; m.set_u32(cpu.esi, 0x16110F0u32); cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8ABAE);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x004038F0))(m, cpu);  { let r = cpu.fl.alu_and((m.u8(cpu.esp.wrapping_add(0x8)) as u32), 0x1u32, 8); } pc = if cpu.fl.cond("e") { 0xC8ABCC } else { 0xC8ABB5 }; continue; }
-            0xC8ABB5 => { { let v = 0x19A6E54u32; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8ABBF);  super::lifted::f_00cf5e20(m, cpu);  cpu.edx = m.u32(cpu.eax); { let r = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.esp = r; } cpu.ecx = cpu.eax; cpu.eax = m.u32(cpu.edx.wrapping_add(0x24)); { let v = cpu.esi; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, v); } { let t = cpu.eax; cpu.esp = cpu.esp.wrapping_sub(4); m.set_u32(cpu.esp, 0xC8ABCC);  x86::call_ext(m, cpu, t);  } pc = 0xC8ABCC; continue; }
-            0xC8ABCC => { cpu.eax = cpu.esi; { let v = m.u32(cpu.esp); cpu.esp = cpu.esp.wrapping_add(4); cpu.esi = v; } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x00C8ABE0 (DDDA.exe 2017-12-13 Steam), cZCGodRaysControl::getDTI.
-pub fn f_00c8abe0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0x19A7074u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

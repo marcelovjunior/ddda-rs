@@ -1,0 +1,16 @@
+[package]
+name = "ddplay"
+version = "0.1.0"
+description = "Runs the rebuilt game in a window: the runtime's session with the wgpu backend"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddruntime = { path = "../ddruntime" }
+ddgpu = { path = "../ddgpu" }
+ddaudio = { path = "../ddaudio" }
+cpal = "0.17.3"
+wgpu = "29.0.4"
+winit = "0.30.13"
+windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_XboxController"] }

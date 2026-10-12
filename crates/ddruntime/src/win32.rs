@@ -328,13 +328,35 @@ pub fn get_command_line_a(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = persistent(m, "command line A", line.as_bytes());
     ret(m, cpu, 0);
 }
-/// GetEnvironmentStringsW(): an empty environment block (a terminating
-/// pair of NUL characters): the guest sees no host variables.
+/// GetEnvironmentStringsW(): the guest's environment block, which starts
+/// empty (a terminating pair of NUL characters: the guest sees no host
+/// variables) and holds what SetEnvironmentVariableA set
+/// (crate::system::environment_block). Like Windows, each call returns a
+/// fresh copy for FreeEnvironmentStringsW to free.
 pub fn get_environment_strings_w(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = persistent(m, "environment W", &[0, 0, 0, 0]);
+    let block = crate::system::environment_block();
+    let p = with_state(|s| s.heap.alloc(2 * block.len() as u32)).expect("guest heap");
+    for (k, &u) in block.iter().enumerate() {
+        m.set_u16(p + 2 * k as u32, u);
+    }
+    with_state(|s| s.environment_blocks.push(p));
+    cpu.eax = p;
     ret(m, cpu, 0);
 }
+/// FreeEnvironmentStringsW(block): frees a block GetEnvironmentStringsW
+/// returned; TRUE.
 pub fn free_environment_strings_w(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let p = arg(m, cpu, 0);
+    let ours = with_state(|s| match s.environment_blocks.iter().position(|&b| b == p) {
+        Some(k) => {
+            s.environment_blocks.swap_remove(k);
+            true
+        }
+        None => false,
+    });
+    if ours {
+        with_state(|s| s.heap.free(p)).expect("an environment block is a live heap block");
+    }
     cpu.eax = 1;
     ret(m, cpu, 4);
 }
@@ -465,8 +487,17 @@ pub fn get_cp_info(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 // --- standard handles: a GUI process without a console ----------------------
 
+/// GetStdHandle(nStdHandle): what SetStdHandle (crate::system) last set,
+/// NULL at first (a GUI process without a console, measured);
+/// INVALID_HANDLE_VALUE with ERROR_INVALID_HANDLE for another nStdHandle.
 pub fn get_std_handle(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0; // no console attached
+    cpu.eax = match crate::system::std_index(arg(m, cpu, 0)) {
+        Some(i) => with_state(|s| s.system.std_handles[i]),
+        None => {
+            set_error(6); // ERROR_INVALID_HANDLE
+            u32::MAX
+        }
+    };
     ret(m, cpu, 4);
 }
 pub fn get_file_type(m: &mut dyn Mem, cpu: &mut Cpu) {

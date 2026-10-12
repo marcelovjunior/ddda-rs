@@ -113,6 +113,7 @@ pub fn set_lifted_lookup(lookup: LiftLookup) {
 
 /// Ordinary lifted call: the caller already performed any stack push.
 /// Copy the function pointer before calling, so nested calls are reentrant.
+#[inline]
 pub fn call_lifted(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
     let lookup = LIFTED.get().expect("initialize the lifted program before entering a raw shard");
     let f = lookup(target).unwrap_or_else(|| panic!("missing lifted target {target:#010x}"));
@@ -133,6 +134,7 @@ pub fn set_ext_calls(f: Option<Box<ExtCall>>) -> Option<std::rc::Rc<ExtCall>> {
 /// handler that dispatches into lifted code which calls `call_ext` again
 /// (nested calls, callbacks, recursion) finds it installed, and a panic
 /// inside the handler leaves it in place.
+#[inline]
 pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
     let f = EXT.with(|e| e.borrow().clone())
         .unwrap_or_else(|| panic!("call to {target:#010x}: no handler for untranslated code"));
@@ -140,19 +142,23 @@ pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
 }
 
 impl Flags {
+    #[inline]
     fn defined(&self, bit: u32) {
         assert!(self.kind != PARTIAL || self.a & bit != 0, "read of undefined x86 flag {bit:#x}");
         assert!(self.kind != IMUL || bit & 0x801 != 0, "read of undefined IMUL flag {bit:#x}");
     }
+    #[inline]
     pub fn af(&self) -> bool {
         self.defined(0x10);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x10 != 0; }
         matches!(self.kind, ADD | SUB | INC | DEC) && (self.a ^ self.b ^ self.r) & 0x10 != 0
     }
+    #[inline]
     pub fn lahf(&self) -> u8 {
         2 | self.cf() as u8 | ((self.pf() as u8) << 2) | ((self.af() as u8) << 4)
             | ((self.zf() as u8) << 6) | ((self.sf() as u8) << 7)
     }
+    #[inline]
     pub fn sahf(&mut self, ah: u8) {
         let (old, valid) = self.snapshot();
         *self = Self::partial((ah as u32 & 0xd5) | (old & 0x800), 0xd5 | (valid & 0x800));
@@ -162,6 +168,7 @@ impl Flags {
     /// is 8, 16 or 32, as in the literal instruction templates in lift.py.
     /// Keep even flags that the current function does not read: a callee
     /// (or caller) can observe the full machine state.
+    #[inline]
     pub fn alu_add(&mut self, a: u32, b: u32, bits: u32) -> u32 {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
@@ -169,6 +176,7 @@ impl Flags {
         *self = Self::new(ADD, a, b, r, bits);
         r
     }
+    #[inline]
     pub fn alu_sub(&mut self, a: u32, b: u32, bits: u32) -> u32 {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
@@ -176,6 +184,7 @@ impl Flags {
         *self = Self::new(SUB, a, b, r, bits);
         r
     }
+    #[inline]
     pub fn alu_and(&mut self, a: u32, b: u32, bits: u32) -> u32 {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
@@ -183,6 +192,7 @@ impl Flags {
         *self = Self::new(LOGIC, a, b, r, bits);
         r
     }
+    #[inline]
     pub fn alu_or(&mut self, a: u32, b: u32, bits: u32) -> u32 {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
@@ -190,6 +200,7 @@ impl Flags {
         *self = Self::new(LOGIC, a, b, r, bits);
         r
     }
+    #[inline]
     pub fn alu_xor(&mut self, a: u32, b: u32, bits: u32) -> u32 {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
@@ -197,22 +208,29 @@ impl Flags {
         *self = Self::new(LOGIC, a, b, r, bits);
         r
     }
+    #[inline]
     pub fn new(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
         Flags { kind, a, b, r, bits, cf_in: false }
     }
     /// imul (2/3-operand, 32-bit): CF = OF = the signed product does not fit.
+    #[inline]
     fn imul_overflow(&self) -> bool {
         (self.a as i32 as i64) * (self.b as i32 as i64) != self.r as i32 as i64
     }
+    #[inline]
     fn mask(&self) -> u32 { if self.bits == 32 { u32::MAX } else { (1 << self.bits) - 1 } }
+    #[inline]
     fn sign(&self, v: u32) -> bool { (v >> (self.bits - 1)) & 1 != 0 }
+    #[inline]
     pub fn zf(&self) -> bool {
         self.defined(0x40);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x40 != 0; }
         if self.kind == COMISS { return self.r != 1 && self.r != 2 } // r: 0 equal, 1 greater, 2 less, 3 unordered
         self.r & self.mask() == 0
     }
+    #[inline]
     pub fn sf(&self) -> bool { self.defined(0x80); if matches!(self.kind, RAW | PARTIAL) { self.r & 0x80 != 0 } else { self.kind != COMISS && self.sign(self.r) } }
+    #[inline]
     pub fn cf(&self) -> bool {
         self.defined(1);
         let m = self.mask();
@@ -229,6 +247,7 @@ impl Flags {
             _ => false, // logic
         }
     }
+    #[inline]
     pub fn of(&self) -> bool {
         self.defined(0x800);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x800 != 0; }
@@ -244,6 +263,7 @@ impl Flags {
             _ => false, // logic, sar
         }
     }
+    #[inline]
     pub fn pf(&self) -> bool {
         self.defined(4);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 4 != 0; }
@@ -251,6 +271,7 @@ impl Flags {
         (self.r & 0xFF).count_ones() % 2 == 0
     }
     /// Condition codes as in `jcc`/`setcc` (the mnemonic's suffix).
+    #[inline]
     pub fn cond(&self, cc: &str) -> bool {
         match cc {
             "e" | "z" => self.zf(), "ne" | "nz" => !self.zf(),
@@ -267,6 +288,7 @@ impl Flags {
 }
 
 /// `comiss`/`ucomiss` a, b: 0 equal, 1 a > b, 2 a < b, 3 unordered.
+#[inline]
 pub fn comiss(a: u32, b: u32) -> Flags {
     let (x, y) = (f32::from_bits(a), f32::from_bits(b));
     let r = if x.is_nan() || y.is_nan() { 3 } else if x > y { 1 } else if x < y { 2 } else { 0 };
@@ -281,16 +303,25 @@ mod sse {
     #[inline]
     fn get(v: __m128) -> u32 { unsafe { _mm_cvtsi128_si32(_mm_castps_si128(v)) as u32 } }
     /// `op a, b` with a as the destination: the original's operand order.
+    #[inline]
     pub fn addss(a: u32, b: u32) -> u32 { unsafe { get(_mm_add_ss(set(a), set(b))) } }
+    #[inline]
     pub fn subss(a: u32, b: u32) -> u32 { unsafe { get(_mm_sub_ss(set(a), set(b))) } }
+    #[inline]
     pub fn mulss(a: u32, b: u32) -> u32 { unsafe { get(_mm_mul_ss(set(a), set(b))) } }
+    #[inline]
     pub fn divss(a: u32, b: u32) -> u32 { unsafe { get(_mm_div_ss(set(a), set(b))) } }
+    #[inline]
     pub fn minss(a: u32, b: u32) -> u32 { unsafe { get(_mm_min_ss(set(a), set(b))) } }
+    #[inline]
     pub fn maxss(a: u32, b: u32) -> u32 { unsafe { get(_mm_max_ss(set(a), set(b))) } }
+    #[inline]
     pub fn sqrtss(b: u32) -> u32 { unsafe { get(_mm_sqrt_ss(set(b))) } }
     /// cvttss2si (truncation; out of range gives 0x80000000).
+    #[inline]
     pub fn cvttss2si(a: u32) -> u32 { unsafe { _mm_cvttss_si32(set(a)) as u32 } }
     /// cvtsi2ss with the current (round-to-nearest) mode.
+    #[inline]
     pub fn cvtsi2ss(v: u32) -> u32 { unsafe { get(_mm_cvtsi32_ss(_mm_setzero_ps(), v as i32)) } }
 }
 #[cfg(target_arch = "x86_64")]

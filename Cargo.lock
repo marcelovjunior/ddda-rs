@@ -2294,6 +2294,7 @@ dependencies = [
  "d3d9ref",
  "d3d9shader",
  "mtarc",
+ "naga",
  "wgpu",
 ]
 
@@ -2330,6 +2331,14 @@ dependencies = [
  "mtarc",
  "mtfsm",
  "mtxfs",
+]
+
+[[package]]
+name = "ddaudio"
+version = "0.1.0"
+dependencies = [
+ "windows",
+ "windows-core",
 ]
 
 [[package]]
@@ -2488,6 +2497,7 @@ name = "ddlift-00"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2495,6 +2505,7 @@ name = "ddlift-01"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2502,6 +2513,7 @@ name = "ddlift-02"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2509,6 +2521,7 @@ name = "ddlift-03"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2516,6 +2529,7 @@ name = "ddlift-04"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2523,6 +2537,7 @@ name = "ddlift-05"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2530,6 +2545,7 @@ name = "ddlift-06"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2537,6 +2553,7 @@ name = "ddlift-07"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2544,6 +2561,7 @@ name = "ddlift-08"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2551,6 +2569,7 @@ name = "ddlift-09"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2558,6 +2577,7 @@ name = "ddlift-10"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2565,6 +2585,7 @@ name = "ddlift-11"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2572,6 +2593,7 @@ name = "ddlift-12"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2579,6 +2601,7 @@ name = "ddlift-13"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2586,6 +2609,7 @@ name = "ddlift-14"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2593,6 +2617,7 @@ name = "ddlift-15"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "mtmath",
 ]
 
 [[package]]
@@ -2642,6 +2667,7 @@ dependencies = [
  "ddlift-14",
  "ddlift-15",
  "ddnative-base",
+ "mtmath",
  "serde_json",
 ]
 
@@ -2729,6 +2755,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddperf"
+version = "0.1.0"
+dependencies = [
+ "ddnative",
+ "ddnative-base",
+ "ddruntime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ddplay"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "ddaudio",
+ "ddgpu",
+ "ddruntime",
+ "wgpu",
+ "windows-sys 0.61.2",
+ "winit",
+]
+
+[[package]]
 name = "ddprogress"
 version = "0.1.0"
 dependencies = [
@@ -2773,9 +2823,13 @@ version = "0.1.0"
 dependencies = [
  "d3d9cmd",
  "d3d9shader",
+ "ddaudio",
  "ddexe",
  "ddnative",
  "ddnative-base",
+ "ddsave",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]
@@ -4159,6 +4213,25 @@ version = "0.1.0"
 [[package]]
 name = "mtlot"
 version = "0.1.0"
+
+[[package]]
+name = "mtmath"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "serde_json",
+]
+
+[[package]]
+name = "mtmath-bench"
+version = "0.1.0"
+dependencies = [
+ "ddlift-07",
+ "ddlift-12",
+ "ddlift-13",
+ "ddnative-base",
+ "mtmath",
+]
 
 [[package]]
 name = "mtmod"

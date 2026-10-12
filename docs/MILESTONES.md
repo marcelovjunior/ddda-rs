@@ -910,3 +910,98 @@ opening (codex-31), route perf (codex-29).
   thread FS bases and binds the verified original entries. See L15 Results
   for exact addresses, evidence and regeneration steps. No shared writes,
   generated-code commits, native gate, runtime edits or push.
+
+
+### L18: runtime movie boundary (2026-10-11)
+
+- **Implemented:** WMVCore delay exports and guest reader/media/header/sample
+  interfaces. Host Windows WMVCore decodes through a guest IStream callback
+  bridge; no host filename or pointer is substituted for the guest stream.
+- **Evidence:** `0x00F7B250` selects YV12 and 48 kHz PCM; `0x00F7C200`
+  consumes timed samples; `0x00F7B530` splits Y,V,U planes. Complete census
+  and test results: [L18 Results](tasks/L18-movies.md#results).
+- **Tested:** 39 runtime tests pass; all six installed WMVs decode through
+  guest-dispatched fixture streams, original delay thunks and the lifted
+  format selector. Y-plane variation, timestamps, sizes, interleaved reads
+  and four movies' 48 kHz / six-channel PCM checked. No live-original
+  pixel/audio comparison or complete uMovie session yet.
+- **Blockers:** original stream AddRef/Release/Seek at `0x00F7B650`,
+  `0x00F7B660`, `0x00F7B7D0` are absent from the base resolver. Capture
+  encoding (`0x00F95320`) is separate and remains explicitly unsupported.
+- **One next action:** add the three stream bodies through the native
+  workflow, then exercise original uMovie playback in a running session.
+
+### L16: headless runtime input and audio services (2026-10-11)
+
+- **Implemented:** 17 import bindings; DirectInput8A/system mouse/keyboard,
+  XInput 1.3's four independent ports, USER32 key state/hooks/settings and host
+  event/rumble channels. XAudio2 2.7 engine and voice ABI, null endpoint,
+  descriptor/range/loop timing, EOS and flush completion, guest audio worker
+  callbacks, effect parameter callbacks, and a bounded float-block output seam.
+- **Evidence:** keyboard ctor `0x00DF43E0`, mouse `0x00E05120`, pad paths
+  `0x00DF52B0..0x00DF9EE0`; XAudio engine `0x00DCE0E0`, AudioReverb 2.7
+  CLSID `0x0142AC70` used at `0x00DCE600`, streaming-ring completion callback
+  `0x00DCCD00`. The full API/COM census and SDK contracts are in
+  [L16 Results](tasks/L16-input-audio-services.md#results).
+- **Validation:** `cargo test -p ddruntime`: 36 passed (13 new + 23 existing).
+  Private original-engine fixture also passes: lifted `0x00DCE0E0` creates the
+  engine/mastering voice and reads the endpoint format through these services.
+  Tests exercise import/COM stdcall
+  cleanup and output layouts, device injection, worker callback identity,
+  real-time PCM/ADPCM consumption, loops/flush/EOS, effect parameters and
+  per-session isolation. Not compared against live game input/audio.
+- **Blockers / limits:** output is deliberately silent; decoding, audible
+  mixing/effects and physical host backends remain. No legacy joystick force
+  feedback or general multi-thread keyboard-hook chains are advertised.
+  Static caller roles do not establish original OS thread IDs. Callback
+  `0x00DCCD00` is missing from the inventory/generated program (head notified);
+  real game streaming requires that native entry.
+- **One next action:** head integrates the services into the startup trace and
+  captures the next dynamic input/audio boundary before wiring host devices
+  or claiming audible parity.
+
+
+## Batch 2026-10-12 (train 1: batched verification; title/gameplay/co-op maps)
+
+- **Process change:** verification is batched. Agents run cheap checks and
+  commit; the head merges about five ready branches into an integration
+  branch and runs one gen + `native_gate.sh` + runtime tests
+  (docs/tasks/AGENT-RULES.md, "Batched verification"). Train 1 landed on
+  main 59f55a9:
+  - L25: performance. GPU present 2.9-3.5 ms → 0.4-0.6 ms; per-draw
+    backend cost 475 µs → 18 µs; vector replay 551 → 357 ms.
+  - L29: every render-target format the renderer uses equals the driver.
+  - L24: 29 readable math ports (`crates/mtmath`, `docs/MATH.md`).
+  - L26: an offline Steam client (14 imports, 37 interface methods) and
+    the DDDA.sav sandbox with read-only import.
+  - L19: audible XAudio2 2.7 mixing, bit-exact against the real 2.7 on
+    PCM, ADPCM, SRC and reverb; a cpal sink in ddplay.
+  - L36: ddruntime builds without the lifted program
+    (`--no-default-features`).
+- **Earlier merges, 2026-10-11/12:**
+  - L17 B+C: the SEH helpers and both worker loops (58,704 verified,
+    99.0%, 96.4% of bytes).
+  - L18: movies.
+  - L20: D3D9 completeness.
+  - L23: all 29,198 shaders equal the driver (28,488 bit-exact, 710 within
+    332 ULP, 0 differing).
+  - L30/L30b: the frame-rate audit (`docs/FRAME_RATE.md`; FRAME.md 1a: the
+    clock, base 30, `MaxFPS` 30-999).
+- **Maps:**
+  - `docs/TITLE_PATH.md` (L35/L35b): WinMain to the title's first frame;
+    3,276 of 3,594 path functions verified.
+  - `docs/GAMEPLAY_PATH.md` (L38/L38b): title to gameplay, and the census
+    of all 586 non-verified functions:
+    - 410 are recorder failures (claude-3: mock ABI 190, NaN 81, runaway
+      73, noreturn 15, other);
+    - 176 are lifter rejections (claude-6).
+  - `docs/COOP_ON_REBUILD.md` (L40): the single-player assumptions (one
+    pointer, `sPlayerManager+0x99C`) and a seat-relative proposal.
+- **Blockers:**
+  - The boot stops in CRT start-up (`__setmbcp`), which is in L28 batch 1
+    on train 2.
+  - Then the title path's 80+ unverified functions (IME setup, singleton
+    constructors, the sShader2 loader 0x00E0E470) and the IMM32 and D3DX
+    services (L43, L37).
+- **One next action:** run train 2 (L28 + L22 data adoption, L31, L33, L34,
+  L37, the L25 prototypes, L32), then rerun the boot.

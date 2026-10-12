@@ -57,9 +57,12 @@ impl Session {
         crate::files::set_roots(install, &crate::services::sandbox_home());
         let imports = crate::image::bind_imports(&mut mem, &exe).map_err(|e| e.to_string())?;
         crate::services::bind_apis(&mut registry, &imports).map_err(|e| format!("{e:?}"))?;
-        // interface objects (Steam now; COM devices later)
+        // Interface objects and named guest method tokens.
         let mut tokens = crate::interfaces::Tokens::default();
         crate::steam::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
+        crate::input::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
+        crate::audio::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
+        crate::movies::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         crate::d3d9::install(&mut mem, &mut registry, &mut tokens).map_err(|e| format!("{e:?}"))?;
         mem.map(crate::interfaces::METHOD_TOKENS, tokens.span(), READ).map_err(|e| format!("{e:?}"))?;
         mem.map_lazy(crate::threads::STACKS_BASE, crate::threads::STACKS_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
