@@ -1633,8 +1633,8 @@ def lift(addr, size, callable=frozenset(), ext=False, step=False, x87_inputs=Fal
                                 f"fl = Flags::new(x86::SUB, 0, a, r, {bits}); {store(i, ops[0], 'r')} }}")
                 else:
                     op, kind = ("wrapping_add", "INC") if mn == "inc" else ("wrapping_sub", "DEC")
-                    body.append(f"{{ let a = {a} & {mask}; let r = a.{op}(1) & {mask}; let cf = fl.cf(); "
-                                f"fl = Flags::new(x86::{kind}, a, 1, r, {bits}); fl.cf_in = cf; {store(i, ops[0], 'r')} }}")
+                    body.append(f"{{ let a = {a} & {mask}; let r = a.{op}(1) & {mask}; "
+                                f"fl.inc_dec(x86::{kind}, a, r, {bits}); {store(i, ops[0], 'r')} }}")
             elif mn in ("shl", "shr", "sar", "sal"):
                 a = load(i, ops[0])
                 cnt = "1u32" if len(ops) == 1 else load(i, ops[1])
@@ -1975,6 +1975,17 @@ def compact_alu(arm):
     return ALU_BLOCK.sub(replace, arm)
 
 
+# Cached INC/DEC templates read CF eagerly to carry it over; after DIV that
+# CF is undefined (L46: _qsort 0x012EEBC6 `div ebx; inc eax; cmp eax, 8`).
+INC_DEC = re.compile(r"let cf = fl\.cf\(\); fl = Flags::new\(x86::(INC|DEC), a, 1, r, (8|16|32)\); fl\.cf_in = cf;")
+
+
+def lazy_inc_dec(arm):
+    """Lower the cached INC/DEC template to Flags::inc_dec, which carries an
+    undefined CF over instead of reading it (gen-time only)."""
+    return INC_DEC.sub(lambda m: f"fl.inc_dec(x86::{m[1]}, a, r, {m[2]});", arm)
+
+
 def cpu_arm(arm, start=None, fast=True):
     """Lower cached local-register IR onto the shared Cpu in place.
 
@@ -1986,7 +1997,7 @@ def cpu_arm(arm, start=None, fast=True):
     step functions keep the plain Mem calls, so a transactional Mem sees
     every access of a restartable instruction.
     """
-    arm = compact_alu(exact_compares(arm, start=start)).replace(SAVE, "").replace(LOAD, "")
+    arm = lazy_inc_dec(compact_alu(exact_compares(arm, start=start))).replace(SAVE, "").replace(LOAD, "")
     # Prepared pre-DF caches use the old state-transfer markers.
     arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}

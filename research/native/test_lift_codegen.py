@@ -32,6 +32,14 @@ class CodegenTests(unittest.TestCase):
         self.assertNotIn('std::mem::take', legacy_rust)
         self.assertNotIn('*cpu =', legacy_rust)
 
+    def test_inc_dec_carry_cf_lazily(self):
+        # L46: the cached template reads CF; after DIV it is undefined
+        arm = ("{ let a = eax & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; let cf = fl.cf(); "
+               "fl = Flags::new(x86::INC, a, 1, r, 32); fl.cf_in = cf; eax = r; }")
+        out = lift.cpu_arm(arm, start=0x1000)
+        self.assertIn("cpu.fl.inc_dec(x86::INC, a, r, 32);", out)
+        self.assertNotIn("cf()", out)
+
     def test_binary_templates_and_conservative_fallback(self):
         for bits, mask in ((8, '0xFF'), (16, '0xFFFF'), (32, 'u32::MAX')):
             for op, expression, kind in (

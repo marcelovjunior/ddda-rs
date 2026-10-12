@@ -1422,6 +1422,22 @@ tracks the pointers dynamically and writes the same bytes. Tests:
 every inventory extent), so they stay unsupported. `fnsave`/`frstor` occur
 only in 0x012F1C9D.
 
+**Frame tails, completed (L46).**
+- **Calls inside a tail:** a frame tail may contain calls.
+  `harness.frame_exit(calls=True)` steps over a direct call with its
+  proven `static_pop`, and the exit is compared signed. An underestimated
+  pop only lowers the exit, so a false tail is impossible. This finds the
+  CRT x87 tails 0x01300749 and 0x0130070B (`pop edx; ret` after error
+  reporting through calls), and four "entries" that are code inside their
+  jumper (0x0056532A, 0x0057D24D, 0x00786D74, 0x00BB922B).
+- **Emission:** L45 decoded such tails into the jumper but still emitted
+  the jump as a tail call, because `lift`'s `inside()` and the x87 depth
+  walk excluded every inventory entry. memcpy's `jmp __VEC_memcpy` went
+  through `call_ext` to code that is never lifted standalone. A jump into
+  an inlined tail now stays local (`lift.inlined_tail`). The gate reports
+  records that still leave as "tail call into its own inlined code", and
+  `refresh` re-lifts them.
+
 **x87 helpers promoted closed.** A mock leaves the x87 stack and control
 word alone, so it is no stand-in for a helper doing x87 work.
 `structured_inputs.py promote --address` names the entries to consider

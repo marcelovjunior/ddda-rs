@@ -492,6 +492,31 @@ fn x87_fnsave_frstor_match_cpu() {
 }
 
 #[test]
+fn inc_dec_carry_an_undefined_cf_over() {
+    // L46: _qsort 0x012EEBC6 runs `div ebx; inc eax; cmp eax, 8; ja`.
+    // DIV leaves the arithmetic flags undefined; INC keeps CF, which the
+    // CMP rewrites before any read.
+    let mut fl = Flags::partial(0, 0);
+    fl.inc_dec(INC, 0xa89, 0xa8a, 32);
+    assert_eq!(fl.snapshot(), (0, ARITH_FLAGS & !1)); // 0xA8A: OF/SF/ZF/AF/PF clear, CF undefined
+    assert!(!fl.zf() && !fl.sf() && !fl.of());
+    fl = Flags::new(SUB, 0xa8a, 8, 0xa82, 32); // cmp eax, 8
+    assert!(fl.cond("a"));
+    // a defined CF is carried exactly as before (dec keeps CF = 1)
+    let mut fl = Flags::new(SUB, 0, 1, u32::MAX, 32);
+    fl.inc_dec(DEC, 5, 4, 32);
+    assert!(fl.cf() && !fl.zf());
+}
+
+#[test]
+#[should_panic(expected = "read of undefined x86 flag 0x1")]
+fn inc_dec_keep_cf_undefined() {
+    let mut fl = Flags::partial(0, 0);
+    fl.inc_dec(DEC, 1, 0, 32);
+    let _ = fl.cf();
+}
+
+#[test]
 fn pushfd_popfd_follow_cpl3() {
     // L22: measured in a 32-bit Windows process (research/native/probe_machine.rs):
     // IF and bit 1 read as set; POPFD changes the arithmetic flags, DF, NT, AC, ID only.
