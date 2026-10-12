@@ -812,9 +812,17 @@ impl WgpuBackend {
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+            view_formats: &[format.add_srgb_suffix()],
         });
-        let (sview, dview) = (src.create_view(&Default::default()), dst.create_view(&Default::default()));
+        // the D3D9 driver resolves 8-bit targets gamma-correctly: the
+        // samples averaged as linear light and encoded back to sRGB
+        // (measured: a quarter-covered white pixel resolves to 137, the sRGB
+        // encoding of 0.25; L31 tests/msaa.rs). Resolving through sRGB views
+        // does that; float targets resolve linearly, as the driver does
+        let gamma = matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm);
+        let view_format = Some(if gamma { format.add_srgb_suffix() } else { format });
+        let sview = src.create_view(&wgpu::TextureViewDescriptor { format: view_format, ..Default::default() });
+        let dview = dst.create_view(&wgpu::TextureViewDescriptor { format: view_format, ..Default::default() });
         let mut enc = self.device.create_command_encoder(&Default::default());
         {
             let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -833,8 +841,8 @@ impl WgpuBackend {
     /// StretchRect between depth-stencil surfaces: the source's depth
     /// written as frag_depth (stencil cleared to 0 in the same pass), then
     /// one pass per stencil bit setting the bits the source has (wgpu has
-    /// no stencil export). A multisampled source gives each pixel its
-    /// sample DEPTH_COPY_SAMPLE.
+    /// no stencil export). Between equal sample counts every sample is
+    /// copied; to one sample, the sample `depth_copy_sample` names.
     fn copy_depth(&mut self, src: &Target, dst: &Target) -> Result<(), String> {
         if !(is_depth_format(src.format) && is_depth_format(dst.format)) {
             return Err("between a depth-stencil and a colour surface".into());
@@ -849,16 +857,27 @@ impl WgpuBackend {
         let ms = ssamples > 1;
         let depth_ty = if ms { "texture_depth_multisampled_2d" } else { "texture_depth_2d" };
         let stencil_ty = if ms { "texture_multisampled_2d<u32>" } else { "texture_2d<u32>" };
-        let level = if ms { format!("{DEPTH_COPY_SAMPLE}") } else { "0".into() };
+        // equal sample counts copy sample by sample (per-sample shading);
+        // to one sample, the driver's sample for the count
+        let level = if !ms {
+            "0".to_string()
+        } else if dsamples == ssamples {
+            "i32(si)".to_string()
+        } else if dsamples == 1 {
+            format!("{}", depth_copy_sample(ssamples).ok_or_else(|| format!("from {ssamples} samples"))?)
+        } else {
+            return Err(format!("from {ssamples} to {dsamples} samples"));
+        };
+        let si = if ms && dsamples == ssamples { ", @builtin(sample_index) si: u32" } else { "" };
         let wgsl = format!(
             "@group(0) @binding(0) var d: {depth_ty};\n@group(0) @binding(1) var st: {stencil_ty};\n\
              struct P {{ bit: vec4<u32> }}\n@group(0) @binding(2) var<uniform> p: P;\n\
              @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {{\n\
                let c = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));\n\
                return vec4<f32>(c * vec2<f32>(4.0, -4.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);\n}}\n\
-             @fragment fn depth_fs(@builtin(position) pos: vec4<f32>) -> @builtin(frag_depth) f32 {{\n\
+             @fragment fn depth_fs(@builtin(position) pos: vec4<f32>{si}) -> @builtin(frag_depth) f32 {{\n\
                return textureLoad(d, vec2<i32>(pos.xy), {level});\n}}\n\
-             @fragment fn stencil_fs(@builtin(position) pos: vec4<f32>) {{\n\
+             @fragment fn stencil_fs(@builtin(position) pos: vec4<f32>{si}) {{\n\
                let v = textureLoad(st, vec2<i32>(pos.xy), {level}).r;\n\
                if ((v & p.bit.x) == 0u) {{ discard; }}\n}}\n");
         let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("depth copy"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) });
@@ -1796,9 +1815,19 @@ fn half_toward_zero(v: f32) -> f64 {
     f32::from_bits(b & !((1u32 << drop) - 1)) as f64
 }
 
-/// The sample of a multisampled depth-stencil source a depth-to-depth
-/// StretchRect copies (to be measured against the driver; L31).
-const DEPTH_COPY_SAMPLE: u32 = 0;
+/// The sample a depth-stencil StretchRect from a multisampled source to a
+/// single-sampled destination copies, by sample count: measured on the
+/// D3D9 driver (L31 tests/msaa.rs depth_stencil_copies_match_the_d3d9_driver;
+/// in the standard sample positions, which the driver's multisampled draws
+/// match, these are the bottom-most samples).
+fn depth_copy_sample(samples: u32) -> Option<u32> {
+    match samples {
+        2 => Some(0),
+        4 => Some(3),
+        8 => Some(6),
+        _ => None,
+    }
+}
 
 /// D3DFMT depth-stencil formats (D16_LOCKABLE..D24FS8) and the vendor
 /// depth FOURCCs the backend maps.

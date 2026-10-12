@@ -273,7 +273,7 @@ pub struct Oracle {
     targets: Vec<Obj>,
     readback: Vec<Obj>,
     /// StretchRect copies for the next replay (render_copied)
-    copies: Vec<d3d9cmd::CopyCall>,
+    copies: Vec<(usize, d3d9cmd::CopyCall)>,
 }
 
 impl Oracle {

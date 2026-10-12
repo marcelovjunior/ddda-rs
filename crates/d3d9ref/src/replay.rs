@@ -73,6 +73,14 @@ impl Oracle {
     /// copies' surfaces are the targets named by surface number (created
     /// with their format, size and multisample type).
     pub fn render_copied(&mut self, uploads: &[Upload], clears: &[ClearCall], draws: &[DrawCall], copies: &[CopyCall], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
+        let placed: Vec<(usize, CopyCall)> = copies.iter().map(|c| (draws.len(), c.clone())).collect();
+        self.render_placed(uploads, clears, draws, &placed, reads)
+    }
+
+    /// [`Oracle::render_copied`] with each copy placed after the given
+    /// number of draws (0: before the first draw). Every copy runs outside
+    /// the scene (EndScene, StretchRect, BeginScene).
+    pub fn render_placed(&mut self, uploads: &[Upload], clears: &[ClearCall], draws: &[DrawCall], copies: &[(usize, CopyCall)], reads: &[Target]) -> Result<Vec<Vec<u8>>, String> {
         let refs: Vec<&ClearCall> = clears.iter().collect();
         self.copies = copies.to_vec();
         let r = self.render_all(uploads, &refs, draws, reads, &[]).map(|(r, _)| r);
@@ -148,10 +156,18 @@ impl Oracle {
                 let ds = target(t, true, created)?;
                 com!(d, SET_DEPTH_STENCIL_SURFACE, (Obj), ds);
             }
-            for (k, t) in c.targets.iter().enumerate().skip(1) {
-                if let Some(t) = t {
-                    let s = target(t, false, created)?;
-                    com!(d, SET_RENDER_TARGET, (u32, Obj), k as u32, s);
+            // the clear's own targets (render target 0 included), the
+            // others unbound
+            for (k, t) in c.targets.iter().enumerate() {
+                match t {
+                    Some(t) => {
+                        let s = target(t, false, created)?;
+                        com!(d, SET_RENDER_TARGET, (u32, Obj), k as u32, s);
+                    }
+                    None if k > 0 => {
+                        com!(d, SET_RENDER_TARGET, (u32, Obj), k as u32, std::ptr::null_mut::<c_void>());
+                    }
+                    None => {}
                 }
             }
             // Clear follows the viewport, SRGBWRITEENABLE and the scissor
@@ -189,6 +205,22 @@ impl Oracle {
                 }
             }
         };
+        let copies = std::mem::take(&mut self.copies);
+        let run_copies = |at: usize, created: &mut Vec<Obj>| -> Result<(), String> {
+            for (_, c) in copies.iter().filter(|(k, _)| *k == at) {
+                let depth = |f: u32| matches!(f, 70..=83);
+                let (src, dst) = (target(&c.src, depth(c.src.format), created)?, target(&c.dst, depth(c.dst.format), created)?);
+                let rect = |r: [i32; 4]| if r == [0; 4] { None } else { Some(r) };
+                let (sr, dr) = (rect(c.src_rect), rect(c.dst_rect));
+                let p = |r: &Option<[i32; 4]>| r.as_ref().map_or(std::ptr::null(), |r| r.as_ptr());
+                com!(d, END_SCENE, ());
+                let hr = com!(d, STRETCH_RECT, (Obj, *const i32, Obj, *const i32, u32), src, p(&sr), dst, p(&dr), c.filter);
+                com!(d, BEGIN_SCENE, ());
+                check(hr, "StretchRect")?;
+            }
+            Ok(())
+        };
+        run_copies(0, created)?;
         for (k, draw) in draws.iter().enumerate() {
             issue(k, false);
             let r = self.one_draw(draw, uploads, &buffers, &mut textures, &mut |t, depth, c| target(t, depth, c), created);
@@ -197,17 +229,10 @@ impl Oracle {
                 return Err(e);
             }
             issue(k + 1, true);
+            run_copies(k + 1, created)?;
         }
         issue(draws.len(), false);
         com!(d, END_SCENE, ());
-        for c in std::mem::take(&mut self.copies) {
-            let depth = |f: u32| matches!(f, 70..=83);
-            let (src, dst) = (target(&c.src, depth(c.src.format), created)?, target(&c.dst, depth(c.dst.format), created)?);
-            let rect = |r: [i32; 4]| if r == [0; 4] { None } else { Some(r) };
-            let (sr, dr) = (rect(c.src_rect), rect(c.dst_rect));
-            let p = |r: &Option<[i32; 4]>| r.as_ref().map_or(std::ptr::null(), |r| r.as_ptr());
-            check(com!(d, STRETCH_RECT, (Obj, *const i32, Obj, *const i32, u32), src, p(&sr), dst, p(&dr), c.filter), "StretchRect")?;
-        }
         let mut counts = Vec::new();
         for &q in &queries {
             let mut n = 0u32;

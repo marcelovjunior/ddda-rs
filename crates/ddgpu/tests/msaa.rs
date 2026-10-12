@@ -146,7 +146,11 @@ fn multisampled_draws_resolve_like_the_d3d9_driver() {
             Ok(o) if o == theirs => {}
             Ok(o) => {
                 let max = o[0].iter().zip(&theirs[0]).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
-                failures.push(format!("case {case} ({samples}x, format {format}): bytes differ (max byte diff {max})"));
+                let bpp = o[0].len() / 64;
+                let first = |b: &[u8]| b.chunks_exact(bpp).map(|p| if bpp == 4 { p[2] as u32 } else { u16::from_le_bytes([p[0], p[1]]) as u32 }).collect::<Vec<_>>();
+                failures.push(format!("case {case} ({samples}x, format {format}): bytes differ (max byte diff {max})
+  ours {:?}
+  D3D9 {:?}", first(&o[0]), first(&theirs[0])));
             }
             Err(e) => failures.push(format!("case {case}: backend error {e}")),
         }
@@ -250,4 +254,65 @@ fn the_backend_resolves_and_copies_multisampled_targets() {
             assert_eq!(on_copy, on_source, "the copy equals the source");
         }
     }
+}
+
+/// Depth-stencil StretchRect (D24S8, whole surfaces, outside the scene),
+/// as the game's draw-command case 5 does it: single-sampled, and from 2x,
+/// 4x and 8x to 1x, and 4x to 4x. A triangle writes depth 0.25 and stencil
+/// 0x5A into the source; after the copy a probe draw over the whole target
+/// (depth and stencil tests against the copy) shows what arrived.
+#[test]
+fn depth_stencil_copies_match_the_d3d9_driver() {
+    let Some(mut d3d9) = available() else {
+        eprintln!("skipped: no D3D9 device or adapter");
+        return;
+    };
+    let tri = [[-0.9f32, -0.7], [0.3, 0.95], [0.85, -0.2]];
+    let full = [[-1.0f32, -1.0], [-1.0, 3.0], [3.0, -1.0]];
+    let mut failures = Vec::new();
+    for (ss, ds) in [(0u32, 0u32), (2, 0), (4, 0), (8, 0), (4, 4)] {
+        for (zfunc, sfunc) in [(2u32, 8u32), (5, 8), (8, 3), (8, 6), (2, 3)] {
+            let (rt, src, dst) = (target(0x100, 21, ss), target(0x180, 75, ss), target(0x181, 75, ds));
+            let (probe_rt, resolved) = (target(0x102, 21, ds), target(0x103, 21, 0));
+            let write = draw([1.0; 4], tri, 0.25, &rt, Some(&src), &[(7, 1), (14, 1), (23, 8), (52, 1), (56, 8), (55, 3), (57, 0x5A), (58, 0xFF), (59, 0xFF)]);
+            let probe = draw([0.0, 1.0, 0.0, 1.0], full, 0.5, &probe_rt, Some(&dst),
+                             &[(7, 1), (14, 0), (23, zfunc), (52, 1), (56, sfunc), (57, 0x5A), (58, 0xFF), (59, 0), (53, 1), (54, 1), (55, 1)]);
+            let clears = [clear(&probe_rt, Some(&dst), 0xFF00_0000), clear(&rt, Some(&src), 0xFF00_0000)];
+            let mut copies = vec![(1usize, copy(&src, &dst, [0; 4], [0; 4]))];
+            let read = if ds != 0 {
+                copies.push((2, copy(&probe_rt, &resolved, [0; 4], [0; 4])));
+                resolved.clone()
+            } else {
+                probe_rt.clone()
+            };
+            let theirs = match d3d9.render_placed(&[], &clears, &[write.clone(), probe.clone()], &copies, &[read.clone()]) {
+                Ok(mut r) => r.remove(0),
+                Err(e) => {
+                    failures.push(format!("{ss}x -> {ds}x: D3D9: {e}"));
+                    continue;
+                }
+            };
+            let mut gpu = ddgpu::WgpuBackend::headless().unwrap();
+            for c in &clears {
+                gpu.clear(c);
+            }
+            gpu.draw(&write);
+            gpu.copy(&copies[0].1);
+            gpu.draw(&probe);
+            if ds != 0 {
+                gpu.copy(&copies[1].1);
+            }
+            let ours = gpu.read_back(&read);
+            let lit = |b: &[u8]| b.chunks_exact(4).enumerate().filter(|(_, p)| p[1] > 0).map(|(k, _)| k).collect::<Vec<_>>();
+            if !gpu.errors.is_empty() {
+                failures.push(format!("{ss}x -> {ds}x: backend {:?}", gpu.errors));
+            } else if ours.as_ref() != Some(&theirs) {
+                failures.push(format!("{ss}x -> {ds}x zfunc {zfunc} sfunc {sfunc}: ours {:?} / D3D9 {:?}", ours.map(|o| lit(&o)), lit(&theirs)));
+            }
+        }
+    }
+    for f in &failures {
+        eprintln!("{f}");
+    }
+    assert!(failures.is_empty(), "{} depth copies differ", failures.len());
 }
