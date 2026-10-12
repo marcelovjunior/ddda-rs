@@ -8,6 +8,11 @@ mod lifted_004; pub use lifted_004::*;
 mod lifted_005; pub use lifted_005::*;
 mod lifted_006; pub use lifted_006::*;
 mod lifted_007; pub use lifted_007::*;
+pub use mtframe::abi::f_011e48e0;
+/// The lifted bodies of the functions the readable ports replace.
+pub mod replaced {
+    pub use super::lifted_006::f_011e48e0;
+}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x01100070, f_01100070),

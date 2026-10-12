@@ -2498,6 +2498,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2507,6 +2508,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2516,6 +2518,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2525,6 +2528,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2534,6 +2538,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2543,6 +2548,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2552,6 +2558,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2561,6 +2568,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2570,6 +2578,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2579,6 +2588,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2588,6 +2598,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2597,6 +2608,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2606,6 +2618,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2615,6 +2628,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2624,6 +2638,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 
@@ -2633,6 +2648,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtframe",
  "mtmath",
 ]
 

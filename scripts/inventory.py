@@ -35,7 +35,7 @@ def connect():
 
 
 # Crates of readable ports wired over lifted bodies (docs/MATH.md, docs/CORE.md).
-READABLE_CRATES = ("mtmath", "mtcore")
+READABLE_CRATES = ("mtmath", "mtcore", "mtframe")
 
 
 def native_declarations(repo=REPO):
