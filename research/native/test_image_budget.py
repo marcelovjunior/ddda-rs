@@ -146,6 +146,33 @@ class ImageBudgetTests(unittest.TestCase):
             ins,read,_=self.fixture(bytes.fromhex(code))
             self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
 
+    def test_narrow_register_facts_do_not_define_unknown_high_bits(self):
+        for code in (
+                'b200 84d2 7501 c3 cc',
+                'b200 b600 6685d2 7501 c3 cc',
+                'ba78563412 88c2 b200 81fa00563412 7501 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in (
+                'b200 85d2 7501 c3 cc', # EDX high bits remain unknown
+                'b200 89c2 84d2 7501 c3 cc', # explicit full write clears DL
+                'b200 f7e1 84d2 7501 c3 cc'): # implicit MUL write clears DL
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_zero_vector_stores_produce_exact_bytes_and_later_writes_clear_facts(self):
+        code=bytes.fromhex('b900000020 660fefc0 660fd601 8a11 84d2 750a b904000000 31c0 40 49 75fc c3')
+        ins,read,pages=self.fixture(code)
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read):
+            result=h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=3,
+                                body=[i.address for i in ins],end=0x400000+len(code))
+        self.assertEqual(result['regs_out']['eax'],4)
+        self.assertIn('image_budget',result)
+        changed=code.replace(bytes.fromhex('660fd601'),bytes.fromhex('0f28c1 660fd601'))
+        other,read,_=self.fixture(changed)
+        self.assertIsNone(image_bound(other,read,0xf008000,guarded=True))
+
     def test_signed_branches_use_overflow_not_only_the_result_sign(self):
         for code in (
                 'b8ffffff7f 83c001 7d01 cc c3',

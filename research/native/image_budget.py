@@ -129,7 +129,17 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     ins = {i.address: i for i in instructions}
     root_addresses = frozenset(ins)
     code_bytes = {a for i in instructions for a in range(i.address, i.address+i.size)}
-    regs = dict.fromkeys(REGS)
+    partials = {}
+    zero_vectors = set()
+    class Registers(dict):
+        # Every implicit full-register assignment clears narrower facts too.
+        def __setitem__(self, name, value):
+            partials.pop(name,None)
+            super().__setitem__(name,value)
+        def update(self,*args,**kwargs):
+            for name,value in dict(*args,**kwargs).items():
+                self[name] = value
+    regs = Registers(dict.fromkeys(REGS))
     regs['esp'] = stack
     if entry_values is not None:
         if (entry_pointers is None or any(r not in REGS or r == 'esp'
@@ -310,7 +320,11 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             return load(a, op.size, symbolic(i,op))
         if op.type == X86_OP_REG:
             name, shift, bits = register(i, op)
-            return None if regs[name] is None else (regs[name] >> shift) & ((1 << bits)-1)
+            if regs[name] is not None:
+                return (regs[name] >> shift) & ((1 << bits)-1)
+            known,value = partials.get(name,(0,0))
+            wanted = ((1 << bits)-1) << shift
+            return (value >> shift) & ((1 << bits)-1) if known & wanted == wanted else None
         raise ValueError('operand')
 
     def affine_add(left, right, scale=1):
@@ -367,8 +381,13 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             pointers[name] = pointer_value if bits == 32 else None
             affine_regs[name] = affine_value if bits == 32 else None
             mask = (1 << bits)-1
-            regs[name] = (None if value is None or (bits != 32 and regs[name] is None)
-                          else ((regs[name] or 0) & ~(mask << shift)) | ((value & mask) << shift))
+            known,old = (MASK,regs[name]) if regs[name] is not None else partials.get(name,(0,0))
+            lane = mask << shift
+            known = (known & ~lane) | (lane if value is not None else 0)
+            combined = (old & ~lane) | (((value & mask) << shift) if value is not None else 0)
+            regs[name] = combined & MASK if known == MASK else None
+            if known and known != MASK:
+                partials[name] = known,combined & MASK
         else:
             raise ValueError('destination')
 
@@ -657,6 +676,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                         return finish(4)
                     pc = target
             elif guarded and mn == 'call':
+                zero_vectors.clear()  # do not assume vector values survive a call
                 direct = op[0].type == X86_OP_IMM
                 target = op[0].imm & MASK if direct else get(i,op[0])
                 opaque.clear()
@@ -721,8 +741,19 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                                     'addss','subss','mulss','divss','sqrtss','minss','maxss',
                                     'addps','subps','mulps','divps','sqrtps','minps','maxps',
                                     'addsd','subsd','mulsd','divsd','sqrtsd','minsd','maxsd'):
-                # Value-opaque scalar/SIMD data movement: never invent a
-                # value or flags. Known destinations become unknown bytes.
+                # Only exact bitwise-zero vectors supply known store bytes.
+                # All other scalar/SIMD results remain opaque; no FP arithmetic
+                # or flags are inferred here.
+                zero_result = False
+                if len(op) == 2 and all(o.type == X86_OP_REG for o in op):
+                    dst,src = (i.reg_name(o.reg) for o in op)
+                    if dst.startswith('xmm') and src.startswith('xmm'):
+                        zero_result = (mn in ('pxor','xorps','xorpd') and
+                                       (dst == src or dst in zero_vectors and src in zero_vectors))
+                        zero_result |= mn in ('movq','movaps','movups','movdqa','movdqu') and src in zero_vectors
+                written_vectors = {i.reg_name(r) for r in i.regs_access()[1] if i.reg_name(r).startswith('xmm')}
+                if op and op[0].type == X86_OP_REG and i.reg_name(op[0].reg).startswith('xmm'):
+                    written_vectors.add(i.reg_name(op[0].reg))
                 if any(i.reg_name(r) in (*REGS,'eflags') for r in i.regs_access()[1]):
                     return None
                 for index,o in enumerate(op):
@@ -730,7 +761,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     # read. A memory destination of a move is always written.
                     move_store = index == 0 and mn in ('movq','movss','movsd','movaps','movups','movdqa','movdqu')
                     if o.type == X86_OP_MEM and (o.access & 2 or move_store or mn in ('fstp','fst','fistp')):
-                        put(i,o,None)
+                        zero_store = (move_store and len(op) > 1 and op[1].type == X86_OP_REG
+                                      and i.reg_name(op[1].reg) in zero_vectors)
+                        put(i,o,0 if zero_store else None)
+                zero_vectors.difference_update(written_vectors)
+                if zero_result:
+                    zero_vectors.add(i.reg_name(op[0].reg))
             else:
                 return None
             if regs['esp'] is None:

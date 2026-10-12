@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c byte/vector proof facts (2026-10-12)
+
+- Exact narrow-register lanes and bitwise-zero vector stores retain only
+  proved bits. **161 tests pass**; accepted data remains **59,597 / 177,385**.
+- **Next action:** finish queued trials, then checked 0x00815C60 constructor
+  input and the two string-copy recipes.
+
 ### L28c checked division (2026-10-12)
 
 - Division proof checks zero/overflow and preserves undefined-flag limits.

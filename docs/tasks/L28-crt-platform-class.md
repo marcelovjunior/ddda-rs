@@ -35,6 +35,25 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Narrow register and zero-vector facts (2026-10-12)
+
+The proof retains known byte/word register lanes without inventing unknown
+high bits. Full and implicit register writes clear narrower facts. Exact
+bitwise-zero vectors can supply zero store bytes; other floating/vector
+values remain unknown, and calls or overwrites discard vector facts.
+**161 light tests pass**, including original synthetic SSE/store/byte-test
+execution and explicit/implicit clobbers. Recording remains queued behind
+claude-2; accepted data is still the audited **59,597 / 177,385**.
+
+This addresses the string-copy stop at 0x007674D5: PXOR/MOVQ zeroes the
+source bytes, then MOV DL/TEST DL needs only the known byte lane. Planned
+retries: 0x0048F330, 0x00495520 and serializer 0x00C9E0F0.
+For 0x00815C60, constructor 0x00811780 takes its object in EAX, initializes
++4/+8/+0xC/+0x10 at 0x0081191F onward and flags at +0x4654. Caller
+0x00812820 passes the same object in EDI to 0x00815C60 at 0x008128D5.
+**Next:** checked producer 0x00811780 with EDI bound to its input EAX;
+then the string retries, after the pending division/tail trials.
+
 ### Checked division proof (2026-10-12)
 
 32-bit DIV/IDIV proofs require known inputs, nonzero divisor and a fitting
