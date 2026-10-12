@@ -632,3 +632,21 @@ claude-6 (15):
       `_memset`, on esi+0x1A0 and above, so the vtable survives. The call
       therefore always goes to slot 0x2C, 0x00DC67E0 (verified, 55 bytes).
     - Cause 2. Owner: Codex.
+15. main 5525e431 (train 8: Codex recorded 0x00DD5ED0 and 0x00F7DE40).
+    The committed code was built as is. Runtime game tests 46/46. The boot
+    passes 0x00DD5ED0.
+    - Stop: untranslated 0x00DC7D00, called from just before 0x00DD1BD2
+      (in 0x00DD1B70, verified, called by 0x00DD5ED0 at 0x00DD601A).
+      Registers: ecx = esi = 0x65AF83A0, esp 0x7EFFD15C.
+    - 0x00DD1B70 builds a sound object at this+0x3AC90:
+      - vtable 0x0142B030, then 0x00DC6030, then vtable 0x0142B0D8;
+      - a 1 MiB buffer from the allocator (0x00CF5E20(0x018D0C00), its
+        vtable[0x20] with size 0x100000 and alignment 0x10), kept in
+        [this+0x6A0];
+      - then a call to 0x00DC7D00 (127 bytes, slot 14 of 0x0142B0D8).
+    - 0x00DC7D00 calls 0x00DC6030, then this->vtable[0x2C], which is the
+      verified 1-byte `ret` 0x005F35C0 here. It then clears the whole
+      buffer: `_memset([this+0x6A0], 0, 0x100000)`.
+    - That fill alone touches 256 pages, so every case trips Codex's
+      256-page recorder guard ("Page limit" in the L28 Results).
+    - Cause 2. Owner: Codex (board #9685/#9686).
