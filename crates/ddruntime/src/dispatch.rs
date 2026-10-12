@@ -98,6 +98,7 @@ impl std::hash::Hasher for AddrHasher {
 
 #[derive(Default)]
 pub struct Registry {
+    instructions: Option<ddnative_base::execution::Lookup>,
     bindings: HashMap<u32, Binding, std::hash::BuildHasherDefault<AddrHasher>>,
     names: HashMap<u32, String>,
 }
@@ -112,6 +113,8 @@ impl Registry {
     pub fn with_lifted_program() -> Self {
         #[allow(unused_mut)]
         let mut r = Self::new();
+        #[cfg(feature = "game")]
+        r.set_instruction_lookup(ddnative::generated::lifted::instruction);
         #[cfg(feature = "game")]
         for (addr, f) in ddnative::generated::lifted::all() {
             r.insert(addr, Binding::Lifted(f)).expect("the lifted list has one entry per address");
@@ -137,6 +140,16 @@ impl Registry {
         self.bindings.get(&addr).copied()
     }
 
+    /// Install the generated, exact instruction-address resolver. Services
+    /// retain precedence; whole-function lifts are not instruction fallbacks.
+    pub fn set_instruction_lookup(&mut self, lookup: ddnative_base::execution::Lookup) {
+        self.instructions = Some(lookup);
+    }
+
+    pub(crate) fn instruction(&self, ip: u32) -> Option<ddnative_base::execution::Step> {
+        self.instructions.and_then(|lookup| lookup(ip))
+    }
+
     pub fn len(&self) -> usize {
         self.bindings.len()
     }
@@ -148,6 +161,10 @@ impl Registry {
     /// Run whatever is bound at `target` (return address already pushed),
     /// or report it as unbound.
     pub fn call(&self, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) -> Result<(), Unbound> {
+        if self.instructions.is_some() && (self.get(target).is_some() || self.instruction(target).is_some()) {
+            crate::executor::run(self, m, cpu, target);
+            return Ok(());
+        }
         match self.get(target) {
             Some(b) => {
                 if let Binding::Service(_) = b {

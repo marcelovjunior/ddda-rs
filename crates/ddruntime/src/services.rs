@@ -141,6 +141,9 @@ pub const CALLBACK_RETURN: u32 = 0xFFFF_FFE0;
 /// and the dispatcher runs the target. eax is the result; ecx and edx are
 /// the callee's to clobber (as across any call), the other registers are
 /// preserved by the callee's own ABI and checked here.
+/// With an instruction resolver installed, a nonlocal SEH transfer unwinds
+/// this Rust frame through the executor's typed boundary; these normal-return
+/// ABI checks and the caller's service continuation then do not execute.
 pub fn call_guest(m: &mut dyn Mem, cpu: &mut Cpu, target: u32, args: &[u32]) -> u32 {
     let (esp, ebx, ebp, esi, edi) = (cpu.esp, cpu.ebx, cpu.ebp, cpu.esi, cpu.edi);
     for &a in args.iter().rev() {

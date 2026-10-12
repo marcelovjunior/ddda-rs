@@ -4,65 +4,40 @@
 //! lifts. Each callback executes ONE restartable instruction (one iteration
 //! for REP), and returns its actual successor. CALL pushes a guest return
 //! address; RET reads it and returns `Flow::Return`. No Rust caller stack is
-//! retained. The production lifter has not yet been wired to this contract.
+//! retained. Generated instruction resolvers use the same boundary.
 //!
 //! Instructions must not call services, allocate, change mappings, release
 //! the guest lock, or publish side effects outside Mem/Cpu. Such effects
 //! need separate executor boundaries. GuestMemory access remains serialized
 //! by the runtime guest lock, including preflight and commit.
-use crate::{
-    memory::{Fault, GuestMemory},
-    seh,
-};
-use ddnative_base::{
-    mem::Mem,
-    x86::{self, Cpu},
-};
+use crate::{memory::Fault, seh};
+use ddnative_base::{mem::Mem, x86::Cpu};
 use std::{
     collections::BTreeMap,
     panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flow {
-    /// Fallthrough, branch, or CALL after the instruction pushed its return.
-    Next(u32),
-    /// RET after it read its guest target and performed stack cleanup.
-    Return(u32),
-}
+pub use ddnative_base::execution::{divide, Flow};
 pub type Instruction = fn(&mut dyn Mem, &mut Cpu) -> Flow;
 
 #[derive(Debug)]
-enum Trap {
-    Access(Fault),
-    Divide,
-}
-
-/// x86 #DE covers both zero divisor and quotient overflow. The helper leaves
-/// output registers untouched on failure; the instruction boundary restores
-/// the complete pre-instruction Cpu in either case.
-pub fn divide(low: u32, high: u32, divisor: u32, bits: u32, signed: bool) -> (u32, u32) {
-    x86::divide(low, high, divisor, bits, signed).unwrap_or_else(|| std::panic::panic_any(Trap::Divide))
-}
+struct Access(Fault);
 
 /// A write buffer for one restartable instruction. Reads see earlier writes
 /// of that instruction, but no write becomes visible before it succeeds.
 struct Transaction<'a> {
-    memory: &'a mut GuestMemory,
+    memory: &'a mut dyn Mem,
     writes: BTreeMap<u32, u8>,
 }
 impl Transaction<'_> {
     fn check(&self, addr: u32, width: u32, write: bool) {
-        if self.memory.check(addr, width, write).is_err() {
-            // The checked-memory report names the whole access's start.
-            // SEH needs the inaccessible byte (CR2), including split pages.
-            for k in 0..width {
-                if let Err(mut f) = self.memory.check(addr.wrapping_add(k), 1, write) {
-                    f.width = width;
-                    std::panic::panic_any(Trap::Access(f));
-                }
-            }
-            unreachable!("mapping changed during an instruction");
+        if let Err(bad) = self.memory.probe(addr, width, write) {
+            std::panic::panic_any(Access(Fault {
+                addr: bad,
+                width,
+                write,
+                reason: "instruction access",
+            }));
         }
     }
     fn load(&self, addr: u32, width: u32) -> u32 {
@@ -112,10 +87,10 @@ impl Mem for Transaction<'_> {
 /// all Cpu state and discards pending writes. Arbitrary Rust panics propagate
 /// as host failures: panic text is never interpreted as an access violation.
 pub fn instruction(
-    memory: &mut GuestMemory,
+    memory: &mut dyn Mem,
     cpu: &mut Cpu,
     ip: u32,
-    step: Instruction,
+    step: impl FnOnce(&mut dyn Mem, &mut Cpu) -> Flow,
 ) -> Result<Flow, seh::Exception> {
     let before = cpu.clone();
     let mut tx = Transaction {
@@ -129,11 +104,11 @@ pub fn instruction(
         }
         Err(payload) => {
             *cpu = before;
-            match payload.downcast::<Trap>() {
-                Ok(trap) => Err(match *trap {
-                    Trap::Access(f) => seh::Exception::access_violation(&f, ip),
-                    Trap::Divide => seh::Exception::new(0xc0000094, ip),
-                }),
+            if payload.is::<ddnative_base::execution::DivideError>() {
+                return Err(seh::Exception::new(0xc0000094, ip));
+            }
+            match payload.downcast::<Access>() {
+                Ok(trap) => Err(seh::Exception::access_violation(&trap.0, ip)),
                 Err(other) => resume_unwind(other),
             }
         }
@@ -145,6 +120,151 @@ pub enum Stop {
     MissingInstruction { ip: u32 },
     Budget { ip: u32 },
     Exception(seh::Stop),
+}
+
+#[derive(Clone, Copy)]
+struct Boundary {
+    id: u64,
+    slot: u32,
+    target: u32,
+}
+thread_local! {
+    static BOUNDARIES: std::cell::RefCell<Vec<Boundary>> = const { std::cell::RefCell::new(Vec::new()) };
+    static SERIAL: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+struct Scope(u64);
+impl Drop for Scope {
+    fn drop(&mut self) {
+        BOUNDARIES.with(|b| assert_eq!(b.borrow_mut().pop().unwrap().id, self.0));
+    }
+}
+#[derive(Debug)]
+struct Transfer {
+    owner: u64,
+    cpu: Cpu,
+    ip: Option<u32>,
+}
+
+/// On the Windows downward-growing guest stack, restoring ESP past a
+/// callback's return slot abandons that callback. This is a stack boundary,
+/// never an address-specific exception-handler heuristic. The outermost
+/// execution owns arbitrary stack pivots; a callback may retain its slot.
+fn owner(esp: u32) -> Option<u64> {
+    BOUNDARIES.with(|b| {
+        let b = b.borrow();
+        b.iter().rev().find(|b| esp <= b.slot).or(b.first()).map(|b| b.id)
+    })
+}
+
+/// Transfer from a software exception API to a CONTEXT-selected instruction.
+/// The typed unwind drops host callback/service frames before re-entry.
+pub(crate) fn resume(cpu: Cpu, ip: u32) -> ! {
+    match owner(cpu.esp) {
+        Some(owner) => resume_unwind(Box::new(Transfer {
+            owner,
+            cpu,
+            ip: Some(ip),
+        })),
+        None => std::panic::panic_any(seh::Stop::UnsupportedResume {
+            address: ip,
+            esp: cpu.esp,
+        }),
+    }
+}
+
+/// Registry/Session execution. Services run outside instruction transactions;
+/// nested call_guest/SEH callbacks open distinct return-slot boundaries even
+/// when they use the same sentinel address. No generated guest call nests Rust.
+pub(crate) fn run(registry: &crate::dispatch::Registry, m: &mut dyn Mem, cpu: &mut Cpu, entry: u32) {
+    use crate::dispatch::Binding;
+    let id = SERIAL.with(|s| {
+        let n = s.get().wrapping_add(1);
+        s.set(n);
+        n
+    });
+    let boundary = Boundary {
+        id,
+        slot: cpu.esp,
+        target: m.u32(cpu.esp),
+    };
+    BOUNDARIES.with(|b| b.borrow_mut().push(boundary));
+    let _scope = Scope(id);
+    let mut ip = entry;
+    loop {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let slot = cpu.esp;
+            let flow = if let Some(Binding::Service(f)) = registry.get(ip) {
+                let target = m.u32(slot);
+                crate::threads::maybe_yield();
+                f(m, cpu);
+                Flow::Return(target)
+            } else if let Some(step) = registry.instruction(ip) {
+                match instruction(m, cpu, ip, |m, cpu| step(m, cpu, ip)) {
+                    Ok(flow) => flow,
+                    Err(e) => {
+                        let next = seh::dispatch(m, cpu, &e, ip).unwrap_or_else(|e| std::panic::panic_any(e));
+                        if owner(cpu.esp) != Some(id) {
+                            resume(cpu.clone(), next);
+                        }
+                        return Some(next);
+                    }
+                }
+            } else {
+                std::panic::panic_any(Stop::MissingInstruction { ip });
+            };
+            if let Flow::Return(target) | Flow::Jump(target) = flow {
+                let returned = BOUNDARIES.with(|b| {
+                    b.borrow()
+                        .iter()
+                        .rev()
+                        .filter(|b| {
+                            b.target == target
+                                && match flow {
+                                    Flow::Return(_) => b.slot == slot,
+                                    // A naked epilogue may POP its return address and
+                                    // JMP through a register instead of using RET.
+                                    Flow::Jump(_) => cpu.esp > b.slot,
+                                    _ => false,
+                                }
+                        })
+                        .max_by_key(|b| b.slot)
+                        .copied()
+                });
+                if let Some(b) = returned {
+                    if b.id == id {
+                        return None;
+                    }
+                    resume_unwind(Box::new(Transfer {
+                        owner: b.id,
+                        cpu: cpu.clone(),
+                        ip: None,
+                    }));
+                }
+                // Do not infer abandonment from transient ESP arithmetic
+                // alone (e.g. POP/PUSH of a return address in an epilogue).
+                if owner(cpu.esp) != Some(id) {
+                    resume(cpu.clone(), target);
+                }
+            }
+            let (Flow::Next(target) | Flow::Jump(target) | Flow::Return(target)) = flow;
+            Some(target)
+        }));
+        match result {
+            Ok(Some(next)) => ip = next,
+            Ok(None) => return,
+            Err(e) => match e.downcast::<Transfer>() {
+                Ok(t) if t.owner == id => {
+                    *cpu = t.cpu;
+                    match t.ip {
+                        Some(next) => ip = next,
+                        None => return,
+                    }
+                }
+                Ok(t) => resume_unwind(t),
+                Err(e) => resume_unwind(e),
+            },
+        }
+    }
 }
 
 /// Flat guest control flow. Interior entries are ordinary instruction keys;
@@ -164,7 +284,7 @@ impl Executor {
     }
     pub fn run(
         &self,
-        memory: &mut GuestMemory,
+        memory: &mut dyn Mem,
         cpu: &mut Cpu,
         entry: u32,
         return_token: u32,
@@ -179,7 +299,7 @@ impl Executor {
                 .ok_or(Stop::MissingInstruction { ip })?;
             match instruction(memory, cpu, ip, step) {
                 Ok(Flow::Return(target)) if target == return_token => return Ok(()),
-                Ok(Flow::Next(target) | Flow::Return(target)) => ip = target,
+                Ok(Flow::Next(target) | Flow::Jump(target) | Flow::Return(target)) => ip = target,
                 Err(exception) => {
                     // Cpu is the PRE-instruction checkpoint, including ESP
                     // before a failed PUSH/POP. SEH can select any known
