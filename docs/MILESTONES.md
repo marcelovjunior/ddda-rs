@@ -1206,8 +1206,13 @@ opening (codex-31), route perf (codex-29).
     - debug info: full 84 s, line tables 76 s, none 71 s; typeck plus
       borrowck take ~37 s regardless;
     - opt-level 1: 492 s, of which crate-local ThinLTO is 339 s;
-    - release at opt-level 3: 661 s; 528 s with LTO off;
+    - release at opt-level 3: 661 s; 528 s with LTO off; opt-level 2
+      without LTO 549 s; opt-level 1 without LTO 408 s. Release settings
+      stay as they are until a ddperf replay shows what each costs at run
+      time;
     - peak RSS ~3 GB per shard compiler.
+  - Third-party crates are optimised in dev/test builds (aa8e6a3e):
+    d3d9wgsl's driver comparison went from 745 s to 52 s.
     heavy.py now gives a slot that runs alone with 20 GB free five cargo
     jobs, and runs every job in a Windows Job Object (orphaned rustc/cargo
     die with it; the idle watchdog uses the job's CPU accounting).
@@ -1223,3 +1228,70 @@ opening (codex-31), route perf (codex-29).
   Codex's L28b recorder batches.
 - **One next action:** claude-2 reruns the boot on main (`__fpmath`, the
   sine-table initializers and `__aulldvrm` are fixed by train 2's data).
+
+## Batch 2026-10-12 (train 3: 99.6%; parallel guest threads; boot into WinMain)
+
+- **Train 3 landed on main e3d0fdd6. Gate: 59,248 of 59,500 verified
+  (99.6%, 99.0% of code bytes).** It contains:
+  - L42: parallel guest threads, atomic page table, service lock;
+  - L41: the whole-frame oracle;
+  - L28-crt (claude-3's last code) and the L25 results;
+  - Codex's L28b batch (data only; its recorder code rides train 4).
+  Every suite is green: ddruntime (L42's parallel tests included), the
+  light crates, ddgpu, and the ddplay build.
+- **Per-address data merges.** `E:/ddda-re/tools/merge_lift_data3.py`
+  merges a private set into the shared data per address, against the
+  set's base (record and cases as one unit; a conflict stops the merge).
+  Agents may now re-record existing functions (promotions).
+- **Build:** aa8e6a3e's optimised third-party crates also caught the
+  ddlift shards, because they are not workspace members. 12db9dcb pins
+  them to opt-level 0. With that, train 3's cold gate build took ~8
+  minutes, and the light suites 3 minutes instead of 17.
+- **Boot (claude-2):** the real boot runs the whole CRT start-up
+  (`__cinit`, all 5,662 initialisers) and enters WinMain. It stops at
+  0x00DAFED0, an introsort partition with no fixture (Codex). claude-2's
+  static look-ahead to the title is in the L21 Results:
+  - 42 functions on direct-call routes;
+  - 51 one hop away through vtables or pointers;
+  - 45 two hops away.
+  They are routed to Codex (no fixture) and claude-6 (not lifted).
+- **L45 (claude-6), in progress:**
+  - a general edge-bound rule for table jumps;
+  - gen no longer counts a function as verified when it has an unbound
+    direct target, an unproven table or a stale body (~51 functions,
+    reasons in `patterns/verification_gaps.json`);
+  - boot triage next.
+- **One next action:** Codex's 0x00DAFED0 fixture, then claude-2 reruns
+  the boot.
+
+## Batch 2026-10-12 (train 4: honest verification; boot past sRender)
+
+- **Train 4 landed on main 863f6817: 59,229 of 59,440 verified (99.6%).**
+  It contains:
+  - claude-6's L45 rules: tails past Ghidra's end, frame tails, and
+    verification gaps, so 44 functions with unproven tables are no longer
+    credited, and 60 non-code admissions left the denominator;
+  - L27b (SEH faults inside lifted code);
+  - the boot triage records;
+  - claude-2's services (CreateProcessA, wsprintfA) and look-ahead tables;
+  - Codex's recorder rules and batches. The boot functions 0x00DAFED0,
+    0x00DA9EC0, 0x00419100 and the sBbsRpgMain-ctor route are recorded.
+  `tests/options.rs` passes un-ignored.
+- **Incident:** L27b emitted a per-instruction step function for every
+  lifted function. The shards tripled (lift_12: 21 → 61 MB), one rustc
+  reached 11 GB, and the machine ran out of RAM (Claude Code stopped the
+  head's background jobs: Ghidra server, status server, memory guard).
+  Fixes:
+  - steps only with LIFT_INSTRUCTIONS=1 (24c4f5c4);
+  - the executor runs whole-function bindings (b84b3e44, diagnosed by
+    claude-2);
+  - heavy.py caps each slot job at 16 GB of committed memory (a Job
+    Object limit), so a runaway compiler fails instead of the machine;
+  - L47 (claude-6) scopes steps to the 44 bodies that register EH4 scopes.
+- **Boot (preview on Codex's data with L46):** the boot gets past:
+  - sRender's set-up;
+  - the archive-manager tables;
+  - `_qsort` in the sShader2 constructor (L46: an undefined CF after DIV
+    must stay undefined through INC).
+- **One next action:** train 5 (L46 x87 state and frame-tail fix, L47
+  scoped steps, Codex's next batches), then claude-2's next boot stop.

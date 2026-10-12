@@ -4,7 +4,7 @@
 //! that backends (crates/ddgpu, wgpu) do not depend on the runtime.
 
 /// A texture's dimensionality.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TexKind {
     Flat,
     Cube,
@@ -39,8 +39,31 @@ pub struct TextureBinding {
     pub height: u32,
     pub depth: u32,
     pub levels: u32,
+    /// D3DUSAGE bits the texture was created with (D3DUSAGE_RENDERTARGET 1,
+    /// D3DUSAGE_DEPTHSTENCIL 2: its levels are targets as well)
+    pub usage: u32,
     /// D3DSAMPLERSTATETYPE 1..13 values
     pub states: [u32; 14],
+}
+
+/// D3DUSAGE_RENDERTARGET.
+pub const USAGE_RENDERTARGET: u32 = 0x1;
+/// D3DUSAGE_DEPTHSTENCIL.
+pub const USAGE_DEPTHSTENCIL: u32 = 0x2;
+
+/// The texture a target surface is a level of: enough to create the
+/// texture when a draw or clear renders into it before it is sampled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TargetTexture {
+    pub resource: u32,
+    pub kind: TexKind,
+    /// the top level's size
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub levels: u32,
+    /// D3DUSAGE bits (D3DUSAGE_RENDERTARGET or D3DUSAGE_DEPTHSTENCIL)
+    pub usage: u32,
 }
 
 /// A render target or depth-stencil: the surface, its format and size, and
@@ -51,7 +74,7 @@ pub struct Target {
     pub format: u32,
     pub width: u32,
     pub height: u32,
-    pub texture: Option<u32>,
+    pub texture: Option<TargetTexture>,
     /// for a texture's surface: its index among the texture's level
     /// surfaces (face * levels + level)
     pub level: u32,

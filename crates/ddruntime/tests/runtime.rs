@@ -1939,3 +1939,42 @@ fn string_from_guid2_formats_as_windows_measured() {
     assert_eq!(call_service(system::string_from_guid2, &mut m, &[g, out, 38]).eax, 0);
     assert_eq!(m.u16(out), 0xEEEE, "nothing written");
 }
+
+#[test]
+fn create_process_stops_with_the_restart_command_line() {
+    let mut m = guest();
+    let cmd = 0x0030_0000;
+    put_str(&mut m, cmd, r#""E:\Games\DDDA\DDDA.exe" -restart"#);
+    let msg = stops(system::create_process_a, &mut m, &[0, cmd, 0, 0, 0, 0, 0, 0, 0x0030_0100, 0x0030_0200]);
+    assert!(msg.contains("restart itself") && msg.contains("-restart") && msg.contains("from 0x00405678"), "{msg}");
+}
+
+#[test]
+fn wsprintf_formats_wide_strings_as_windows_measured() {
+    let mut m = guest();
+    let (out, fmt, wide) = (0x0030_0000, 0x0030_0800, 0x0030_0900);
+    let run = |m: &mut GuestMemory, f: &str, s: Option<&str>| {
+        put_str(m, fmt, f);
+        if let Some(s) = s { put_w(m, wide, s); }
+        fill(m, out, 1100, 0xEE);
+        let cpu = call_service(text::wsprintf_a, m, &[out, fmt, if s.is_some() { wide } else { 0 }]);
+        assert_eq!(cpu.esp, 0x0011_0000 - 12, "cdecl: the caller pops");
+        let n = cpu.eax;
+        assert_eq!(m.u8(out + n), 0, "NUL-terminated");
+        (n, m.read(out, n).unwrap())
+    };
+    assert_eq!(run(&mut m, "%S", Some("abc")), (3, b"abc".to_vec()));
+    assert_eq!(run(&mut m, "<%S>%%", Some("\u{E9}\u{20AC}\u{100}\u{4E00}x")), (8, vec![b'<', 0xE9, 0x80, b'A', b'?', b'x', b'>', b'%']));
+    assert_eq!(run(&mut m, "%S", Some("a\u{1F600}b")).1, b"a??b", "a surrogate pair is two units");
+    assert_eq!(run(&mut m, "%S", None), (0, Vec::new()), "NULL");
+    // the 1024-character limit
+    let long = |n: usize| "a".repeat(n);
+    assert_eq!(run(&mut m, "%S", Some(&long(1023))).0, 1023);
+    assert_eq!(run(&mut m, "%S", Some(&long(1024))).0, 0, "an argument that does not end below 1024 is dropped");
+    assert_eq!(run(&mut m, "<%S>%%", Some(&long(1021))).0, 1024, "literals while fewer than 1024");
+    let (n, t) = run(&mut m, "<%S>%%", Some(&long(1022)));
+    assert_eq!((n, t[1023]), (1024, b'>'));
+    assert_eq!(run(&mut m, "<%S>%%", Some(&long(1023))), (1, b"<".to_vec()), "output stops at the first piece that does not fit");
+    put_str(&mut m, fmt, "%d");
+    assert!(stops(text::wsprintf_a, &mut m, &[out, fmt, 5]).contains("not modelled"));
+}

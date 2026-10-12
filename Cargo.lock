@@ -2272,6 +2272,15 @@ name = "d3d9cmd"
 version = "0.1.0"
 
 [[package]]
+name = "d3d9frame"
+version = "0.1.0"
+dependencies = [
+ "d3d9cmd",
+ "miniz_oxide 0.8.9",
+ "png",
+]
+
+[[package]]
 name = "d3d9ref"
 version = "0.1.0"
 dependencies = [
@@ -2444,6 +2453,7 @@ name = "ddgpu"
 version = "0.1.0"
 dependencies = [
  "d3d9cmd",
+ "d3d9frame",
  "d3d9ref",
  "d3d9shader",
  "d3d9wgsl",
@@ -2862,6 +2872,7 @@ name = "ddruntime"
 version = "0.1.0"
 dependencies = [
  "d3d9cmd",
+ "d3d9frame",
  "d3d9shader",
  "d3dxref",
  "ddaudio",

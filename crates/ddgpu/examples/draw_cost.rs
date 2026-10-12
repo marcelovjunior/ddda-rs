@@ -77,7 +77,7 @@ fn main() {
             fvf: 0,
             vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() },
             ps_constants: ps_c,
-            textures: vec![TextureBinding { sampler: 0, resource: 0x200 + k % 4, kind: TexKind::Flat, format: 21, width: 64, height: 64, depth: 1, levels: 1, states: sampler }],
+            textures: vec![TextureBinding { sampler: 0, resource: 0x200 + k % 4, kind: TexKind::Flat, format: 21, width: 64, height: 64, depth: 1, levels: 1, usage: 0, states: sampler }],
             render_states: states,
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],
             scissor: [0, 0, w as i32, h as i32],

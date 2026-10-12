@@ -64,9 +64,9 @@ class StepTests(unittest.TestCase):
                  patch.object(h, 'code', read), patch.object(h, 'executable', executable), \
                  patch.object(lift, 'function_entries', return_value=frozenset(blocks)), \
                  patch.object(lift, 'noreturn_entries', return_value=frozenset()), contextlib.redirect_stdout(io.StringIO()):
-                lift.gen()
+                lift.gen(instructions=True)
                 stamps = {p: p.stat().st_mtime_ns for p in root.rglob('*.rs')}
-                lift.gen()
+                lift.gen(instructions=True)
                 self.assertEqual(stamps, {p: p.stat().st_mtime_ns for p in stamps})
             index = (root / 'crates/ddlift/lift_05/src/generated/mod.rs').read_text()
             self.assertIn('(0x0040200C, s_00510000)', index)

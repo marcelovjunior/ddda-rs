@@ -14,9 +14,12 @@ demand, every byte read and written recorded).
     python lift.py relift       # after a codegen change: re-translate the current list
     python lift.py one ADDR     # print the Rust for one function
 
-Run with E:/ddda-re/tools/pyenv/Scripts/python.exe. Production gen also
-decodes the original image for restartable instruction entries (L27b);
-gen(instructions=False) is only for synthetic legacy-IR generator tests.
+Run with E:/ddda-re/tools/pyenv/Scripts/python.exe. Restartable
+instruction entries (L27b: a per-instruction step function for every
+lifted function, decoded from the original image) are off unless
+LIFT_INSTRUCTIONS=1. Emitted for all 59,500 functions they tripled the
+generated code and one shard's rustc reached 11 GB (train 4); they wait
+for a scoped design (only the functions that can resume mid-body).
 docs/NATIVE_PIPELINE.md, "The lifter".
 """
 import json
@@ -2673,7 +2676,9 @@ def verification_gaps(lifted):
     return gaps
 
 
-def gen(chunk=400, instructions=True):
+def gen(chunk=400, instructions=None):
+    if instructions is None:
+        instructions = os.environ.get('LIFT_INSTRUCTIONS') == '1'
     from pathlib import Path
     lifted = sorted(json.loads(Path(N, "patterns/lift.json").read_text()), key=lambda f: f["addr"])
     addresses = {f["addr"] for f in lifted}
