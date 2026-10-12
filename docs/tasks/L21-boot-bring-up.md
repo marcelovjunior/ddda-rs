@@ -290,7 +290,7 @@ game's dispatch), so this is a lower bound. The real boot will show more.
 
 Imports: 139 are reached on these routes, and all have a runtime service
 now. The last one, `CreateProcessA` (the self-restart helper 0x011797F0),
-stops with a report naming the command line (commit after 61443074).
+stops with a report naming the command line (e42d7b9f).
 `UnhandledExceptionFilter` (`___report_gsfailure`) is L27's seh service.
 
 42 unverified functions, by owner. Depth is call levels below the root.
