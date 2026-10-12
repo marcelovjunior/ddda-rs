@@ -1,5 +1,81 @@
 # Milestones
 
+### L28c string/constructed fixtures (2026-10-12, pending replay)
+
+- **+3/+9:** two string helpers and a checked constructed self-copy, 3/3
+  each. Cumulative **+10/+30**, private **59,602 / 177,400**.
+- Audit: all **59,592 baseline functions / 177,370 cases unchanged**;
+  no stale mocks or unexpected edits. **161 tests pass**; main merged.
+- Five recipes remain, including 0x00493AA0 set aside. **Next action:**
+  new boot stops first, otherwise checked state for 0x004A0C00's branch.
+
+### L28c division/tail fixtures (2026-10-12, pending replay)
+
+- **+2/+6:** 0x0046A2D0 and 0x00DBA780 record 3/3; **161 tests pass**.
+- Cumulative **+7/+21**, private **59,599 / 177,391**; baseline records
+  unchanged. Main merged. **Next action:** constructor and string recipes.
+
+### L28c byte/vector proof facts (2026-10-12)
+
+- Exact narrow-register lanes and bitwise-zero vector stores retain only
+  proved bits. **161 tests pass**; accepted data remains **59,597 / 177,385**.
+- **Next action:** finish queued trials, then checked 0x00815C60 constructor
+  input and the two string-copy recipes.
+
+### L28c checked division (2026-10-12)
+
+- Division proof checks zero/overflow and preserves undefined-flag limits.
+  **159 tests pass**; two original-game trials await the boot heavy slot.
+- **Next action:** finish sibling/destructor recording, then string inputs.
+
+### L28c mocked tail proof (2026-10-12)
+
+- Direct mock tails retain return-address and exact runtime mock checks.
+  **158 tests pass**; original destructor recording is pending.
+- **Next action:** signed division proof, then sibling/destructor trials.
+
+### L28c multiply/rotate fixtures (2026-10-12, pending replay)
+
+- **+2/+6:** 0x00494D80 and 0x0046A150 record 3/3. **157 tests pass.**
+- Cumulative **+5/+15**, native-L28c **59,597 / 177,385**; all baseline
+  records unchanged. **Next action:** 0x0046A2D0 proof and destructor tail.
+
+### L28c exact-input fixtures (2026-10-12, pending replay)
+
+- **+3/+9**: 0x004A06B0, 0x00495150, 0x0050A110 record 3/3 each.
+  **155 tests pass**; all 59,592 baseline records / 177,370 cases unchanged.
+- Native-L28c **59,595 / 177,379**. Main train 10 merged; Rust replay is
+  head's next step. **Next action:** remaining IMUL/ROL proof gaps.
+
+### L28c standalone input proofs (2026-10-12)
+
+- Exact-input proof now also supports standalone recorder distributions.
+  **155 tests pass**; original-game trials are pending the heavy slot.
+- Fourteen residuals are queued for serial trials; 0x00493AA0 stays aside.
+  **Next action:** finish the waiting boot-route trial, then that list.
+
+### L28c checked stack arguments (2026-10-12)
+
+- Setup outputs can bind method stack arguments while preserving the return
+  address and subsequent setup distributions. **154 tests pass.**
+- 0x004A06B0 and 0x00DBA780 producer recipes are prepared, not recorded.
+  **Next action:** run serial trials when head's heavy slot becomes free.
+
+### L28c integer proof operations (2026-10-12)
+
+- CDQ, double shifts and overflow-aware signed branches have regression
+  coverage. **153 tests pass; private records unchanged.**
+- 0x00494D80 retry queued behind head's train. **Next action:** finish the
+  retry, then checked stack-argument bindings for 0x004A06B0.
+
+### L28c exact input-page proofs (2026-10-12)
+
+- Opt-in checked-state proof uses the recorder's exact initial page bytes
+  with existing alias guards. **151 tests pass; 59,592 / 177,370 unchanged.**
+- 0x00494D80 reaches 69,197 proof instructions; CDQ is unsupported.
+  **Next action:** general integer proof semantics. 0x00493AA0 set aside
+  with both setup-order mismatches documented, per head.
+
 ### L28c earlier producer bindings (2026-10-12)
 
 - Method inputs can select any checked setup phase without rebinding later

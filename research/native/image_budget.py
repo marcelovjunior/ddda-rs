@@ -55,7 +55,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 deadline=None, max_bytes=256*4096, guarded=False, decode=None,
                 closed=frozenset(), models=None, pop_for=None, initial_direction=None,
                 caller_stack=None, entry_pointers=None, initial_writes=None,
-                entry_values=None):
+                entry_values=None, initial_pages=None, read_initial=None):
     """Return a strict count or guarded bound certificate; None if unproven.
 
     `read_image(address, size)` must return original image bytes only and
@@ -85,6 +85,11 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
     values through 32-bit copies, sums/differences, LEA and saved words. Only
     cancellation of every symbolic term creates an integer fact. Arithmetic
     flags remain unknown when the operands were unknown.
+    Opt-in `initial_pages` supplies complete captured setup input pages,
+    including bytes the setup did not write. Reads receive the same alias
+    guards; changed instruction bytes refuse the proof. `read_initial` may
+    supply lazily generated input bytes only when it uses the exact same
+    immutable input generator as execution. Its caller must cap cached pages.
     """
     # Only the bounded caller-argument window is an input fact. The saved
     # return address and uninitialized callee locals are deliberately absent.
@@ -109,13 +114,32 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             or any(type(a) is not int or not 0 <= a <= MASK or type(v) is not int or not 0 <= v <= 255
                    for a,v in initial_writes.items())):
         raise ValueError('setup writes require guarded pointer witnesses and bounded bytes')
+    if initial_pages is not None and (entry_pointers is None
+            or len(initial_pages)*4096 > max_bytes
+            or any(type(p) is not int or not 0 <= p <= 0xfffff000 or p % 4096
+                   or type(data) is not bytes or len(data) != 4096
+                   for p,data in initial_pages.items())):
+        raise ValueError('setup pages require guarded pointer witnesses and bounded pages')
+    if read_initial is not None and (entry_pointers is None or not callable(read_initial)):
+        raise ValueError('initial input reader requires guarded pointer witnesses')
+    initial_pages = initial_pages or {}
     prior = dict(initial_writes or {})
     if not instructions:
         return None
     ins = {i.address: i for i in instructions}
     root_addresses = frozenset(ins)
     code_bytes = {a for i in instructions for a in range(i.address, i.address+i.size)}
-    regs = dict.fromkeys(REGS)
+    partials = {}
+    zero_vectors = set()
+    class Registers(dict):
+        # Every implicit full-register assignment clears narrower facts too.
+        def __setitem__(self, name, value):
+            partials.pop(name,None)
+            super().__setitem__(name,value)
+        def update(self,*args,**kwargs):
+            for name,value in dict(*args,**kwargs).items():
+                self[name] = value
+    regs = Registers(dict.fromkeys(REGS))
     regs['esp'] = stack
     if entry_values is not None:
         if (entry_pointers is None or any(r not in REGS or r == 'esp'
@@ -187,8 +211,10 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
         return value & MASK
 
     def stored_load(a, size):
-        # Only this trace's stores or checked setup writes supply object facts.
-        if a is None or any((a+k)&MASK not in stores and (a+k)&MASK not in prior for k in range(size)):
+        # Trace stores, checked writes, or opt-in captured pages supply facts.
+        if a is None or any((a+k)&MASK not in stores and (a+k)&MASK not in prior
+                            and read_initial is None and (((a+k)&MASK & ~4095) not in initial_pages
+                                 or stack <= (a+k)&MASK < stack+4) for k in range(size)):
             return None
         return load(a, size)
 
@@ -227,11 +253,14 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 v = stores[p]
             elif p in prior:
                 v = prior[p]
+            elif p & ~4095 in initial_pages and not stack <= p < stack+4:
+                v = initial_pages[p & ~4095][p & 4095]
             elif 0 <= p-(stack+4) < len(caller_stack):
                 v = caller_stack[p-(stack+4)]
             else:
                 try:
-                    raw = read_image(p, 1)
+                    raw = (read_initial(p, 1) if read_initial is not None and not stack <= p < stack+4
+                           else read_image(p, 1))
                     v = raw[0] if len(raw) == 1 else None
                 except KeyError:
                     v = None
@@ -291,7 +320,11 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             return load(a, op.size, symbolic(i,op))
         if op.type == X86_OP_REG:
             name, shift, bits = register(i, op)
-            return None if regs[name] is None else (regs[name] >> shift) & ((1 << bits)-1)
+            if regs[name] is not None:
+                return (regs[name] >> shift) & ((1 << bits)-1)
+            known,value = partials.get(name,(0,0))
+            wanted = ((1 << bits)-1) << shift
+            return (value >> shift) & ((1 << bits)-1) if known & wanted == wanted else None
         raise ValueError('operand')
 
     def affine_add(left, right, scale=1):
@@ -348,10 +381,26 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
             pointers[name] = pointer_value if bits == 32 else None
             affine_regs[name] = affine_value if bits == 32 else None
             mask = (1 << bits)-1
-            regs[name] = (None if value is None or (bits != 32 and regs[name] is None)
-                          else ((regs[name] or 0) & ~(mask << shift)) | ((value & mask) << shift))
+            known,old = (MASK,regs[name]) if regs[name] is not None else partials.get(name,(0,0))
+            lane = mask << shift
+            known = (known & ~lane) | (lane if value is not None else 0)
+            combined = (old & ~lane) | (((value & mask) << shift) if value is not None else 0)
+            regs[name] = combined & MASK if known == MASK else None
+            if known and known != MASK:
+                partials[name] = known,combined & MASK
         else:
             raise ValueError('destination')
+
+    def finish(extra=0):
+        if regs['esp'] != stack or any(stack+k in stores for k in range(4)):
+            return None
+        if code_bytes.intersection(stores) or count+overhead+extra > ceiling:
+            return None
+        if guarded:
+            return dict(instructions=count+overhead+extra,
+                        protected=sorted(protected | code_bytes | set(range(stack,stack+4))),
+                        unknown_writes=sorted(unknown_writes),mock_calls=mock_calls)
+        return count+extra
 
     try:
         for count in range(1, ceiling+1):
@@ -369,6 +418,9 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 return None
             if any(a in prior for a in range(i.address,i.address+i.size)):
                 return None  # setup may not change the instructions being proved
+            if any((a & ~4095) in initial_pages and initial_pages[a & ~4095][a & 4095] != b
+                   for a,b in zip(range(i.address,i.address+i.size),i.bytes)):
+                return None  # initial pages must retain the decoded instructions
             mn, op = i.mnemonic, i.operands
             before_esp, was_root = regs['esp'], not frames
             pc += i.size
@@ -385,15 +437,7 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                         outgoing = 0
                     continue
                 # A saved root return address must not have been overwritten.
-                if regs['esp'] != stack or any(stack+k in stores for k in range(4)):
-                    return None
-                if code_bytes.intersection(stores):
-                    return None  # includes code discovered in closed callees
-                if guarded:
-                    return dict(instructions=count+overhead,
-                                protected=sorted(protected | code_bytes | set(range(stack,stack+4))),
-                                unknown_writes=sorted(unknown_writes), mock_calls=mock_calls)
-                return count
+                return finish()
             if mn == 'nop':
                 continue
             if guarded and mn in ('cld','std'):
@@ -490,6 +534,15 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                         flags['cf'] = False
                     elif old_cf is not None:
                         flags['cf'] = old_cf
+                if result is not None:
+                    if mn in ('xor','or','and','test'):
+                        flags['of'] = False
+                    else:
+                        signed_a = a-(1 << bits) if a & (1 << (bits-1)) else a
+                        signed_b = b-(1 << bits) if b & (1 << (bits-1)) else b
+                        total = (signed_a-signed_b-carry if mn in ('cmp','sub','sbb','dec')
+                                 else signed_a+signed_b+carry)
+                        flags['of'] = not -(1 << (bits-1)) <= total < (1 << (bits-1))
                 if mn not in ('cmp','test'):
                     affine_value = None
                     if bits == 32 and mn in ('add','sub','inc','dec'):
@@ -501,6 +554,86 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     if base_pointer is not None and b is not None and mn in ('add','sub','inc','dec'):
                         adjusted = (base_pointer+(b if mn in ('add','inc') else -b)) & MASK
                     put(i, op[0], result, adjusted, affine_value)
+            elif guarded and mn in ('div','idiv') and op[0].size == 4:
+                low,high,divisor = regs['eax'],regs['edx'],get(i,op[0])
+                if low is None or high is None or divisor in (None,0):
+                    return None
+                dividend = (high << 32) | low
+                if mn == 'idiv':
+                    if high & 0x80000000: dividend -= 1 << 64
+                    if divisor & 0x80000000: divisor -= 1 << 32
+                    quotient = abs(dividend)//abs(divisor)
+                    if (dividend < 0) != (divisor < 0): quotient = -quotient
+                    if not -(1 << 31) <= quotient < (1 << 31): return None
+                else:
+                    quotient = dividend//divisor
+                    if quotient > MASK: return None
+                remainder = dividend-quotient*divisor
+                for name,value in (('eax',quotient),('edx',remainder)):
+                    regs[name] = value & MASK
+                    revisions[name] += 1
+                    pointers[name] = affine_regs[name] = None
+                flags = {}  # Neither division form defines arithmetic flags.
+            elif guarded and mn in ('mul','imul') and len(op) == 1 and op[0].size == 4:
+                a,b = regs['eax'],get(i,op[0])
+                product,overflow = None,None
+                if a is not None and b is not None:
+                    if mn == 'imul':
+                        a = a-(1 << 32) if a & 0x80000000 else a
+                        b = b-(1 << 32) if b & 0x80000000 else b
+                    product = a*b
+                    overflow = (not -(1 << 31) <= product < (1 << 31) if mn == 'imul'
+                                else product > MASK)
+                for name,shift in (('eax',0),('edx',32)):
+                    regs[name] = None if product is None else (product >> shift) & MASK
+                    revisions[name] += 1
+                    pointers[name] = affine_regs[name] = None
+                flags = {} if overflow is None else dict(cf=overflow,of=overflow)
+            elif guarded and mn == 'imul' and len(op) in (2,3) and op[0].size == 4:
+                a,b = (get(i,op[0]),get(i,op[1])) if len(op)==2 else (get(i,op[1]),get(i,op[2]))
+                result, overflow = None, None
+                if a is not None and b is not None:
+                    signed_a = a-(1 << 32) if a & 0x80000000 else a
+                    signed_b = b-(1 << 32) if b & 0x80000000 else b
+                    product = signed_a*signed_b
+                    result = product & MASK
+                    overflow = not -(1 << 31) <= product < (1 << 31)
+                put(i,op[0],result)
+                # IMUL defines only CF/OF; a known product does not define ZF/SF.
+                flags = {} if overflow is None else dict(cf=overflow,of=overflow)
+            elif guarded and mn in ('rol','ror') and op[0].size == 4:
+                a,n = get(i,op[0]),get(i,op[1])
+                n = None if n is None else n & 31
+                if n == 0:
+                    continue
+                result = None
+                flags.pop('cf',None);flags.pop('of',None)
+                if a is not None and n is not None:
+                    result = (((a << n) | (a >> (32-n))) if mn == 'rol'
+                              else ((a >> n) | (a << (32-n)))) & MASK
+                    flags['cf'] = bool(result & (1 if mn == 'rol' else 0x80000000))
+                    if n == 1:
+                        flags['of'] = (bool(result & 0x80000000) != flags['cf'] if mn == 'rol'
+                                       else bool(result & 0x80000000) != bool(result & 0x40000000))
+                put(i,op[0],result)  # ZF/SF remain unchanged by a rotate.
+            elif guarded and mn == 'cdq':
+                value = regs['eax']
+                regs['edx'] = None if value is None else MASK if value & 0x80000000 else 0
+                revisions['edx'] += 1
+                pointers['edx'] = affine_regs['edx'] = None
+                # Sign extension preserves all flags.
+            elif guarded and mn in ('shld','shrd') and op[0].size == op[1].size == 4:
+                a,b,n = get(i,op[0]),get(i,op[1]),get(i,op[2])
+                n = None if n is None else n & 31
+                if n == 0:
+                    continue
+                result = None
+                if a is not None and b is not None and n is not None:
+                    result = (((a >> n) | (b << (32-n))) if mn == 'shrd'
+                              else ((a << n) | (b >> (32-n)))) & MASK
+                put(i,op[0],result)
+                flags = {} if result is None else dict(zf=result == 0,sf=bool(result & 0x80000000),
+                    cf=bool((a >> (n-1 if mn == 'shrd' else 32-n)) & 1))
             elif guarded and mn in ('shl','shr','sar'):
                 a,n = get(i,op[0]),get(i,op[1])
                 bits = op[0].size*8
@@ -521,18 +654,29 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 if target is None or (not frames and target not in root_addresses):
                     return None
                 pc = target
-            elif mn in ('jmp','je','jne','jb','jae','jbe','ja','js','jns') and op[0].type == X86_OP_IMM:
+            elif mn in ('jmp','je','jne','jb','jae','jbe','ja','js','jns','jl','jge','jle','jg') and op[0].type == X86_OP_IMM:
                 if mn == 'jmp': taken = True
                 elif mn in ('je','jne'): taken = flags['zf'] == (mn == 'je')
                 elif mn in ('js','jns'): taken = flags['sf'] == (mn == 'js')
+                elif mn in ('jl','jge'): taken = (flags['sf'] != flags['of']) == (mn == 'jl')
+                elif mn in ('jle','jg'): taken = (flags['zf'] or flags['sf'] != flags['of']) == (mn == 'jle')
                 elif mn in ('jb','jae'): taken = flags['cf'] == (mn == 'jb')
                 else: taken = (flags['cf'] or flags['zf']) == (mn == 'jbe')
                 if taken:
                     target = op[0].imm & MASK
                     if guarded and not frames and target not in root_addresses:
-                        return None  # a root tail is a different mock boundary
+                        if mn != 'jmp' or target in closed or target in models or pop_for is None:
+                            return None
+                        pop = pop_for(target)
+                        if type(pop) is not int or not 0 <= pop <= 0x400 or pop % 4:
+                            return None
+                        # A root tail uses its existing return address. Execution
+                        # must perform this exact external mock and stack cleanup.
+                        mock_calls[i.address] = pop
+                        return finish(4)
                     pc = target
             elif guarded and mn == 'call':
+                zero_vectors.clear()  # do not assume vector values survive a call
                 direct = op[0].type == X86_OP_IMM
                 target = op[0].imm & MASK if direct else get(i,op[0])
                 opaque.clear()
@@ -597,8 +741,19 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                                     'addss','subss','mulss','divss','sqrtss','minss','maxss',
                                     'addps','subps','mulps','divps','sqrtps','minps','maxps',
                                     'addsd','subsd','mulsd','divsd','sqrtsd','minsd','maxsd'):
-                # Value-opaque scalar/SIMD data movement: never invent a
-                # value or flags. Known destinations become unknown bytes.
+                # Only exact bitwise-zero vectors supply known store bytes.
+                # All other scalar/SIMD results remain opaque; no FP arithmetic
+                # or flags are inferred here.
+                zero_result = False
+                if len(op) == 2 and all(o.type == X86_OP_REG for o in op):
+                    dst,src = (i.reg_name(o.reg) for o in op)
+                    if dst.startswith('xmm') and src.startswith('xmm'):
+                        zero_result = (mn in ('pxor','xorps','xorpd') and
+                                       (dst == src or dst in zero_vectors and src in zero_vectors))
+                        zero_result |= mn in ('movq','movaps','movups','movdqa','movdqu') and src in zero_vectors
+                written_vectors = {i.reg_name(r) for r in i.regs_access()[1] if i.reg_name(r).startswith('xmm')}
+                if op and op[0].type == X86_OP_REG and i.reg_name(op[0].reg).startswith('xmm'):
+                    written_vectors.add(i.reg_name(op[0].reg))
                 if any(i.reg_name(r) in (*REGS,'eflags') for r in i.regs_access()[1]):
                     return None
                 for index,o in enumerate(op):
@@ -606,7 +761,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     # read. A memory destination of a move is always written.
                     move_store = index == 0 and mn in ('movq','movss','movsd','movaps','movups','movdqa','movdqu')
                     if o.type == X86_OP_MEM and (o.access & 2 or move_store or mn in ('fstp','fst','fistp')):
-                        put(i,o,None)
+                        zero_store = (move_store and len(op) > 1 and op[1].type == X86_OP_REG
+                                      and i.reg_name(op[1].reg) in zero_vectors)
+                        put(i,o,0 if zero_store else None)
+                zero_vectors.difference_update(written_vectors)
+                if zero_result:
+                    zero_vectors.add(i.reg_name(op[0].reg))
             else:
                 return None
             if regs['esp'] is None:

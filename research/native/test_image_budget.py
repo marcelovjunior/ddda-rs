@@ -51,6 +51,164 @@ class ImageBudgetTests(unittest.TestCase):
         writer=next(i.address for i in ins if i.op_str=='dword ptr [edx], 0')
         self.assertTrue(WriteGuard(proof).conflicts(writer,witnesses['esp']-4,4))
 
+    def test_sign_extension_and_double_shifts_preserve_known_integer_facts(self):
+        for code in (
+                'b8ffffffff 31c9 99 7206 83faff 7501 c3 cc',
+                '31c0 99 85d2 7501 c3 cc',
+                'b878563412 ba01efcdab 0facd010 3d341201ef 7501 c3 cc',
+                'b878563412 ba01efcdab 0fa4d010 3dcdab7856 7501 c3 cc',
+                '31c9 0facd000 7201 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in ('99 85d2 7501 c3 cc', '0facd001 7401 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_generated_input_pages_can_prove_a_standalone_bounded_loop(self):
+        code=bytes.fromhex('803d0000002000 750a b904000000 31c0 40 49 75fc c3')
+        ins,read,pages=self.fixture(code)
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read):
+            result=h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=3,
+                                body=[i.address for i in ins],end=0x400000+len(code))
+        self.assertEqual(result['regs_out']['eax'],4)
+        self.assertIn('image_budget',result)
+        self.assertIn([0x20000000,'00'],result['reads'])
+
+    def test_signed_products_and_rotates_use_only_defined_flags(self):
+        for code in (
+                'b8ffffff7f 6bc002 7201 cc c3',
+                'b8feffffff 6bc003 83f8fa 7401 cc c3',
+                'b8ffffffff b9ffffffff 0fafc1 83f801 7401 cc c3',
+                '31c9 b801000080 d1c0 7201 cc c3',
+                '31c9 b801000000 d1c8 7201 cc c3',
+                '31c9 c1c020 7401 cc c3', # masked zero leaves flags intact
+                '31c9 c1c002 7401 cc c3'): # nonzero rotate preserves ZF
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in (
+                '31c0 6bc002 7401 cc c3', # IMUL leaves ZF undefined
+                '6bc002 7201 cc c3', # unknown product: unknown CF
+                '31c9 c1c002 7c01 cc c3'): # multi-bit rotate: unknown OF
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_one_operand_multiply_tracks_both_halves_and_defined_flags(self):
+        for code in (
+                'b8ffffffff b902000000 f7e1 83fa01 7506 83f8fe 7501 c3 cc',
+                'b8ffffffff b902000000 f7e9 83faff 7506 83f8fe 7501 c3 cc',
+                'b8ffffffff b902000000 f7e1 7201 cc c3',
+                'b8feffffff b903000000 f7e9 7301 cc c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in ('31c0 31c9 f7e1 7401 cc c3','b902000000 f7e1 7201 cc c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_proved_root_tail_requires_the_exact_runtime_mock_contract(self):
+        caller=bytearray(bytes.fromhex('b904000000 31c0 40 49 75fc'))
+        tail=0x400000+len(caller)
+        caller+=b'\xe9'+struct.pack('<i',0x400100-tail-5)
+        ins,read,pages=self.fixture(bytes(caller))
+        proof=image_bound(ins,read,0xf008000,guarded=True,pop_for=lambda _:4)
+        self.assertIsNotNone(proof)
+        self.assertEqual(proof['mock_calls'],{tail:4})
+        guard=WriteGuard(proof);guard.call(tail)
+        self.assertFalse(guard.calls_match())
+        self.assertFalse(guard.mock(tail,0))
+        self.assertTrue(guard.mock(tail,4));self.assertTrue(guard.calls_match())
+        self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True,
+                                      pop_for=lambda _:4,closed={0x400100}))
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read),patch.object(h,'static_pop',return_value=4):
+            result=h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=3,
+                                body=[i.address for i in ins],end=0x400000+len(caller))
+        self.assertEqual(result['regs_out']['esp'],result['regs_in']['esp']+8)
+        self.assertEqual(len(result['calls']),1)
+        self.assertIn('image_budget',result)
+        # A tail with an outstanding saved word cannot consume the root return.
+        bad,read,_=self.fixture(bytes.fromhex('50 e9fa000000'))
+        self.assertIsNone(image_bound(bad,read,0xf008000,guarded=True,pop_for=lambda _:4))
+
+    def test_division_truncates_toward_zero_and_refuses_faults_or_flag_facts(self):
+        for code in (
+                'b8f9ffffff 99 b903000000 f7f9 83f8fe 7506 83faff 7501 c3 cc',
+                'b807000000 99 b9fdffffff f7f9 83f8fe 7506 83fa01 7501 c3 cc',
+                'b807000000 31d2 b903000000 f7f1 83f802 7506 83fa01 7501 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in (
+                '31c9 f7f1 c3', # zero divisor
+                'f7f9 c3', # unknown inputs
+                'b800000080 99 b9ffffffff f7f9 c3', # signed quotient overflow
+                '31c0 ba01000000 b901000000 f7f1 c3', # unsigned quotient overflow
+                '31c0 31d2 b901000000 f7f1 7401 cc c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_narrow_register_facts_do_not_define_unknown_high_bits(self):
+        for code in (
+                'b200 84d2 7501 c3 cc',
+                'b200 b600 6685d2 7501 c3 cc',
+                'ba78563412 88c2 b200 81fa00563412 7501 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in (
+                'b200 85d2 7501 c3 cc', # EDX high bits remain unknown
+                'b200 89c2 84d2 7501 c3 cc', # explicit full write clears DL
+                'b200 f7e1 84d2 7501 c3 cc'): # implicit MUL write clears DL
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_zero_vector_stores_produce_exact_bytes_and_later_writes_clear_facts(self):
+        code=bytes.fromhex('b900000020 660fefc0 660fd601 8a11 84d2 750a b904000000 31c0 40 49 75fc c3')
+        ins,read,pages=self.fixture(code)
+        with patch.object(h,'image',return_value=(0x400000,list(pages.items()))), \
+             patch.object(h,'code',side_effect=read):
+            result=h.run_sparse(0x400000,7,input_strategy='guarded-input-v1',max_insn=3,
+                                body=[i.address for i in ins],end=0x400000+len(code))
+        self.assertEqual(result['regs_out']['eax'],4)
+        self.assertIn('image_budget',result)
+        changed=code.replace(bytes.fromhex('660fd601'),bytes.fromhex('0f28c1 660fd601'))
+        other,read,_=self.fixture(changed)
+        self.assertIsNone(image_bound(other,read,0xf008000,guarded=True))
+
+    def test_signed_branches_use_overflow_not_only_the_result_sign(self):
+        for code in (
+                'b8ffffff7f 83c001 7d01 cc c3',
+                'b800000080 83f801 7c01 cc c3',
+                'b800000080 48 7c01 cc c3',
+                '31c0 7e01 cc c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        ins,read,_=self.fixture(bytes.fromhex('31c0 40 83f804 7cfa c3'))
+        self.assertEqual(image_bound(ins,read,0xf008000,guarded=True)['instructions'],14)
+        ins,read,_=self.fixture(bytes.fromhex('83c001 7c01 cc c3'))
+        self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_setup_page_reads_keep_alias_and_instruction_guards(self):
+        ins,read,_=self.fixture(bytes.fromhex('8b32 8906 8b0b 85c9 7501 c3 cc'))
+        witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}
+        witnesses['esp']=0xf008000
+        kw=dict(guarded=True,entry_pointers=witnesses)
+        # ESI reads an uncaptured pointer and is unknown; [ESI] must not alias
+        # the captured input word read later through EBX.
+        witnesses['edx']=0x30000000
+        witnesses['esi']=0x40000000
+        proof=image_bound(ins,read,witnesses['esp'],initial_pages={0x20000000:bytes(4096)},**kw)
+        self.assertIsNotNone(proof)
+        writer=next(i.address for i in ins if i.mnemonic=='mov' and i.op_str.startswith('dword ptr [esi]'))
+        self.assertTrue(WriteGuard(proof).conflicts(writer,0x20000000,4))
+        # A known-address unknown-value store replaces the captured byte.
+        overwritten,read2,_=self.fixture(bytes.fromhex('890500000020 8b0d00000020 85c9 7501 c3 cc'))
+        self.assertIsNone(image_bound(overwritten,read2,witnesses['esp'],
+                                     initial_pages={0x20000000:bytes(4096)},**kw))
+        changed=bytearray(4096);changed[0]=0x90
+        self.assertIsNone(image_bound(ins,read,witnesses['esp'],initial_pages={0x400000:bytes(changed)},**kw))
+        for pages in ({1:bytes(4096)},{0x20000000:b''}):
+            with self.assertRaises(ValueError):
+                image_bound(ins,read,witnesses['esp'],initial_pages=pages,**kw)
+
     def test_only_explicit_matching_entry_bindings_are_known(self):
         ins,read,_=self.fixture(bytes.fromhex('85c9 7401 c3 cc'))
         witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}

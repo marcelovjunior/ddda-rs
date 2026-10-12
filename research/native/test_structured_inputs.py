@@ -18,6 +18,8 @@ class InputTests(unittest.TestCase):
     RANGE_LAYOUT = dict(stride=20, first={'stack':8}, last={'stack':12}, result={'stack':4},
                         uint_offsets=[8,12], float_offsets=[16])
     def record(self, code, strategy=None, seed=19, **kwargs):
+        if strategy == 'guarded-state-v1':
+            kwargs.setdefault('initial_state',dict(pages={},heap=h.HEAP_BASE,registers={}))
         if strategy == 'record-range-v1':
             kwargs.setdefault('input_layout',self.RANGE_LAYOUT)
         elif strategy == 'slot-sweep-v1':  # L48: a register index binding over small-v1
