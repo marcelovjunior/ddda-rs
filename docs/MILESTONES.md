@@ -1,5 +1,12 @@
 # Milestones
 
+### L28c integer proof operations (2026-10-12)
+
+- CDQ, double shifts and overflow-aware signed branches have regression
+  coverage. **153 tests pass; private records unchanged.**
+- 0x00494D80 retry queued behind head's train. **Next action:** finish the
+  retry, then checked stack-argument bindings for 0x004A06B0.
+
 ### L28c exact input-page proofs (2026-10-12)
 
 - Opt-in checked-state proof uses the recorder's exact initial page bytes

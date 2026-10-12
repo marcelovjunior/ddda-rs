@@ -51,6 +51,32 @@ class ImageBudgetTests(unittest.TestCase):
         writer=next(i.address for i in ins if i.op_str=='dword ptr [edx], 0')
         self.assertTrue(WriteGuard(proof).conflicts(writer,witnesses['esp']-4,4))
 
+    def test_sign_extension_and_double_shifts_preserve_known_integer_facts(self):
+        for code in (
+                'b8ffffffff 31c9 99 7206 83faff 7501 c3 cc',
+                '31c0 99 85d2 7501 c3 cc',
+                'b878563412 ba01efcdab 0facd010 3d341201ef 7501 c3 cc',
+                'b878563412 ba01efcdab 0fa4d010 3dcdab7856 7501 c3 cc',
+                '31c9 0facd000 7201 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        for code in ('99 85d2 7501 c3 cc', '0facd001 7401 c3 cc'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
+    def test_signed_branches_use_overflow_not_only_the_result_sign(self):
+        for code in (
+                'b8ffffff7f 83c001 7d01 cc c3',
+                'b800000080 83f801 7c01 cc c3',
+                'b800000080 48 7c01 cc c3',
+                '31c0 7e01 cc c3'):
+            ins,read,_=self.fixture(bytes.fromhex(code))
+            self.assertIsNotNone(image_bound(ins,read,0xf008000,guarded=True))
+        ins,read,_=self.fixture(bytes.fromhex('31c0 40 83f804 7cfa c3'))
+        self.assertEqual(image_bound(ins,read,0xf008000,guarded=True)['instructions'],14)
+        ins,read,_=self.fixture(bytes.fromhex('83c001 7c01 cc c3'))
+        self.assertIsNone(image_bound(ins,read,0xf008000,guarded=True))
+
     def test_setup_page_reads_keep_alias_and_instruction_guards(self):
         ins,read,_=self.fixture(bytes.fromhex('8b32 8906 8b0b 85c9 7501 c3 cc'))
         witnesses={r:0x20000000 for r in ('eax','ebx','ecx','edx','esi','edi','ebp','esp')}

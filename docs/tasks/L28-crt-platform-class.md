@@ -35,6 +35,23 @@ requires it, no address special cases, no pushes.
 
 ## Results
 
+### Integer proof operations (2026-10-12)
+
+The bounded interpreter now models CDQ, 32-bit SHLD/SHRD, and signed
+branches with overflow-aware arithmetic flags. Unknown operands do not
+produce signed comparison facts; zero-count shifts and CDQ preserve flags.
+**153 light tests pass; records unchanged**, `integer-state-audit.json`.
+0x00494D80 advances past CDQ to the signed loop at 0x00495032 (69,674
+instructions). The retry with signed-branch support is queued behind head's
+train in heavy.py; no guessed budget or weakened check. **Next:** finish
+that retry, then the evidenced 0x004A06B0 source/destination recipe.
+
+0x004A06B0 evidence: caller 0x004964C0 passes destination `ESI+0xE65A0`
+and source singleton 0x018FA504 at 0x00496574-0x00496581. Parent constructor
+0x00495FF0 builds that destination using 0x00489F80 at 0x00496022.
+0x0049F990 publishes the source singleton from EDI at 0x0049FD4F.
+This recipe requires general checked setup-output bindings to stack arguments.
+
 ### Exact setup/input pages (2026-10-12)
 
 Opt-in `guarded-state-v1` requires checked setup state. Its proof reads

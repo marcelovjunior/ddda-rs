@@ -512,6 +512,15 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                         flags['cf'] = False
                     elif old_cf is not None:
                         flags['cf'] = old_cf
+                if result is not None:
+                    if mn in ('xor','or','and','test'):
+                        flags['of'] = False
+                    else:
+                        signed_a = a-(1 << bits) if a & (1 << (bits-1)) else a
+                        signed_b = b-(1 << bits) if b & (1 << (bits-1)) else b
+                        total = (signed_a-signed_b-carry if mn in ('cmp','sub','sbb','dec')
+                                 else signed_a+signed_b+carry)
+                        flags['of'] = not -(1 << (bits-1)) <= total < (1 << (bits-1))
                 if mn not in ('cmp','test'):
                     affine_value = None
                     if bits == 32 and mn in ('add','sub','inc','dec'):
@@ -523,6 +532,24 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                     if base_pointer is not None and b is not None and mn in ('add','sub','inc','dec'):
                         adjusted = (base_pointer+(b if mn in ('add','inc') else -b)) & MASK
                     put(i, op[0], result, adjusted, affine_value)
+            elif guarded and mn == 'cdq':
+                value = regs['eax']
+                regs['edx'] = None if value is None else MASK if value & 0x80000000 else 0
+                revisions['edx'] += 1
+                pointers['edx'] = affine_regs['edx'] = None
+                # Sign extension preserves all flags.
+            elif guarded and mn in ('shld','shrd') and op[0].size == op[1].size == 4:
+                a,b,n = get(i,op[0]),get(i,op[1]),get(i,op[2])
+                n = None if n is None else n & 31
+                if n == 0:
+                    continue
+                result = None
+                if a is not None and b is not None and n is not None:
+                    result = (((a >> n) | (b << (32-n))) if mn == 'shrd'
+                              else ((a << n) | (b >> (32-n)))) & MASK
+                put(i,op[0],result)
+                flags = {} if result is None else dict(zf=result == 0,sf=bool(result & 0x80000000),
+                    cf=bool((a >> (n-1 if mn == 'shrd' else 32-n)) & 1))
             elif guarded and mn in ('shl','shr','sar'):
                 a,n = get(i,op[0]),get(i,op[1])
                 bits = op[0].size*8
@@ -543,10 +570,12 @@ def image_bound(instructions, read_image, stack, ceiling=2_000_000, entry=None,
                 if target is None or (not frames and target not in root_addresses):
                     return None
                 pc = target
-            elif mn in ('jmp','je','jne','jb','jae','jbe','ja','js','jns') and op[0].type == X86_OP_IMM:
+            elif mn in ('jmp','je','jne','jb','jae','jbe','ja','js','jns','jl','jge','jle','jg') and op[0].type == X86_OP_IMM:
                 if mn == 'jmp': taken = True
                 elif mn in ('je','jne'): taken = flags['zf'] == (mn == 'je')
                 elif mn in ('js','jns'): taken = flags['sf'] == (mn == 'js')
+                elif mn in ('jl','jge'): taken = (flags['sf'] != flags['of']) == (mn == 'jl')
+                elif mn in ('jle','jg'): taken = (flags['zf'] or flags['sf'] != flags['of']) == (mn == 'jle')
                 elif mn in ('jb','jae'): taken = flags['cf'] == (mn == 'jb')
                 else: taken = (flags['cf'] or flags['zf']) == (mn == 'jbe')
                 if taken:
