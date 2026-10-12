@@ -357,6 +357,14 @@ impl Mem for GuestMemory {
     /// fast path leaves those to store), and the table lives as long as any
     /// handle to this address space and never moves.
     fn page_table(&self) -> Option<std::ptr::NonNull<PageTable>> {
+        // Every lifted function reads its page table at entry, direct
+        // in-shard calls included (they bypass call_lifted): the entry is
+        // the serial-mode preemption point (L57b; the title's Vorbis decoder
+        // calls small call-free leaves directly and held the lock for
+        // seconds). One relaxed load unless a runnable thread waits.
+        if ddnative_base::x86::PREEMPT.load(std::sync::atomic::Ordering::Relaxed) {
+            crate::threads::preempt_entry();
+        }
         Some(std::ptr::NonNull::from(&*self.space))
     }
     // `alloc` keeps the trait's default (panic): the fixture bump allocator

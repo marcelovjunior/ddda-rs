@@ -347,6 +347,22 @@ pub(crate) fn preempt() {
     ddnative_base::x86::ldmxcsr(mxcsr);
 }
 
+/// A lifted function entry while a runnable thread waits (memory.rs): the
+/// clock is read once per 256 entries.
+pub(crate) fn preempt_entry() {
+    thread_local! {
+        static ENTRIES: Cell<u32> = const { Cell::new(0) };
+    }
+    let due = ENTRIES.with(|c| {
+        let n = c.get().wrapping_add(1);
+        c.set(n);
+        n % 256 == 0
+    });
+    if due {
+        preempt();
+    }
+}
+
 /// At an API call: yield if the time slice is used up.
 pub(crate) fn maybe_yield() {
     let due = SLICE_START.with(|t| t.get().is_some_and(|t0| t0.elapsed() >= SLICE));
