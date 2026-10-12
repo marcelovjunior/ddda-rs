@@ -94,5 +94,170 @@ debug = 1
 opt-level = 0
 debug = 1
 
+[profile.dev.package.ddlift-16]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-17]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-18]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-19]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-20]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-21]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-22]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-23]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-24]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-25]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-26]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-27]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-28]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-29]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-30]
+opt-level = 0
+debug = 1
+
+[profile.dev.package.ddlift-31]
+opt-level = 0
+debug = 1
+
 [profile.dev.package.ddnative-base]
 debug = 1
+
+# Release builds of the 32 lifted shards at opt-level 1: per shard 408 s
+# instead of 661 s at opt-level 3 (measured on one shard, MILESTONES
+# 2026-10-12). The release boot holds the game's 60 fps limit with
+# opt-level 3 shards (L21); opt-level 1 is to be checked against that.
+[profile.release.package.ddlift-00]
+opt-level = 1
+
+[profile.release.package.ddlift-01]
+opt-level = 1
+
+[profile.release.package.ddlift-02]
+opt-level = 1
+
+[profile.release.package.ddlift-03]
+opt-level = 1
+
+[profile.release.package.ddlift-04]
+opt-level = 1
+
+[profile.release.package.ddlift-05]
+opt-level = 1
+
+[profile.release.package.ddlift-06]
+opt-level = 1
+
+[profile.release.package.ddlift-07]
+opt-level = 1
+
+[profile.release.package.ddlift-08]
+opt-level = 1
+
+[profile.release.package.ddlift-09]
+opt-level = 1
+
+[profile.release.package.ddlift-10]
+opt-level = 1
+
+[profile.release.package.ddlift-11]
+opt-level = 1
+
+[profile.release.package.ddlift-12]
+opt-level = 1
+
+[profile.release.package.ddlift-13]
+opt-level = 1
+
+[profile.release.package.ddlift-14]
+opt-level = 1
+
+[profile.release.package.ddlift-15]
+opt-level = 1
+
+[profile.release.package.ddlift-16]
+opt-level = 1
+
+[profile.release.package.ddlift-17]
+opt-level = 1
+
+[profile.release.package.ddlift-18]
+opt-level = 1
+
+[profile.release.package.ddlift-19]
+opt-level = 1
+
+[profile.release.package.ddlift-20]
+opt-level = 1
+
+[profile.release.package.ddlift-21]
+opt-level = 1
+
+[profile.release.package.ddlift-22]
+opt-level = 1
+
+[profile.release.package.ddlift-23]
+opt-level = 1
+
+[profile.release.package.ddlift-24]
+opt-level = 1
+
+[profile.release.package.ddlift-25]
+opt-level = 1
+
+[profile.release.package.ddlift-26]
+opt-level = 1
+
+[profile.release.package.ddlift-27]
+opt-level = 1
+
+[profile.release.package.ddlift-28]
+opt-level = 1
+
+[profile.release.package.ddlift-29]
+opt-level = 1
+
+[profile.release.package.ddlift-30]
+opt-level = 1
+
+[profile.release.package.ddlift-31]
+opt-level = 1
+

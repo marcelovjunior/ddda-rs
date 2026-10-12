@@ -60,14 +60,14 @@ class ShardTests(unittest.TestCase):
                 patterns.write_text(json.dumps(functions))
                 lift.gen(instructions=False)
                 changed = [p.relative_to(repo).as_posix() for p in files if p.stat().st_mtime_ns != stamps[p]]
-                self.assertEqual(changed, ['crates/ddlift/lift_05/src/generated/lifted_000.rs'])
+                self.assertEqual(changed, [f'crates/ddlift/lift_{lift.shard(0x500010):02}/src/generated/lifted_000.rs'])
                 # Removal of an entire shard leaves a valid empty registry.
                 patterns.write_text(json.dumps(functions[:3]))
                 with self.assertRaisesRegex(ValueError, 'missing lifted callees'):
                     lift.gen(instructions=False)
                 patterns.write_text(json.dumps([functions[2]]))
                 lift.gen(instructions=False)
-                self.assertFalse((repo / 'crates/ddlift/lift_06/src/generated/lifted_000.rs').exists())
+                self.assertFalse((repo / f'crates/ddlift/lift_{lift.shard(0x600000):02}/src/generated/lifted_000.rs').exists())
                 patterns.write_text(json.dumps(functions))
                 lift.gen(instructions=False)
             (native / 'tests/shards.rs').write_text(r'''
