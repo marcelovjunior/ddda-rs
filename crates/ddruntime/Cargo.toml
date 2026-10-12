@@ -12,6 +12,7 @@ ddnative = { path = "../ddnative" }
 ddexe = { path = "../ddexe" }
 d3d9shader = { path = "../d3d9shader" }
 d3d9cmd = { path = "../d3d9cmd" }
+hostdisplay = { path = "../hostdisplay" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Media_WindowsMediaFormat", "Win32_System_Com", "Win32_System_Com_StructuredStorage"] }

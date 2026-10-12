@@ -216,8 +216,10 @@ fn counted(object: u32) -> u32 {
 
 /// Complete windowed present parameters as D3D9 does: a zero back buffer
 /// size is the window's client size, an unknown format the display
-/// format, a zero count one buffer. Fullscreen parameters must name a mode
-/// of the desktop. None if the parameters are invalid.
+/// format, a zero count one buffer. Full-screen parameters must name one of
+/// the adapter's modes (size, and the refresh rate unless it is
+/// D3DPRESENT_RATE_DEFAULT) in X8R8G8B8. None if the parameters are
+/// invalid.
 fn complete(mut pp: PresentParameters, focus: u32) -> Option<PresentParameters> {
     if pp[7] == 0 {
         pp[7] = focus;
@@ -239,7 +241,7 @@ fn complete(mut pp: PresentParameters, focus: u32) -> Option<PresentParameters> 
         if pp[2] == D3DFMT_UNKNOWN {
             pp[2] = D3DFMT_X8R8G8B8;
         }
-    } else if !crate::d3d9::MODES.contains(&(pp[0], pp[1])) || !matches!(pp[12], 0 | 60) {
+    } else if !crate::d3d9::display().has(pp[0], pp[1], pp[12]) || pp[2] != D3DFMT_X8R8G8B8 {
         return None;
     }
     if pp[3] == 0 {
@@ -374,14 +376,13 @@ fn get_device_caps(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
 }
-/// GetDisplayMode(this, swap chain, D3DDISPLAYMODE*): the desktop's mode.
+/// GetDisplayMode(this, swap chain, D3DDISPLAYMODE*): the adapter's
+/// current mode (the full-screen mode while full screen).
 fn get_display_mode(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (chain, out) = (arg(m, cpu, 1), arg(m, cpu, 2));
     let count = with_device(arg(m, cpu, 0), |d| d.swap_chains.len() as u32);
     cpu.eax = if chain < count {
-        for (k, v) in [crate::win32::SCREEN_W, crate::win32::SCREEN_H, 60, D3DFMT_X8R8G8B8].into_iter().enumerate() {
-            m.set_u32(out + 4 * k as u32, v);
-        }
+        crate::d3d9::write_mode(m, out, crate::d3d9::current_mode());
         D3D_OK
     } else {
         D3DERR_INVALIDCALL
@@ -691,6 +692,34 @@ fn reset(m: &mut dyn Mem, cpu: &mut Cpu) {
         }
     };
     ret(m, cpu, 8);
+}
+
+/// How the game presents: its first device's implicit swap chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Presentation {
+    /// The back buffer: the window's client area when windowed, the
+    /// display mode when full screen.
+    pub width: u32,
+    pub height: u32,
+    pub windowed: bool,
+    /// FullScreen_RefreshRateInHz (0 when windowed, or the adapter's default).
+    pub refresh: u32,
+    /// PresentationInterval: D3DPRESENT_INTERVAL_IMMEDIATE (0x80000000) for
+    /// VSYNC=OFF, D3DPRESENT_INTERVAL_ONE (1) for VSYNC=ON (0x00DB1480, the
+    /// table at 0x01429878).
+    pub interval: u32,
+}
+
+/// The game's presentation, once it has a device: what a host window
+/// follows (size, windowed or full screen, refresh rate, vsync).
+pub fn presentation() -> Option<Presentation> {
+    objects(|o| {
+        let device = o.live.iter().filter_map(|(&k, v)| match &v.kind { Kind::Device(d) => Some((k, d.swap_chains.first().copied()?)), _ => None }).min()?;
+        match &o.live.get(&device.1)?.kind {
+            Kind::SwapChain { pp, .. } => Some(Presentation { width: pp[0], height: pp[1], windowed: pp[8] != 0, refresh: pp[12], interval: pp[13] }),
+            _ => None,
+        }
+    })
 }
 
 /// Frames presented on a swap chain (tests, diagnostics).
