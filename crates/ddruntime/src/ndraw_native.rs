@@ -1482,6 +1482,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         r?
     };
     let s = kept_part(&mut c.streams, c.frame, streams, || stream_part(&g, streams))?;
+    let rebuilt = !matches!(c.bindings.get(&shader), Some((frame, _)) if *frame == c.frame);
     let b = match c.bindings.get(&shader) {
         Some((frame, r)) if *frame == c.frame => r.clone()?,
         other => {
@@ -1605,7 +1606,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         targets: t.targets.clone(),
         depth: t.depth.clone(),
     };
-    Ok(Decoded { call, shadow: sh, binding: b })
+    Ok(Decoded { call, shadow: sh, binding: b, rebuilt })
 }
 
 /// A decoded draw: its DrawCall, the sampler section's effects and the
@@ -1614,6 +1615,8 @@ pub struct Decoded {
     pub call: DrawCall,
     pub shadow: Shadow,
     pub binding: Arc<BindingPart>,
+    /// the binding was decoded for this draw (not this frame's cached part)
+    pub rebuilt: bool,
 }
 
 /// Make a taken draw's sampler section effects: the context words and the
@@ -2137,12 +2140,20 @@ impl Native {
                 *t.refused.entry(r).or_default() += 1;
                 Taken::Default
             }
-            Ok(Decoded { call: d, .. }) if self.mode == Mode::Verify => {
+            Ok(Decoded { call: d, binding, rebuilt, .. }) if self.mode == Mode::Verify => {
                 let reads = [&d.vertex_shader, &d.pixel_shader].map(|t| {
                     let key = t.as_ref().map_or(0, |t| Arc::as_ptr(t) as *const u32 as usize);
                     g.caches.reads.get(&key).map(|r| r.1).unwrap_or_default()
                 });
-                expect(Expected { call: d, reads });
+                // what a mismatch report says about the draw's binding
+                let context = VerifyContext {
+                    record,
+                    binding: m.u32(record.wrapping_add(0xC)),
+                    rebuilt,
+                    written: [binding.written[0].0, binding.written[1].0],
+                    uncovered: binding.uncovered,
+                };
+                expect(Expected { call: d, reads, context });
                 t.taken += 1;
                 Taken::Default
             }
@@ -2150,7 +2161,7 @@ impl Native {
                 t.taken += 1;
                 Taken::Default
             }
-            Ok(Decoded { call: d, shadow, binding }) if self.mode == Mode::DrawCall || !g.native => {
+            Ok(Decoded { call: d, shadow, binding, .. }) if self.mode == Mode::DrawCall || !g.native => {
                 commit(m, &g.info, &mut g.caches, shadow, &d.textures);
                 g.uploads.add(&binding);
                 g.handled = true;
@@ -2166,7 +2177,7 @@ impl Native {
                 t.taken += 1;
                 Taken::Handled
             }
-            Ok(Decoded { call: d, shadow, binding }) => match native_draw(&d, &binding, identity(m, record), &mut g.caches) {
+            Ok(Decoded { call: d, shadow, binding, .. }) => match native_draw(&d, &binding, identity(m, record), &mut g.caches) {
                 Err(r) => {
                     *t.refused.entry(r).or_default() += 1;
                     Taken::Default
@@ -2958,6 +2969,33 @@ mod tests {
 struct Expected {
     call: DrawCall,
     reads: [Reads; 2],
+    /// the draw's record and binding, for a mismatch report
+    context: VerifyContext,
+}
+
+/// A verified draw's record and binding (printed with a mismatch).
+#[derive(Default)]
+struct VerifyContext {
+    record: u32,
+    binding: u32,
+    /// decoded for this draw, not this frame's cached part
+    rebuilt: bool,
+    /// float registers written and uncovered, per stage
+    written: [[u64; 4]; 2],
+    uncovered: [[u64; 4]; 2],
+}
+
+impl std::fmt::Display for VerifyContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "record {:#x}, binding {:#x} {}, written vs {:x?} ps {:x?}, uncovered vs {:x?} ps {:x?}",
+            self.record,
+            self.binding,
+            if self.rebuilt { "decoded for this draw" } else { "from this frame's cache" },
+            self.written[0], self.written[1], self.uncovered[0], self.uncovered[1],
+        )
+    }
 }
 
 thread_local! {
@@ -3010,7 +3048,7 @@ pub(crate) fn observe(d: &DrawCall) {
         let printed = v.printed.entry(field).or_default();
         if *printed < 5 {
             *printed += 1;
-            eprintln!("ndraw native verify: {field} differs: {detail}");
+            eprintln!("ndraw native verify: {field} differs: {detail} ({})", e.context);
         }
     }
 }
@@ -3019,7 +3057,7 @@ pub(crate) fn observe(d: &DrawCall) {
 /// it, its shaders reading `reads`) and the D3D9 path's `actual` differ.
 pub fn differences(expected: &DrawCall, reads: [Reads; 2], actual: &DrawCall) -> Vec<(&'static str, String)> {
     let mut wrong = Vec::new();
-    compare(&Expected { call: expected.clone(), reads }, actual, &mut wrong);
+    compare(&Expected { call: expected.clone(), reads, context: Default::default() }, actual, &mut wrong);
     wrong
 }
 
