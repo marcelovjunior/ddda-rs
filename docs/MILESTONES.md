@@ -1,5 +1,20 @@
 # Milestones
 
+### L160 job worker sizing and wake analysis (2026-10-13)
+
+- Original constructor caps participation at min(CPUs,8), minus one for
+  counts >=4: 8/12/16 CPUs all select **main + six active workers**.
+  Seven foreground workers are allocated; a separate background pool has
+  up to eight. More reported CPUs cannot enable the proposed larger pool.
+- Producers mix per-participant and per-object work with dynamic claiming;
+  the scheduler does not split a long callback. Runtime already reports
+  host logical CPU count in parallel mode; ddplay requests a 1 ms timer.
+- Offline L158 signal/wait/first-job pairing: **seven tests pass**. Actual
+  wake latency remains pending head capture; aggregate wait durations are
+  not wake delays. No runtime behavior change or game/shard run.
+- Next: head L158 trace capture, cache/futex 0/0 versus 1/1, with exact
+  binary/env hashes. Details: `docs/tasks/L160-job-threads.md`.
+
 ### L153 game-thread synchronization (2026-10-13)
 
 - Opt-in service/site/handle census and scheduler job histograms; fan-out
