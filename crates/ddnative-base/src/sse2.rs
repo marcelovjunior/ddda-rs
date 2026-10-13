@@ -160,29 +160,36 @@ fn compare_flags(rflags: u64) -> super::Flags {
 /// comparison and the exception flags (IE for any NaN or only an SNaN, DE)
 /// are the hardware's.
 pub fn comiss_hw<const ORDERED: bool>(a: u32, b: u32) -> super::Flags {
-    let rflags: u64;
+    // ZF/PF/CF read with SETcc right after the compare (L179: PUSHFQ/POP per
+    // compare cost ~4 ns and kept the asm from being stack-free; 20,000
+    // lifted call sites). Same instruction, same MXCSR effects.
+    let (zf, pf, cf): (u8, u8, u8);
     unsafe {
         if ORDERED {
-            asm!("movd {x}, {a:e}", "movd {y}, {b:e}", "comiss {x}, {y}", "pushfq", "pop {f}",
-                 a = in(reg) a, b = in(reg) b, x = out(xmm_reg) _, y = out(xmm_reg) _, f = out(reg) rflags);
+            asm!("movd {x}, {a:e}", "movd {y}, {b:e}", "comiss {x}, {y}", "setz {z}", "setp {p}", "setb {c}",
+                 a = in(reg) a, b = in(reg) b, x = out(xmm_reg) _, y = out(xmm_reg) _,
+                 z = out(reg_byte) zf, p = out(reg_byte) pf, c = out(reg_byte) cf, options(nomem, nostack));
         } else {
-            asm!("movd {x}, {a:e}", "movd {y}, {b:e}", "ucomiss {x}, {y}", "pushfq", "pop {f}",
-                 a = in(reg) a, b = in(reg) b, x = out(xmm_reg) _, y = out(xmm_reg) _, f = out(reg) rflags);
+            asm!("movd {x}, {a:e}", "movd {y}, {b:e}", "ucomiss {x}, {y}", "setz {z}", "setp {p}", "setb {c}",
+                 a = in(reg) a, b = in(reg) b, x = out(xmm_reg) _, y = out(xmm_reg) _,
+                 z = out(reg_byte) zf, p = out(reg_byte) pf, c = out(reg_byte) cf, options(nomem, nostack));
         }
     }
-    compare_flags(rflags)
+    compare_flags(u64::from(zf) << 6 | u64::from(pf) << 2 | u64::from(cf))
 }
 
 /// COMISD (ORDERED) / UCOMISD on the host (low 64 bits of each operand).
 pub fn comisd_hw<const ORDERED: bool>(a: [u32; 4], b: [u32; 4]) -> super::Flags {
     let (x, y): (__m128i, __m128i) = unsafe { (std::mem::transmute(a), std::mem::transmute(b)) };
-    let rflags: u64;
+    let (zf, pf, cf): (u8, u8, u8);
     unsafe {
         if ORDERED {
-            asm!("comisd {x}, {y}", "pushfq", "pop {f}", x = in(xmm_reg) x, y = in(xmm_reg) y, f = out(reg) rflags);
+            asm!("comisd {x}, {y}", "setz {z}", "setp {p}", "setb {c}", x = in(xmm_reg) x, y = in(xmm_reg) y,
+                 z = out(reg_byte) zf, p = out(reg_byte) pf, c = out(reg_byte) cf, options(nomem, nostack));
         } else {
-            asm!("ucomisd {x}, {y}", "pushfq", "pop {f}", x = in(xmm_reg) x, y = in(xmm_reg) y, f = out(reg) rflags);
+            asm!("ucomisd {x}, {y}", "setz {z}", "setp {p}", "setb {c}", x = in(xmm_reg) x, y = in(xmm_reg) y,
+                 z = out(reg_byte) zf, p = out(reg_byte) pf, c = out(reg_byte) cf, options(nomem, nostack));
         }
     }
-    compare_flags(rflags)
+    compare_flags(u64::from(zf) << 6 | u64::from(pf) << 2 | u64::from(cf))
 }
