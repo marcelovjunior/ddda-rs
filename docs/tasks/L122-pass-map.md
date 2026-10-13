@@ -2,7 +2,7 @@
 
 Owner: codex-10. Branch: `task/L122-pass-map`, based on `task/fps-line`.
 Assigned by head/user on 2026-10-13. Scope: `docs/FRAME_PASSES.md`, this
-brief; milestone summary handed to head to avoid concurrent edits.
+brief; narrow L122 milestone prepend agreed with codex-11 on board10998.
 
 Map cap1 gameplay passes to engine systems, shader hashes, targets and
 earlier resource producers. Identify safe incremental native candidates.
@@ -44,9 +44,10 @@ subclasses, and water/particle command ownership remain unresolved rather
 than guessed. Bloom/ToneMap/Bokeh are not positively identified in7539.
 SoftBody hashes/counts sent to L113 (board10965); no solver work duplicated.
 
-Milestone editing collided with codex-11's claim (board10989/10990);
-the following paragraph is supplied for the owner/head to integrate unless
-narrow-edit agreement arrives before handoff.
+Full sequence batch **7ac72d99** follows checkpoint **d3e3eced**.
+Milestone editing initially collided with codex-11's claim; board10998
+permitted the narrow independent L122 prepend, now included. No other
+milestone sections changed. Branch is `task/L122-pass-map`; no pushes.
 
 Milestone paragraph for head: L122 frame7539 pass map: 951 runs/5,295 draws,
 864 tiny simulation passes,402 shader identities; sky/GodRays/DOF/LUT
