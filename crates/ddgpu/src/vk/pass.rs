@@ -51,10 +51,12 @@ pub(crate) struct Pass {
 pub(crate) struct Ready {
     pub commands: Vec<wgpu::CommandBuffer>,
     pub keepalive: Vec<Pass>,
+    pub checks: Vec<super::shadow::Check>,
 }
 impl Ready {
     pub fn submit(self, queue: &wgpu::Queue) {
         queue.submit(self.commands);
+        for check in self.checks { check.map(); }
         // Publish initialization only after ordered submission, never from an
         // encoding worker: a later chunk may finish before an earlier chunk.
         for pass in self.keepalive.iter().filter(|p| p.initialize) {
@@ -91,6 +93,33 @@ impl Pass {
                     v.initialized.load(Ordering::Acquire)
                         || views_initialized.contains(&(Arc::as_ptr(v) as usize)))
             });
+            if let Some(id) = usable.then(super::shadow::selected).flatten() {
+                Self::flush_run(device, &mut run, &mut ready);
+                let mut one = vec![(pass, resources.unwrap())];
+                match super::shadow::prepare(device, &one[0].0, id) {
+                    Ok((before, after, checks)) => {
+                        match Self::raw_batch(device, &one) {
+                            Ok(raw) => {
+                                PASSES.fetch_add(1, Ordering::Relaxed);
+                                DRAWS.fetch_add(one[0].0.draws.len() as u64, Ordering::Relaxed);
+                                let mut commands = before;
+                                commands.extend(raw);
+                                commands.push(after);
+                                ready.push(Ready { commands, checks, keepalive: one.drain(..).map(|(p,_)| p).collect() });
+                            }
+                            Err(e) => {
+                                super::shadow::skipped(&e);
+                                Self::flush_run(device, &mut one, &mut ready);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        super::shadow::skipped(&e);
+                        Self::flush_run(device, &mut one, &mut ready);
+                    }
+                }
+                continue;
+            }
             if usable {
                 run.push((pass, resources.unwrap()));
                 continue;
@@ -98,6 +127,7 @@ impl Pass {
             Self::flush_run(device, &mut run, &mut ready);
             FALLBACK.fetch_add(1, Ordering::Relaxed);
             let command = pass.wgpu(device);
+            if resources.is_none() { super::RESOURCE_FALLBACK.fetch_add(1, Ordering::Relaxed); }
             if let Some((buffers, _)) = resources {
                 INITIALIZE.fetch_add(1, Ordering::Relaxed);
                 initialized.buffers.extend(buffers.into_keys());
@@ -109,6 +139,7 @@ impl Pass {
             ready.push(Ready {
                 commands: vec![command],
                 keepalive: vec![pass],
+                checks: vec![],
             });
         }
         Self::flush_run(device, &mut run, &mut ready);
@@ -129,6 +160,7 @@ impl Pass {
                 ready.push(Ready {
                     commands,
                     keepalive: std::mem::take(run).into_iter().map(|(p, _)| p).collect(),
+                    checks: vec![],
                 });
             }
             Err(e) => {
@@ -140,6 +172,7 @@ impl Pass {
                     ready.push(Ready {
                         commands: vec![pass.wgpu(device)],
                         keepalive: vec![pass],
+                        checks: vec![],
                     });
                 }
             }
@@ -281,9 +314,12 @@ impl Pass {
     }
 
     fn wgpu(&self, device: &wgpu::Device) -> wgpu::CommandBuffer {
+        self.wgpu_targets(device, &self.colors, self.depth.as_ref())
+    }
+
+    pub(super) fn wgpu_targets(&self, device: &wgpu::Device, targets: &[Option<wgpu::TextureView>], depth: Option<&(wgpu::TextureView, wgpu::TextureFormat)>) -> wgpu::CommandBuffer {
         let mut encoder = device.create_command_encoder(&Default::default());
-        let colors = self
-            .colors
+        let colors = targets
             .iter()
             .map(|view| {
                 view.as_ref().map(|view| wgpu::RenderPassColorAttachment {
@@ -301,7 +337,7 @@ impl Pass {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("L138 fallback"),
                 color_attachments: &colors,
-                depth_stencil_attachment: self.depth.as_ref().map(|(view, format)| {
+                depth_stencil_attachment: depth.map(|(view, format)| {
                     wgpu::RenderPassDepthStencilAttachment {
                         view,
                         depth_ops: Some(wgpu::Operations {

@@ -1321,3 +1321,14 @@ N=1/2/4 exact two-target images during and after warmup. Full light suite has
 inherited gamma and load-sensitive timing failures (timing passes alone).
 No original-game comparison or loading gain established; c25 timeline awaited.
 See [L151 evidence, controls and receipts](tasks/L151-load-parallel.md).
+
+### L159 Vulkan pass image gate
+
+`DDGPU_VK=1 DDGPU_VK_SHADOW=997` samples same-run raw passes against wgpu
+using copied attachment load state and identical retained draws. Color,
+depth and stencil reductions execute before later passes overwrite targets.
+`DDGPU_VK_SHADOW=1` checks all eligible passes (expensive); unset/0 disables.
+Matched, mismatched, skipped, pending and error counts remain distinct;
+receipt hashes describe reductions, not presented frames. New Vulkan query
+and resource-fallback counters separate initialization from unsupported work.
+Head's image gate and limitations: `docs/tasks/L159-vk-default.md`.

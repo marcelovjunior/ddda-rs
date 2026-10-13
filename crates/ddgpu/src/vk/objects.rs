@@ -61,6 +61,7 @@ destroy!(TextureView, destroy_texture_view);
 pub(crate) struct View {
     pub raw: Object<v::TextureView>,
     _source: wgpu::TextureView,
+    pub desc: wgpu::TextureViewDescriptor<'static>,
     pub initialized: std::sync::atomic::AtomicBool,
 }
 
@@ -513,6 +514,7 @@ impl Context {
                 Arc::new(View {
                     raw: Object::new(&self.device, raw),
                     _source: view.clone(),
+                    desc: wgpu::TextureViewDescriptor { label: None, ..desc.clone() },
                     initialized: std::sync::atomic::AtomicBool::new(false),
                 }),
             );

@@ -1,5 +1,18 @@
 # Milestones
 
+### L159 Vulkan default image gate (2026-10-13)
+
+- Same-run selected raw pass oracle copies attachment load state, replays
+  wgpu on shadows, and compares color/depth/stencil image values in queue
+  order. Separate query/resource fallback counters; initialization retained.
+- 30 CPU / 19 focused GPU tests pass; dedicated four-pass oracle matches
+  all 14 aspects, zero errors/skips/pending. Light suite 221 reported passes,
+  inherited gamma and timing failures / six ignored; timing retry passes.
+  No game acceptance; oracle commit keeps opt-in. Protocol and limitations:
+  `docs/tasks/L159-vk-default.md`.
+- Next: head `DDGPU_VK=1 DDGPU_VK_SHADOW=997` gameplay image gate, then
+  separately adopt the staged default-on commit only after acceptance.
+
 ### L153 game-thread synchronization (2026-10-13)
 
 - Opt-in service/site/handle census and scheduler job histograms; fan-out

@@ -217,7 +217,7 @@ fn decode(tag: CompareTag, bytes: &[u8]) -> CompareResult {
     }
 }
 
-fn make_pipeline(
+pub(crate) fn make_pipeline(
     device: &wgpu::Device,
     aspect: CompareAspect,
 ) -> (wgpu::ComputePipeline, wgpu::BindGroupLayout) {

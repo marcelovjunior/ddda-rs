@@ -9,6 +9,8 @@
 mod objects;
 mod pass;
 mod mapped;
+mod shadow;
+pub use shadow::{shadow_stats, ShadowStats};
 pub(crate) use mapped::MappedUniforms;
 pub(crate) use objects::{Context, Pipeline};
 pub(crate) use pass::{Bindings, Draw, Pass, Ready};
@@ -18,6 +20,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static PASSES: AtomicU64 = AtomicU64::new(0);
 static DRAWS: AtomicU64 = AtomicU64::new(0);
 static FALLBACK: AtomicU64 = AtomicU64::new(0);
+static QUERY_FALLBACK: AtomicU64 = AtomicU64::new(0);
+static RESOURCE_FALLBACK: AtomicU64 = AtomicU64::new(0);
 static INITIALIZE: AtomicU64 = AtomicU64::new(0);
 static ERRORS: AtomicU64 = AtomicU64::new(0);
 static LIVE_VIEWS: AtomicU64 = AtomicU64::new(0);
@@ -30,6 +34,8 @@ pub struct Stats {
     pub draws: u64,
     pub fallback_passes: u64,
     pub initialization_passes: u64,
+    pub query_passes: u64,
+    pub resource_fallback_passes: u64,
     pub encode_errors: u64,
     pub live_views: u64,
     pub mapped_rings: u64,
@@ -42,6 +48,8 @@ pub fn stats() -> Stats {
         draws: DRAWS.load(Ordering::Relaxed),
         fallback_passes: FALLBACK.load(Ordering::Relaxed),
         initialization_passes: INITIALIZE.load(Ordering::Relaxed),
+        query_passes: QUERY_FALLBACK.load(Ordering::Relaxed),
+        resource_fallback_passes: RESOURCE_FALLBACK.load(Ordering::Relaxed),
         encode_errors: ERRORS.load(Ordering::Relaxed),
         live_views: LIVE_VIEWS.load(Ordering::Relaxed),
         mapped_rings: MAPPED_RINGS.load(Ordering::Relaxed),
@@ -50,6 +58,7 @@ pub fn stats() -> Stats {
 }
 
 pub(crate) fn unsupported_pass() {
+    QUERY_FALLBACK.fetch_add(1, Ordering::Relaxed);
     FALLBACK.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -58,6 +67,7 @@ pub(crate) fn report() {
     let mut last = LAST.lock().unwrap();
     if last.is_none_or(|t| t.elapsed().as_secs() >= 2) {
         eprintln!("ddgpu-vk {:?}", stats());
+        shadow::report();
         *last = Some(std::time::Instant::now());
     }
 }
@@ -89,6 +99,7 @@ pub(crate) fn finish(chunk: Chunk) -> Vec<Ready> {
         Chunk::Wgpu(encoder) => vec![Ready {
             commands: crate::encode::finish_wgpu(encoder),
             keepalive: vec![],
+            checks: vec![],
         }],
         Chunk::Vulkan(device, passes, _) => Pass::finish_batch(&device, passes),
     }
@@ -98,10 +109,12 @@ pub(crate) fn submit(queue: &wgpu::Queue, ready: Vec<Ready>) {
     let mut combined = Ready {
         commands: vec![],
         keepalive: vec![],
+        checks: vec![],
     };
     for r in ready {
         combined.commands.extend(r.commands);
         combined.keepalive.extend(r.keepalive);
+        combined.checks.extend(r.checks);
     }
     combined.submit(queue);
 }
