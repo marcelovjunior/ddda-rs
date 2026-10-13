@@ -640,13 +640,21 @@ pub fn set_pass(m: &mut dyn Mem, c: &mut Cpu) {
     let entry = c.esp;
     let force = pg.u8(m, entry.wrapping_add(8)) != 0;
     let pass = pg.u32(m, entry.wrapping_add(4));
-    let finish = |c: &mut Cpu| c.esp = entry.wrapping_add(4 + 8);
-    let mode = pg.u32(m, ctx + 0x164);
+    set_pass_at(m, c, pg, ctx, pass, force, entry);
+    c.esp = entry.wrapping_add(4 + 8);
+}
+
+/// [`set_pass`] called directly by another port: `entry` is the ESP the
+/// original would have at its entry (the caller's frame less the two
+/// arguments and the return address); ESP is not changed.
+pub(crate) fn set_pass_at(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, ctx: u32, pass: u32, force: bool, entry: u32) {
+    let finish = |_: &mut Cpu| ();
+    let mode = pg.u32(m, ctx.wrapping_add(0x164));
     if !force && mode & 0x1f == pass {
         return finish(c);
     }
-    let table = pg.u32(m, ctx + 0x1d4);
-    pg.set_u32(m, ctx + 0x164, mode ^ ((mode ^ pass) & 0x1f));
+    let table = pg.u32(m, ctx.wrapping_add(0x1d4));
+    pg.set_u32(m, ctx.wrapping_add(0x164), mode ^ ((mode ^ pass) & 0x1f));
     if table == 0 {
         return finish(c);
     }
@@ -655,25 +663,25 @@ pub fn set_pass(m: &mut dyn Mem, c: &mut Cpu) {
     let frame = entry.wrapping_sub(0x20);
     let mut colours = 0u32;
     for i in 0..4u32 {
-        let slot = pg.u32(m, table.wrapping_add(pass.wrapping_mul(0x10) + 0x18 + 4 * i));
-        let target = if slot == 0 { 0 } else { pg.u32(m, pg.u32(m, slot + 0x44)) };
-        pg.set_u32(m, colours_at + 4 * i, target);
+        let slot = pg.u32(m, table.wrapping_add(pass.wrapping_mul(0x10).wrapping_add(0x18 + 4 * i)));
+        let target = if slot == 0 { 0 } else { pg.u32(m, pg.u32(m, slot.wrapping_add(0x44))) };
+        pg.set_u32(m, colours_at.wrapping_add(4 * i), target);
         if target == 0 {
             break;
         }
         colours += 1;
     }
     let depth_slot = pg.u32(m, table.wrapping_add(0x198).wrapping_add(pass.wrapping_mul(4)));
-    let depth = if depth_slot == 0 { 0 } else { pg.u32(m, pg.u32(m, depth_slot + 0x48)) };
+    let depth = if depth_slot == 0 { 0 } else { pg.u32(m, pg.u32(m, depth_slot.wrapping_add(0x48))) };
     if colours == 0 && depth == 0 {
         return finish(c);
     }
-    let caps = pg.u32(m, table + 0x10);
+    let caps = pg.u32(m, table.wrapping_add(0x10));
     let mut flags = if caps & 0x10000 != 0 && (pass == 0xb || pass == 0xc) { 0x40 } else { 0 } | 3;
-    if caps & 0x4000 != 0 && caps & 0x2000 != 0 && (pass == 8 || pass == 9) && pg.u32(m, table + 0x2dc) != 2 {
+    if caps & 0x4000 != 0 && caps & 0x2000 != 0 && (pass == 8 || pass == 9) && pg.u32(m, table.wrapping_add(0x2dc)) != 2 {
         flags |= 0x20;
     }
-    if pg.u8(m, table + 0x2e0) != 0 && pass == 0x12 {
+    if pg.u8(m, table.wrapping_add(0x2e0)) != 0 && pass == 0x12 {
         flags |= 0x20;
     }
     let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);

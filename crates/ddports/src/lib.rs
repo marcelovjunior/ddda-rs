@@ -32,6 +32,14 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_SHADOW_TRAVERSAL").as_deref() == Ok("1") {
         ports.push((0x00db63e0, mtcore::shadow_traversal::traverse));
     }
+    // L172 P2b: the sPrimitive begin/end methods and their dispatch thunks.
+    if std::env::var("DDRUNTIME_SHADOW_PRIMITIVE").as_deref() == Ok("1") {
+        ports.push((0x00e61010, mtcore::shadow_primitive::sprimitive_vf11));
+        ports.push((0x00e68390, mtcore::shadow_primitive::sprimitive_vf12));
+        ports.push((0x0107ff00, mtcore::shadow_primitive::dispatch_begin));
+        ports.push((0x0107ff30, mtcore::shadow_primitive::dispatch_end));
+        ports.push((0x0111e180, mtcore::shadow_primitive::sprimitive_sort));
+    }
     if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
         ports.push((0x00efd240, mtcore::shadow_pass::setup));
     }
@@ -171,6 +179,8 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00ff_04c0, mtcore::semantic_s9::set_viewport_rect),
             (0x0049_e920, mtcore::semantic_s10::find_nearest_object),
             (0x00fe_66a0, mtcore::semantic_s10::gather_ambient_probe),
+            (0x00ea_3130, mtcore::semantic_p2c::base_model_draw_unit),
+            (0x00ea_1fd0, mtcore::semantic_p2c::select_shadow_state_abi),
             (0x00fe_db80, mtcore::semantic_s1::save_recording_state),
             (0x00fe_dc00, mtcore::semantic_s1::restore_recording_state),
             (0x00cf_eec0, mtcore::semantic_s7_stream::stream_skip),

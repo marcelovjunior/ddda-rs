@@ -284,9 +284,9 @@ pub fn submit_pass_records(m: &mut dyn Mem, c: &mut Cpu) {
 /// Render-state helpers of `uPlayerBase::vf25`: the model's state slots are
 /// {value, tag} pairs; changing one while the model records an undo log
 /// (bit 7 of the byte at +0x5c) first pushes the old pair on the log.
-struct StateSlots {
-    pg: Pages,
-    model: u32,
+pub(crate) struct StateSlots {
+    pub(crate) pg: Pages,
+    pub(crate) model: u32,
 }
 
 /// Dirty bits of the model's state (+0x154): 1 = a slot changed, 2 = a
@@ -298,18 +298,18 @@ const UNDO_COUNT: u32 = 0x6c;
 const UNDO_LOG: u32 = 0x30c7c;
 
 impl StateSlots {
-    fn field(&self, m: &dyn Mem, offset: u32) -> u32 {
+    pub(crate) fn field(&self, m: &dyn Mem, offset: u32) -> u32 {
         self.pg.u32(m, self.model.wrapping_add(offset))
     }
-    fn set_field(&self, m: &mut dyn Mem, offset: u32, value: u32) {
+    pub(crate) fn set_field(&self, m: &mut dyn Mem, offset: u32, value: u32) {
         self.pg.set_u32(m, self.model.wrapping_add(offset), value);
     }
-    fn mark_dirty(&self, m: &mut dyn Mem, bits: u32) {
+    pub(crate) fn mark_dirty(&self, m: &mut dyn Mem, bits: u32) {
         let dirty = self.field(m, DIRTY);
         self.set_field(m, DIRTY, dirty | bits);
     }
     /// Push {code, slot value, slot tag} on the undo log when it is on.
-    fn log_old(&self, m: &mut dyn Mem, slot: u32, code: u32) {
+    pub(crate) fn log_old(&self, m: &mut dyn Mem, slot: u32, code: u32) {
         if self.pg.u8(m, self.model.wrapping_add(0x5c)) & 0x80 == 0 {
             return;
         }
@@ -327,7 +327,7 @@ impl StateSlots {
     /// A plain value slot: when `slot` differs from `[[model + 0x20] +
     /// table_offset]` (the device's current value), log, store it with `tag`
     /// and mark everything dirty.
-    fn set_value(&self, m: &mut dyn Mem, slot: u32, table_offset: u32, code: u32, tag: u32) {
+    pub(crate) fn set_value(&self, m: &mut dyn Mem, slot: u32, table_offset: u32, code: u32, tag: u32) {
         let table = self.field(m, 0x20);
         let current = self.field(m, slot);
         let new = self.pg.u32(m, table.wrapping_add(table_offset));
@@ -341,7 +341,7 @@ impl StateSlots {
     }
     /// A resource slot: when `slot` differs from `new`, log, store it (its
     /// use generation is stamped) with the tag `resource.id | flavour`.
-    fn set_resource(&self, m: &mut dyn Mem, slot: u32, new: u32, code: u32, flavour: u32) {
+    pub(crate) fn set_resource(&self, m: &mut dyn Mem, slot: u32, new: u32, code: u32, flavour: u32) {
         if self.field(m, slot) == new {
             return;
         }
@@ -367,7 +367,7 @@ impl StateSlots {
 /// NaN quieted (the Unicorn oracle's x87 copies it unchanged, so its
 /// vectors hold no signalling NaN there).
 #[inline]
-fn x87_copy_f32(bits: u32) -> u32 {
+pub(crate) fn x87_copy_f32(bits: u32) -> u32 {
     if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
         bits | 0x0040_0000
     } else {
@@ -593,7 +593,7 @@ pub fn player_prepare_draw(m: &mut dyn Mem, c: &mut Cpu) {
 }
 
 /// memcpy of `words` 32-bit words (the CRT routine is overlap safe).
-fn copy_words(m: &mut dyn Mem, pg: Pages, dst: u32, src: u32, words: u32) {
+pub(crate) fn copy_words(m: &mut dyn Mem, pg: Pages, dst: u32, src: u32, words: u32) {
     let bytes = words.wrapping_mul(4);
     if dst.wrapping_sub(src) < bytes && dst != src {
         let copy: Vec<u32> = (0..words).map(|i| pg.u32(m, src.wrapping_add(4 * i))).collect();
@@ -1000,7 +1000,7 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
     l[0xc4 / 4] = flags & 1;
     let mut hit = false;
     // sum one contribution (the buffer the virtual call filled)
-    let mut accumulate = |m: &dyn Mem, l: &mut [u32; 0x1c0 / 4], hit: &mut bool| {
+    let accumulate = |m: &dyn Mem, l: &mut [u32; 0x1c0 / 4], hit: &mut bool| {
         let base = (ACCUMULATOR / 4) as usize;
         let buffer = (CONTRIBUTION / 4) as usize;
         for k in 0..PROBE_WORDS {
@@ -1035,7 +1035,10 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
         }
     }
     if want_probe {
-        if pg.u8(m, this.wrapping_add(0xb5c)) == 0 || pg.u32(m, this.wrapping_add(0xb60)) == 0 {
+        // the nested search's tree: ECX at its call is `this[0xb60]` (the
+        // search routine uses it as its object)
+        let search_root = if pg.u8(m, this.wrapping_add(0xb5c)) == 0 { 0 } else { pg.u32(m, this.wrapping_add(0xb60)) };
+        if search_root == 0 {
             if pg.u32(m, this.wrapping_add(0x30)) != 0 {
                 let mut k = 0u32;
                 loop {
@@ -1107,11 +1110,11 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
             for k in 0..PROBE_WORDS {
                 pg.set_u32(m, frame.wrapping_add(ACCUMULATOR + 4 * k as u32), l[(ACCUMULATOR / 4) as usize + k]);
             }
-            let ecx = c.ecx;
+            (c.esi, c.edi) = (model, this);
             guest_call(
                 m,
                 c,
-                ecx,
+                search_root,
                 0x0117_87c0,
                 &[frame.wrapping_add(0x180), this, 0x00fe_5190, frame.wrapping_add(0x160), 0, 0xffff_ffff],
                 0x00fe_6eb6,
@@ -1220,73 +1223,73 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
             x[2] ^= x[2];
             x[2] = (x[2] & !0xffff_ffff) | u64::from((f64::from_bits(x[0]) as f32).to_bits());
             x[0] = x[2];
-            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) * f32::from_bits(rd(m, 0x01406cec))).to_bits());
-            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits((x[5] as u32)) / f32::from_bits((x[0] as u32))).to_bits());
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits(x[0] as u32) * f32::from_bits(rd(m, 0x01406cec))).to_bits());
+            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits(x[5] as u32) / f32::from_bits(x[0] as u32)).to_bits());
             x[0] = f64::from_bits(rd64(m, 0x0161ca58)).sqrt().to_bits();
             x[1] ^= x[1];
             x[1] = (x[1] & !0xffff_ffff) | u64::from((f64::from_bits(x[0]) as f32).to_bits());
             x[0] = x[2];
-            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) * f32::from_bits(rd(m, 0x01406cf4))).to_bits());
-            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) / f32::from_bits((x[0] as u32))).to_bits());
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits(x[0] as u32) * f32::from_bits(rd(m, 0x01406cf4))).to_bits());
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits(x[1] as u32) / f32::from_bits(x[0] as u32)).to_bits());
             x[0] = f64::from_bits(rd64(m, 0x0143a4e0)).sqrt().to_bits();
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             x[3] = x[2];
-            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits((x[3] as u32)) * f32::from_bits(rd(m, 0x01434024))).to_bits());
-            x[2] = (x[2] & !0xffff_ffff) | u64::from((f32::from_bits((x[2] as u32)) * f32::from_bits(rd(m, 0x0142a8f0))).to_bits());
+            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits(x[3] as u32) * f32::from_bits(rd(m, 0x01434024))).to_bits());
+            x[2] = (x[2] & !0xffff_ffff) | u64::from((f32::from_bits(x[2] as u32) * f32::from_bits(rd(m, 0x0142a8f0))).to_bits());
             x[0] = (x[0] & !0xffff_ffff) | u64::from((f64::from_bits(x[0]) as f32).to_bits());
-            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) / f32::from_bits((x[3] as u32))).to_bits());
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits(x[0] as u32) / f32::from_bits(x[3] as u32)).to_bits());
             x[3] = f64::from_bits(rd64(m, 0x01408ca8)).sqrt().to_bits();
-            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits(x[7] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             x[3] = u64::from((f64::from_bits(x[3]) as f32).to_bits());
-            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits((x[3] as u32)) / f32::from_bits((x[2] as u32))).to_bits());
+            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits(x[3] as u32) / f32::from_bits(x[2] as u32)).to_bits());
             x[2] = u64::from(rd(m, 0x0161c280));
             x[6] ^= x[2];
             l[96] = x[6] as u32;
             x[6] = u64::from(l[10]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             l[98] = x[6] as u32;
             x[6] = u64::from(l[8]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[5] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[5] as u32)).to_bits());
             l[48] = x[6] as u32;
             x[7] ^= x[2];
             l[97] = x[7] as u32;
             x[7] = x[3];
-            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[14])).to_bits());
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) - f32::from_bits((x[7] as u32))).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits(x[7] as u32) * f32::from_bits(l[14])).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) - f32::from_bits(x[7] as u32)).to_bits());
             l[99] = x[6] as u32;
             x[6] = u64::from(l[23]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             x[6] ^= x[2];
             l[100] = x[6] as u32;
             x[6] = u64::from(l[21]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             x[6] ^= x[2];
             l[101] = x[6] as u32;
             x[6] = u64::from(l[22]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             l[102] = x[6] as u32;
             x[6] = u64::from(l[20]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[5] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[5] as u32)).to_bits());
             l[48] = x[6] as u32;
             x[7] = u64::from(l[48]);
             x[6] = x[3];
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits(l[26])).to_bits());
-            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) - f32::from_bits((x[6] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(l[26])).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits(x[7] as u32) - f32::from_bits(x[6] as u32)).to_bits());
             x[6] = u64::from(l[35]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             x[6] ^= x[2];
             l[104] = x[6] as u32;
             x[6] = u64::from(l[33]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             x[6] ^= x[2];
             l[105] = x[6] as u32;
             x[6] = u64::from(l[34]);
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(x[1] as u32)).to_bits());
             x[1] = u64::from(l[32]);
-            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) * f32::from_bits((x[5] as u32))).to_bits());
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits(x[1] as u32) * f32::from_bits(x[5] as u32)).to_bits());
             x[5] = x[3];
-            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits((x[5] as u32)) * f32::from_bits(l[38])).to_bits());
-            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) - f32::from_bits((x[5] as u32))).to_bits());
+            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits(x[5] as u32) * f32::from_bits(l[38])).to_bits());
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits(x[1] as u32) - f32::from_bits(x[5] as u32)).to_bits());
             x[5] = u64::from(l[96]);
             l[52] = x[5] as u32;
             x[5] = u64::from(l[97]);
@@ -1295,10 +1298,10 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
             l[54] = x[5] as u32;
             x[5] = u64::from(l[99]);
             x[4] = x[0];
-            x[4] = (x[4] & !0xffff_ffff) | u64::from((f32::from_bits((x[4] as u32)) * f32::from_bits(rd(m, 0x01406cf0))).to_bits());
+            x[4] = (x[4] & !0xffff_ffff) | u64::from((f32::from_bits(x[4] as u32) * f32::from_bits(rd(m, 0x01406cf0))).to_bits());
             l[55] = x[5] as u32;
             x[5] = u64::from(l[100]);
-            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits((x[3] as u32)) * f32::from_bits(rd(m, 0x01406cf4))).to_bits());
+            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits(x[3] as u32) * f32::from_bits(rd(m, 0x01406cf4))).to_bits());
             l[56] = x[5] as u32;
             x[5] = u64::from(l[101]);
             l[63] = x[1] as u32;
@@ -1308,27 +1311,27 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
             x[5] = u64::from(l[104]);
             l[59] = x[7] as u32;
             x[1] = x[0];
-            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) * f32::from_bits(l[12])).to_bits());
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits(x[1] as u32) * f32::from_bits(l[12])).to_bits());
             l[96] = x[1] as u32;
             l[60] = x[5] as u32;
             x[5] = u64::from(l[105]);
             x[1] = x[0];
-            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) * f32::from_bits(l[13])).to_bits());
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits(x[1] as u32) * f32::from_bits(l[13])).to_bits());
             x[1] ^= x[2];
             l[61] = x[5] as u32;
             l[65] = x[1] as u32;
             l[62] = x[6] as u32;
             x[6] = x[0];
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits(l[24])).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(l[24])).to_bits());
             x[7] = x[3];
-            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[26])).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits(x[7] as u32) * f32::from_bits(l[26])).to_bits());
             l[102] = x[7] as u32;
             x[7] = x[0];
-            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[27])).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits(x[7] as u32) * f32::from_bits(l[27])).to_bits());
             x[7] ^= x[2];
             x[5] = x[3];
-            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits((x[5] as u32)) * f32::from_bits(l[14])).to_bits());
-            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits((x[3] as u32)) * f32::from_bits(l[38])).to_bits());
+            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits(x[5] as u32) * f32::from_bits(l[14])).to_bits());
+            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits(x[3] as u32) * f32::from_bits(l[38])).to_bits());
             l[98] = x[5] as u32;
             x[1] = u64::from(l[98]);
             l[66] = x[1] as u32;
@@ -1336,19 +1339,19 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
             l[100] = x[6] as u32;
             x[1] = u64::from(l[100]);
             x[7] = x[0];
-            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[36])).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits(x[7] as u32) * f32::from_bits(l[36])).to_bits());
             l[68] = x[1] as u32;
             x[1] = u64::from(l[102]);
             x[5] = x[0];
-            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits((x[5] as u32)) * f32::from_bits(l[15])).to_bits());
+            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits(x[5] as u32) * f32::from_bits(l[15])).to_bits());
             x[6] = x[0];
-            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits(l[25])).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits(x[6] as u32) * f32::from_bits(l[25])).to_bits());
             l[70] = x[1] as u32;
             x[1] = u64::from(l[103]);
             l[104] = x[7] as u32;
             x[7] = x[0];
-            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) * f32::from_bits(l[39])).to_bits());
-            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[37])).to_bits());
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits(x[0] as u32) * f32::from_bits(l[39])).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits(x[7] as u32) * f32::from_bits(l[37])).to_bits());
             x[0] ^= x[2];
             l[71] = x[1] as u32;
             x[1] = u64::from(l[104]);
@@ -1357,14 +1360,14 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
             l[75] = x[0] as u32;
             x[1] = x[7];
             x[0] = x[4];
-            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) * f32::from_bits(l[16])).to_bits());
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits(x[0] as u32) * f32::from_bits(l[16])).to_bits());
             l[73] = x[1] as u32;
             x[5] ^= x[2];
             x[6] ^= x[2];
             x[2] = u64::from(l[96]);
             x[1] = x[4];
-            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) * f32::from_bits(l[28])).to_bits());
-            x[4] = (x[4] & !0xffff_ffff) | u64::from((f32::from_bits((x[4] as u32)) * f32::from_bits(l[40])).to_bits());
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits(x[1] as u32) * f32::from_bits(l[28])).to_bits());
+            x[4] = (x[4] & !0xffff_ffff) | u64::from((f32::from_bits(x[4] as u32) * f32::from_bits(l[40])).to_bits());
             l[76] = x[0] as u32;
             x[0] = u64::from(rd(m, 0x01406ce0));
             l[105] = x[7] as u32;

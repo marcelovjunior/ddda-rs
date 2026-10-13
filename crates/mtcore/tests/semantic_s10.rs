@@ -256,9 +256,68 @@ fn semantic_gather_ambient_probe_matches_original() {
         Callee { target: 0x00d1_3600, reads: &[], stack_args: 2 },
         Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 1 },
         Callee { target: 0x3000_0200, reads: &[ECX], stack_args: 3 },
-        Callee { target: 0x0117_87c0, reads: &[], stack_args: 6 },
+        Callee { target: 0x0117_87c0, reads: &[ECX], stack_args: 6 },
         Callee { target: 0x00fe_d890, reads: &[ECX], stack_args: 1 },
     ];
     let (cases, made) = run_cases(&vectors("ambient_probe.json"), mtcore::semantic_s10::gather_ambient_probe, false, &callees, &[]);
     eprintln!("{cases} ABI-level ambient_probe cases passed; calls {made:x?}");
+}
+
+// verifies 0x01062f20 (ABI level incl. its leftover EAX; the CRT memcpy is native)
+#[test]
+fn semantic_finalize_material_matches_original() {
+    let callees = [Callee { target: 0x00fe_d890, reads: &[ECX], stack_args: 1 }];
+    let (cases, made) = run_cases(
+        &vectors("finalize_material.json"),
+        mtcore::semantic_draw_b::finalize_material_abi,
+        true,
+        &callees,
+        &[0x012e_fea0],
+    );
+    eprintln!("{cases} ABI-level finalize_material cases passed; calls {made:x?}");
+}
+
+// verifies 0x00feef20 (ABI level; returns 0)
+#[test]
+fn semantic_commit_current_state_matches_original() {
+    let callees = [Callee { target: 0x00fe_e320, reads: &[ECX], stack_args: 2 }];
+    let (cases, made) = run_cases(&vectors("commit_current.json"), mtcore::semantic_draw_c::commit_current_state_guest_commit, true, &callees, &[]);
+    eprintln!("{cases} ABI-level commit_current cases passed; calls {made:x?}");
+}
+
+// verifies 0x00ea3130 (ABI level; void) with 0x00EA1EE0 and 0x00EA1F40 folded in
+#[test]
+fn semantic_base_model_draw_unit_matches_original() {
+    let c = |target, stack_args| Callee { target, reads: &[ECX], stack_args };
+    let callees = [
+        c(0x00ff_0780, 1),
+        c(0x00ff_0ad0, 2),
+        c(0x00fe_d480, 1),
+        c(0x3000_0003, 2),
+        c(0x00fe_d8d0, 0),
+        c(0x00fe_d5d0, 1),
+        c(0x3000_0064, 1),
+        c(0x3000_0068, 6),
+        c(0x3000_0030, 1),
+        c(0x00fe_d890, 1),
+    ];
+    let (cases, made) = run_cases(&vectors("unit_draw.json"), mtcore::semantic_p2c::base_model_draw_unit, false, &callees, &[0x012e_fea0]);
+    eprintln!("{cases} ABI-level unit_draw cases passed; calls {made:x?}");
+}
+
+// verifies 0x00ea1fd0 (ABI level) with 0x00EA1EE0 folded in
+#[test]
+fn semantic_select_shadow_state_matches_original() {
+    let c = |target, stack_args| Callee { target, reads: &[ECX], stack_args };
+    let callees = [
+        c(0x00ff_0780, 1),
+        c(0x00ff_0ad0, 2),
+        c(0x00fe_d480, 1),
+        c(0x3000_0003, 2),
+        c(0x00fe_d890, 1),
+        c(0x00fe_d8d0, 0),
+        c(0x00fe_d5d0, 1),
+    ];
+    let (cases, made) = run_cases(&vectors("shadow_state.json"), mtcore::semantic_p2c::select_shadow_state_abi, true, &callees, &[]);
+    eprintln!("{cases} ABI-level shadow_state cases passed; calls {made:x?}");
 }
