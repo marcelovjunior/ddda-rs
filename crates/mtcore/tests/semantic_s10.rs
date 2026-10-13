@@ -256,7 +256,7 @@ fn semantic_gather_ambient_probe_matches_original() {
         Callee { target: 0x00d1_3600, reads: &[], stack_args: 2 },
         Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 1 },
         Callee { target: 0x3000_0200, reads: &[ECX], stack_args: 3 },
-        Callee { target: 0x0117_87c0, reads: &[], stack_args: 6 },
+        Callee { target: 0x0117_87c0, reads: &[ECX], stack_args: 6 },
         Callee { target: 0x00fe_d890, reads: &[ECX], stack_args: 1 },
     ];
     let (cases, made) = run_cases(&vectors("ambient_probe.json"), mtcore::semantic_s10::gather_ambient_probe, false, &callees, &[]);

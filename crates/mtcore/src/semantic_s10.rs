@@ -1035,7 +1035,10 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
         }
     }
     if want_probe {
-        if pg.u8(m, this.wrapping_add(0xb5c)) == 0 || pg.u32(m, this.wrapping_add(0xb60)) == 0 {
+        // the nested search's tree: ECX at its call is `this[0xb60]` (the
+        // search routine uses it as its object)
+        let search_root = if pg.u8(m, this.wrapping_add(0xb5c)) == 0 { 0 } else { pg.u32(m, this.wrapping_add(0xb60)) };
+        if search_root == 0 {
             if pg.u32(m, this.wrapping_add(0x30)) != 0 {
                 let mut k = 0u32;
                 loop {
@@ -1107,11 +1110,11 @@ pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
             for k in 0..PROBE_WORDS {
                 pg.set_u32(m, frame.wrapping_add(ACCUMULATOR + 4 * k as u32), l[(ACCUMULATOR / 4) as usize + k]);
             }
-            let ecx = c.ecx;
+            (c.esi, c.edi) = (model, this);
             guest_call(
                 m,
                 c,
-                ecx,
+                search_root,
                 0x0117_87c0,
                 &[frame.wrapping_add(0x180), this, 0x00fe_5190, frame.wrapping_add(0x160), 0, 0xffff_ffff],
                 0x00fe_6eb6,

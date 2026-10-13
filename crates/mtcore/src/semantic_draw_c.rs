@@ -321,7 +321,7 @@ fn commit_current_state(m: &mut dyn Mem, c: &mut Cpu, p: Pages, draw: u32, frame
     };
     // commit_primitive_state(bank_entry, variant): entry ESP below the two
     // arguments and the return address
-    let commit_entry = frame.wrapping_sub(16).wrapping_sub(8);
+    let commit_entry = frame.wrapping_sub(16).wrapping_sub(4);
     let committed = commit(m, c, p, draw, bank_entry, variant, commit_entry);
     let cursor = p.u32(m, draw.wrapping_add(0x48));
     let flags = p.u32(m, draw.wrapping_add(0x5c));
