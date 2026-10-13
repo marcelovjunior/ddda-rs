@@ -11,7 +11,7 @@
 //! number. Set* calls keep a reference to the object they bind and release
 //! the one they replace, as D3D9 does.
 use crate::d3d9::{profile, D3DERR_INVALIDCALL, D3D_OK};
-use crate::d3d9dev::{add_ref_to, counted_in, hand_out, new_object, objects, release_of, with_device, Kind, Object};
+use crate::d3d9dev::{add_ref_to, hand_out, new_object, objects, release_of, with_counted, with_device, Kind, Object};
 use crate::guest::View;
 use crate::services::{arg, args, ret};
 use ddnative_base::mem::Mem;
@@ -505,21 +505,15 @@ pub(crate) fn device_set_texture(dev: u32, st: u32, tex: u32) -> bool {
                 return None;
             }
             if tex != 0 {
-                let t = counted_in(o, tex);
-                let x = o.live.get_mut(&t).unwrap_or_else(|| panic!("AddRef on {t:#x}, not a live D3D9 object"));
-                x.refs += 1;
+                with_counted(o, tex, |_, x| x.refs += 1)
+                    .unwrap_or_else(|| panic!("AddRef on {tex:#x}, not a live D3D9 object"));
             }
             if old == 0 {
                 return None;
             }
-            let t = counted_in(o, old);
-            let x = o.live.get_mut(&t).unwrap_or_else(|| panic!("Release on {t:#x}, not a live D3D9 object"));
-            if x.refs > 1 {
-                x.refs -= 1;
-                None
-            } else {
-                Some(old)
-            }
+            let last = with_counted(o, old, |_, x| if x.refs > 1 { x.refs -= 1; false } else { true })
+                .unwrap_or_else(|| panic!("Release on {old:#x}, not a live D3D9 object"));
+            last.then_some(old)
         });
         if let Some(old) = last {
             release_of(old);

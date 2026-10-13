@@ -341,25 +341,20 @@ pub(crate) fn new_object(m: &mut dyn Mem, iface: &'static str, kind: Kind) -> u3
 }
 
 pub(crate) fn add_ref_to(object: u32) -> u32 {
-    let object = counted(object);
-    objects(|o| {
-        let x = o.live.get_mut(&object).unwrap_or_else(|| panic!("AddRef on {object:#x}, not a live D3D9 object"));
-        x.refs += 1;
-        x.refs
-    })
+    objects(|o| with_counted(o, object, |_, x| { x.refs += 1; x.refs }))
+        .unwrap_or_else(|| panic!("AddRef on {object:#x}, not a live D3D9 object"))
 }
 
 /// Release one reference; at zero the object goes, releasing what it holds
 /// (a swap chain its back buffers, a device its swap chains and surfaces).
 pub(crate) fn release_of(object: u32) -> u32 {
-    let object = counted(object);
-    let (left, gone) = objects(|o| {
-        let x = o.live.get_mut(&object).unwrap_or_else(|| panic!("Release on {object:#x}, not a live D3D9 object"));
-        x.refs -= 1;
-        if x.refs == 0 {
+    let (object, left, gone) = objects(|o| {
+        let (object, left) = with_counted(o, object, |t, x| { x.refs -= 1; (t, x.refs) })
+            .unwrap_or_else(|| panic!("Release on {object:#x}, not a live D3D9 object"));
+        if left == 0 {
             o.dirty.remove(&object);
-            (0, o.live.remove(&object))
-        } else { (x.refs, None) }
+            (object, 0, o.live.remove(&object))
+        } else { (object, left, None) }
     });
     if let Some(x) = gone {
         if matches!(x.kind, Kind::Query { .. }) {
@@ -468,18 +463,19 @@ fn surface(m: &mut dyn Mem, device: u32, desc: SurfaceDesc, container: u32) -> u
     new_object(m, "IDirect3DSurface9", Kind::Surface { device, desc, container, owner: 0, image })
 }
 
-/// The object whose reference count `object` uses (a texture's level
-/// surfaces count on the texture).
-fn counted(object: u32) -> u32 {
-    objects(|o| counted_in(o, object))
-}
-
-/// [`counted`] inside an access to the objects.
-pub(crate) fn counted_in(o: &Objects, object: u32) -> u32 {
-    match o.live.get(&object).map(|x| &x.kind) {
-        Some(Kind::Surface { owner, .. }) if *owner != 0 => *owner,
-        _ => object,
-    }
+/// `f` on the object whose reference count `object` uses (a texture's
+/// level surfaces count on the texture), and its address: one lookup unless
+/// `object` is such a surface (L144: AddRef, Release and SetTexture looked
+/// each object up twice). None if either is not live.
+pub(crate) fn with_counted<R>(o: &mut Objects, object: u32, f: impl FnOnce(u32, &mut Object) -> R) -> Option<R> {
+    let owner = {
+        let x = o.live.get_mut(&object)?;
+        match x.kind {
+            Kind::Surface { owner, .. } if owner != 0 => owner,
+            _ => return Some(f(object, x)),
+        }
+    };
+    o.live.get_mut(&owner).map(|x| f(owner, x))
 }
 
 /// Complete windowed present parameters as D3D9 does: a zero back buffer
