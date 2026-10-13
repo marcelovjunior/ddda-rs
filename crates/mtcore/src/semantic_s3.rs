@@ -1151,14 +1151,28 @@ pub fn world_position(m: &mut dyn Mem, c: &mut Cpu) {
     c.esp = entry.wrapping_add(8);
 }
 
+/// The frustum-test ports `classify_overlap` may call directly instead of
+/// through the guest call dispatch: `(0x00FF0780 cull_sphere, 0x00FF0AD0
+/// cull_oriented)`, set once by the runtime (mtdraw::cull, which this crate
+/// cannot depend on).
+pub static CULL_PORTS: std::sync::OnceLock<(ddnative_base::x86::LiftFn, ddnative_base::x86::LiftFn)> = std::sync::OnceLock::new();
+
 // Translated from 0x00ea1ee0 (DDDA.exe 2017-12-13 Steam).
 /// 0x00EA1EE0, `object->classify(other) -> mask` (thiscall, `ret 4`): with
 /// none of the low six bits of `+0x108` set the answer is 0x3f. Otherwise
-/// `other->test_a(object + 0x160)` (0x00FF0780) is the answer if it is not
-/// positive; if it is not 0x3f, `other->test_b(object + 0x170, answer)`
-/// (0x00FF0AD0) refines it; a still-positive answer becomes 0x3f when
-/// those bits of `+0x108` equal 1.
+/// `other->cull_sphere(object + 0x160)` (0x00FF0780) is the answer if it is
+/// not positive; if it is not 0x3f, `other->cull_oriented(object + 0x170,
+/// answer)` (0x00FF0AD0) refines it; a still-positive answer becomes 0x3f
+/// when those bits of `+0x108` equal 1.
+///
+/// The two tests are called directly when [`CULL_PORTS`] is set.
 pub fn classify_overlap(m: &mut dyn Mem, c: &mut Cpu) {
+    classify_overlap_with(m, c, CULL_PORTS.get().copied())
+}
+
+/// [`classify_overlap`] with the frustum tests chosen by the caller (`None`:
+/// guest calls to the originals).
+pub fn classify_overlap_with(m: &mut dyn Mem, c: &mut Cpu, ports: Option<(ddnative_base::x86::LiftFn, ddnative_base::x86::LiftFn)>) {
     let pg = Pages::of(m);
     let (object, entry) = (c.ecx, c.esp);
     let (saved_esi, saved_edi) = (c.esi, c.edi);
@@ -1173,11 +1187,16 @@ pub fn classify_overlap(m: &mut dyn Mem, c: &mut Cpu) {
     let other = pg.u32(m, entry.wrapping_add(4));
     // the original's frame at its calls: esi and edi pushed
     let frame = entry.wrapping_sub(8);
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
-    let mut answer = call_from(m, c, pg, frame, other, &[object.wrapping_add(0x160)], 0x00ea_1f08, guest(0x00ff_0780));
+    let test = |m: &mut dyn Mem, c: &mut Cpu, port: Option<ddnative_base::x86::LiftFn>, target: u32, args: &[u32], back: u32| {
+        call_from(m, c, pg, frame, other, args, back, |m, c| match port {
+            Some(port) => port(m, c),
+            None => call_ext(m, c, target),
+        })
+    };
+    let mut answer = test(m, c, ports.map(|p| p.0), 0x00ff_0780, &[object.wrapping_add(0x160)], 0x00ea_1f08);
     if answer as i32 > 0 {
         if answer != 0x3f {
-            answer = call_from(m, c, pg, frame, other, &[object.wrapping_add(0x170), answer], 0x00ea_1f20, guest(0x00ff_0ad0));
+            answer = test(m, c, ports.map(|p| p.1), 0x00ff_0ad0, &[object.wrapping_add(0x170), answer], 0x00ea_1f20);
         }
         if answer as i32 > 0 && pg.u8(m, object.wrapping_add(0x108)) & 0x3f == 1 {
             answer = 0x3f;
@@ -1187,10 +1206,54 @@ pub fn classify_overlap(m: &mut dyn Mem, c: &mut Cpu) {
     finish(c)
 }
 
+// Translated from 0x0111d610 (DDDA.exe 2017-12-13 Steam), with 0x01192260 inlined.
+/// 0x0111D610, `state_set->push(value) -> error` (thiscall, `ret 4`): push a
+/// state record onto a set's stack of six (`+0x54` is the depth, records are
+/// 12 bytes from `+0xc`: the value byte, then two zero words) and, first, a
+/// snapshot onto its owner's stack (`+4`: depth at `+0x64`, 16-byte records
+/// from `+4` holding the words `+0x74` and `+0x78`, then 0). Returns 9 when
+/// the set is full, else 0 (the owner being full is not reported).
+pub fn push_state(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let value = pg.u8(m, entry.wrapping_add(4));
+    c.eax = push_state_record(m, pg, c.ecx, value);
+    c.esp = entry.wrapping_add(8);
+}
+
+fn push_state_record(m: &mut dyn Mem, pg: Pages, set: u32, value: u8) -> u32 {
+    let depth = pg.u32(m, set.wrapping_add(0x54));
+    if depth >= 6 {
+        return 9;
+    }
+    let owner = pg.u32(m, set.wrapping_add(4));
+    let slot = set.wrapping_add((depth * 3 + 3) * 4);
+    // 0x01192260 `owner->push_snapshot()`
+    let owner_depth = pg.u32(m, owner.wrapping_add(0x64));
+    if owner_depth < 6 {
+        let record = owner.wrapping_add(owner_depth * 16 + 4);
+        let first = pg.u32(m, owner.wrapping_add(0x74));
+        let second = pg.u32(m, owner.wrapping_add(0x78));
+        pg.set_u32(m, record, first);
+        pg.set_u32(m, record.wrapping_add(4), second);
+        pg.set_u32(m, record.wrapping_add(8), 0);
+        pg.set_u8(m, record.wrapping_add(0xc), 0);
+        let again = pg.u32(m, owner.wrapping_add(0x64)).wrapping_add(1);
+        pg.set_u32(m, owner.wrapping_add(0x64), again);
+    }
+    pg.set_u32(m, slot.wrapping_add(4), 0);
+    pg.set_u32(m, slot.wrapping_add(8), 0);
+    pg.set_u8(m, slot, value);
+    let again = pg.u32(m, set.wrapping_add(0x54)).wrapping_add(1);
+    pg.set_u32(m, set.wrapping_add(0x54), again);
+    0
+}
+
 // Translated from 0x00e61010 (DDDA.exe 2017-12-13 Steam).
 /// 0x00E61010, `set->test(a, b, single, value) -> bool` (thiscall, `ret
 /// 0x10`): a fan-out over the object's `+0xd0` members (`+0x30` array),
-/// each asked 0x0111D610 with `value`. With `single` clear only the member
+/// each pushed a state record with `value` ([`push_state`], 0x0111D610, run
+/// natively). With `single` clear only the member
 /// at index `a[+0x58]` is asked and its answer returned as is; otherwise
 /// the result is true when any member answered non-zero.
 pub fn any_member_test(m: &mut dyn Mem, c: &mut Cpu) {
@@ -1198,22 +1261,19 @@ pub fn any_member_test(m: &mut dyn Mem, c: &mut Cpu) {
     let (object, entry) = (c.ecx, c.esp);
     let saved = (c.ebx, c.ebp, c.esi, c.edi);
     let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
     if arg(m, 2) == 0 {
         let index = pg.u32(m, arg(m, 0).wrapping_add(0x58));
         let member = pg.u32(m, object.wrapping_add(index.wrapping_mul(4)).wrapping_add(0x30));
-        let value = arg(m, 3);
-        call_from(m, c, pg, entry.wrapping_sub(4), member, &[value], 0x00e6_102f, guest(0x0111_d610));
+        let value = arg(m, 3) as u8;
+        c.eax = push_state_record(m, pg, member, value);
     } else {
-        // the original's frame: ebp, ebx, edi, esi pushed
-        let frame = entry.wrapping_sub(16);
         let mut none_answered = true;
         let mut i = 0u32;
         if pg.u32(m, object.wrapping_add(0xd0)) != 0 {
             loop {
                 let member = pg.u32(m, object.wrapping_add(0x30 + 4 * i));
-                let value = arg(m, 3);
-                let answer = call_from(m, c, pg, frame, member, &[value], 0x00e6_1051, guest(0x0111_d610));
+                let value = arg(m, 3) as u8;
+                let answer = push_state_record(m, pg, member, value);
                 none_answered = none_answered && answer == 0;
                 i += 1;
                 if i >= pg.u32(m, object.wrapping_add(0xd0)) {

@@ -468,18 +468,45 @@ fn semantic_world_position_matches_original() {
     eprintln!("{n} ABI-level world_position cases passed");
 }
 
-// verifies 0x00ea1ee0 (ABI level)
+// verifies 0x00ea1ee0 (ABI level), calling the originals' stubs
 #[test]
 fn semantic_classify_overlap_matches_original() {
     ddnative_host::install();
-    let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_flags.json", mtcore::semantic_s3::classify_overlap, true, leaf_callee);
+    let n = abi_cases(
+        "E:/ddda-re/notes/native-L184/leaf_flags.json",
+        |m, c| mtcore::semantic_s3::classify_overlap_with(m, c, None),
+        true,
+        leaf_callee,
+    );
     eprintln!("{n} ABI-level classify_overlap cases passed");
+}
+
+// verifies 0x00ea1ee0 (ABI level) with the frustum tests called directly:
+// the recording ran the original 0x00FF0780 / 0x00FF0AD0 code
+#[test]
+fn semantic_classify_overlap_direct_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases(
+        "E:/ddda-re/notes/native-L184/leaf_flags_real.json",
+        |m, c| mtcore::semantic_s3::classify_overlap_with(m, c, Some((mtdraw::cull::cull_sphere, mtdraw::cull::cull_oriented))),
+        true,
+        no_callees,
+    );
+    eprintln!("{n} ABI-level direct classify_overlap cases passed");
+}
+
+// verifies 0x0111d610 (ABI level; 0x01192260 inlined, ran as original code)
+#[test]
+fn semantic_push_state_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_push.json", mtcore::semantic_s3::push_state, true, no_callees);
+    eprintln!("{n} ABI-level push_state cases passed");
 }
 
 // verifies 0x00e61010 (ABI level)
 #[test]
 fn semantic_any_member_test_matches_original() {
     ddnative_host::install();
-    let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_any.json", mtcore::semantic_s3::any_member_test, true, leaf_callee);
+    let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_any_real.json", mtcore::semantic_s3::any_member_test, true, no_callees);
     eprintln!("{n} ABI-level any_member_test cases passed");
 }

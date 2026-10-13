@@ -27,7 +27,18 @@ MODES = {
     'origin': (0x00EA1F40, 0x8B, 1, {0x30000030: 1}),
     'flags': (0x00EA1EE0, 0x5C, 1, {0x00FF0780: 1, 0x00FF0AD0: 2}),
     'any': (0x00E61010, 0x6E, 4, {0x0111D610: 1}),
+    # the same functions with their callees as original code (no stubs)
+    'flags_real': (0x00EA1EE0, 0x5C, 1, {}),
+    'any_real': (0x00E61010, 0x6E, 4, {}),
+    'push': (0x0111D610, 0x3A, 1, {}),
 }
+# mode -> original code to map besides the function, and image data
+REAL = {
+    'flags_real': ([(0x00FF0780, 0x80), (0x00FF0AD0, 0x242)], [(0x0161C280, 0x10), (0x0161C330, 0x10), (0x01629490, 0x10)]),
+    'any_real': ([(0x0111D610, 0x3A), (0x01192260, 0x2E)], []),
+    'push': ([(0x01192260, 0x2E)], []),
+}
+PLANES = 0x25000000
 OBJ, PARENTS, OUT, OTHER, TABLE = 0x20000000, 0x21000000, 0x22000000, 0x23000000, 0x24000000
 STACK, SP = 0x0F000000, 0x0F008000
 REGS = [getattr(x, 'UC_X86_REG_' + n) for n in ('EAX', 'ECX', 'EDX', 'EBX', 'ESP', 'EBP', 'ESI', 'EDI')]
@@ -52,6 +63,15 @@ class Oracle:
             mapping(address, size)
         for a in self.stubs:
             mapping(a, 1)
+        self.real_ranges = []
+        for address, size in REAL.get(mode, ([], []))[0]:
+            mapping(address, size)
+            uc.mem_write(address, h.code(address, size))
+            self.real_ranges.append((address, address + size))
+        for address, size in REAL.get(mode, ([], []))[1]:
+            mapping(address, size)
+            uc.mem_write(address, h.code(address, size))
+        mapping(PLANES, 0x1000)
         uc.mem_write(self.entry, h.code(self.entry, length))
         for a in self.stubs:
             uc.mem_write(a, b'\xc3')
@@ -85,7 +105,7 @@ class Oracle:
             uc.emu_stop()
             return
         if address not in self.stubs:
-            assert self.entry <= address < self.entry + 0x100, hex(address)
+            assert self.entry <= address < self.entry + 0x100 or any(a <= address < b for a, b in self.real_ranges), hex(address)
             return
         rng = self.rng
         esp = uc.reg_read(x.UC_X86_REG_ESP)
@@ -142,6 +162,45 @@ class Oracle:
         elif self.mode == 'flags':
             uc.mem_write(OBJ + 0x108, bytes([rng.choice((0, 0x40, 1, 2, 0x3F, 0x81, rng.randrange(256)))]))
             args = [OTHER]
+        elif self.mode == 'flags_real':
+            uc.mem_write(PLANES, bytes(rng.randrange(256) for _ in range(0x100)))
+            uc.mem_write(OBJ + 0x108, bytes([rng.choice((0x40, 1, 2, 0x3F, 0x81, 0x41, rng.randrange(256)))]))
+            for k in range(6):
+                normal = [rng.uniform(-1, 1) for _ in range(3)]
+                length = sum(v * v for v in normal) ** 0.5 or 1.0
+                plane = [v / length for v in normal] + [rng.uniform(-1.5, 8)]
+                uc.mem_write(PLANES + 16 * k, struct.pack('<4f', *plane))
+            w32(OTHER + 0xCA0, PLANES + rng.choice((0, 0, 4, 8, 15)))
+            near = rng.random() < 0.5
+            sphere = [rng.uniform(-3, 3) for _ in range(3)] + [rng.choice((0.0, 0.5, 2.0, rng.uniform(0, 6), -1.0))]
+            uc.mem_write(OBJ + 0x160, struct.pack('<4f', *sphere))
+            transform = [rng.uniform(-2, 2) for _ in range(16)]
+            if near:
+                transform = [1.0 if i % 5 == 0 else 0.0 for i in range(16)]
+            uc.mem_write(OBJ + 0x170, struct.pack('<19f', *(transform + [rng.uniform(0, 3) for _ in range(3)])))
+            args = [OTHER]
+        elif self.mode == 'push':
+            w32(OBJ + 0x54, rng.choice((0, 1, 5, 5, 6, 7, rng.randrange(8))))
+            w32(OBJ + 4, TABLE)
+            w32(TABLE + 0x64, rng.choice((0, 3, 5, 6, 7, rng.randrange(8))))
+            w32(TABLE + 0x74, rng.randrange(1 << 32))
+            w32(TABLE + 0x78, rng.randrange(1 << 32))
+            args = [rng.randrange(1 << 32)]
+        elif self.mode == 'any_real':
+            w32(OTHER + 0x58, rng.randrange(0, 6))
+            count = rng.randrange(0, 6)
+            w32(OBJ + 0xD0, count)
+            for k in range(6):
+                member = PARENTS + 0x400 * k
+                table = TABLE + 0x200 * k
+                w32(OBJ + 0x30 + 4 * k, member)
+                w32(member + 0x54, rng.choice((0, 1, 5, 5, 6, 7, rng.randrange(8))))
+                w32(member + 4, table)
+                w32(table + 0x64, rng.choice((0, 3, 5, 6, 7, rng.randrange(8))))
+                w32(table + 0x74, rng.randrange(1 << 32))
+                w32(table + 0x78, rng.randrange(1 << 32))
+                uc.mem_write(member, bytes(rng.randrange(256) for _ in range(4)))
+            args = [OTHER, rng.randrange(1 << 32), rng.choice((0, 0, 1, 7)), rng.randrange(1 << 32)]
         elif self.mode == 'any':
             w32(OTHER + 0x58, rng.randrange(0, 6))
             w32(OBJ + 0xD0, rng.randrange(0, 6))
