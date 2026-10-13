@@ -14,15 +14,16 @@
 - Exact diagnostic: root2 headers162AC/16923, equal sort key,66/66 entries.
   Sequence rebasing now integrated from CAPTURED lane starts (FED200 retains
   +74, correcting the unwired prototype). Real64 headers rebased; next
-  difference root22 bindings, with key/header exact. Bounded binding
-  diagnostics added; no comparator relaxation.
+  difference root22 Shader constant index2 fourth component (byteA4),
+  identities/lengths/key/header exact. Exact-word diagnostics added; no
+  assumed padding or float tolerance.
 - Latest focused shadow:37 passed/0 failed. Latest full default light at
   8750e8bf:290 passed/0 failed/7 ignored. Synthetic tests are not original
   acceptance. Prior oracle:8 original FED3B0 returns and227 shader fixtures,
   1704 uploads (29 conservative refusals).
 - Live output remains serial; publication and FPS/job-time acceptance are
   OPEN. No TRAIN READY. One next action: self-serve R172 build and replay48124
-  to identify the root22 binding difference.
+  to trace the root22 shader constant producer.
   Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)

@@ -1139,7 +1139,18 @@ fn compare_replays(
                         .zip(&b.bytes)
                         .enumerate()
                         .find(|(_, (a, b))| a != b)
-                        .map(|(offset, (a, b))| (offset, *a, *b));
+                        .map(|(offset, (av, bv))| {
+                            let word = offset & !3;
+                            let a_word = a
+                                .bytes
+                                .get(word..word + 4)
+                                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()));
+                            let b_word = b
+                                .bytes
+                                .get(word..word + 4)
+                                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()));
+                            (offset, *av, *bv, a_word, b_word)
+                        });
                     (a.kind, a.identity, b.identity, a.bytes.len(), b.bytes.len(), byte)
                 })
         });
