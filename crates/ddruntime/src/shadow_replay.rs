@@ -1269,8 +1269,20 @@ fn compare_replays(
                 .filter(|l| l.contains(&format!("c{}", ca.register)) || l.contains("[a0") || l.contains("[aL"))
                 .take(8)
                 .collect();
+            let table: Vec<String> = shaders
+                .get(&handle)
+                .and_then(|t| d3d9shader::parse(t).ok())
+                .and_then(|s| d3d9shader::ctab::table(&s))
+                .map(|t| {
+                    t.constants
+                        .iter()
+                        .filter(|c| c.register_set == 2)
+                        .map(|c| format!("{} c{}..{}", c.name, c.register_index, c.register_index + c.register_count))
+                        .collect()
+                })
+                .unwrap_or_default();
             return Err(format!(
-                "shader {handle:#x} may read c{} component {} (direct mask {:#x}, relative mask {:#x}): {lines:?}",
+                "shader {handle:#x} may read c{} component {} (direct mask {:#x}, relative mask {:#x}): {lines:?}; float constants {table:?}",
                 ca.register, ca.byte / 4, r.direct.get(ca.register as usize).copied().unwrap_or(0xff), r.any
             ));
         }
