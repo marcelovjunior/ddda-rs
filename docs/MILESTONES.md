@@ -1,5 +1,18 @@
 # Milestones
 
+### L168 guest-memory locality opt-in (2026-10-13)
+
+- `DDNATIVE_BACKING=regions`: 2 MiB-aligned guest-region host reservations,
+  lazy 4 KiB commits, unchanged permissions/atomics/retirement. Large-page
+  attempt fails error 1314 on this token; `large` falls back, no policy change.
+- Base 41 pass; fallback five pass; runtime light 250 reported pass, zero
+  failures/seven ignored. Original hash leaf replay four tests pass.
+- Synthetic sequential read/read-write median paired gains 1.461x/1.385x;
+  scattered/leaf gains unproven. No hardware miss-rate or gameplay claim.
+- Head-owned bounded WPR profile validates. Next: matched PMC and profiler-off
+  gameplay A/B after playtest; actual snapshot/counters pending. Details:
+  `docs/tasks/L168-tlb.md`.
+
 ### L159 Vulkan default image gate (2026-10-13)
 
 - Same-run selected raw pass oracle copies attachment load state, replays
