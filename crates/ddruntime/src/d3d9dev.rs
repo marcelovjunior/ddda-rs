@@ -774,6 +774,19 @@ fn present(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 20);
 }
 
+// Selected at registration only. The disabled path has no per-Present check.
+fn present_ndraw_stats(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let device = arg(m, cpu, 0);
+    present(m, cpu);
+    if cpu.eax == D3D_OK { crate::ndraw_stats::present(device); }
+}
+
+fn chain_present_ndraw_stats(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let device = with_chain(arg(m, cpu, 0), |d, _, _, _| d);
+    chain_present(m, cpu);
+    if cpu.eax == D3D_OK { crate::ndraw_stats::present(device); }
+}
+
 /// SetGammaRamp(this, swap chain, flags, D3DGAMMARAMP*): returns nothing.
 /// The ramp is kept with the chain and shown with its frames when the
 /// chain is full-screen (see present_chain). D3DSGR_CALIBRATE is ignored:
@@ -1137,6 +1150,13 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
         // L93: every D3D method holds the D3D lock; the hot device methods
         // that touch only the D3D objects and the backend take no guest lock
         for &(slot, f) in spec.methods {
+            let f = if crate::ndraw_stats::enabled() {
+                match (spec.name, slot) {
+                    ("IDirect3DDevice9", 17) => present_ndraw_stats as ddnative_base::x86::LiftFn,
+                    ("IDirect3DSwapChain9", 3) => chain_present_ndraw_stats as ddnative_base::x86::LiftFn,
+                    _ => f,
+                }
+            } else { f };
             let only_d3d = spec.name == "IDirect3DDevice9" && DEVICE_ONLY_SLOTS.contains(&slot)
                 || spec.name == "IDirect3DSwapChain9" && slot == 3;
             registry.replace(m.u32(v + 4 * slot), crate::dispatch::Binding::Device(f, !only_d3d));
