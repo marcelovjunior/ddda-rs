@@ -93,6 +93,9 @@ use std::time::{Duration, Instant};
 
 #[path = "ndraw_compare.rs"]
 pub mod comparison;
+#[path = "ndraw_ops.rs"]
+mod ops;
+pub(crate) use ops::{observe_op, Op};
 
 /// What `DDDRAW_NATIVE` asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,14 +211,17 @@ pub enum Refusal {
     /// inside a span of type-7 commands (a query begun and not ended): the
     /// D3D9 path draws it, so the backend counts its samples
     Query,
+    /// a Clear's colour check under an x87 rounding mode other than to
+    /// nearest (ops::clear_args)
+    Precision,
 }
 
 impl Refusal {
-    const ALL: [Refusal; 18] = [
+    const ALL: [Refusal; 19] = [
         Refusal::Instanced, Refusal::NotScene, Refusal::NullBinding, Refusal::Decode, Refusal::ViewportGlobals,
         Refusal::BlendFactor, Refusal::NoColourTarget, Refusal::NoIndices, Refusal::ZeroStride, Refusal::Missing,
         Refusal::Shader, Refusal::FloatsUncovered, Refusal::IntsUncovered, Refusal::BoolsUncovered,
-        Refusal::SamplersUncovered, Refusal::Device, Refusal::Primitive, Refusal::Query,
+        Refusal::SamplersUncovered, Refusal::Device, Refusal::Primitive, Refusal::Query, Refusal::Precision,
     ];
 }
 
@@ -1964,6 +1970,8 @@ struct Totals {
     /// native jobs sent, and their draws
     jobs: u64,
     native: u64,
+    /// clears and copies (types 4 and 5)
+    ops: ops::Stats,
 }
 
 struct Inner {
@@ -2109,9 +2117,18 @@ impl Native {
                 }
             }
         }
-        if kind > 3 {
-            return Taken::Default;
+        match kind {
+            0..=3 => {}
+            4 if ops::enabled() => return self.clear(g, m, context, record),
+            5 if ops::enabled() => return self.copy(g, m, record),
+            _ => return Taken::Default,
         }
+        self.draw(g, m, context, record, kind)
+    }
+
+    /// A draw record (types 0..3, and a Clear's fallback draw as type 0).
+    fn draw(&self, g: &mut Inner, m: &mut dyn Mem, context: u32, record: u32, kind: u32) -> Taken {
+        let f = &mut g.frame;
         let size = target_size(m, record);
         *f.draws_by_size.entry(size).or_default() += 1;
         if self.mode == Mode::Census {
@@ -2274,8 +2291,10 @@ fn report(mode: Mode, t: &Totals) {
         out += &format!("  native jobs {:.1}, draws in them {:.1} (a job the backend rejects goes as its DrawCalls)\n",
                         per(t.jobs), per(t.native));
     }
+    out += &t.ops.report(t.frames);
     if mode == Mode::Verify {
         out += &verify_report();
+        out += &ops::verify_report();
     }
     out += "  refused:";
     for r in Refusal::ALL {

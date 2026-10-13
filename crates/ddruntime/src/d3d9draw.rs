@@ -448,6 +448,7 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
         rects, flags: a[3], colour: a[4], z: f32::from_bits(a[5]), stencil: a[6],
         targets: std::array::from_fn(|k| target(rts[k])), depth: target(ds), viewport, scissor, srgb,
     };
+    crate::ndraw_native::observe_op(crate::ndraw_native::Op::Clear(c.clone()));
     backend_unlocked(|b| b.clear(&c));
     cpu.eax = D3D_OK;
     ret(m, cpu, 28);

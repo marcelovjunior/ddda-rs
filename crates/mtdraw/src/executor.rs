@@ -300,6 +300,7 @@ pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
     // L119: a native sink, if one is installed, is offered the commands
     let sink = crate::sink::sink();
     if let Some(s) = &sink {
+        crate::sink::set_x87_control(cpu.st.control());
         s.frame_begin(m, cpu.esi, at(cpu, CONTEXT));
     }
 

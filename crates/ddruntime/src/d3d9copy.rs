@@ -25,6 +25,7 @@ pub fn stretch_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
         (Some(src), Some(dst)) => {
             flush(m, a[1]);
             let c = CopyCall { src, src_rect: rect(m, a[2]), dst, dst_rect: rect(m, a[4]), filter: a[5] };
+            crate::ndraw_native::observe_op(crate::ndraw_native::Op::Copy(c.clone()));
             backend(|b| b.copy(&c));
             D3D_OK
         }

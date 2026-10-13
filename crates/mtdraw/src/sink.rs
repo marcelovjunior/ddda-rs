@@ -68,3 +68,18 @@ pub(crate) fn sink() -> Option<Arc<dyn CommandSink>> {
     }
     SINK.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
+
+thread_local! {
+    static X87_CONTROL: std::cell::Cell<u16> = const { std::cell::Cell::new(0x027F) };
+}
+
+/// The guest's x87 control word when the executor began the frame on this
+/// thread (L182: the Clear's colour check compares an x87 product at its
+/// precision, so a sink deciding Clears needs it). 0x027F until a frame.
+pub fn x87_control() -> u16 {
+    X87_CONTROL.with(|c| c.get())
+}
+
+pub(crate) fn set_x87_control(control: u16) {
+    X87_CONTROL.with(|c| c.set(control));
+}
