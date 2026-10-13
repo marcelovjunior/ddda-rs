@@ -8,10 +8,17 @@ mod access;
 pub mod port;
 #[path = "zlib_table.rs"]
 pub mod table;
+#[path = "archive_skip.rs"]
+pub mod stream;
 use access::Access;
 
 /// Install before diagnostic wrappers, preserving explicit ports/mods.
 pub fn install(ports: &mut Vec<(u32, ddnative_base::x86::LiftFn)>) {
+    if std::env::var("DDRUNTIME_ARCHIVE_SKIP").as_deref() == Ok("1")
+        && !ports.iter().any(|&(address, _)| address == 0x00cf_eec0)
+    {
+        ports.push((0x00cf_eec0, stream::skip));
+    }
     if std::env::var("DDRUNTIME_ZLIB_TABLE").as_deref() == Ok("1")
         && !ports.iter().any(|&(address, _)| address == 0x00cf_30c0)
     {

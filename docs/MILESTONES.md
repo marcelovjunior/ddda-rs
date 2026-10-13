@@ -12,6 +12,22 @@
   `docs/tasks/L159-vk-default.md`.
 - Next: head `DDGPU_VK=1 DDGPU_VK_SHADOW=997` gameplay image gate, then
   separately adopt the staged default-on commit only after acceptance.
+### L163 boot attribution and exact stream skip (2026-10-13)
+
+- Boot intervals mix original logo holds, authored GUI sequences, input
+  residence and work. Autoplay cadence ~1.66 s; title entry/exit nominally
+  5.3 s. Storage's 120-frame hold has original input escape; no timer edits.
+- Combo30 loading: decoders 16.969 CPU s / 14 s; 207 non-wait samples.
+  CF02E0 76, CFEEC0 59 (28.5%), DB9F40 service/lock loop 52. New opt-in
+  ARCHIVE_SKIP batches buffered skip, preserving original refill and ABI.
+- CPU timeline replaces repeated Toolhelp with one first-Present discovery
+  plus cached GetThreadTimes; process residual covers unregistered CPU.
+  Boot-detail observations opt-in. 192 original-instruction + 192 scalar
+  skip cases pass; 16 parser tests pass; final library results in brief.
+- Not yet compared in game; inherited gamma Reset failure remains. Next:
+  head skip0/1 load/image run plus boot detail; retain FAST2/TABLE opt-ins.
+  Evidence and limitations: docs/LOADING.md, docs/tasks/L163-loader-cpu.md.
+
 ### L156 exact inflate and Huffman builder (2026-10-13)
 
 - Opt-in FAST=2 adds bounded table/output spans, packed input pairs and
