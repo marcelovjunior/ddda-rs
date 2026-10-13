@@ -251,6 +251,12 @@ impl GuestLock {
 /// must not borrow runtime state itself. In the serial mode, or nested,
 /// `f` just runs.
 pub(crate) fn unlocked<R>(f: impl FnOnce() -> R) -> R {
+    // L93: a D3D service that also holds the guest lock keeps it: taking it
+    // back while holding the D3D lock would invert the lock order (guest,
+    // then D3D)
+    if crate::d3d9dev::holds_device_lock() {
+        return f();
+    }
     if SERVICE_TAIL_ALLOWED.with(Cell::get) && release_service_tail() {
         return f();
     }

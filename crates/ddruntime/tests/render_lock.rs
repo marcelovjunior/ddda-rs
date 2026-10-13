@@ -66,14 +66,15 @@ fn draw_and_clear_return_without_a_second_acquisition() {
     assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0); // DrawPrimitive
     assert_eq!(com(&mut s, dev, 82, &[4, 0, 0, 3, 0, 1]), 0); // DrawIndexedPrimitive
     assert_eq!(com(&mut s, dev, 43, &[0, 0, 1, 0x12345678, 1f32.to_bits(), 0]), 0);
-    assert_eq!(com(&mut s, dev, 83, &[4, 1, SCRATCH + 0x400, 12]), 0); // UP retains reacquisition
+    assert_eq!(com(&mut s, dev, 83, &[4, 1, SCRATCH + 0x400, 12]), 0); // DrawPrimitiveUP
     assert_eq!(com(&mut s, dev, 42, &[]), 0); // EndScene
     assert_eq!(com(&mut s, dev, 17, &[0, 0, 0, 0]), 0); // Present/frame delimiter
     let report = ddruntime::threads::lock_stats().unwrap();
-    for service in ["::DrawPrimitive (", "::DrawIndexedPrimitive (", "::Clear ("] {
-        assert_eq!(acquisitions(&report, service), 1, "{service}");
+    // L93: the draws and Clear hold the D3D lock only (dispatch::Binding::
+    // Device): no guest lock acquisition at all (L82: one, the UP draw two)
+    for service in ["::DrawPrimitive (", "::DrawIndexedPrimitive (", "::Clear (", "::DrawPrimitiveUP ("] {
+        assert_eq!(acquisitions(&report, service), 0, "{service}");
     }
-    assert_eq!(acquisitions(&report, "::DrawPrimitiveUP ("), 2);
     ddruntime::d3d9draw::recorded(|r| {
         assert_eq!(r.draws.len(), 3);
         assert!(matches!(r.draws[0].indices, d3d9cmd::Indices::None));

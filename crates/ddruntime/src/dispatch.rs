@@ -39,6 +39,12 @@ pub enum Binding {
     /// memcpy/memset, the timers); in the serial mode it is an API call
     /// like any other (a time slice may end there).
     LockFree(LiftFn),
+    /// A Direct3D 9 / D3DX method (L93): runs holding the D3D lock
+    /// (crate::d3d9dev::D3dCell) for its whole call, so D3D calls stay
+    /// atomic against each other; with `true` it also holds the guest lock
+    /// (taken first), without it (the hot device methods, which touch only
+    /// the D3D objects and the backend) none in parallel mode.
+    Device(LiftFn, bool),
 }
 
 impl Binding {
@@ -48,6 +54,7 @@ impl Binding {
             Binding::Service(_) => "service",
             Binding::ServiceTail(_) => "service with host-only tail",
             Binding::LockFree(_) => "lock-free service",
+            Binding::Device(..) => "D3D service",
         }
     }
 }
@@ -275,6 +282,7 @@ impl Registry {
             Some(Binding::Service(f)) => self.run_service(f, m, cpu, target, true, false),
             Some(Binding::ServiceTail(f)) => self.run_service(f, m, cpu, target, true, true),
             Some(Binding::LockFree(f)) => self.run_service(f, m, cpu, target, false, false),
+            Some(Binding::Device(f, guest)) => self.run_service_as(f, m, cpu, target, guest, false, true),
             Some(Binding::Lifted(f)) => f(m, cpu),
         }
         Ok(())
@@ -297,6 +305,15 @@ impl Registry {
     /// `locked`: whether it takes the guest lock in parallel mode (a
     /// [`Binding::Service`]; a [`Binding::LockFree`] does not).
     pub(crate) fn run_service(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32, locked: bool, tail: bool) {
+        self.run_service_as(f, m, cpu, target, locked, tail, false)
+    }
+
+    /// [`run_service`](Self::run_service); `device`: holding the D3D lock
+    /// for the call (a [`Binding::Device`]), taken after the guest lock and
+    /// after the time-slice yield, so the two locks are always taken in that
+    /// order.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_service_as(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32, locked: bool, tail: bool, device: bool) {
         // L22: a service is Rust: it runs under the host default MXCSR and
         // the guest's (live while lifted code runs) waits in cpu.mxcsr, so
         // neither sees nor changes the other's rounding or sticky flags.
@@ -315,7 +332,9 @@ impl Registry {
         let lock = if locked { crate::threads::service() } else { crate::threads::service_lock_free() };
         let traced = trace::start(self, m, cpu, target);
         let scope = crate::threads::ServiceScope::enter_with_tail(tail);
+        let d3d = device.then(crate::d3d9dev::device_lock);
         f(m, cpu);
+        drop(d3d);
         if let Some(line) = traced {
             trace::finish(line, cpu);
         }

@@ -53,7 +53,8 @@ pub struct Runtime {
     pub(crate) files: GuestCell<crate::files::Files>,
     pub(crate) steam: GuestCell<crate::steam::Steam>,
     pub(crate) desktop: GuestCell<crate::user32::Desktop>,
-    pub(crate) d3d: GuestCell<crate::d3d9dev::Objects>,
+    /// behind their own lock, not the guest lock (L93: crate::d3d9dev::D3dCell)
+    pub(crate) d3d: crate::d3d9dev::D3dCell<crate::d3d9dev::Objects>,
     /// The display the adapter answers from (crate::d3d9::display).
     pub(crate) display: GuestCell<Option<crate::d3d9::Display>>,
     /// The graphics backend, behind its own lock (not a GuestCell): draws

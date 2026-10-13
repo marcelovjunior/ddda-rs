@@ -87,6 +87,9 @@ pub struct Object {
 
 #[derive(Default)]
 pub(crate) struct Objects {
+    /// objects whose last reference went without the guest lock (L93),
+    /// destroyed by the next D3D method that holds it
+    deferred: Vec<(u32, Object)>,
     vtables: HashMap<&'static str, u32>,
     /// by guest address (L78: a fast hash; looked up several times a draw)
     pub(crate) live: crate::fasthash::FxMap<u32, Object>,
@@ -94,6 +97,131 @@ pub(crate) struct Objects {
 
 pub(crate) fn objects<R>(f: impl FnOnce(&mut Objects) -> R) -> R {
     crate::runtime::with(|rt| rt.d3d.with(f))
+}
+
+// --- the D3D lock (L93) --------------------------------------------------------------
+//
+// The D3D objects (and the device state in them) are behind a lock of their
+// own, not the guest lock, so the render thread's ~25,000 D3D calls a frame
+// do not queue behind the other threads' services. A D3D method holds the
+// lock for its whole call (dispatch::Binding::Device), so D3D calls are as
+// atomic against each other as they were under the guest lock; anything
+// else reaching the objects takes it for each access. The hot device
+// methods take only this lock: they touch the D3D objects and the backend,
+// nothing else. The others (creation, Lock, Reset, the copies, D3DX) take
+// the guest lock first, then this one; nothing takes them the other way
+// round (threads::unlocked keeps the guest lock while this one is held).
+
+/// A value behind the D3D lock: re-entrant on one thread, so a method can
+/// reach the objects through any helper; a RefCell inside still catches a
+/// nested mutable borrow.
+pub(crate) struct D3dCell<T> {
+    lock: std::sync::Mutex<bool>,
+    free: std::sync::Condvar,
+    /// the holder (a per-thread key; 0: none) and its depth (only the
+    /// holder changes it)
+    owner: std::sync::atomic::AtomicU64,
+    depth: std::cell::Cell<u32>,
+    cell: std::cell::RefCell<T>,
+}
+
+// SAFETY: `cell` and `depth` are only touched by the thread that holds the
+// lock (`owner`), and taking and giving the lock goes through the mutex.
+unsafe impl<T: Send> Sync for D3dCell<T> {}
+
+impl<T: Default> Default for D3dCell<T> {
+    fn default() -> Self {
+        D3dCell {
+            lock: std::sync::Mutex::new(false),
+            free: std::sync::Condvar::new(),
+            owner: std::sync::atomic::AtomicU64::new(0),
+            depth: std::cell::Cell::new(0),
+            cell: Default::default(),
+        }
+    }
+}
+
+thread_local! {
+    /// This thread's key for D3dCell::owner, and the D3D locks it holds.
+    static THREAD_KEY: u64 = {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
+    static HELD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+impl<T> D3dCell<T> {
+    fn acquire(&self) {
+        let me = THREAD_KEY.with(|k| *k);
+        if self.owner.load(std::sync::atomic::Ordering::Acquire) != me {
+            let mut locked = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+            while *locked {
+                locked = self.free.wait(locked).unwrap_or_else(|e| e.into_inner());
+            }
+            *locked = true;
+            self.owner.store(me, std::sync::atomic::Ordering::Release);
+        }
+        self.depth.set(self.depth.get() + 1);
+        HELD.with(|h| h.set(h.get() + 1));
+    }
+
+    fn release(&self) {
+        HELD.with(|h| h.set(h.get() - 1));
+        let d = self.depth.get() - 1;
+        self.depth.set(d);
+        if d == 0 {
+            self.owner.store(0, std::sync::atomic::Ordering::Release);
+            *self.lock.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            self.free.notify_one();
+        }
+    }
+
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        struct Release<'a, T>(&'a D3dCell<T>);
+        impl<T> Drop for Release<'_, T> {
+            fn drop(&mut self) {
+                self.0.release();
+            }
+        }
+        self.acquire();
+        let _release = Release(self);
+        f(&mut self.cell.borrow_mut())
+    }
+}
+
+/// Whether this thread holds the D3D lock.
+pub(crate) fn holds_device_lock() -> bool {
+    HELD.with(|h| h.get()) > 0
+}
+
+/// The D3D lock for one D3D method (dispatch::Binding::Device). With the
+/// guest lock also held, the destructions deferred by methods without it
+/// run first.
+pub(crate) struct DeviceLock(std::sync::Arc<crate::runtime::Runtime>);
+
+pub(crate) fn device_lock() -> DeviceLock {
+    let rt = crate::runtime::current();
+    rt.d3d.acquire();
+    let lock = DeviceLock(rt);
+    // (the deferred list first: asking about the guest lock takes its mutex)
+    if objects(|o| !o.deferred.is_empty()) && crate::threads::holds_guest_lock() {
+        destroy_deferred();
+    }
+    lock
+}
+
+impl Drop for DeviceLock {
+    fn drop(&mut self) {
+        self.0.d3d.release();
+    }
+}
+
+/// Destroy the objects whose last reference went in a method without the
+/// guest lock (the guest heap needs it).
+fn destroy_deferred() {
+    while let Some((object, x)) = objects(|o| o.deferred.pop()) {
+        destroy(object, x);
+    }
 }
 
 /// The interface and reference count of a live object (tests, diagnostics).
@@ -128,6 +256,22 @@ pub(crate) fn release_of(object: u32) -> u32 {
         if x.refs == 0 { (0, o.live.remove(&object)) } else { (x.refs, None) }
     });
     if let Some(x) = gone {
+        if crate::threads::holds_guest_lock() {
+            destroy(object, x);
+        } else {
+            // a method without the guest lock (L93): the heap blocks are
+            // freed, and what the object holds released, by the next D3D
+            // method that has it (the object is no longer the guest's)
+            objects(|o| o.deferred.push((object, x)));
+        }
+    }
+    left
+}
+
+/// The end of an object whose last reference went: the backend forgets it,
+/// what it holds is released, its heap blocks freed (under the guest lock).
+fn destroy(object: u32, x: Object) {
+    {
         // the backend forgets what it keeps for the address
         if matches!(x.kind, Kind::Surface { .. } | Kind::Texture { .. } | Kind::Buffer { .. } | Kind::Query { .. }) {
             crate::d3d9draw::backend(|b| b.release(object));
@@ -183,7 +327,6 @@ pub(crate) fn release_of(object: u32) -> u32 {
         }
         with_state(|s| s.heap.free(object)).expect("D3D9 object block");
     }
-    left
 }
 
 fn add_ref(m: &mut dyn Mem, cpu: &mut Cpu) {
@@ -936,26 +1079,38 @@ pub const INTERFACES: &[Spec] = &[
     },
 ];
 
+/// The IDirect3DDevice9 methods that take no guest lock (L93): each was
+/// audited to touch only the D3D objects (a last Release is deferred, see
+/// release_of), guest memory and the backend, never the guest heap, the
+/// display, windows or guest code. AddRef, Release, TestCooperativeLevel,
+/// Present, Get/SetRenderTarget, Get/SetDepthStencilSurface, Begin/EndScene,
+/// Clear, Set/GetTransform, Set/GetViewport, Set/GetRenderState,
+/// Get/SetTexture, Get/SetTextureStageState, Get/SetSamplerState,
+/// Set/GetScissorRect, the four draws, Set/GetVertexDeclaration,
+/// Set/GetFVF, Set/GetVertexShader, the vertex constants, Set/Get
+/// StreamSource(Freq), Set/GetIndices, Set/GetPixelShader, the pixel
+/// constants.
+const DEVICE_ONLY_SLOTS: &[u32] = &[
+    1, 2, 3, 17, 37, 38, 39, 40, 41, 42, 43, 44, 45, 47, 48, 57, 58, 64, 65, 66, 67, 68, 69, 75, 76,
+    81, 82, 83, 84, 87, 88, 89, 90, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105,
+    107, 108, 109, 110, 111, 112, 113, 114,
+];
+
 /// Build the vtables (before the registry is frozen); objects are created
 /// at run time.
 pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) -> Result<(), Conflict> {
     objects(|o| *o = Objects::default());
     for spec in INTERFACES.iter().chain(crate::d3dx::INTERFACES) {
         let v = interfaces::vtable(m, registry, tokens, spec)?;
-        if spec.name == "IDirect3DDevice9" {
-            // L82: these three bodies prepare/flush their complete command
-            // under the guest lock, then call backend_unlocked exactly once
-            // as their final host operation. That helper takes the backend
-            // mutex before dropping the guest lock, preserving submission
-            // order. Only CPU/stack return follows: no GuestCell or callback.
-            // Keep this list audited against every unlocked call in each
-            // body. UP draws reset bindings/release references afterward,
-            // so they MUST retain the ordinary Service policy.
-            for (slot, f) in [(43, draw::clear as ddnative_base::x86::LiftFn),
-                              (81, draw::draw_primitive), (82, draw::draw_indexed_primitive)] {
-                registry.replace(m.u32(v + 4 * slot), crate::dispatch::Binding::ServiceTail(f));
-            }
+        // L93: every D3D method holds the D3D lock; the hot device methods
+        // that touch only the D3D objects and the backend take no guest lock
+        for &(slot, f) in spec.methods {
+            let only_d3d = spec.name == "IDirect3DDevice9" && DEVICE_ONLY_SLOTS.contains(&slot)
+                || spec.name == "IDirect3DSwapChain9" && slot == 3;
+            registry.replace(m.u32(v + 4 * slot), crate::dispatch::Binding::Device(f, !only_d3d));
         }
+        // (L82 bound Clear and the two draws as ServiceTail, the guest lock
+        // given up for their backend tail; L93 runs them without it)
         objects(|o| o.vtables.insert(spec.name, v));
     }
     Ok(())
