@@ -61,8 +61,17 @@
   limits: `docs/tasks/L169-shadow.md`.
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
-- Head cap172 reached gameplay but returned zero captures/hook lines.
-  Added installation and entry diagnostics; launch receipt/rerun pending.
+- Actual cap172 reaches sample300 but rejects capture at0. First-cause
+  stage/reason/seed/allocation diagnostics added;10replay tests pass.
+  Next: head rerun and source-backed capture correction; no equality yet.
+
+- Final default light with one test thread:281 passed/0 failed/7 ignored.
+  Concurrent-run inherited timing failures both pass; no checks skipped.
+  L172 focused10replay+11executor pass. Awaiting head actual capture.
+
+- Head corrected cap172 receipt: a build merge conflict prevented launch;
+  prior log was stale. Fixed by head; rebuild/capture pending. Added
+  installation and entry diagnostics.
   Full feature-light before service addition277/0/7; final replay10PASS
   with and without feature. Next: diagnose missing hook activation.
 

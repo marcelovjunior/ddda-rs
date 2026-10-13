@@ -155,8 +155,24 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
-Head capture run cap172 reached gameplay but produced zero files and zero
-parallel-shadow lines. Hook installation, first shadow entry, first scoped/
+First actual cap172 run (#14314/14315) confirms hooks and sample300 entry,
+but rejects capture at address0 before writing a file. The old failure word
+conflated host allocations with unreadable seeded pages and overwrote first
+causes. Capture now retains the first reason/stage/address, reports rejected
+seed bounds and host allocation sizes. Ten replay regressions pass; no guard
+was removed. Next: head rerun to resolve the concrete capture blocker.
+
+
+Final default light suite with --test-threads=1: **281 passed, zero failed,
+seven ignored**. The preceding concurrent default run failed the inherited
+Interlocked/Present timing assertions (129/2/5 library); both pass in the full
+serial-test rerun. No checks were changed or skipped. Final L172 focused
+coverage: 10 replay tests plus 11 executor tests.
+
+
+Head corrected cap172 receipt (#14296): the build failed before launch on
+a Cargo feature merge conflict; the existing run log was stale. No capture
+run occurred. The head fixed the conflict and is rebuilding85868a8a. Hook installation, first shadow entry, first scoped/
 unscoped traversal and sample start now log explicitly to distinguish a
 missing environment switch from a routing/selection failure. Awaiting launch
 receipt and rerun. Pre-service full feature-light gate:277 passed,0 failed,
