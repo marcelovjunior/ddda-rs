@@ -409,3 +409,10 @@ requested from head. Added bounded state-difference categories independent
 of first stream refusal, to expose the remaining publication state gate;
 no category exempts any byte.37 focused tests pass. Next: replay48124
 and trace non-command state while awaiting head-only v4 capture.
+
+2026-10-13 replay3381896e: serial/live66PASS;175 jobs;64 headers rebased.
+Independent strict state gate reports19650 command-arena differing bytes,
+462 root-context bytes and195 other bytes (first render+33DC9, shared
+command cursor). No outer-scheduler differences. Added bounded first24
+other-state words to locate remaining producer/state dependencies.
+37 focused tests pass. No state exclusions or shader masks introduced.
