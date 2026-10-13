@@ -1391,7 +1391,12 @@ fn compare_replays(
                 )
             })
             .map_err(|e| format!("start publish test: {e}"))?;
-        Some(handle.join().map_err(|_| "publish test panic".to_string())?)
+        Some(handle.join().map_err(|p| {
+            p.downcast_ref::<Reject>()
+                .map(|r| format!("publish test rejected: {r:?}"))
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "publish test panic".into())
+        })?)
     } else {
         None
     };
