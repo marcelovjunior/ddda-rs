@@ -383,6 +383,7 @@ fn release(m: &mut dyn Mem, c: &mut Cpu) {
                 let _ = invoke(m, c, Request::Release(g.host));
             }
             if g.stream != 0 {
+                crate::load_log::event("movie_end", format_args!("reader={} stream={:#x} reason=release", g.host, g.stream));
                 stream_ref(m, c, g.stream, 2);
             }
             if let Some((p, _, _)) = g.buffer {
@@ -406,16 +407,20 @@ fn reader_open(m: &mut dyn Mem, c: &mut Cpu) {
         let (id, h, _) = info(p)?;
         let old = state(|st| st.groups[&id].stream);
         stream_ref(m, c, s, 1);
+        crate::load_log::event("movie_open_begin", format_args!("reader={h} stream={s:#x}"));
         let r = invoke(m, c, Request::Open(h, s));
+        crate::load_log::event("movie_open_end", format_args!("reader={h} stream={s:#x} success={}", r.is_ok()));
         // Native OpenStream can replace a source. Keep both sources alive
         // through its callbacks; the backend closes on a failed open.
         state(|st| st.groups.get_mut(&id).unwrap().stream = if r.is_ok() { s } else { 0 });
         if old != 0 {
+            crate::load_log::event("movie_end", format_args!("reader={h} stream={old:#x} reason=replaced"));
             stream_ref(m, c, old, 2);
         }
         if r.is_err() {
             stream_ref(m, c, s, 2);
         }
+        if r.is_ok() { crate::load_log::event("movie_start", format_args!("reader={h} stream={s:#x} boundary=reader_open")); }
         r.map(|_| ())
     })();
     finish(m, c, 2, r)
@@ -427,6 +432,7 @@ fn reader_close(m: &mut dyn Mem, c: &mut Cpu) {
         invoke(m, c, Request::Close(h))?;
         let stream = state(|s| std::mem::take(&mut s.groups.get_mut(&id).unwrap().stream));
         if stream != 0 {
+            crate::load_log::event("movie_end", format_args!("reader={h} stream={stream:#x} reason=close"));
             stream_ref(m, c, stream, 2);
         }
         Ok(())

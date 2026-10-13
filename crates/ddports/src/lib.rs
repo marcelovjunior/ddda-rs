@@ -1,4 +1,4 @@
-//! The readable ports (crates/mtmath, mtcore, mtframe) and mods, registered
+//! The readable ports (crates/mtmath, mtcore, mtframe, mtdraw) and mods, registered
 //! by address over their lifted bodies (L60, docs/NATIVE_PIPELINE.md,
 //! "Overrides").
 //!
@@ -11,7 +11,7 @@ use ddnative_base::x86::{self, LiftFn};
 
 /// Every verified readable port: (address, adapter).
 pub fn ports() -> Vec<(u32, LiftFn)> {
-    mtmath::abi::PORTS.iter().chain(mtcore::abi::PORTS).chain(mtframe::abi::PORTS)
+    mtmath::abi::PORTS.iter().chain(mtcore::abi::PORTS).chain(mtframe::abi::PORTS).chain(mtdraw::abi::PORTS)
         .map(|&(a, f, _)| (a, f))
         .collect()
 }
@@ -40,8 +40,18 @@ pub fn set_mods(mods: Vec<(u32, LiftFn)>) -> bool {
 /// Register the ports and the mods set so far, once per process (the
 /// runtime calls this before it lists the lifted program).
 pub fn ensure() {
+    ensure_with(|_| {});
+}
+
+/// Compose diagnostic wrappers with ports/mods before dispatch freezes.
+/// Called once; a wrapper must retain and call the body it replaces.
+pub fn ensure_with(wrap: impl FnOnce(&mut Vec<(u32, LiftFn)>)) {
     static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| install(MODS.get().map(|v| &v[..]).unwrap_or(&[])));
+    ONCE.call_once(|| {
+        let mut v = with_mods(MODS.get().map(|v| &v[..]).unwrap_or(&[]));
+        wrap(&mut v);
+        x86::set_overrides(&v);
+    });
 }
 
 #[cfg(test)]

@@ -1,5 +1,39 @@
 # Milestones
 
+### L111 nDraw executor observer (2026-10-13)
+
+- Opt-in read-only executor wrapper plus Present-selected frame counters;
+  off registers no new execution/Present hooks. Nested command decoder,
+  state/shader/sampler/buffer identities and ordered surface target runs
+  sourced to DAB480/DA6DA0 and apply helpers. Counts are raw records.
+- Seven synthetic regressions pass; enabled light unit suite 35 pass /
+  1 existing ignored. Full suite 158 pass / 2 existing timing failures /
+  1 ignored; both failures pass isolated reruns (160 verified across runs).
+  Fullscreen gamma fails with switch off too on current desktop; recorded
+  L34 display resolves it. No tests/checks weakened.
+- cap1 last20 analytical extraction preserves 108,502 command payloads
+  and 50,507 referenced blobs (284 MB raw vs 19.79 GB whole-capture blobs).
+  Unchanged frame_stats completed: 107,544 draws / 19,704 passes.
+- Mean 5,377.2 draws / 985.2 passes per frame, including 898.2 single-draw
+  tiny float32 target passes. Constants change 248,722 bytes/frame;
+  fixed-state lists differ for 4.898% of predecessor comparisons.
+- Next: head-run DDRUNTIME_NDRAW_STATS=1, EVERY=1 for executor/capture
+  correlation; no game, image-equivalence or FPS claim from this batch.
+  Details: docs/tasks/L111-executor-stats.md.
+### L109 loading instrumentation and read scratch (2026-10-13)
+
+- Opt-in process-relative init/movie/file/archive/GPU/frame telemetry;
+  original archive read/inflate bodies retained. Timeline parser keeps
+  unobserved title/menu/loading phases explicitly unmeasured.
+- Synthetic optimized warm 128 KiB ReadFile: **11.569 -> 9.643 us/call**,
+  **1 -> 0 allocations** (three alternating pairs, five samples each).
+  Small reads have no reliable timing win; no game loading speedup claim.
+- Light runtime serial suite: **153 passed, 1 existing gamma failure,
+  2 ignored**. Parser **8 pass**, ddports **1 pass**. Details:
+  `docs/tasks/L109-loading.md`.
+- Next: head-run unskipped boot/menu/save baseline using
+  `DDRUNTIME_LOAD_LOG=1`, then same-save before/after phase comparison.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants

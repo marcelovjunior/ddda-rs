@@ -175,6 +175,7 @@ fn a_draw_costs_the_services() {
     assert_eq!(com(&mut s, dev, 41, &[]), 0); // BeginScene
 
     let n = 2000;
+    let dirty_samplers = std::env::var_os("DDRUNTIME_BENCH_DIRTY_SAMPLERS").is_some();
     // the calls alone: GetRenderState
     let t = Instant::now();
     for _ in 0..n {
@@ -188,7 +189,8 @@ fn a_draw_costs_the_services() {
     let constants = t.elapsed().as_secs_f64() * 1e6 / n as f64;
     let t = Instant::now();
     let allocations = ALLOCS.load(Ordering::Relaxed);
-    for _ in 0..n {
+    for k in 0..n {
+        if dirty_samplers { assert_eq!(com(&mut s, dev, 69, &[0, 1, 1 + k % 3]), 0); }
         assert_eq!(com(&mut s, dev, 82, &[4, 0, 0, 1000, 0, 300]), 0);
     }
     let draw = t.elapsed().as_secs_f64() * 1e6 / n as f64;
