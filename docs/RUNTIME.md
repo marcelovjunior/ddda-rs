@@ -1,5 +1,18 @@
 # Phase 1 runtime proposal (R01)
 
+## L130 main/job dependency traversal
+
+`ddports` registers `mtcore::hot::expand_dependencies` at `0x00E0EC50`.
+This whole-function port retains the original five unrolled dependency
+levels, recursive dispatch, guest stack spills and call-boundary machine
+state. It reads the descriptor/value banks from guest memory.
+112 original Unicorn cases and the extracted lifted body agree across
+1,674 recursive call/return boundaries and all 60 conditional outcomes.
+Recorded synthetic trees benchmark 1.79–2.77x faster (opt1 lifted versus
+opt3 port, atomic guest pages); gameplay share and FPS remain unmeasured.
+See [L130 results](tasks/L130-main-thread-ports.md#results). Inventory
+function totals do not change: this replaces an already lifted body.
+
 ## L109 loading telemetry
 
 ReadFileEx optionally caches immutable install archives with
