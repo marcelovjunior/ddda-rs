@@ -21,6 +21,15 @@ runtime light 255 pass, zero failures, seven ignored. Full train and live
 image/per-job acceptance remain head-owned. See
 [L173 evidence](tasks/L173-semantic-draw-a.md) for isolated timings and
 the x87 signaling-NaN oracle limitation.
+## L177 semantic draw commit and model mesh
+
+`DDRUNTIME_SEMANTIC=1` also replaces FEE320, FFC350 and 01145BF0 with
+native draw-context commit, model-mesh and material-wrapper functions.
+All 1,664 isolated original returns match heap/live-stack ABI checks,
+opt2 lifted replay, and serial/atomic Pages; runtime light 260 pass.
+Synthetic median paired gains are 1.665x/2.126x/1.102x. Guest x87 modes
+and SSE operation order are preserved. Gameplay/image acceptance remains
+with the head's train; see [L177 evidence](tasks/L177-semantic-state-commit.md).
 
 ## L168 guest-memory backing experiment
 
