@@ -186,8 +186,14 @@ fn main() {
     for (state, v) in [(7u32, 1u32), (14, 1), (22, 3), (27, 0), (174, 0)] {
         com(mem, dev, 57, &[state, v]);
     }
+    // RW_OBJECTS extra live textures (the game holds thousands of objects)
+    let extra: u32 = std::env::var("RW_OBJECTS").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    for _ in 0..extra {
+        out(mem, dev, 23, &[16, 16, 1, 0, 21, 1, OUT, 0]);
+    }
     assert_eq!(com(mem, dev, 41, &[]), 0); // BeginScene
 
+    let no_lock = std::env::var_os("RW_NOLOCK").is_some();
     let n: u32 = std::env::var("RW_N").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000);
     let mut best = [f64::MAX; 3];
     let mut allocs = 0.0;
@@ -205,10 +211,13 @@ fn main() {
                     at = now;
                 };
                 // Lock(0, 4096, OUT, D3DLOCK_DISCARD), Unlock: 4 KB dirty
-                assert_eq!(com(mem, vb, 11, &[0, 4096, OUT, 0x2000]), 0);
-                lap(0);
-                assert_eq!(com(mem, vb, 12, &[]), 0);
-                lap(1);
+                // (RW_NOLOCK: the buffer stays clean)
+                if !no_lock {
+                    assert_eq!(com(mem, vb, 11, &[0, 4096, OUT, 0x2000]), 0);
+                    lap(0);
+                    assert_eq!(com(mem, vb, 12, &[]), 0);
+                    lap(1);
+                }
                 assert_eq!(com(mem, dev, 65, &[0, textures[(k % 6) as usize]]), 0);
                 lap(2);
                 assert_eq!(com(mem, dev, 94, &[16, DATA, 16]), 0);
