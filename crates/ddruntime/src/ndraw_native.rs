@@ -1298,39 +1298,71 @@ pub fn commit(m: &mut dyn Mem, info: &FrameInfo, c: &mut Caches, mut sh: Shadow,
     c.scratch = sh;
 }
 
-/// The constant registers taken draws wrote since the default path last
-/// ran, per stage: the last value of each.
+/// The shader bindings taken draws used since the default path last ran,
+/// in order (a binding repeated by the next draw kept once): their
+/// constant uploads, the last value of each register, reach the device
+/// when the default path takes over. Per taken draw this costs a pointer
+/// compare (a register-by-register record cost 2.3 us for a binding of
+/// 128 + 64 registers, release, `bench_uploads_per_taken_draw`).
 #[derive(Default)]
 pub struct Uploads {
-    floats: [FxMap<u32, [u32; 4]>; 2],
-    ints: [FxMap<u32, [i32; 4]>; 2],
-    bools: [FxMap<u32, u32>; 2],
+    bindings: Vec<Arc<BindingPart>>,
 }
 
 impl Uploads {
-    fn add(&mut self, b: &BindingPart) {
-        for stage in 0..2 {
-            let (f, i, bo) = b.written[stage];
-            let bank = &b.constants[stage];
-            for n in 0..256usize {
-                if f[n / 64] >> (n % 64) & 1 != 0 {
-                    if let Some(r) = bank.f.get(n) {
-                        self.floats[stage].insert(n as u32, *r);
+    fn add(&mut self, b: &Arc<BindingPart>) {
+        if !self.bindings.last().is_some_and(|l| Arc::ptr_eq(l, b)) {
+            self.bindings.push(b.clone());
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.bindings.is_empty()
+    }
+    /// Each register's last value, newest binding first: `f(stage, kind
+    /// (0 float, 1 int, 2 bool), register, the binding's bank)`.
+    fn each_last(&self, mut f: impl FnMut(usize, u8, usize, &Constants)) {
+        let mut done = [([0u64; 4], 0u16, 0u16); 2];
+        for b in self.bindings.iter().rev() {
+            for stage in 0..2 {
+                let (w, i, bo) = b.written[stage];
+                let d = &mut done[stage];
+                let bank = &b.constants[stage];
+                for word in 0..4 {
+                    let mut new = w[word] & !d.0[word];
+                    d.0[word] |= new;
+                    while new != 0 {
+                        let n = word * 64 + new.trailing_zeros() as usize;
+                        new &= new - 1;
+                        f(stage, 0, n, bank);
                     }
                 }
-            }
-            for n in 0..16usize {
-                if i >> n & 1 != 0 {
-                    self.ints[stage].insert(n as u32, bank.i[n]);
+                let mut new = i & !d.1;
+                d.1 |= new;
+                while new != 0 {
+                    f(stage, 1, new.trailing_zeros() as usize, bank);
+                    new &= new - 1;
                 }
-                if bo >> n & 1 != 0 {
-                    self.bools[stage].insert(n as u32, bank.b[n]);
+                let mut new = bo & !d.2;
+                d.2 |= new;
+                while new != 0 {
+                    f(stage, 2, new.trailing_zeros() as usize, bank);
+                    new &= new - 1;
                 }
             }
         }
     }
-    fn is_empty(&self) -> bool {
-        (0..2).all(|k| self.floats[k].is_empty() && self.ints[k].is_empty() && self.bools[k].is_empty())
+    /// The float registers' last values, vertex then pixel, by register.
+    #[cfg(test)]
+    fn registers(&self) -> (Vec<(u32, [u32; 4])>, Vec<(u32, [u32; 4])>) {
+        let mut out = (Vec::new(), Vec::new());
+        self.each_last(|stage, kind, n, bank| {
+            if let (0, Some(&r)) = (kind, bank.f.get(n)) {
+                if stage == 0 { &mut out.0 } else { &mut out.1 }.push((n as u32, r));
+            }
+        });
+        out.0.sort_unstable_by_key(|e| e.0);
+        out.1.sort_unstable_by_key(|e| e.0);
+        out
     }
 }
 
@@ -1355,24 +1387,39 @@ pub fn flush_uploads(device: u32, uploads: &mut Uploads) {
     objects(|o| {
         if let Some(Kind::Device(d)) = o.live.get_mut(&device).map(|x| &mut x.kind) {
             let s = &mut d.state;
-            for (stage, bank) in [&mut s.vs, &mut s.ps].into_iter().enumerate() {
-                let c = Arc::make_mut(bank);
-                for (&n, &v) in &u.floats[stage] {
-                    if let Some(r) = c.f.get_mut(n as usize) {
-                        *r = v;
+            let (vs, ps) = (Arc::make_mut(&mut s.vs), Arc::make_mut(&mut s.ps));
+            u.each_last(|stage, kind, n, bank| {
+                let c = if stage == 0 { &mut *vs } else { &mut *ps };
+                match kind {
+                    0 => {
+                        if let (Some(r), Some(&v)) = (c.f.get_mut(n), bank.f.get(n)) {
+                            *r = v;
+                        }
                     }
+                    1 => c.i[n] = bank.i[n],
+                    _ => c.b[n] = bank.b[n],
                 }
-                for (&n, &v) in &u.ints[stage] {
-                    c.i[n as usize] = v;
-                }
-                for (&n, &v) in &u.bools[stage] {
-                    c.b[n as usize] = v;
-                }
-            }
+            });
             s.constant_snapshots[0].dirty = true;
             s.constant_snapshots[1].dirty = true;
         }
     });
+}
+
+/// Flush what `d` reads (the D3D9 path's flush_reads; the benchmark).
+pub fn flush_draw(m: &dyn Mem, d: &DrawCall) {
+    crate::d3d9draw::flush_reads(m, reads_of(d));
+}
+
+/// Send `d` to the backend alone (the benchmark).
+pub fn send_draw(d: &DrawCall) {
+    crate::d3d9draw::backend_unlocked(|b| b.draw(d));
+}
+
+/// Send a run of taken draws as one command (the benchmark).
+pub fn send_draws(draws: Vec<DrawCall>) {
+    let mut batch = draws;
+    send_batch(&mut batch);
 }
 
 /// The resources a DrawCall reads, as the D3D9 path flushes them:
@@ -1563,6 +1610,8 @@ struct Inner {
     /// draws taken since the default path last ran, and their uploads
     handled: bool,
     uploads: Uploads,
+    /// taken draws not sent yet (`drawcall`): one backend command a run
+    batch: Vec<DrawCall>,
     comparison: comparison::Comparison,
     /// the backend takes native jobs (`1`; otherwise those draws go as
     /// DrawCalls, as `drawcall`)
@@ -1582,7 +1631,7 @@ impl Native {
             inner: Mutex::new(Inner {
                 frame: Frame::default(), totals: Totals::default(), since: Instant::now(),
                 info: FrameInfo::default(), scene: (0, 0), caches: Caches::default(), pending: Pending::default(), native: false,
-                handled: false, uploads: Uploads::default(),
+                handled: false, uploads: Uploads::default(), batch: Vec::new(),
                 comparison: comparison::Comparison::default(),
             }),
             every,
@@ -1653,6 +1702,7 @@ impl CommandSink for Native {
 
 impl Inner {
     fn send(&mut self) {
+        send_batch(&mut self.batch);
         if self.comparison.is_active() {
             crate::d3d9draw::backend_unlocked(|b| self.comparison.finish(b));
         }
@@ -1660,6 +1710,14 @@ impl Inner {
             self.totals.jobs += 1;
             self.totals.native += n;
         }
+    }
+}
+
+/// Send the taken draws not sent yet, as one backend command.
+fn send_batch(batch: &mut Vec<DrawCall>) {
+    if !batch.is_empty() {
+        let draws = std::mem::replace(batch, Vec::with_capacity(64));
+        crate::d3d9draw::backend_unlocked(|b| b.draws(draws));
     }
 }
 
@@ -1711,8 +1769,12 @@ impl Native {
                 commit(m, &g.info, &mut g.caches, shadow, &d.textures);
                 g.uploads.add(&binding);
                 g.handled = true;
+                // an upload goes after the draws taken before it
+                if objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
+                    send_batch(&mut g.batch);
+                }
                 crate::d3d9draw::flush_reads(m, reads_of(&d));
-                crate::d3d9draw::backend_unlocked(|b| b.draw(&d));
+                g.batch.push(d);
                 crate::d3d9draw::count_draws(1);
                 t.taken += 1;
                 Taken::Handled
@@ -2119,6 +2181,66 @@ mod tests {
         again.ctx.push((0x100, 7));
         again.prune(&g, &pruned);
         assert!(again.is_empty() && again.ctx.is_empty());
+    }
+
+    /// A shader binding writing `vs` vertex and `ps` pixel float
+    /// registers.
+    fn binding_writing(vs: usize, ps: usize, seed: u32) -> Arc<BindingPart> {
+        let bank = |n: usize, floats: usize| {
+            let mut c = Constants { f: vec![[0; 4]; floats], ..Default::default() };
+            for (k, r) in c.f.iter_mut().take(n).enumerate() {
+                *r = [seed, k as u32, 0, 0];
+            }
+            c
+        };
+        let mask = |n: usize| -> [u64; 4] { std::array::from_fn(|w| if n >= 64 * (w + 1) { !0 } else if n > 64 * w { (1u64 << (n - 64 * w)) - 1 } else { 0 }) };
+        Arc::new(BindingPart {
+            meta: Arc::new(MetaPart {
+                handles: [0; 3], vs: Arc::from(vec![]), ps: Arc::from(vec![]), declaration: Arc::from(vec![]),
+                floats: [256, 224], reads: Default::default(), samplers: Default::default(), uploads: Default::default(),
+                checked: 0.into(),
+            }),
+            alpha: None,
+            constants: [Arc::new(bank(vs, 256)), Arc::new(bank(ps, 224))],
+            written: [(mask(vs), 0, 0), (mask(ps), 0, 0)],
+        })
+    }
+
+    /// The registers taken draws upload reach the device as the last value
+    /// of each, whatever the bookkeeping.
+    #[test]
+    fn uploads_keep_the_last_value_of_each_register() {
+        let (a, b) = (binding_writing(8, 4, 1), binding_writing(4, 8, 2));
+        let mut u = Uploads::default();
+        for x in [&a, &b, &b, &a, &b] {
+            u.add(x);
+        }
+        let (vs, ps) = u.registers();
+        // b wrote last: its 4 / 8 registers; a's beyond them
+        assert_eq!(vs.len(), 8);
+        assert_eq!(ps.len(), 8);
+        assert!(vs.iter().all(|&(n, r)| r[0] == if n < 4 { 2 } else { 1 }));
+        assert!(ps.iter().all(|&(_, r)| r[0] == 2));
+    }
+
+    /// Release: `cargo test --release -p ddruntime --no-default-features
+    /// --lib bench_ -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_uploads_per_taken_draw() {
+        let parts: Vec<_> = (0..8).map(|k| binding_writing(128, 64, k)).collect();
+        let n = 200_000;
+        let mut u = Uploads::default();
+        let t = Instant::now();
+        for k in 0..n {
+            // runs of the same binding, as consecutive draws of a material
+            u.add(&parts[(k / 4) % parts.len()]);
+            if k % 1000 == 999 {
+                std::hint::black_box(u.registers());
+                u = Uploads::default();
+            }
+        }
+        eprintln!("Uploads::add (128 VS + 64 PS registers): {:.3} us per draw", t.elapsed().as_secs_f64() * 1e6 / n as f64);
     }
 
     #[test]

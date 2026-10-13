@@ -155,8 +155,12 @@ impl X87 {
     /// ModRM << 8; memory operands use [rax], a private ten-byte buffer.
     /// No executable code is generated. Register encodings remain unchanged.
     /// Unmasked exceptions are unsupported (a guest trap must not trap Rust).
-    #[cfg(target_arch = "x86_64")]
     pub fn exec<const OP: u16>(&mut self, data: &mut [u8; 10]) -> u32 {
+        self.execute::<OP, true>(data)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn execute<const OP: u16, const CAPTURE_FLAGS: bool>(&mut self, data: &mut [u8; 10]) -> u32 {
         let (opcode, modrm) = (OP & 255, OP >> 8);
         let valid = if modrm < 0xc0 {
             match opcode {
@@ -190,21 +194,34 @@ impl X87 {
         if live_id() != self.id {
             self.acquire();
         }
-        let flags: u64;
-        unsafe {
-            std::arch::asm!(
-                ".byte {opcode}, {modrm}",
-                "pushfq", "pop {flags}",
-                in("rax") data.as_mut_ptr(),
-                opcode = const (OP & 255), modrm = const (OP >> 8),
-                flags = out(reg) flags,
-            );
+        if CAPTURE_FLAGS {
+            let flags: u64;
+            unsafe {
+                std::arch::asm!(
+                    ".byte {opcode}, {modrm}",
+                    "pushfq", "pop {flags}",
+                    in("rax") data.as_mut_ptr(),
+                    opcode = const (OP & 255), modrm = const (OP >> 8),
+                    flags = out(reg) flags,
+                );
+            }
+            flags as u32
+        } else {
+            // Only callers that discard integer flags use this path. Keep
+            // the same instruction and default compiler memory/flag clobbers.
+            unsafe {
+                std::arch::asm!(
+                    ".byte {opcode}, {modrm}",
+                    in("rax") data.as_mut_ptr(),
+                    opcode = const (OP & 255), modrm = const (OP >> 8),
+                );
+            }
+            0
         }
-        flags as u32
     }
 
     #[cfg(not(target_arch = "x86_64"))]
-    pub fn exec<const OP: u16>(&mut self, _data: &mut [u8; 10]) -> u32 {
+    fn execute<const OP: u16, const CAPTURE_FLAGS: bool>(&mut self, _data: &mut [u8; 10]) -> u32 {
         panic!("exact lifted x87 requires an x86-64 host (opcode {OP:#x})");
     }
 
@@ -267,13 +284,13 @@ impl X87 {
     /// FSTP ST(0): drop the top value (a mocked callee takes it, L50).
     pub fn pop(&mut self) {
         let mut data = [0; 10];
-        self.exec::<0xd8dd>(&mut data); // fstp st(0)
+        self.execute::<0xd8dd, false>(&mut data); // fstp st(0)
     }
 
     pub fn push(&mut self, bits: u32) {
         let mut data = [0; 10];
         data[..4].copy_from_slice(&bits.to_le_bytes());
-        self.exec::<0x00d9>(&mut data); // fld m32real
+        self.execute::<0x00d9, false>(&mut data); // fld m32real
     }
 
     pub fn memory<const OP: u16, const SIZE: usize, const WRITE: bool>(
@@ -294,7 +311,7 @@ impl X87 {
                 data[k..k + 2].copy_from_slice(&m.fast_u16(pt, addr.wrapping_add(k as u32)).to_le_bytes());
             }
         }
-        self.exec::<OP>(&mut data);
+        self.execute::<OP, false>(&mut data);
         if WRITE {
             let mut k = 0;
             while k + 4 <= SIZE {
@@ -307,7 +324,7 @@ impl X87 {
         }
     }
 
-    pub fn register<const OP: u16>(&mut self) { self.exec::<OP>(&mut [0; 10]); }
+    pub fn register<const OP: u16>(&mut self) { self.execute::<OP, false>(&mut [0; 10]); }
     pub fn compare_flags<const OP: u16>(&mut self) -> crate::x86::Flags {
         crate::x86::Flags::new(crate::x86::RAW, 0, 0, self.exec::<OP>(&mut [0; 10]), 32)
     }

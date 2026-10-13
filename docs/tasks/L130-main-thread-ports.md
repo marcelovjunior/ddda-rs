@@ -319,3 +319,94 @@ Next action: head integrates the duration family, checks the six fallback
 log entries disappear, and captures the same scene/profile; codex-7 owns
 the combined gate and milestone file. Further ports should follow the
 new remaining exclusive costs, accounting for readable callees.
+
+## Session continuation: recording-state save (2026-10-13)
+
+Rebased onto `task/fps-line` at `0d5ccfb8`; earlier three local commits are
+now `6a71c3a2`, `fc799fd1`, `e3e976ca`. The user assigned the remaining c17
+main-thread candidates and all six active job threads (1070..1084).
+Recording-side placement proposed to claude-2/head in board #11737/#11772:
+mtcore whole-machine ABI ports; no executor/sink changes.
+
+**FEDB80** saves the variable-length recording descriptor and sort cursor,
+then starts a nested state. Registered through `mtcore::hot::PORTS`, already
+consumed by ddports. **48 original Unicorn and isolated lifted cases / 96
+call-return boundaries pass**, including four depths, six descriptor counts
+(0..4096), random untouched state and callbacks changing the depth/argument.
+Checks cover complete written bytes, GPR/XMM, defined arithmetic flags/DF,
+MXCSR and x87 state. IMUL's undefined SF/ZF/AF/PF are excluded only at its
+callee-entry boundary. Memcpy is an explicit copying synthetic callback;
+its ABI side effects are recorded/replayed, not claimed as an original
+memcpy equivalence test. The isolated reference redirects that platform
+call to the same checked callback, leaving the lifted body unchanged.
+
+- Full core/ddports: **13 tests pass / 5 benchmark ignores**; isolated
+  original/lifted suites: **5 pass / 5 ignores**, 6,680 total cases.
+- Five alternating opt1-lifted/opt3-port rounds, atomic paged memory,
+  1,000 measured calls each, bulk synthetic callback replay: median ns
+  **553.1 -> 564.6** (count0), **619.5 -> 641.4** (count8),
+  **854.0 -> 849.8** (count32). **No reliable speedup**; no FPS claim.
+  First timings used byte-wise callback replay and mostly measured that
+  harness overhead. Both versions gate the full final machine state.
+- Logs: `C:/ddda-targets/L130/recording-{differential,core,bench2}.log`.
+  Private corpus: `native-L130/recording.json`; regenerate with
+  `record_main_thread.py --recording`, replay with `check_main_thread.py`,
+  measure with `check_main_thread.py --bench --recording`, all via heavy.py.
+
+The milestone file remains owned by codex-7; send the above evidence for
+its merge-ready entry. Next: FEDC00 restore/record oracle and measurement,
+then FED200 and the remaining assigned whole-function candidates. No game,
+GPU or shard build/run in this continuation.
+
+### FEDC00 restore and command recording
+
+Whole ABI port registered through mtcore/ddports. **96 original Unicorn +
+isolated lifted cases / 480 call-return boundaries pass**, including all
+four conditional edges, depths 0..3, descriptor counts 0..4096, varying
+pending draws, allocation-free/exact-fit/refill paths and allocator zero.
+The zero-result case maps page zero in synthetic memory to check the
+original unchecked writes; this is not an assertion that allocation
+failure is safe in the game. The original memcpy and allocator remain
+external calls, with explicit synthetic effects checked at both boundaries.
+
+Five alternating opt1-lifted/opt3-port medians (ns/call): empty descriptor
+with spare capacity **775.8 -> 495.1**, exact capacity **716.2 -> 639.9**,
+refill **700.8 -> 699.7**, zero allocator result **816.1 -> 697.9**;
+32-entry descriptor **823.5 -> 853.0**. Mixed results, shared-machine
+timing, synthetic callees: no guaranteed workload/FPS improvement.
+All seven isolated suites pass, registry test passes, strict own-crate
+clippy passes. Logs: `restore-lanes-differential.log`, `restore-bench.log`,
+`recording-{registry,clippy}.log` under `C:/ddda-targets/L130`.
+
+**Activation correction (c20):** all six duration readers still appear in
+the runtime fallback log despite being in ddports. Registry only inserts
+generated entry addresses; these six have none. Head assigned **L136 to
+codex-11** to bind missing overrides and test `call_ext`. Prior leaf
+comparisons and fallback microbenchmarks remain valid; actual runtime
+activation and any resulting FPS/memory saving were never established.
+The c20 FPS change must not be attributed to these six ports.
+
+Next: commit the separately verified FED200 lane initializer, then finish
+the E10FC0 dependency-key wrapper oracle. Milestone update sent to its owner.
+
+### FED200 recording-lane initialization
+
+Whole port registered through mtcore/ddports. **60 original Unicorn and
+isolated lifted cases / 560 call-return boundaries pass**: one/two/four
+lanes, descriptor counts 0/1/8/32/4096, capacity 0/1/17/FFFFFFFF and all
+three frame-bank indices. Full machine/memory state is checked with the
+same explicit memcpy/memset callback contract. The initial zero-lane
+branch is unreachable because the preceding DIV faults; the port retains
+the existing lifted divide-error behavior. All other conditional edges pass.
+
+Five alternating opt1-lifted/opt3-port medians (ns/call): one lane, count0
+**523.2 -> 523.2**; one lane, count1 **527.2 -> 516.4**; two lanes, count0
+**1,009.3 -> 1,020.5**; four lanes, count0 **1,924.5 -> 1,954.9**.
+No reliable speedup. Includes synthetic callee work; no gameplay claim.
+Registry and strict own-crate clippy pass. Private `lanes.json` is recorded
+with `--lanes`; isolated benchmark uses `--bench --lanes`. Logs:
+`restore-lanes-differential.log`, `lanes-bench2.log`,
+`recording-{registry,clippy}.log` in the L130 target directory.
+
+Next: E10FC0 original/lifted replay. L136 independently fixes runtime
+activation of entries absent from the generated list (`d1c586ee`).
