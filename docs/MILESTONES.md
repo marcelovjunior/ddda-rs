@@ -2,6 +2,10 @@
 
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
+- Final default light with one test thread:281 passed/0 failed/7 ignored.
+  Concurrent-run inherited timing failures both pass; no checks skipped.
+  L172 focused10replay+11executor pass. Awaiting head actual capture.
+
 - Head corrected cap172 receipt: a build merge conflict prevented launch;
   prior log was stale. Fixed by head; rebuild/capture pending. Added
   installation and entry diagnostics.

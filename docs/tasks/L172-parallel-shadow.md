@@ -155,6 +155,13 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Final default light suite with --test-threads=1: **281 passed, zero failed,
+seven ignored**. The preceding concurrent default run failed the inherited
+Interlocked/Present timing assertions (129/2/5 library); both pass in the full
+serial-test rerun. No checks were changed or skipped. Final L172 focused
+coverage: 10 replay tests plus 11 executor tests.
+
+
 Head corrected cap172 receipt (#14296): the build failed before launch on
 a Cargo feature merge conflict; the existing run log was stale. No capture
 run occurred. The head fixed the conflict and is rebuilding85868a8a. Hook installation, first shadow entry, first scoped/
