@@ -5,7 +5,6 @@
 //! table, and [`park`] gives the FPU back to host code.
 use ddnative_base::x87::{live_id, LIVE_SLOT, NONE, UNASSIGNED, X87};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -15,7 +14,9 @@ thread_local! {
     /// TEB slot is unavailable).
     static LIVE: Cell<u64> = const { Cell::new(NONE) };
     /// States displaced from this thread's FPU, by X87 id.
-    static SPILLED: RefCell<HashMap<u64, [u8; 108]>> = RefCell::new(HashMap::new());
+    /// States displaced from this thread's FPU: a thread has one or two X87s,
+    /// so a short list (no hashing: L88, it was SipHash on every service call).
+    static SPILLED: RefCell<Vec<(u64, [u8; 108])>> = const { RefCell::new(Vec::new()) };
     /// This thread's own control word, restored by [`park`].
     static HOST_CW: Cell<Option<u16>> = const { Cell::new(None) };
     static TOKEN: u64 = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -75,7 +76,7 @@ pub fn park() {
     let mut image = [0u8; 108];
     fnsave_host(&mut image);
     image[12..28].fill(0);
-    SPILLED.with(|s| s.borrow_mut().insert(live, image));
+    SPILLED.with(|s| { let mut s = s.borrow_mut(); match s.iter_mut().find(|e| e.0 == live) { Some(e) => e.1 = image, None => s.push((live, image)) } });
     set_live(NONE);
     if let Some(cw) = HOST_CW.with(Cell::get) {
         fldcw_host(cw);
@@ -91,7 +92,7 @@ pub(crate) fn image(x: &X87) -> [u8; 108] {
         frstor_host(&image);
         image
     } else {
-        SPILLED.with(|s| *s.borrow().get(&x.id).expect("spilled x87 state"))
+        SPILLED.with(|s| s.borrow().iter().find(|e| e.0 == x.id).map(|e| e.1).expect("spilled x87 state"))
     };
     image[12..28].fill(0);
     image
@@ -103,7 +104,7 @@ pub(crate) fn release(x: &mut X87) {
     if live_id() == x.id {
         set_live(NONE);
     } else {
-        SPILLED.with(|s| s.borrow_mut().remove(&x.id));
+        SPILLED.with(|s| { let mut s = s.borrow_mut(); if let Some(k) = s.iter().position(|e| e.0 == x.id) { s.swap_remove(k); } });
     }
     x.home = 0;
 }
@@ -118,7 +119,7 @@ pub(crate) fn acquire(x: &mut X87) {
         x.state
     } else {
         assert_eq!(x.home, me, "x87 state used on another host thread than the one it is live on");
-        SPILLED.with(|s| s.borrow_mut().remove(&x.id)).expect("spilled x87 state")
+        SPILLED.with(|s| { let mut s = s.borrow_mut(); let k = s.iter().position(|e| e.0 == x.id).expect("spilled x87 state"); s.swap_remove(k).1 })
     };
     // Unmasked exceptions are unsupported (a guest trap must not trap Rust).
     assert_eq!(image[0] & 0x3f, 0x3f, "unmasked guest x87 exceptions");

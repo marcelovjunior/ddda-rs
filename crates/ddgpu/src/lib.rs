@@ -2277,8 +2277,10 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn clear(&mut self, c: &ClearCall) {
-        self.flush();
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        // L80: a whole-target clear is a pass of its own recorded into the
+        // open encoder after the draws before it (the GPU runs them in that
+        // order), not two submissions per clear
+        self.end_pass();
         let views: Vec<Option<(wgpu::TextureView, wgpu::TextureFormat)>> = if c.flags & 1 != 0 {
             c.targets.iter().map(|t| t.as_ref().and_then(|t| self.target_view(t, c.srgb))).collect()
         } else {
@@ -2292,10 +2294,16 @@ impl GraphicsBackend for WgpuBackend {
         let whole = regions.len() == 1 && regions[0] == [0, 0, size.0, size.1];
         if !whole {
             if !regions.is_empty() {
+                self.flush();
                 self.clear_regions_with_pipeline(c, &regions);
             }
             return;
         }
+        {
+            let mut uses = self.open_uses.borrow_mut();
+            uses.extend(c.targets.iter().chain(std::iter::once(&c.depth)).flatten().filter_map(|t| t.texture.map(|x| x.resource)));
+        }
+        let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
         {
             let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views.iter().map(|v| v.as_ref().map(|(view, f)| wgpu::RenderPassColorAttachment {
                 view, depth_slice: None, resolve_target: None,
@@ -2314,7 +2322,13 @@ impl GraphicsBackend for WgpuBackend {
                 multiview_mask: None,
             });
         }
-        self.queue.submit([enc.finish()]);
+        *self.open.borrow_mut() = Some(enc);
+        // a clear counts like a draw toward the submit limit, so the open
+        // encoder stays bounded when frames clear without a Present
+        self.open_draws.set(self.open_draws.get() + 1);
+        if self.open_draws.get() >= DRAWS_PER_SUBMIT {
+            self.flush();
+        }
     }
 
     fn query_begin(&mut self, query: u32) {
