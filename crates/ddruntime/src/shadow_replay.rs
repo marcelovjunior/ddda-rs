@@ -1227,18 +1227,37 @@ fn compare_replays(
         .map(|(&handle, tokens)| (handle, d3d9shader::parse(tokens).ok().map(|s| s.float_reads())))
         .collect();
     let mut residue: Vec<(Vec<usize>, mtcore::shadow_lanes::ConstByte, u8, u8)> = Vec::new();
+    let mut refused = 0;
     let mut allow = |path: &[usize],
                      a: &mtcore::shadow_lanes::Binding,
                      b: &mtcore::shadow_lanes::Binding,
                      offset: usize| {
+        let verdict = residue_allowed(path, a, b, offset);
+        if let Err(why) = &verdict {
+            refused += 1;
+            if refused <= 4 {
+                eprintln!("parallel-shadow constant byte {offset:#x} at {path:?} refused: {why}");
+            }
+        }
+        verdict.is_ok()
+    };
+    let mut residue_allowed = |path: &[usize],
+                     a: &mtcore::shadow_lanes::Binding,
+                     b: &mtcore::shadow_lanes::Binding,
+                     offset: usize| -> Result<(), String> {
         let at = offset as u32;
         let origin = |x: &mtcore::shadow_lanes::Binding| x.constants.iter().find(|(o, _)| *o == at).map(|&(_, c)| c);
-        let (Some(ca), Some(cb)) = (origin(a), origin(b)) else { return false };
+        let (Some(ca), Some(cb)) = (origin(a), origin(b)) else {
+            return Err(format!("not an uploaded constant byte (layouts {} / {})", a.constants.len(), b.constants.len()));
+        };
         if ca.section != 1 || (ca.stage, ca.register, ca.byte) != (cb.stage, cb.register, cb.byte) {
-            return false;
+            return Err(format!("origins differ or not float: {ca:x?} / {cb:x?}"));
         }
         if results[0].2.contains_key(&ca.source) || results[1].2.contains_key(&cb.source) {
-            return false;
+            return Err(format!(
+                "written by a traversal: serial {:#x} {} parallel {:#x} {}",
+                ca.source, results[0].2.contains_key(&ca.source), cb.source, results[1].2.contains_key(&cb.source)
+            ));
         }
         // the stage's shader handle: metadata (+0x10 vertex, +0x14 pixel),
         // encoded after the binding's 12 header bytes, equal on both sides
@@ -1246,16 +1265,16 @@ fn compare_replays(
         let handle = |x: &mtcore::shadow_lanes::Binding| {
             x.bytes.get(handle_at..handle_at + 4).map(|w| u32::from_le_bytes(w.try_into().unwrap()))
         };
-        let (Some(handle), Some(other)) = (handle(a), handle(b)) else { return false };
+        let (Some(handle), Some(other)) = (handle(a), handle(b)) else { return Err("no shader handle".into()) };
         if handle != other {
-            return false;
+            return Err(format!("shader handles differ {handle:#x} / {other:#x}"));
         }
-        let Some(Some(r)) = reads.get(&handle) else { return false };
+        let Some(Some(r)) = reads.get(&handle) else { return Err(format!("shader {handle:#x} not captured or not parsed")) };
         if r.reads(ca.register as usize, (ca.byte / 4) as usize) {
-            return false;
+            return Err(format!("shader {handle:#x} may read c{} component {}", ca.register, ca.byte / 4));
         }
         residue.push((path.to_vec(), ca, a.bytes[offset], b.bytes[offset]));
-        true
+        Ok(())
     };
     let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
     if !residue.is_empty() {
