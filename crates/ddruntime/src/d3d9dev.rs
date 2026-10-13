@@ -1115,3 +1115,169 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::{GuestMemory, READ, WRITE};
+    use crate::session::{Outcome, Session};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    const SCRATCH: u32 = 0x7EFF_0000;
+    const PP: u32 = SCRATCH + 0x200;
+    const OUT: u32 = SCRATCH + 0x300;
+
+    fn token(s: &Session, name: &str) -> u32 {
+        s.imports.iter().find(|i| i.full_name() == name).unwrap().token
+    }
+
+    fn call(s: &mut Session, target: u32, args: &[u32]) -> u32 {
+        match s.call(target, 0, args) {
+            Outcome::Returned(c) => c.eax,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn com(s: &mut Session, object: u32, slot: u32, args: &[u32]) -> u32 {
+        let target = s.mem.u32(s.mem.u32(object) + slot * 4);
+        call(s, target, &[&[object], args].concat())
+    }
+
+    /// A guest thread's COM calls, through the registry on its own stack.
+    struct Caller {
+        r: Arc<crate::dispatch::Registry>,
+        m: GuestMemory,
+        top: u32,
+        out: u32,
+    }
+
+    impl Caller {
+        fn com(&mut self, object: u32, slot: u32, args: &[u32]) -> u32 {
+            let target = self.m.u32(self.m.u32(object) + 4 * slot);
+            let mut c = Cpu::default();
+            c.esp = self.top;
+            for a in [object].iter().chain(args).rev() {
+                c.esp -= 4;
+                self.m.set_u32(c.esp, *a);
+            }
+            c.esp -= 4;
+            self.m.set_u32(c.esp, 0xFFFF_0000);
+            self.r.call(&mut self.m, &mut c, target).unwrap();
+            c.eax
+        }
+    }
+
+    /// L93: a render thread binds and draws (D3D lock only) while a loader
+    /// thread creates textures and drops its own references (guest + D3D
+    /// lock) and a third thread keeps taking the guest lock. The render
+    /// thread's SetTexture makes the last release of each texture without
+    /// the guest lock, so its destruction is deferred and done by the
+    /// loader's next creation. 300 textures: no panic, every draw
+    /// recorded, every texture destroyed, nothing left deferred.
+    #[test]
+    fn a_render_thread_draws_while_another_creates_and_releases_textures() {
+        let path = std::env::var("DDDA_EXE").unwrap_or_else(|_| r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe".into());
+        if ddexe::ExeFile::open(&path).is_err() {
+            eprintln!("skipped: no installed game image");
+            return;
+        }
+        let mut s = Session::new(&path).unwrap();
+        crate::threads::set_parallel(true);
+        let name = SCRATCH + 0x100;
+        s.mem.set_u16(name, b'W' as u16);
+        s.mem.set_u32(SCRATCH + 8, token(&s, "USER32.dll!DefWindowProcW"));
+        s.mem.set_u32(SCRATCH + 40, name);
+        let f = token(&s, "USER32.dll!RegisterClassExW");
+        call(&mut s, f, &[SCRATCH]);
+        let f = token(&s, "USER32.dll!CreateWindowExW");
+        let hwnd = call(&mut s, f, &[0, name, 0, 0x00CA_0000, 0, 0, 70, 93, 0, 0, 0x0040_0000, 0]);
+        let f = token(&s, "d3d9.dll!Direct3DCreate9");
+        let d3d = call(&mut s, f, &[32]);
+        for (k, v) in [64, 64, 21, 1, 0, 0, 1, hwnd, 1, 0, 0, 0, 0, 0].into_iter().enumerate() {
+            s.mem.set_u32(PP + 4 * k as u32, v);
+        }
+        assert_eq!(com(&mut s, d3d, 16, &[0, 1, hwnd, 0x46, PP, OUT]), 0);
+        let dev = s.mem.u32(OUT);
+        assert_eq!(com(&mut s, dev, 41, &[]), 0); // BeginScene
+        let draws_before = crate::d3d9draw::recorded(|r| r.draws.len()).unwrap();
+        let last_error = token(&s, "KERNEL32.dll!GetLastError");
+
+        let textures = 300u32;
+        let next = Arc::new(AtomicU32::new(0));
+        let bound = Arc::new(AtomicU32::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let rt = crate::runtime::current();
+        let draws = Arc::new(AtomicU32::new(0));
+        crate::threads::without_lock(|| {
+            let spawn = |k: u32, body: Box<dyn FnOnce(&mut Caller) + Send>| {
+                let (rt, r, mut m) = (rt.clone(), s.registry.clone(), s.mem.share());
+                std::thread::spawn(move || {
+                    crate::runtime::enter(rt);
+                    crate::threads::set_test_tid(0x6000 + 4 * k);
+                    let stack = 0x0500_0000 + k * 0x1_0000;
+                    m.map(stack, 0x1_0000, READ | WRITE).unwrap();
+                    let mut caller = Caller { r, m, top: stack + 0xF000, out: stack + 0xF800 };
+                    body(&mut caller);
+                })
+            };
+            let (next1, bound1, done1, draws1) = (next.clone(), bound.clone(), done.clone(), draws.clone());
+            let render = spawn(0, Box::new(move |g: &mut Caller| {
+                let mut current = 0;
+                let mut k = 0u32;
+                while !done1.load(Ordering::SeqCst) || next1.load(Ordering::SeqCst) != current {
+                    let t = next1.load(Ordering::SeqCst);
+                    if t != current {
+                        assert_eq!(g.com(dev, 65, &[0, t]), 0); // SetTexture
+                        current = t;
+                        bound1.store(t, Ordering::SeqCst);
+                    }
+                    assert_eq!(g.com(dev, 81, &[4, 0, 1]), 0); // DrawPrimitive
+                    draws1.fetch_add(1, Ordering::SeqCst);
+                    k += 1;
+                    if k % 100 == 0 {
+                        assert_eq!(g.com(dev, 17, &[0, 0, 0, 0]), 0); // Present
+                    }
+                }
+                assert_eq!(g.com(dev, 65, &[0, 0]), 0); // unbind the last texture
+            }));
+            let (next2, bound2, done2) = (next.clone(), bound.clone(), done.clone());
+            let loader = spawn(1, Box::new(move |g: &mut Caller| {
+                for _ in 0..textures {
+                    let out = g.out;
+                    assert_eq!(g.com(dev, 23, &[16, 16, 1, 0, 21, 1, out, 0]), 0); // CreateTexture
+                    let t = g.m.u32(out);
+                    next2.store(t, Ordering::SeqCst);
+                    while bound2.load(Ordering::SeqCst) != t {
+                        std::thread::yield_now();
+                    }
+                    assert_eq!(g.com(t, 2, &[]), 1, "the device holds the bound texture"); // Release
+                }
+                done2.store(true, Ordering::SeqCst);
+            }));
+            let done3 = done.clone();
+            let traffic = spawn(2, Box::new(move |g: &mut Caller| {
+                while !done3.load(Ordering::SeqCst) {
+                    let mut c = Cpu::default();
+                    c.esp = g.top;
+                    c.esp -= 4;
+                    g.m.set_u32(c.esp, 0xFFFF_0000);
+                    g.r.call(&mut g.m, &mut c, last_error).unwrap();
+                }
+            }));
+            for t in [render, loader, traffic] {
+                t.join().unwrap();
+            }
+        });
+        // a method holding the guest lock destroys what is still deferred
+        assert_eq!(com(&mut s, dev, 4, &[]) > 0, true); // GetAvailableTextureMem
+        let (textures_live, deferred) = objects(|o| {
+            (o.live.values().filter(|x| matches!(x.kind, Kind::Texture { .. })).count(), o.deferred.len())
+        });
+        let recorded = crate::d3d9draw::recorded(|r| r.draws.len()).unwrap() - draws_before;
+        eprintln!("{} draws, {textures} textures created and destroyed", draws.load(Ordering::SeqCst));
+        // (the default recorder keeps the first 10,000 draws)
+        assert_eq!(recorded as u32, draws.load(Ordering::SeqCst).min(10_000 - draws_before as u32), "every draw recorded");
+        assert_eq!((textures_live, deferred), (0, 0), "every texture destroyed, nothing left deferred");
+    }
+}

@@ -181,6 +181,12 @@ thread_local! {
     static SLICE_START: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
+/// Make this host thread guest thread `tid` (tests of other modules).
+#[cfg(test)]
+pub(crate) fn set_test_tid(tid: u32) {
+    CURRENT_TID.with(|c| c.set(tid));
+}
+
 /// The running guest thread's id.
 pub fn current_tid() -> u32 {
     CURRENT_TID.with(Cell::get)
