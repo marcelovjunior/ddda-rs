@@ -202,7 +202,7 @@ impl Registry {
             crate::archive_inflate::install(ports);
             crate::procedural_geometry::install(ports);
             // L171: semantic 0x00E12A20 keeps the original body for its rare branch
-            if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
+            if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") && ddports::semantic_selected(0x00e1_2a20) {
                 let bodies = ddnative::generated::lifted::bodies();
                 if let Some(&(_, original)) = bodies.iter().find(|(a, _)| *a == 0x00e1_2a20) {
                     let _ = ddports::mtcore::semantic::E12A20_ORIGINAL.set(original);

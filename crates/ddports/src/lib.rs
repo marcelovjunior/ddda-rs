@@ -89,6 +89,9 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x010a35d0, mtcore::semantic_jobs::query_bounds_tree),
             (0x00c24640, mtcore::semantic_instancing::draw_instanced_mesh),
         ] {
+            if !semantic_selected(a) {
+                continue;
+            }
             ports.retain(|p| p.0 != a);
             ports.push((a, f));
         }
@@ -101,6 +104,23 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         }
     }
     ports
+}
+
+/// Whether the semantic rewrite at `address` is in use: every rewrite
+/// unless `DDRUNTIME_SEMANTIC_ONLY` lists the addresses to keep, or
+/// `DDRUNTIME_SEMANTIC_SKIP` the addresses to leave out (comma-separated
+/// hex, `0x` optional). One build can then bisect the rewrites in game.
+pub fn semantic_selected(address: u32) -> bool {
+    let listed = |name: &str| {
+        std::env::var(name).ok().map(|list| {
+            list.split(',').any(|item| {
+                let item = item.trim();
+                let hex = item.strip_prefix("0x").unwrap_or(item);
+                u32::from_str_radix(hex, 16) == Ok(address)
+            })
+        })
+    };
+    listed("DDRUNTIME_SEMANTIC_ONLY").unwrap_or(true) && !listed("DDRUNTIME_SEMANTIC_SKIP").unwrap_or(false)
 }
 
 /// The ports with `mods` over them: a mod at a ported address replaces the
