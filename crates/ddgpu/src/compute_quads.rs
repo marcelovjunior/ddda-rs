@@ -474,6 +474,7 @@ impl WgpuBackend {
             bind.push(wgpu::BindGroupEntry { binding: 2 * n + 1, resource: wgpu::BindingResource::Sampler(s) });
         }
         let g = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &bind });
+        self.cached_resources.extend(key.1.iter().map(|entry| entry.2));
         self.tex_groups.insert(key, g.clone());
         Ok(g)
     }
