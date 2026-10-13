@@ -2943,7 +2943,20 @@ impl GraphicsBackend for WgpuBackend {
         self.flush();
         self.small_buffers.remove(&resource);
         self.quads.forget(resource);
-        self.native_worker = None; // Guest/resource identities may now be reused.
+        // Guest/resource identities may now be reused: the native worker
+        // forgets its resources if it holds this one (a target, an imported
+        // buffer or a sampled texture), keeping its pipelines (L141).
+        if let Some(worker) = self.native_worker.as_mut() {
+            let tex = self.textures.get(&resource);
+            let held = self.surfaces.contains_key(&resource)
+                || tex.is_some_and(|t| t.target)
+                || worker.holds(self.buffers.get(&resource), tex.map(|t| &t.texture));
+            if held {
+                worker.reset_resources();
+                self.native_stats.resource_resets += 1;
+            }
+        }
+
         // cached views and bind groups may hold the resource
         self.tex_groups.clear();
         self.last_group = Default::default();

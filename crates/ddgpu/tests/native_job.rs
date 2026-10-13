@@ -606,3 +606,33 @@ fn bounded_indexed_strips_match_host_driver_with_start_base_and_culling() {
         1
     );
 }
+
+/// L141: a guest release keeps the native worker and its pipelines. A
+/// resource the worker does not hold changes nothing; one it holds resets
+/// only its resource tables, and the next job still draws the same image.
+#[test]
+fn releases_keep_the_native_worker_and_its_pipelines() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let t = target(1, 21);
+    upload(&mut backend);
+    backend.upload(Upload::Buffer { resource: 99, bytes: vec![0; 64] });
+    let d = draw(false, false, false, [0.0, 1.0, 0.0, 1.0]);
+    backend.clear(&clear(&t, None));
+    assert!(backend.native(job(d.clone(), &t, None)).is_ok());
+    let first = backend.read_back(&t).unwrap();
+    // not held by the worker
+    backend.release(99);
+    assert!(backend.native(job(d.clone(), &t, None)).is_ok());
+    let s = backend.native_job_stats();
+    assert_eq!((s.worker_instances, s.resource_resets), (1, 0));
+    // held: the vertex buffer, uploaded again with the same bytes
+    backend.release(10);
+    backend.upload(Upload::Buffer { resource: 10, bytes: vertices() });
+    backend.clear(&clear(&t, None));
+    assert!(backend.native(job(d, &t, None)).is_ok());
+    assert_eq!(backend.read_back(&t).unwrap(), first);
+    let s = backend.native_job_stats();
+    assert_eq!((s.worker_instances, s.resource_resets, s.accepted), (1, 1, 3));
+}
