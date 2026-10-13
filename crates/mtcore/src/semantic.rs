@@ -164,3 +164,72 @@ pub fn intern_dependency_keys_with(m: &mut dyn Mem, c: &mut Cpu, expander: Expan
     // EAX = the interned sequence; `ret 0x14` from the entry frame
     c.esp = entry.wrapping_add(4 + 0x14);
 }
+
+/// The original body of 0x00E12A20, set by the runtime when it installs
+/// [`shader_lookup`] (the rare branch runs it unchanged).
+pub static E12A20_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = std::sync::OnceLock::new();
+
+/// A guest call from the frame `frame` (the caller's ESP at its call
+/// sites): push `args` (last first) and `back`, set ECX and run `body`.
+/// Returns EAX; ESP is `frame` again after the callee's own `ret n`.
+fn call_from(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, args: &[u32], back: u32, body: impl FnOnce(&mut dyn Mem, &mut Cpu)) -> u32 {
+    c.esp = frame;
+    for &v in args.iter().rev() {
+        c.esp = c.esp.wrapping_sub(4);
+        pg.set_u32(m, c.esp, v);
+    }
+    c.esp = c.esp.wrapping_sub(4);
+    pg.set_u32(m, c.esp, back);
+    c.ecx = this;
+    body(m, c);
+    c.eax
+}
+
+/// 0x00E12A20, `this->lookup(a, bank, slot, keys_owner_values, keys,
+/// extra, other_bank) -> entry` (thiscall, `ret 0x1c`): the shader/
+/// technique lookup of every model primitive draw. The common branch
+/// (byte `this + 0x39` clear) interns the dependency keys of
+/// `bucket(bank) + slot * 0x28 + 0x1c` and looks them up (0x00E0F3C0),
+/// then again with their CRC (0x00E0F4B0), then for `other_bank`; the rare
+/// branch (shader creation) runs the original body. Only reads happen
+/// before the branch, so the fallback is exact.
+pub fn shader_lookup(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let this = c.ecx;
+    if pg.u8(m, this.wrapping_add(0x39)) != 0 {
+        let original = E12A20_ORIGINAL.get().expect("0x00E12A20 original body");
+        return original(m, c);
+    }
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (bank, slot, owner_values, keys, extra, other) = (arg(m, 1), arg(m, 2), arg(m, 3), arg(m, 4), arg(m, 5), arg(m, 6));
+    let table = pg.u32(m, this.wrapping_add(0x24));
+    let bucket = pg.u32(m, table.wrapping_add((bank & 0xfff).wrapping_mul(4)));
+    let owner = bucket.wrapping_add(slot.wrapping_mul(0x28)).wrapping_add(0x1c);
+    // The original's frame after its prologue (0x8c locals, four pushes);
+    // its CRC local is at frame + 0x10.
+    let frame = entry.wrapping_sub(0x9c);
+    let crc = frame.wrapping_add(0x10);
+    let ext = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let finish = |c: &mut Cpu, r: u32| {
+        c.eax = r;
+        c.esp = entry.wrapping_add(4 + 0x1c);
+    };
+    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, 0], 0x00e1_3208, intern_dependency_keys);
+    let r = call_from(m, c, pg, frame, this, &[key], 0x00e1_3210, ext(0x00e0_f3c0));
+    if r != 0 {
+        return finish(c, r);
+    }
+    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, crc], 0x00e1_322f, intern_dependency_keys);
+    let sum = pg.u32(m, crc);
+    let r = call_from(m, c, pg, frame, this, &[key, sum], 0x00e1_3244, ext(0x00e0_f4b0));
+    if r != 0 || pg.u8(m, this.wrapping_add(0xab229)) != 0 || other == 0 {
+        return finish(c, r);
+    }
+    let table = pg.u32(m, this.wrapping_add(0x24));
+    let owner = pg.u32(m, table.wrapping_add((other & 0xfff).wrapping_mul(4))).wrapping_add(0x1c);
+    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, crc], 0x00e1_3280, intern_dependency_keys);
+    let sum = pg.u32(m, crc);
+    let r = call_from(m, c, pg, frame, this, &[key, sum], 0x00e1_3293, ext(0x00e0_f4b0));
+    finish(c, r)
+}

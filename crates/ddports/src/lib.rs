@@ -8,6 +8,8 @@
 //! caller. Each port crate's `abi::PORTS` lists its adapters; its
 //! differential test replays them against the lifted vectors.
 use ddnative_base::x86::{self, LiftFn};
+// The port crates, for runtime-side installs that need the lifted bodies.
+pub use mtcore;
 
 /// Every verified readable port: (address, adapter).
 pub fn ports() -> Vec<(u32, LiftFn)> {
