@@ -967,6 +967,17 @@ pub fn replay_file(path: &std::path::Path) -> Result<usize, String> {
 
 fn replay_fixture(fixture: capture_file::Fixture, raw: Arc<BTreeMap<u32, LiftFn>>) -> Result<usize, String> {
     let rejection = fixture.rejection.clone();
+    // debug: the captured shaders' disassembly into a private directory
+    if let Some(dir) = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_SHADER_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        let _ = std::fs::create_dir_all(&dir);
+        for (handle, tokens) in &fixture.shaders {
+            if let Ok(s) = d3d9shader::parse(tokens) {
+                let _ = std::fs::write(dir.join(format!("{handle:08x}.asm")), d3d9shader::disasm::disassemble(&s).join("
+"));
+            }
+        }
+    }
     eprintln!(
         "parallel-shadow captured shader objects={}",
         fixture.shaders.len()
