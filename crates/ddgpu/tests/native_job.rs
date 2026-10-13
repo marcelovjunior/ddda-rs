@@ -606,3 +606,125 @@ fn bounded_indexed_strips_match_host_driver_with_start_base_and_culling() {
         1
     );
 }
+
+/// L141: a guest release keeps the native worker and its pipelines. A
+/// resource the worker does not hold changes nothing; one it holds resets
+/// only its resource tables, and the next job still draws the same image.
+#[test]
+fn releases_keep_the_native_worker_and_its_pipelines() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let t = target(1, 21);
+    upload(&mut backend);
+    backend.upload(Upload::Buffer { resource: 99, bytes: vec![0; 64] });
+    let d = draw(false, false, false, [0.0, 1.0, 0.0, 1.0]);
+    backend.clear(&clear(&t, None));
+    assert!(backend.native(job(d.clone(), &t, None)).is_ok());
+    let first = backend.read_back(&t).unwrap();
+    // not held by the worker
+    backend.release(99);
+    assert!(backend.native(job(d.clone(), &t, None)).is_ok());
+    let s = backend.native_job_stats();
+    assert_eq!((s.worker_instances, s.resource_resets), (1, 0));
+    // held: the vertex buffer, uploaded again with the same bytes
+    backend.release(10);
+    backend.upload(Upload::Buffer { resource: 10, bytes: vertices() });
+    backend.clear(&clear(&t, None));
+    assert!(backend.native(job(d, &t, None)).is_ok());
+    assert_eq!(backend.read_back(&t).unwrap(), first);
+    let s = backend.native_job_stats();
+    assert_eq!((s.worker_instances, s.resource_resets, s.accepted), (1, 1, 3));
+}
+
+/// L141: a render-target texture lacking channels (X8R8G8B8: alpha) is
+/// sampled with them as 1 by the native path too, as the D3D9 path does.
+#[test]
+fn native_render_target_samples_fill_missing_channels_as_the_d3d9_path() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let a = target(1, 21);
+    let b = target(2, 21);
+    upload(&mut backend);
+    let mut d = draw(false, false, false, [0.25, 0.25, 0.0, 0.0]);
+    // texld oC0, c0, s0: the texture's colour, alpha included
+    d.pixel_shader = vec![
+        0xffff0300, 0x0200001f, 0x90000000, 0xa00f0800, 0x02000001, 0x800f0001, 0xa0e40000, 0x03000042,
+        0x800f0800, 0x80e40001, 0xa00f0800, 0xffff,
+    ]
+    .into();
+    let mut states = [0; 14];
+    states[1..4].fill(3);
+    states[5] = 1;
+    states[6] = 1;
+    d.textures = vec![TextureBinding {
+        sampler: 0,
+        resource: 50,
+        kind: TexKind::Flat,
+        format: 22,
+        width: 2,
+        height: 2,
+        depth: 1,
+        levels: 1,
+        usage: USAGE_RENDERTARGET,
+        states,
+    }]
+    .into();
+    // the render-target texture's contents: a clear through its surface,
+    // alpha 0 (X8R8G8B8 keeps none)
+    let rt = Target {
+        surface: 60,
+        format: 22,
+        width: 2,
+        height: 2,
+        texture: Some(TargetTexture { resource: 50, kind: TexKind::Flat, width: 2, height: 2, depth: 1, levels: 1, usage: USAGE_RENDERTARGET }),
+        level: 0,
+        samples: 0,
+        quality: 0,
+    };
+    backend.clear(&ClearCall { colour: 0x00ff_8000, viewport: [0, 0, 2, 2, 0, 1f32.to_bits()], ..clear(&rt, None) });
+    backend.clear(&clear(&a, None));
+    backend.draw(&legacy(&d, &a, None));
+    backend.present(&a);
+    let expected = backend.last_frame.as_ref().unwrap().rgba.clone();
+    assert!(expected.chunks(4).all(|p| p[3] == 255), "the D3D9 path samples alpha as 1");
+    backend.clear(&clear(&b, None));
+    assert!(backend.native(job(d, &b, None)).is_ok(), "{:?}", backend.native_job_stats().rejection_reasons);
+    backend.present(&b);
+    assert_eq!(backend.last_frame.as_ref().unwrap().rgba, expected);
+    assert!(backend.errors.is_empty(), "{:?}", backend.errors);
+}
+
+/// L141: DEPTHBIAS draws natively, in the pixel shader as the D3D9 path
+/// does: the same image, and the bias moves the depth test's outcome.
+#[test]
+fn native_depth_bias_matches_the_d3d9_path() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let a = target(1, 21);
+    let b = target(2, 21);
+    let z = target(3, 75);
+    upload(&mut backend);
+    let clear_at = |t: &Target| ClearCall { z: 0.6, ..clear(t, Some(&z)) };
+    let mut images = vec![];
+    for bias in [0.0f32, 0.25] {
+        let mut d = draw(false, false, true, [0.5, 0.25, 1.0, 1.0]);
+        let mut states = d.state.render_states.to_vec();
+        states.push((195, bias.to_bits()));
+        states.sort_unstable();
+        d.state = Arc::new(NativeFixedState { identity: Default::default(), render_states: states.into() });
+        backend.clear(&clear_at(&a));
+        backend.draw(&legacy(&d, &a, Some(&z)));
+        backend.present(&a);
+        let expected = backend.last_frame.as_ref().unwrap().rgba.clone();
+        backend.clear(&clear_at(&b));
+        assert!(backend.native(job(d, &b, Some(&z))).is_ok(), "{:?}", backend.native_job_stats().rejection_reasons);
+        backend.present(&b);
+        assert_eq!(backend.last_frame.as_ref().unwrap().rgba, expected, "bias {bias}");
+        images.push(expected);
+    }
+    assert_ne!(images[0], images[1], "the bias changes what passes the depth test");
+    assert!(backend.errors.is_empty(), "{:?}", backend.errors);
+}
