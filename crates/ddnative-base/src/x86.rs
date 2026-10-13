@@ -381,7 +381,7 @@ impl Flags {
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn cf(&self) -> bool { self.cf_value() }
     // Only helper-to-helper composition inlines; shard calls stay out of line.
-    #[inline(always)] // private: only shared helpers, never shard call sites
+    #[inline]
     fn cf_value(&self) -> bool {
         self.defined(1);
         let m = self.mask();
@@ -401,7 +401,7 @@ impl Flags {
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn of(&self) -> bool { self.of_value() }
     // Only helper-to-helper composition inlines; shard calls stay out of line.
-    #[inline(always)] // private: only shared helpers, never shard call sites
+    #[inline]
     fn of_value(&self) -> bool {
         self.defined(0x800);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x800 != 0; }
