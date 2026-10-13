@@ -4,12 +4,6 @@ use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 use ddnative_base::emit;
 
-// Translated from 0x01389B80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01389B80.
-pub fn f_01389b80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x38u32, m, pt, cpu); emit::push(0x18D78D0u32, m, pt, cpu); emit::push(0x1448CC0u32, m, pt, cpu); cpu.ecx = 0x18D727Cu32; emit::push(0x1389B9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x139C840u32, m, pt, cpu); m.fast_set_u32(pt, 0x18D727Cu32, 0x1448C94u32); emit::push(0x1389BB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
 // Translated from 0x01389BC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01389BC0.
 pub fn f_01389bc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -2402,4 +2396,10 @@ pub fn f_0138c5b0(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn f_0138c5c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     m.fast_set_u32(pt, 0x198D530u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x0138C5D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_0138c5d0.
+pub fn f_0138c5d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x198D560u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

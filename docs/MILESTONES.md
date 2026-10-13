@@ -1,5 +1,21 @@
 # Milestones
 
+### L129 combined integer/float flag fusion gate (2026-10-13)
+
+- Merged FPS-line `05b35e35` with both lifter emitters and regenerated
+  **59,734 functions / 33 crates**, preserving 44 scoped step functions.
+- **178,130 original lifted cases pass; zero failing lifted functions**.
+  Full required-vector native gate: **49 tests pass**, readable ports and
+  inventory checks pass; **26 focused Python tests** also pass.
+- Corrected one pre-L62 x87 test to use documented `park()` host boundaries;
+  host assertions retained, guest continuity assertions added. No runtime
+  change or weakened fixture checks. Existing 5 coverage gaps remain.
+- Clean shard compilation: **264.95 s wall span**, **434.82 MiB rlibs**;
+  generated source **+0.2194%**. No comparative compile-speed/FPS claim.
+- Next: head's same-scene loading/image/FPS measurement. Details and
+  timing/profile limits: `docs/tasks/L129-dead-flags.md`.
+
+### L119 native sink, step 2b (2026-10-13)
 
 ### L119 native sink, step 2b (2026-10-13)
 ### L119 native sink, steps 2b-2d (2026-10-13)

@@ -129,6 +129,9 @@ mod x87_exact {
     #[test]
     fn qword_registers_sqrt_and_host_state() {
         ddnative_host::install();
+        ddnative::x87::park();
+        let mut before = 0u16;
+        unsafe { std::arch::asm!("fnstcw [{p}]", p=in(reg) &mut before); }
         let mut x = X87::default();
         let mut data = [0; 10]; data[..8].copy_from_slice(&(1.0f64 + f64::EPSILON).to_bits().to_le_bytes());
         x.exec::<0x00dd>(&mut data); x.register::<0xc0d9>(); // fld st(0)
@@ -136,11 +139,27 @@ mod x87_exact {
         assert_eq!(data[..8], out[..8]);
         x.push(4f32.to_bits()); x.register::<0xfad9>();
         assert_eq!(x.top_f32(), Some(2f32.to_bits()));
-        let mut before = 0u16; let mut after = 0u16; let mut value = 0u32;
-        unsafe { std::arch::asm!("fnstcw [{p}]", "fld1", p=in(reg) &mut before); }
         control(&mut x, 0x0f7f); x.register::<0xc9d9>(); // fxch st(1)
-        unsafe { std::arch::asm!("fnstcw [{p}]", "fstp dword ptr [{v}]", p=in(reg) &mut after, v=in(reg) &mut value); }
+        let guest_top = x.top_extended();
+        let guest_depth = x.depth();
+        // L62 keeps guest x87 state live between instructions. Host x87
+        // work belongs after park(), which restores the host control word;
+        // it must not push a host value onto the live guest stack.
+        ddnative::x87::park();
+        let mut after = 0u16; let mut value = 0u32;
+        unsafe { std::arch::asm!("fnstcw [{p}]", "fld1", "fstp dword ptr [{v}]", p=in(reg) &mut after, v=in(reg) &mut value); }
         assert_eq!(before, after); assert_eq!(value, 1f32.to_bits());
+        assert_eq!(x.control(), 0x0f7f);
+        assert_eq!(x.depth(), guest_depth);
+        assert_eq!(x.top_extended(), guest_top);
+        x.register::<0xc9d9>(); // reacquire the parked guest, fxch st(1)
+        assert_eq!(x.top_f32(), Some(2f32.to_bits()));
+        x.register::<0xc9d9>();
+        assert_eq!(x.top_extended(), guest_top);
+        assert_eq!(x.control(), 0x0f7f);
+        ddnative::x87::park();
+        unsafe { std::arch::asm!("fnstcw [{p}]", p=in(reg) &mut after); }
+        assert_eq!(before, after);
     }
     #[test]
     fn arithmetic_flags_compare() {
