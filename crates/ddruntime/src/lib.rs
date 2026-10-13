@@ -47,3 +47,9 @@ pub mod user32;
 pub mod win32;
 pub mod movies;
 pub mod net;
+
+/// Take the x87 live TLS slot now (L103; ddnative_host::x87::reserve_slot):
+/// first thing in a host's main.
+pub fn reserve_x87_slot() -> u32 {
+    ddnative_host::x87::reserve_slot()
+}

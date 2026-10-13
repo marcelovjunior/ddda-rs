@@ -354,6 +354,12 @@ impl ApplicationHandler<GameEvent> for App {
 }
 
 fn main() {
+    // L103: the x87 live slot among the TEB's 64 direct TLS slots, before
+    // any GPU driver DLL takes them
+    let x87_slot = ddruntime::reserve_x87_slot();
+    if x87_slot >= 64 {
+        eprintln!("ddplay: no direct TLS slot for the x87 live id ({x87_slot}): the slower fallback is used");
+    }
     // L85: 1 ms host timer resolution for the whole run (per process since
     // Windows 10 2004): the guest's sleeps and timed waits run on it
     ddruntime::user32::host_timer::begin(1);

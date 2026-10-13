@@ -28,22 +28,38 @@ pub(crate) fn live_fallback() -> u64 {
     LIVE.with(Cell::get)
 }
 
+/// Take the process's TLS slot for the live id now (L103). Call it first
+/// thing in main: the 64 slots the TEB holds directly are handed out first
+/// come, and the GPU driver's DLLs take many; a slot taken lazily, at the
+/// first lifted x87 code, was past them, and every check went through the
+/// thread_local fallback (~20% of an x87-heavy game thread).
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub fn reserve_slot() -> u32 {
+    let slot = LIVE_SLOT.load(Ordering::Relaxed);
+    if slot != u32::MAX {
+        return slot;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn TlsAlloc() -> u32;
+    }
+    // SAFETY: plain Win32 call; one slot for the process, never freed
+    let new = unsafe { TlsAlloc() };
+    let new = if new < 64 { new } else { 64 }; // 64+: the thread_local fallback
+    match LIVE_SLOT.compare_exchange(u32::MAX, new, Ordering::Relaxed, Ordering::Relaxed) {
+        Ok(_) => new,
+        Err(won) => won,
+    }
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+pub fn reserve_slot() -> u32 {
+    u32::MAX
+}
+
 #[cfg(all(windows, target_arch = "x86_64"))]
 fn set_live(v: u64) {
-    let mut slot = LIVE_SLOT.load(Ordering::Relaxed);
-    if slot == u32::MAX {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn TlsAlloc() -> u32;
-        }
-        // SAFETY: plain Win32 call; one slot for the process, never freed
-        let new = unsafe { TlsAlloc() };
-        let new = if new < 64 { new } else { 64 }; // 64+: the thread_local fallback
-        slot = match LIVE_SLOT.compare_exchange(u32::MAX, new, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => new,
-            Err(won) => won,
-        };
-    }
+    let slot = reserve_slot();
     if slot >= 64 {
         LIVE.with(|l| l.set(v));
         return;
