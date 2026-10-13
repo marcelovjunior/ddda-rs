@@ -4,8 +4,9 @@
 
 - Owned NativeJob/Pass/Draw transport with effective D3D9 values, identity
   keys, resource IDs and register ranges; same DeferredBackend FIFO.
-  Rejection returns the intact job before native target writes.
-- **7 transport tests pass**, including upload/native/query ordering and
+  One-time capability check; supported jobs enqueue without a round trip.
+  Unexpected worker rejection is logged loudly (head-approved contract).
+- **8 transport tests pass**, including upload/native/query ordering and
   unsupported-job ownership. Worker and game comparison pending.
 - Next: ddgpu native worker adapter; `docs/tasks/L126-native-worker.md`.
 
