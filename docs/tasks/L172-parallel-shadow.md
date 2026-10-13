@@ -380,3 +380,9 @@ exact evidence; comparator remains byte/field strict. Synthetic integration
 uses distinct retained lane counters and validates complete output, state,
 FP and escape refusals.37 focused pass. Next: immediate self-serve build
 and original replay; no new capture/head rebuild request.
+
+2026-10-13 self-serve e8334107 replay48124:64 recording headers rebased;
+serial/live66PASS,175jobs, lane mergePASS. Fullstream comparison advances
+to root22 bindings; key580055EB and header162C0 match exactly. Added
+bounded binding-kind/identity/length/first-byte diagnostics, comparator
+unchanged.37 focused pass. Next: immediate offline rebuild/replay.
