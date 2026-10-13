@@ -299,10 +299,40 @@ pub fn get_tick_count(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 0);
 }
 
-/// Time since the runtime's first clock read.
+static CLOCK_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+/// Set once a warp was ever requested: until then the clock is the plain
+/// elapsed time (one atomic load of overhead).
+static CLOCK_WARPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// (real elapsed, guest clock) at the last warp change, and the factor since.
+static CLOCK_WARP: std::sync::Mutex<(std::time::Duration, std::time::Duration, u32)> =
+    std::sync::Mutex::new((std::time::Duration::ZERO, std::time::Duration::ZERO, 1));
+
+/// Time since the runtime's first clock read, as the guest sees it: real
+/// time, or real time sped up by [`set_clock_warp`] (debug launches only).
 pub fn runtime_clock() -> std::time::Duration {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    START.get_or_init(std::time::Instant::now).elapsed()
+    let real = CLOCK_START.get_or_init(std::time::Instant::now).elapsed();
+    if !CLOCK_WARPED.load(std::sync::atomic::Ordering::Acquire) {
+        return real;
+    }
+    let (real0, guest0, factor) = *CLOCK_WARP.lock().unwrap_or_else(|e| e.into_inner());
+    guest0 + real.saturating_sub(real0) * factor
+}
+
+/// Run the guest clocks (GetTickCount, timeGetTime, QueryPerformanceCounter)
+/// `factor` times faster from now on, continuously and monotonically (L179:
+/// `DDPLAY_QUICK=1` runs the boot's logo/disclaimer timers at 8x, then sets
+/// 1 again). Never used by a normal launch.
+pub fn set_clock_warp(factor: u32) {
+    let factor = factor.max(1);
+    let real = CLOCK_START.get_or_init(std::time::Instant::now).elapsed();
+    let mut warp = CLOCK_WARP.lock().unwrap_or_else(|e| e.into_inner());
+    let guest = if CLOCK_WARPED.load(std::sync::atomic::Ordering::Acquire) {
+        warp.1 + real.saturating_sub(warp.0) * warp.2
+    } else {
+        real
+    };
+    *warp = (real, guest, factor);
+    CLOCK_WARPED.store(true, std::sync::atomic::Ordering::Release);
 }
 
 /// Windows API services, by DLL (case-insensitive) and function name.

@@ -100,6 +100,53 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             ports.push((a, f));
         }
     }
+    // L184: the Sonnet subagents' semantic ports (recorded-case proofs in
+    // crates/mtcore/tests/semantic_s*.rs). Opt-in as one batch; the
+    // DDRUNTIME_SEMANTIC_ONLY/SKIP lists select single addresses.
+    if std::env::var("DDRUNTIME_SEMANTIC_L184").as_deref() == Ok("1") {
+        for (a, f) in [
+            (0x005d_1af0u32, mtcore::semantic_s1::update_effect_timers as LiftFn),
+            (0x0084_c0a0, mtcore::semantic_s1::update_character_frame),
+            (0x0076_f2d0, mtcore::semantic_s1::refresh_actor_slots),
+            (0x00c8_8380, mtcore::semantic_s1::sync_standard_material),
+            (0x00c2_5ea0, mtcore::semantic_s1::update_instancing),
+            (0x00e6_d070, mtcore::semantic_s1::count_active_children),
+            (0x00fa_c6f0, mtcore::semantic_s2::probe_segment),
+            (0x0079_e200, mtcore::semantic_s2::sweep_step),
+            (0x0116_6c00, mtcore::semantic_s2::cast_shape_b),
+            (0x0116_6b10, mtcore::semantic_s2::cast_shape_a),
+            (0x00de_a870, mtcore::semantic_s2::world_query),
+            (0x0115_f650, mtcore::semantic_s2::segment_cast),
+            (0x00c5_2a30, mtcore::semantic_s3::finish_draw),
+            (0x00ff_a620, mtcore::semantic_s3::update_model_bounds),
+            (0x0076_b470, mtcore::semantic_s3::update_scene_objects),
+            (0x007a_5fa0, mtcore::semantic_s3::sync_runtime_object),
+            (0x0079_4550, mtcore::semantic_s3::apply_effect_toggle),
+            (0x00e7_0710, mtcore::semantic_s4::actor_update),
+            (0x00b6_6b30, mtcore::semantic_s4_player::player_post_update),
+            (0x0105_4860, mtcore::semantic_s4_model::model_refresh),
+            (0x0086_0ac0, mtcore::semantic_s5::constraint_edit_apply),
+            (0x0087_2420, mtcore::semantic_s6::motion_filter_apply),
+            (0x0082_9ec0, mtcore::semantic_s6_aim::aim_pose),
+            (0x00f2_b5e0, mtcore::semantic_s7::joint_offset_update),
+            (0x00e5_16f0, mtcore::semantic_s8::init_chain),
+            (0x0113_0a00, mtcore::semantic_s8::look_at_frame),
+            (0x00fe_d5d0, mtcore::semantic_s9::pop_render_state),
+            (0x00ea_5b50, mtcore::semantic_s9::model_upload_state),
+            (0x00ff_1310, mtcore::semantic_s9::set_fade),
+            (0x00fe_b1f0, mtcore::semantic_s9::scene_collect_visible),
+            (0x00c8_5a00, mtcore::semantic_s10::apply_param_block),
+            (0x007f_fcc0, mtcore::semantic_s10::submit_pass_records),
+            (0x00b8_a7f0, mtcore::semantic_s10::player_prepare_draw),
+            (0x00fe_4780, mtcore::semantic_s10::bind_consumer_to_model),
+        ] {
+            if !semantic_selected(a) {
+                continue;
+            }
+            ports.retain(|p| p.0 != a);
+            ports.push((a, f));
+        }
+    }
     // L171: semantic ports not yet checked on recorded vectors
     if std::env::var("DDRUNTIME_SEMANTIC_DRAW").as_deref() == Ok("1") {
         for (a, f) in [(0x00ff1090u32, mtcore::semantic::set_pass as LiftFn)] {

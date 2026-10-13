@@ -228,8 +228,16 @@ fn autokeys(events: EventSender) {
 const PROBE_MS: u64 = 1500;
 
 fn autoplay(events: EventSender) {
-    if std::env::var_os("DDPLAY_AUTOPLAY").is_none() {
+    // DDPLAY_QUICK=1 (L179, debugging only): the autoplay with the guest
+    // clock at 8x until gameplay (the logo and disclaimer timers) and Enter
+    // every 0.3 s instead of 1.5 s.
+    let quick = std::env::var_os("DDPLAY_QUICK").is_some();
+    if std::env::var_os("DDPLAY_AUTOPLAY").is_none() && !quick {
         return;
+    }
+    if quick {
+        ddruntime::services::set_clock_warp(8);
+        eprintln!("ddplay quick launch: guest clock 8x until gameplay, Enter every 0.3 s");
     }
     let _ = std::thread::Builder::new().name("autoplay".into()).spawn(move || {
         let start = std::time::Instant::now();
@@ -237,13 +245,14 @@ fn autoplay(events: EventSender) {
         let mut high = 0;
         let mut playing = false;
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(PROBE_MS));
+            let interval = if quick && !playing { 300 } else { PROBE_MS };
+            std::thread::sleep(std::time::Duration::from_millis(interval));
             let (d, p) = ddruntime::d3d9draw::counts();
             let (draws, frames) = (d - d0, p - p0);
             (d0, p0) = (d, p);
             let per = if frames > 0 { draws / frames } else { 0 };
             let t = start.elapsed().as_secs_f64();
-            eprintln!("ddplay stage-probe t={t:.0}s draws/frame={per} fps={:.1}", frames as f64 * 1000.0 / PROBE_MS as f64);
+            eprintln!("ddplay stage-probe t={t:.0}s draws/frame={per} fps={:.1}", frames as f64 * 1000.0 / interval as f64);
             ddruntime::load_log::event("stage_probe", format_args!("draws_per_frame={per} frames={frames} source=autoplay"));
             if playing {
                 continue;
@@ -252,6 +261,9 @@ fn autoplay(events: EventSender) {
             if high >= 2 {
                 eprintln!("ddplay stage: gameplay t={t:.0}s");
                 playing = true;
+                if quick {
+                    ddruntime::services::set_clock_warp(1);
+                }
                 autowalk(events.clone());
                 continue;
             }

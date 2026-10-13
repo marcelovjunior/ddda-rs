@@ -1323,6 +1323,9 @@ pub struct Caches {
     by_content: FxMap<u64, (u64, Arc<BindingPart>)>,
     /// texture lists by content, with the frame they were last used in
     texture_lists: FxMap<u64, (u64, Arc<[TextureBinding]>)>,
+    /// the previous decided draw (none: a frame's start, or a command the
+    /// default path applied came between)
+    last: Option<LastDraw>,
     /// stream and target bindings by address, with the frame they were last
     /// built in (kept across frames: `kept_part`)
     streams: FxMap<u32, (u64, Result<Arc<StreamPart>, Refusal>)>,
@@ -1343,6 +1346,7 @@ impl Caches {
     /// (with the D3D lock held).
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
+        self.last = None;
         // bindings and contents unused for three frames go (every eighth
         // frame; L180: clearing the whole table dropped every part at once)
         if self.frame % 8 == 0 {
@@ -1488,19 +1492,51 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         r?
     };
     let s = kept_part(&mut c.streams, c.frame, streams, || stream_part(&g, streams))?;
-    let rebuilt = !matches!(c.bindings.get(&shader), Some((frame, _)) if *frame == c.frame);
-    let b = match c.bindings.get(&shader) {
-        Some((frame, r)) if *frame == c.frame => r.clone()?,
-        other => {
-            let previous = match other {
-                Some((_, Ok(p))) => Some(p.clone()),
-                _ => None,
+    // The constants as the original's apply (0x00DAA8B0) leaves them (L180):
+    // it uploads nothing when the context already holds this binding, and
+    // skips an upload whose value slot holds the same pointer as the
+    // previous binding's (same vertex shader, and pixel shader for the
+    // pixel stage): those registers keep what the device holds. The
+    // previous apply: the previous decided draw's (the sink's model of the
+    // context), else the context's own (the default path made it).
+    let last = c.last.take();
+    let (previous, shaders) = match &last {
+        Some(l) => (l.binding, l.shaders),
+        None => (g.u32(context.wrapping_add(0x10)), [g.u32(context.wrapping_add(0x24)), g.u32(context.wrapping_add(0x28))]),
+    };
+    let held_constants = last.as_ref().and_then(|l| l.constants.clone());
+    let (b, constants, filled, rebuilt) = match (&last, &held_constants) {
+        (Some(l), Some(held)) if previous == shader => (l.part.clone(), held.clone(), true, false),
+        _ => {
+            let b = match c.bindings.get(&shader) {
+                Some((frame, r)) if *frame == c.frame && r.is_err() => r.clone()?,
+                other => {
+                    let earlier = match other {
+                        Some((_, Ok(p))) => Some(p.clone()),
+                        _ => None,
+                    };
+                    let r = binding_part(&g, c, shader, earlier.as_ref());
+                    c.bindings.insert(shader, (c.frame, r.clone()));
+                    r?
+                }
             };
-            let r = binding_part(&g, c, shader, previous.as_ref());
-            c.bindings.insert(shader, (c.frame, r.clone()));
-            r?
+            let skipped = if previous == shader {
+                // the context holds it, the sink has no constants of it:
+                // everything it writes is what the device holds
+                b.written
+            } else {
+                skipped_registers(&g, &b.meta, shader, previous, shaders)
+            };
+            let (b, constants) = held_registers(b, skipped, held_constants.as_ref(), info.device)?;
+            (b, constants, false, true)
         }
     };
+    c.last = Some(LastDraw {
+        binding: shader,
+        shaders: [b.meta.handles[0], b.meta.handles[1]],
+        part: b.clone(),
+        constants: Some(constants.clone()),
+    });
     // the fixed state: the objects by identity, the dynamic values
     let id = identity_of(&g, fixed);
     if id.blend.address == 0 || id.depth.address == 0 || id.raster.address == 0 {
@@ -1604,7 +1640,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         declaration: b.meta.declaration.clone(),
         // the runtime's FVF stays 0 once declarations are used
         fvf: 0,
-        vs_constants: b.constants[0].clone(), ps_constants: b.constants[1].clone(),
+        vs_constants: constants[0].clone(), ps_constants: constants[1].clone(),
         textures,
         render_states,
         viewport: t.viewport,
@@ -1612,7 +1648,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         targets: t.targets.clone(),
         depth: t.depth.clone(),
     };
-    Ok(Decoded { call, shadow: sh, binding: b, rebuilt })
+    Ok(Decoded { call, shadow: sh, binding: b, rebuilt, filled })
 }
 
 /// A decoded draw: its DrawCall, the sampler section's effects and the
@@ -1621,9 +1657,160 @@ pub struct Decoded {
     pub call: DrawCall,
     pub shadow: Shadow,
     pub binding: Arc<BindingPart>,
-    /// the binding was decoded for this draw (not this frame's cached part)
+    /// the binding was decoded for this draw (not the previous draw's)
     pub rebuilt: bool,
+    /// the constants are the previous draw's, uncovered registers filled
+    pub filled: bool,
 }
+
+/// The previous decided draw (the sink's model of the executor context's
+/// shader binding and of the device's constants after it).
+#[derive(Clone)]
+pub(crate) struct LastDraw {
+    binding: u32,
+    /// its vertex and pixel shader handles (the context's +0x24, +0x28)
+    shaders: [u32; 2],
+    /// the part its uploads came from (per draw, when registers were held)
+    part: Arc<BindingPart>,
+    /// its constants as drawn (after `fill_uncovered`)
+    constants: Option<[Arc<Constants>; 2]>,
+}
+
+// Translated from 0x00DAA8B0 (DDDA.exe 2017-12-13 Steam; mtstate::shader's
+// constant section): the registers the apply of `binding` after `previous`
+// does not upload. With the same vertex shader (and pixel shader, for the
+// pixel stage) an upload whose value slot holds the same pointer as the
+// previous binding's is skipped.
+fn skipped_registers(g: &G, meta: &MetaPart, binding: u32, previous: u32, shaders: [u32; 2]) -> [([u64; 4], u16, u16); 2] {
+    let mut out = [([0u64; 4], 0u16, 0u16); 2];
+    if previous == 0 {
+        return out;
+    }
+    let same_vs = shaders[0] == meta.handles[0];
+    let same = [same_vs, same_vs && shaders[1] == meta.handles[1]];
+    let float = |o: &mut ([u64; 4], u16, u16), n: u32| {
+        if n < 256 {
+            o.0[n as usize / 64] |= 1 << (n % 64);
+        }
+    };
+    for stage in 0..2 {
+        if !same[stage] {
+            continue;
+        }
+        let o = &mut out[stage];
+        for u in &meta.uploads[stage] {
+            let value = g.u32(binding.wrapping_add(12 + 4 * u.value));
+            if g.u32(previous.wrapping_add(12 + 4 * u.value)) != value {
+                continue;
+            }
+            match u.section {
+                3 => {
+                    if u.count != 0 {
+                        float(o, u.register);
+                    }
+                }
+                0 => {
+                    let count = if value & 15 != 0 { u.count.min((value & 15) * 16) } else { u.count };
+                    for i in 0..count {
+                        float(o, u.register + i);
+                    }
+                }
+                1 => {
+                    for i in 0..u.count {
+                        if u.register + i < 16 {
+                            o.1 |= 1 << (u.register + i);
+                        }
+                    }
+                }
+                _ => {
+                    for i in 0..u.count {
+                        if u.register + i < 16 {
+                            o.2 |= 1 << (u.register + i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Copy the `skipped` registers of each stage from `source` into `banks`.
+fn copy_registers(banks: &mut [Constants; 2], skipped: &[([u64; 4], u16, u16); 2], source: [&Constants; 2]) -> Result<(), Refusal> {
+    for stage in 0..2 {
+        let (floats, ints, bools) = skipped[stage];
+        let src = source[stage];
+        for word in 0..4 {
+            let mut m = floats[word];
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                if let Some(r) = banks[stage].f.get_mut(n) {
+                    *r = *src.f.get(n).ok_or(Refusal::FloatsUncovered)?;
+                }
+            }
+        }
+        for n in 0..16 {
+            if ints >> n & 1 != 0 {
+                banks[stage].i[n] = src.i[n];
+            }
+            if bools >> n & 1 != 0 {
+                banks[stage].b[n] = src.b[n];
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Part `b`'s constants with the `skipped` registers as the device holds
+/// them: the previous decided draw's constants (`held`) when they have
+/// every skipped register, else the device's. A part of its own (for this
+/// draw's uploads too) only when that changes them.
+fn held_registers(
+    b: Arc<BindingPart>,
+    skipped: [([u64; 4], u16, u16); 2],
+    held: Option<&[Arc<Constants>; 2]>,
+    device: u32,
+) -> Result<(Arc<BindingPart>, [Arc<Constants>; 2]), Refusal> {
+    if skipped.iter().all(|s| *s == ([0; 4], 0, 0)) {
+        let constants = b.constants.clone();
+        return Ok((b, constants));
+    }
+    let mut banks = [(*b.constants[0]).clone(), (*b.constants[1]).clone()];
+    let covered = held.is_some_and(|h| {
+        (0..2).all(|stage| {
+            let floats = skipped[stage].0;
+            (0..256).all(|n| floats[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len())
+        })
+    });
+    match held {
+        Some(h) if covered => copy_registers(&mut banks, &skipped, [&h[0], &h[1]])?,
+        _ => {
+            let device_banks = objects(|o| match o.live.get(&device).map(|x| &x.kind) {
+                Some(Kind::Device(d)) => Some([(*d.state.vs).clone(), (*d.state.ps).clone()]),
+                _ => None,
+            })
+            .ok_or(Refusal::Device)?;
+            copy_registers(&mut banks, &skipped, [&device_banks[0], &device_banks[1]])?;
+        }
+    }
+    if *b.constants[0] == banks[0] && *b.constants[1] == banks[1] {
+        let constants = b.constants.clone();
+        return Ok((b, constants));
+    }
+    let [vs, ps] = banks;
+    let constants = [Arc::new(vs), Arc::new(ps)];
+    let part = Arc::new(BindingPart {
+        meta: b.meta.clone(),
+        alpha: b.alpha,
+        constants: constants.clone(),
+        written: b.written,
+        native: Default::default(),
+        uncovered: b.uncovered,
+    });
+    Ok((part, constants))
+}
+
 
 /// Make a taken draw's sampler section effects: the context words and the
 /// device calls.
@@ -2117,6 +2304,11 @@ impl Native {
                 }
             }
         }
+        // clears (their fallback draws), copies and nested lists apply on
+        // the default path: the next draw's binding is read again
+        if matches!(kind, 4..=6) {
+            g.caches.last = None;
+        }
         match kind {
             0..=3 => {}
             4 if ops::enabled() => return self.clear(g, m, context, record),
@@ -2149,9 +2341,16 @@ impl Native {
         let started = Instant::now();
         let lock = crate::d3d9dev::device_lock();
         let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind).and_then(|mut d| {
-            fill_uncovered(&mut d.call, &d.binding, &g.uploads, g.info.device)?;
+            if !d.filled {
+                fill_uncovered(&mut d.call, &d.binding, &g.uploads, g.info.device)?;
+            }
             Ok(d)
         });
+        // the device's constants after this draw: as drawn (L180)
+        match (&decoded, g.caches.last.as_mut()) {
+            (Ok(d), Some(l)) => l.constants = Some([d.call.vs_constants.clone(), d.call.ps_constants.clone()]),
+            _ => g.caches.last = None,
+        }
         let taken = match decoded {
             Err(r) => {
                 *t.refused.entry(r).or_default() += 1;
