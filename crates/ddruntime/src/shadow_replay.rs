@@ -1374,6 +1374,28 @@ fn compare_replays(
                 let w = offset & !3;
                 x.bytes.get(w..w + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
             };
+            // the stage's float registers around it, both sides (debug)
+            let around = |x: &mtcore::shadow_lanes::Binding| -> Vec<String> {
+                let mut regs: BTreeMap<u16, [Option<u8>; 16]> = BTreeMap::new();
+                for &(o, c) in &x.constants {
+                    if c.stage == ca.stage && c.section == 1 && (c.register as i32 - register as i32).abs() <= 3 {
+                        regs.entry(c.register).or_insert([None; 16])[c.byte as usize] = x.bytes.get(o as usize).copied();
+                    }
+                }
+                regs.iter()
+                    .map(|(r, b)| {
+                        let f: Vec<String> = (0..4)
+                            .map(|k| match (b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]) {
+                                (Some(a), Some(b), Some(c), Some(d)) => format!("{}", f32::from_le_bytes([a, b, c, d])),
+                                _ => "?".into(),
+                            })
+                            .collect();
+                        format!("c{r}=({})", f.join(","))
+                    })
+                    .collect()
+            };
+            eprintln!("parallel-shadow around c{register}: serial {:?}", around(a));
+            eprintln!("parallel-shadow around c{register}: parallel {:?}", around(b));
             return Err(format!(
                 "shader {handle:#x} may read c{register} component {component} (serial {:#x?} at {:#x} written {}, parallel {:#x?} at {:#x} written {}): {lines:?}; float constants {table:?}",
                 word(a), ca.source, results[0].2.contains_key(&ca.source), word(b), cb.source, results[1].2.contains_key(&cb.source)
