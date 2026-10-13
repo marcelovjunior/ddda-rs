@@ -60,6 +60,7 @@ def main():
     p.add_argument('--geometry',action='store_true')
     p.add_argument('--identifiers',action='store_true')
     p.add_argument('--durations',action='store_true')
+    p.add_argument('--keys',action='store_true')
     p.add_argument('--lanes',action='store_true')
     p.add_argument('--restore',action='store_true')
     p.add_argument('--recording',action='store_true')
@@ -93,7 +94,11 @@ def main():
     lanes_match=re.search(r'pub fn f_00fed200\(.*?\n\}',recording,re.S)
     assert lanes_match
     lanes_source=lanes_match.group().replace('x86::call_local(m, cpu, 0x012EFEA0, crate::platform::memcpy)', 'x86::call_ext(m, cpu, 0x012EFEA0)').replace('x86::call_local(m, cpu, 0x012EFE20, crate::platform::memset)', 'x86::call_ext(m, cpu, 0x012EFE20)')
-    (out/'src/lib.rs').write_text(prelude+lanes_source+'\n'+restore_source+'\n'+recording_source+'\n'+match.group()+'\n'+geometry_match.group()+'\n'+identifier_match.group()+'\n'+duration_source)
+    keys=(repo/'crates/ddlift/lift_28/src/generated/lifted_005.rs').read_text()
+    keys_match=re.search(r'pub fn f_00e10fc0\(.*?\n\}',keys,re.S)
+    assert keys_match
+    keys_source=re.sub(r'x86::call_local\(m, cpu, (0x[0-9A-F]+), super::lifted::f_[0-9a-f]+\)', r'x86::call_ext(m, cpu, \1)', keys_match.group())
+    (out/'src/lib.rs').write_text(prelude+keys_source+'\n'+lanes_source+'\n'+restore_source+'\n'+recording_source+'\n'+match.group()+'\n'+geometry_match.group()+'\n'+identifier_match.group()+'\n'+duration_source)
     deps='\n'.join(f'{n}={{path="{(repo/"crates"/n).as_posix()}"}}' for n in ('mtcore','ddnative-base','ddnative-host'))
     if a.emu:
         deps+='\nddruntime={path="'+(repo/'crates/ddruntime').as_posix()+'",default-features=false,features=["emu"]}'
@@ -128,13 +133,21 @@ def main():
     test=test.replace('// L130_LANES_REFERENCE','run_with_callees(main_thread_check::f_00fed200,case);')
     test,count=re.subn(r'vec!\[\("port",\s*mtcore::hot::initialize_draw_recording_lanes\)\]; // L130_LANES_COST', 'vec![("lifted",main_thread_check::f_00fed200),("port",mtcore::hot::initialize_draw_recording_lanes)];',test)
     assert count==1,'lanes cost marker missing'
+    test=test.replace('// L130_KEYS_REFERENCE','run_with_callees(main_thread_check::f_00e10fc0,case);')
+    test,count=re.subn(r'vec!\[\("port",\s*mtcore::hot::intern_dependency_keys\)\]; // L130_KEYS_COST', 'vec![("lifted",main_thread_check::f_00e10fc0),("port",mtcore::hot::intern_dependency_keys)];',test)
+    assert count==1,'keys cost marker missing'
     if a.emu: test+=EMU_TEST
     (out/'tests/hot.rs').write_text(test)
     env=dict(os.environ,CARGO_TARGET_DIR='C:/ddda-targets/L130',CARGO_BUILD_JOBS='4',CARGO_INCREMENTAL='0',DDNATIVE_REQUIRE_VECTORS='1')
     command=['cargo','test','--manifest-path',str(out/'Cargo.toml'),'--test','hot']
-    benchmark='lanes_cost' if a.lanes else 'restore_cost' if a.restore else 'recording_cost' if a.recording else 'durations_cost' if a.durations else 'identifiers_cost' if a.identifiers else 'geometry_cost' if a.geometry else 'dependencies_cost'
+    benchmark='keys_cost' if a.keys else 'lanes_cost' if a.lanes else 'restore_cost' if a.restore else 'recording_cost' if a.recording else 'durations_cost' if a.durations else 'identifiers_cost' if a.identifiers else 'geometry_cost' if a.geometry else 'dependencies_cost'
     if a.emu: benchmark='durations_runtime_cost'
-    command+=['--release',benchmark,'--','--ignored','--nocapture'] if a.bench else ['--','--nocapture']
+    if a.bench:
+        command+=['--release',benchmark,'--','--ignored','--nocapture']
+    else:
+        selected=next((name for enabled,name in ((a.keys,'keys_match'),(a.lanes,'lanes_match'),(a.restore,'restore_match'),(a.recording,'recording_match'),(a.durations,'durations_match'),(a.identifiers,'identifiers_match'),(a.geometry,'geometry_matches')) if enabled),None)
+        if selected: command.append(selected)
+        command+=['--','--nocapture']
     raise SystemExit(subprocess.call(command,env=env))
 
 

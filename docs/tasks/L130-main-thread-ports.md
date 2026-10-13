@@ -410,3 +410,29 @@ with `--lanes`; isolated benchmark uses `--bench --lanes`. Logs:
 
 Next: E10FC0 original/lifted replay. L136 independently fixes runtime
 activation of entries absent from the generated list (`d1c586ee`).
+
+### E10FC0 dependency-key interning
+
+Whole wrapper port keeps all six dependency calls and the final interning
+call. The CRC lookup table stays in guest memory. **768 original Unicorn
+and isolated lifted cases / 3,840 call-return boundaries pass**: all 16
+header-presence masks, individual/all/no dependencies, optional CRC and
+zero/multiple callback outputs. The byte-CRC arm is unreachable because
+the original LEA multiplies by four; every feasible conditional edge is
+covered. The callbacks are explicit synthetic ABI effects, not a new
+equivalence claim for E0EC50/E0E5E0 themselves.
+
+Five alternating opt1-lifted/opt3-port medians (ns/call): no dependencies,
+CRC off **290.5 -> 252.4**, CRC on **371.8 -> 206.9**; all dependencies,
+CRC off **707.8 -> 554.9**, CRC on **1,083.3 -> 846.2**; all headers and
+dependencies with CRC **1,196.7 -> 1,043.8**. Synthetic callback work is
+included. The c17 nearest-lifted share includes the existing E0EC50 port:
+these timings do not establish how much gameplay work is removed.
+
+All eight original/lifted suites pass (the broad run was suspended during
+head's game comparison). Strict mtcore clippy and ddports registry pass.
+Private corpus `keys.json`; record `--keys`, replay `--keys`, benchmark
+`--bench --keys`. Logs: `keys-{differential,bench}.log` and
+`keys-small-{clippy,registry}.log` in the L130 target directory.
+The checker now supports focused replay when a family switch is supplied;
+no switch still runs every suite. Next: five observed emulator entries.
