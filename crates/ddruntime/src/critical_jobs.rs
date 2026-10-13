@@ -23,7 +23,8 @@ struct Trace { sender: SyncSender<Event>, epoch: Instant }
 #[derive(Debug)]
 enum Event {
     Frame { frame: u64, ns: u64 },
-    Batch { id: u64, frame: u64, present: u64, scheduler: u32, queued: u32, ns: u64, nested: bool },
+    Batch { id: u64, frame: u64, present: u64, scheduler: u32, queued: u32, mode: u32,
+            participants: u32, configured: u32, ns: u64, nested: bool },
     End { id: u64, ns: u64, lost: u64, panicked: bool },
     Job { id: u64, tid: u32, site: u32, target: u32, object: u32,
           vtable: u32, resolved: u32, record: u32, start: u64, end: u64, panicked: bool },
@@ -31,7 +32,9 @@ enum Event {
     Wake { id: u64, end_id: u64, tid: u32, site: u32, handle: u32, start: u64, end: u64, result: u32 },
 }
 
+#[inline]
 pub(crate) fn enabled() -> bool { trace().is_some() }
+#[inline]
 fn trace() -> Option<&'static Trace> {
     TRACE.get_or_init(|| {
         let path = std::env::var_os("DDRUNTIME_CRITICAL_JOBS")?;
@@ -125,7 +128,11 @@ fn batch(m: &mut dyn Mem, cpu: &mut Cpu) {
         let id = NEXT.fetch_add(1, Relaxed);
         let previous = ACTIVE.swap(id, std::sync::atomic::Ordering::AcqRel);
         emit(Event::Batch { id, frame: FRAME.load(Relaxed), present: PRESENT.load(Relaxed), scheduler: cpu.ecx,
-            queued: word(m, cpu.ecx, 0x8c).unwrap_or(u32::MAX), ns: now(), nested: previous != 0 });
+            queued: word(m, cpu.ecx, 0x8c).unwrap_or(u32::MAX),
+            mode: word(m, cpu.esp, 4).unwrap_or(u32::MAX),
+            participants: word(m, cpu.ecx, 0x98).unwrap_or(u32::MAX),
+            configured: word(m, cpu.ecx, 0x9c).unwrap_or(u32::MAX),
+            ns: now(), nested: previous != 0 });
         Batch { id, previous }
     };
     BODY.get().unwrap()(m, cpu);
@@ -231,12 +238,16 @@ mod tests {
         if !enabled() { return; }
         fn fake(m: &mut dyn Mem, cpu: &mut Cpu) {
             assert!(ACTIVE.load(Acquire) != 0);
+            let saved = cpu.esi;
+            cpu.esi = cpu.ecx + 0xc0;
             let first = begin_job(0x4b9ff0, m, cpu).unwrap();
             assert_eq!(first.resolved, 0x12345678);
             assert!(begin_job(0x12345678, m, cpu).is_none());
             drop(first);
             assert!(JOB.with(Cell::get).is_none());
+            cpu.esi += 8;
             drop(begin_job(0x4b9ff0, m, cpu).unwrap());
+            cpu.esi = saved;
             m.set_u32(cpu.esp, 0xdbe66d);
             begin_join(Some("KERNEL32.dll!WaitForMultipleObjects"), m, cpu).unwrap().finish(0);
             m.set_u32(cpu.esp, 0xdbd958);

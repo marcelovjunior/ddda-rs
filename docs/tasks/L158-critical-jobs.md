@@ -152,8 +152,10 @@ settings is **1.63–2.01x**. Aligned examples:
 | 4096 | 12245.00 | 6654.40 | 1.84x |
 
 These are synthetic leaf timings, not measured whole-job/frame gains.
-Supplemental page-table replay and own-crate registration tests are queued
-behind head's combo30 hold. The combined native gate and a matched
+Supplemental page-table replay passes under serial and atomic access
+policies (four isolated tests pass, one benchmark ignored). Required-vector
+`mtcore`/`ddports` tests with the override enabled report **18 passed,
+zero failed, nine ignored**. The combined native gate and a matched
 `DDRUNTIME_SYNC_PROFILE=1` / hash=0 versus hash=1 game run remain required.
 
 Reproduce (research recorder runs through `heavy.py`):
@@ -172,5 +174,19 @@ Gate/benchmark log `E:/ddda-re/notes/L158-isolated.log` SHA-256:
 `2f0611782706de71e7e76f0b62acc12bfc254ccdba029a40c6439449c6621006`.
 
 Trace follow-up also adds queue mode/record identity validation, exact DTI
-labels and frame filters. Those changes are not part of the original
-973dbf3f trace checkpoint; focused tests will be repeated after the hold.
+labels and frame filters, plus entry participant/configured counts for
+L162's wake analysis. Those changes are not part of the original 973dbf3f
+trace checkpoint. Final verification: **four focused runtime tests and
+five parser tests pass**; the synthetic trace round-trips with one accepted
+join. Tracing alone now enables the service hooks even without sync-profile.
+
+## Results and handoff
+
+Trace checkpoint: `973dbf3f`; hash candidate: `509e5636`. No game, GPU or
+shard build was run by this agent. The exact original/lifted leaf gate and
+synthetic speedup are established; the requested actual per-frame critical
+path ranking and before/after whole-job durations require head's capture.
+Head has the run request: corrected L153 census, `DDRUNTIME_SYNC_PROFILE=1`,
+`DDRUNTIME_CRITICAL_JOBS=<private trace>`, matched hash=0/1 runs through the
+same gameplay phase, with all other settings fixed. Keep the hash opt-in
+until the combined native gate and that comparison pass.

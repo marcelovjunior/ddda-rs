@@ -32,6 +32,19 @@ class AttributionTests(unittest.TestCase):
         result = timeline(["critical version=1", "Batch { id: 1, present: 0, scheduler: 4, queued: 2, ns: 0, nested: false }"])
         self.assertEqual(result["joins"], [])
         self.assertEqual(result["rejected"]["unfinished batch"], 1)
+        with self.assertRaises(ValueError):
+            timeline(["critical version=1", "critical version=1"])
+
+    def test_queue_identity_rejects_duplicate_and_missing_job(self):
+        batch = dict(id=1, present=0, ns=0, queued=2, mode=0, scheduler=0x1000, nested=False)
+        jobs = [dict(start=1, end=2+i, target=8, resolved=0, vtable=0, tid=4,
+                     record=0x10c0+8*i, site=0xdbdd4c, panicked=False) for i in range(2)]
+        end = dict(ns=8, lost=0, panicked=False)
+        join = dict(start=2, end=7, result=0)
+        self.assertEqual(join_metrics(batch, end, jobs, [join])["queued"], 2)
+        jobs[1]["record"] = jobs[0]["record"]
+        with self.assertRaises(ValueError):
+            join_metrics(batch, end, jobs, [join])
 
     def test_symbols_and_parts(self):
         self.assertEqual(address("RNvNt10f_00db7620"), 0xDB7620)

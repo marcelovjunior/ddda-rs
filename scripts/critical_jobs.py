@@ -22,6 +22,17 @@ def join_metrics(batch, end, jobs, joins):
         raise ValueError("nested, panicked or lossy batch")
     if len(jobs) != batch["queued"] or len(joins) != 1 or not jobs:
         raise ValueError("missing callbacks/join or serial/empty batch")
+    if "mode" in batch:
+        mode = batch["mode"]
+        if mode not in range(4):
+            raise ValueError("unsupported dispatch mode")
+        stride = 8 if mode < 2 else 12
+        expected = {(batch["scheduler"] + 0xc0 + i * stride) & 0xffffffff
+                    for i in range(batch["queued"])}
+        sites = [(0xdbd958, 0xdbdd4c), (0xdbd9cb, 0xdbddbf),
+                 (0xdbda4c, 0xdbde40), (0xdbdabc, 0xdbdead)][mode]
+        if {j["record"] for j in jobs} != expected or any(j["site"] not in sites for j in jobs):
+            raise ValueError("callback records/sites do not cover original queue")
     join = joins[0]
     if join["result"] != 0 or not batch["ns"] <= join["start"] <= join["end"] <= end["ns"]:
         raise ValueError("unsuccessful or unordered join")
@@ -33,10 +44,12 @@ def join_metrics(batch, end, jobs, joins):
     longest = max(jobs, key=lambda j: j["end"] - j["start"])
     tail_start = max(join["start"], second) if second is not None else None
     return {"batch": batch["id"], "frame": batch.get("frame", 0), "present_label": batch["present"],
+            "participants": batch.get("participants"), "configured": batch.get("configured"),
             "queued": batch["queued"], "join_ns": join["end"] - join["start"],
             "last_target": last["target"], "last_candidate_virtual": last["resolved"],
             "last_vtable": last["vtable"], "last_tid": last["tid"],
             "last_duration_ns": last["end"] - last["start"],
+            "last_completion_ties": sum(j["end"] == last["end"] for j in jobs),
             "longest_target": longest["target"],
             "longest_duration_ns": longest["end"] - longest["start"],
             "last_end_ns": last["end"], "penultimate_end_ns": second,
@@ -53,6 +66,8 @@ def timeline(lines):
     version = False
     for line in lines:
         if line.strip() == "critical version=1":
+            if version:
+                raise ValueError("multiple captures must not be concatenated")
             version = True
             continue
         match = re.fullmatch(r"(Frame|Batch|End|Job|Join|Wake) \{ (.*) \}\s*", line)
@@ -171,11 +186,24 @@ def main():
     parser.add_argument("--top", type=int, default=20)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--trace", action="store_true", help="parse correlated runtime file instead of sampled stacks")
+    parser.add_argument("--first-frame", type=int, default=0)
+    parser.add_argument("--last-frame", type=int)
+    parser.add_argument("--dti", type=Path, help="private DTI registry for exact vtable labels")
     args = parser.parse_args()
     raw = args.capture.read_bytes()
     if args.trace:
         result = timeline(raw.decode().splitlines())
         result["sha256"] = hashlib.sha256(raw).hexdigest()
+        result["joins"] = [r for r in result["joins"] if r["frame"] >= args.first_frame and
+                           (args.last_frame is None or r["frame"] <= args.last_frame)]
+        if args.dti:
+            registry = defaultdict(list)
+            for entry in json.loads(args.dti.read_text())["classes"]:
+                vtable = entry.get("vtable")
+                if isinstance(vtable, str):
+                    registry[int(vtable, 0)].append(entry["name"])
+            for row in result["joins"]:
+                row["last_classes"] = registry[row["last_vtable"]]
         if args.json:
             print(json.dumps(result, indent=2))
             return
@@ -189,7 +217,8 @@ def main():
             group[2] += row["after_last_completion_ns"]
         print("Last-completing target / candidate virtual / vtable; joins, last-job overlap ms, after-last ms")
         for key, group in sorted(ranked.items(), key=lambda kv: -kv[1][1])[:args.top]:
-            print(" ".join(f"{v:08x}" for v in key), group[0], group[1] / 1e6, group[2] / 1e6)
+            names = registry[key[2]] if args.dti else []
+            print(" ".join(f"{v:08x}" for v in key), group[0], group[1] / 1e6, group[2] / 1e6, names)
         return
     data = json.loads(raw)
     result = analyze(data)
