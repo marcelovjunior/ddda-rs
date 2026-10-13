@@ -194,17 +194,18 @@ pub(crate) fn run(registry: &crate::dispatch::Registry, m: &mut dyn Mem, cpu: &m
         let result = catch_unwind(AssertUnwindSafe(|| {
             let slot = cpu.esp;
             let service = match registry.get(ip) {
-                Some(Binding::Service(f)) => Some((f, true)),
-                Some(Binding::LockFree(f)) => Some((f, false)),
+                Some(Binding::Service(f)) => Some((f, true, false)),
+                Some(Binding::ServiceTail(f)) => Some((f, true, true)),
+                Some(Binding::LockFree(f)) => Some((f, false, false)),
                 _ => None,
             };
-            let flow = if let Some((f, locked)) = service {
+            let flow = if let Some((f, locked, tail)) = service {
                 let target = m.u32(slot);
                 // L64: as Registry::call runs it (in parallel mode with the
                 // guest lock; it had run without, so file services of the
                 // CRT's stepped I/O functions raced other threads' services
                 // on the runtime's cells: "RefCell already borrowed")
-                registry.run_service(f, m, cpu, ip, locked);
+                registry.run_service(f, m, cpu, ip, locked, tail);
                 Flow::Return(target)
             } else if let Some(step) = registry.instruction(ip) {
                 match instruction(m, cpu, ip, |m, cpu| step(m, cpu, ip)) {

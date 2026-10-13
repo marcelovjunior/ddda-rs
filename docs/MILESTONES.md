@@ -1,5 +1,18 @@
 # Milestones
 
+### L82 render service lock tails (2026-10-13)
+
+- DrawPrimitive, DrawIndexedPrimitive and Clear retain locked snapshots and
+  backend command order, but no longer reacquire solely to return. UP stays
+  locked for post-draw state changes. Per-thread/frame contention telemetry
+  identifies waiting services and holders; parallel preemption avoids a
+  serial-only hook and suspended-thread scans.
+- Synthetic 32-call contention: 64 to 32 acquisitions, 32 to zero blocks,
+  4.479 ms to 71.496 us/call. **138 light runtime tests pass**; actual COM
+  regression checks acquisition counts and recorded commands. No game run.
+- Next: head's L82 redirect targets GetAsyncKeyState's measured lock convoy
+  with atomic input snapshots; head owns gameplay/FPS comparison.
+
 ### L66 hot/cold build (2026-10-12)
 
 - Optional function-level hot packages implemented; 20 focused Python tests,
