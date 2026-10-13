@@ -130,7 +130,18 @@ def batch_timeline(ident, batch, end, jobs, pairs, joins):
     participants = batch.get("participants")
     wake_end = max((p["signal_start_ns"] + p["signal_to_wait_ns"] for p in pairs),
                    default=batch["ns"])
+    worker_ids = {p["tid"] for p in pairs}
+    census = []
+    for tid in sorted(worker_ids | {j["tid"] for j in jobs}):
+        own = [j for j in jobs if j["tid"] == tid]
+        census.append({"tid": tid, "worker": tid in worker_ids,
+                       "jobs": len(own),
+                       "callback_ns": sum(j["end"] - j["start"] for j in own)})
     return {"batch": ident, "frame": batch["frame"], "queued": batch["queued"],
+            "callback_census": census,
+            "last_job_start_delay_ns": last["start"] - batch["ns"] if last else None,
+            "last_job_start_rank": sum(j["start"] < last["start"] for j in jobs) if last else None,
+            "last_job_is_worker": last["tid"] in worker_ids if last else None,
             "signaled_workers": len(pairs), "signaled_lanes_with_main": len(pairs) + 1,
             "participants": participants,
             "configured_participants": batch.get("configured"), "mode": batch.get("mode"),
@@ -168,6 +179,36 @@ def join_summary(batches):
             "worker_callback_gaps": distribution([g["ns"] for b in batches
                 for g in b["no_callback_gaps_while_callbacks_unstarted"]]),
             "interpretation": "Join intervals and callback/wake overlaps are observations, not additive costs. A late wake may overlap useful callbacks. After-last-callback includes dispatcher completion and join return, not just OS scheduling. Callback gaps are not proof of idle workers or unclaimed jobs."}
+
+
+def callback_summary(batches):
+    """Stable guest thread identities, including awakened workers with no job.
+
+    Do not call sorted thread IDs lane numbers: the trace does not contain
+    the original worker-slot index. Seven worker identities with callbacks
+    in participant=8 batches prove eighth participation without that guess.
+    """
+    census = {}
+    for batch in batches:
+        for row in batch["callback_census"]:
+            key = str(row["tid"])
+            out = census.setdefault(key, {"worker": row["worker"], "jobs": 0,
+                "callback_ns": 0, "batches": 0, "batches_with_jobs": 0,
+                "final_callbacks": 0, "final_solo_ns": 0})
+            out["jobs"] += row["jobs"]
+            out["callback_ns"] += row["callback_ns"]
+            out["batches"] += 1
+            out["batches_with_jobs"] += row["jobs"] > 0
+            if batch["last_job"] and batch["last_job"]["tid"] == row["tid"]:
+                out["final_callbacks"] += 1
+                out["final_solo_ns"] += batch["last_job_solo_tail_ns"]
+    return {"per_thread": census,
+            "eight_participant_batches_with_seven_working_workers": sum(
+                b["participants"] == 8 and b["workers_with_callbacks"] == 7 for b in batches),
+            "last_job_start_delay": distribution([b["last_job_start_delay_ns"]
+                for b in batches if b["last_job"]]),
+            "last_job_start_rank_histogram": dict(sorted(Counter(
+                b["last_job_start_rank"] for b in batches if b["last_job"]).items()))}
 
 
 def analyze(records, min_frame=0):
@@ -252,6 +293,7 @@ def analyze(records, min_frame=0):
                "wait_to_first_job_ns", "signal_to_first_job_ns")
     return {"pairs": pairs, "batches": batches, "rejected": dict(rejected),
             "join_summary": join_summary(batches),
+            "callback_summary": callback_summary(batches),
             "batch_summary": {
                 "count": len(batches),
                 "queued_histogram": dict(sorted(Counter(b["queued"] for b in batches).items())),

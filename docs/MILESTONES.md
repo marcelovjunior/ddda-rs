@@ -1,5 +1,34 @@
 # Milestones
 
+### L162c job distribution and host scheduling (2026-10-13)
+
+- c31 h0 150-frame census: main 65,186 callbacks, six workers
+  88,096 / 78,545 / 64,249 / 55,879 / 52,116 / 42,930. Main final-callback
+  solo tails add 2.661 ms/frame before its joins. Worst main/worker tails
+  start within 92..135 us but run 14.65..18.51 ms; late queue ordering is
+  not established as their cause. Shared atomic FIFO already distributes work.
+- Independent priority/ideal-processor opt-ins forward original Windows
+  requests previously ignored. Foreground requests CPU hints only; background
+  requests priority -1. No invented boost, affinity pin or callback reordering.
+- 19 parser and four host scheduling tests pass, including suspended guest
+  startup in both modes. Light 254 reported passes / zero failures / seven
+  ignored before final lifecycle refinement; final focused four pass.
+  No game/FPS gain measured. Details: `docs/tasks/L162-job-wake.md`.
+- Blocker: no post-fix p8 trace yet; old ctor-only run cannot prove eighth-lane
+  work. Next: head capture p8 per-thread callbacks, then independent scheduling
+  A/B with participant/hash/sync settings fixed and profile-off acceptance.
+### L168 guest-memory locality opt-in (2026-10-13)
+
+- `DDNATIVE_BACKING=regions`: 2 MiB-aligned guest-region host reservations,
+  lazy 4 KiB commits, unchanged permissions/atomics/retirement. Large-page
+  attempt fails error 1314 on this token; `large` falls back, no policy change.
+- Base 41 pass; fallback five pass; runtime light 250 reported pass, zero
+  failures/seven ignored. Original hash leaf replay four tests pass.
+- Synthetic sequential read/read-write median paired gains 1.461x/1.385x;
+  scattered/leaf gains unproven. No hardware miss-rate or gameplay claim.
+- Head-owned bounded WPR profile validates. Next: matched PMC and profiler-off
+  gameplay A/B after playtest; actual snapshot/counters pending. Details:
+  `docs/tasks/L168-tlb.md`.
 ### L167 critical callbacks and exact shadow state save (2026-10-13)
 
 - Ranked 20,700 validated joins: sky-stable shadow EE2C90 leads at
@@ -156,6 +185,24 @@
   5,000-draw jobs **1.804 -> 1.832** (regression). Same bytes/submits/hashes;
   no gameplay gain claimed. Next: head native VK=1 A/B and zero-mismatch
   compare. Details and limitations: `docs/tasks/L164-native-backend.md`.
+### L161 generator flag fixed point (2026-10-13)
+
+- Audited ten hot main/job lifted routines against raw stacks and opt1
+  assembly. Register caching showed mixed timings and was rejected.
+  Independent generator switch `LIFT_FLAG_FIXED_POINT=1` removes dead
+  carry chains; default off. Regeneration removes 3,238 net flag helpers,
+  preserves 44 step bodies and all per-function memory-helper counts.
+- Full opt0 native/vector/inventory gate: 107 pass, 0 failures, 9 ignored;
+  178,130 original cases / 59,734 functions, five unchanged inventory gaps.
+  Generation 927.60 s; opt0 prebuild 370 s. Isolated opt0/opt1 replay passes
+  31 cases; 43 focused generator/fixture tests pass. Full opt1 build stopped
+  per head's shared-train rule; completion remains with that train.
+- Long hash-loop medians improve 1.032–1.824x opt0 / 1.150–1.879x opt1;
+  other fixture timings mixed. Not additive to L158 JOB_HASH=1. No game
+  FPS claim. Runtime light: 232 pass, two timing failures, seven ignored;
+  both failures pass isolated retries. Details: `docs/tasks/L161-codegen.md`.
+- Next: head combined generation/gate with the switch enabled, then
+  matched image/FPS acceptance.
 
 ### L153 game-thread synchronization (2026-10-13)
 

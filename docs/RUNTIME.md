@@ -1,5 +1,18 @@
 # Phase 1 runtime proposal (R01)
 
+## L168 guest-memory backing experiment
+
+`DDNATIVE_BACKING=regions` opts into 2 MiB-aligned host regions with lazy
+4 KiB commits. Guest permissions, atomic accesses and retired-page lifetime
+stay unchanged. `large` attempts actual large pages, then logs failure and
+falls back to regions; this account lacks the required privilege (error
+1314), and system policy is unchanged. Default backing stays per-page.
+
+Regions improve synthetic sequential access; scattered and hot-leaf gains
+are unproven. Runtime light 250 reported tests pass. Hardware miss rates and
+gameplay performance await the head-owned WPR/game A/B. See
+[L168 measurements and protocol](tasks/L168-tlb.md); alignment alone is not
+large-page backing. Rust allocator counters exclude VirtualAlloc regions.
 ## L158 shader lookup opt-in (2026-10-13)
 
 `DDRUNTIME_JOB_LOOKUP=1` registers exact 01008200/01008260 dependency
@@ -1537,3 +1550,16 @@ configured eight but an idle seventh worker; the first-frame follow-up still
 needs head acceptance. Later game/user configuration changes remain effective.
 See `docs/tasks/L162-job-wake.md` for exact 7/8 capture env, verification
 status and the `scripts/job_wake.py` per-join latency/tail report.
+
+L162c adds independent Windows opt-ins `DDRUNTIME_THREAD_PRIORITY=1` and
+`DDRUNTIME_THREAD_IDEAL=1`. These forward the game's SetThreadPriority and
+SetThreadIdealProcessor requests using retained host thread handles (also
+valid before guest ResumeThread), preserving host errors and return values.
+Defaults retain the previous stubs. The ideal processor is a scheduling hint,
+not an affinity restriction; x86's query sentinel 32 maps to the host sentinel.
+Foreground workers request ideal CPUs 1..7 at `00DBDF30`, with no priority
+boost. The background pool requests priority -1 and ideal CPUs 0..7 at
+`00DBDFE0`. No new priority, queue ordering, or worker count is imposed.
+Four Windows tests cover actual host state, suspended creation, current-thread
+handles, invalid/closed handles, aliases and ABI/error results. Gameplay
+performance and eighth-lane callback confirmation still require head captures.
