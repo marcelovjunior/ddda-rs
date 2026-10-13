@@ -826,6 +826,207 @@ def record_update(out):
     print(f'{len(cases)} update cases, {sum(len(c["events"]) for c in cases)} call boundaries -> {out}')
 
 
+LIGHTS, LIGHTS_END, PRIORITY = 0x49B1A0, 0x49BA1C, 0x7261D0
+LENGTHS[LIGHTS] = LIGHTS_END - LIGHTS
+VF_BOUNDS, VF_SECOND, VF_THIRD = 0xDEA0000, 0xDEA0010, 0xDEA0020
+SCENE, LIGHT_TABLE, VTABLE, LIGHT0 = BASE + 0x100, BASE + 0x1000, BASE + 0x800, BASE + 0x2000
+STATES, PASS_TABLE, PASS_LIGHTS, BOX = BASE + 0x8000, BASE + 0xB000, BASE + 0xC000, BASE + 0x7000
+
+
+def plain_float(rng):
+    """No signalling NaNs (Unicorn's fld does not quiet them)."""
+    v = any_float(rng)
+    return v | 0x400000 if (v >> 23) & 0xFF == 0xFF and v & 0x7FFFFF else v
+
+
+class LightsOracle(TargetOracle):
+    """0x0049B1A0 sSceneExt::vf16 (thiscall, `ret 0x20`). Its light
+    objects' virtual functions (+0x4C bounds, +0x50, +0x54) and the arena
+    refill 0x00FED890 are recorded guest calls; their stubs' writes are the
+    calls' effects. 0x007261D0 (a getter) runs as the original."""
+
+    def __init__(self):
+        uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
+        uc.ctl_set_tcg_buffer_size(16 * 1024 * 1024)
+        for page in (0x49B000, 0x726000, 0x162A000, 0x161C000):
+            uc.mem_map(page, 0x1000)
+            uc.mem_write(page, h.code(page, 0x1000))
+        for address, size in ((REFILL & ~0xFFF, 0x1000), (0x18CF000, 0x1000), (VF_BOUNDS & ~0xFFF, 0x1000),
+                              (BASE, SIZE), (STACK, STACK_SIZE), (h.RET, 0x1000)):
+            uc.mem_map(address, size)
+        for stub in (REFILL, VF_BOUNDS, VF_SECOND, VF_THIRD):
+            uc.mem_write(stub, bytes.fromhex('c20400'))
+        self.active = False
+        uc.hook_add(UC_HOOK_MEM_READ, self.read)
+        uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
+        uc.hook_add(UC_HOOK_CODE, self.code)
+
+    def effect(self, a, v, effects):
+        b = struct.pack('<I', v & 0xFFFFFFFF)
+        self.remember(a, 4)
+        self.uc.mem_write(a, b)
+        self.written.update(range(a, a + 4))
+        effects += [(a + i, b[i]) for i in range(4)]
+
+    def code(self, uc, address, size, data):
+        if address == h.RET:
+            uc.emu_stop()
+            return
+        if address in (REFILL, VF_BOUNDS, VF_SECOND, VF_THIRD):
+            rng = self.rng
+            sp = uc.reg_read(x.UC_X86_REG_ESP)
+            self.remember(sp, 8)
+            self.events.append(dict(kind='call', target=address, **self.snapshot()))
+            resume, arg = struct.unpack('<II', uc.mem_read(sp, 8))
+            this = uc.reg_read(x.UC_X86_REG_ECX)
+            effects, eax = [], rng.getrandbits(32)
+            if address == REFILL:
+                arena = rng.choice([BASE + 0x48000, BASE + 0x48000, 0])
+                self.effect(this + 0x24, arena, effects)
+                self.effect(this + 0x28, (arena + ((arg + 0xFFF) & ~0xFFF)) if arena else 0, effects)
+            elif address == VF_BOUNDS:  # min and max xyz into the caller's buffer
+                box = [struct.unpack('<f', uc.mem_read(BOX + 4 * k, 4))[0] for k in range(8)]
+                for k in range(3):
+                    lo = box[k] - 1 if self.wide else box[k] + rng.uniform(-6, 4)
+                    self.effect(arg + 4 * k, plain_float(rng) if rng.randrange(25) == 0 else f32(lo), effects)
+                    self.effect(arg + 0x10 + 4 * k, f32(box[4 + k] + 1 if self.wide else lo + rng.uniform(0, 8)), effects)
+            else:  # a vector: in the caller's buffer, or the light's own
+                if rng.randrange(2):
+                    for k in range(4):
+                        self.effect(arg + 4 * k, plain_float(rng), effects)
+                    eax = arg
+                else:
+                    eax = this + (0x100 if address == VF_SECOND else 0x110)
+            uc.reg_write(x.UC_X86_REG_EAX, eax)
+            for reg in REGS[1:3]:
+                uc.reg_write(reg, rng.getrandbits(32))
+            uc.reg_write(x.UC_X86_REG_ESP, sp + 8)
+            self.events.append(dict(kind='return', effects=effects, **self.snapshot()))
+            uc.reg_write(x.UC_X86_REG_EIP, resume)
+            return
+        assert LIGHTS <= address < LIGHTS_END or address == PRIORITY or address == PRIORITY + 3, hex(address)
+        if self.last is not None:
+            self.edges.add((self.last, address))
+        self.last = address
+
+    def run(self, seed):
+        uc = self.uc
+        rng = self.rng = random.Random(seed)
+        uc.mem_write(BASE, rng.randbytes(SIZE))
+        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
+        uc.mem_write(0x18CF000, rng.randbytes(0x1000))
+        ctx = CONTEXT
+
+        def word(a, v):
+            uc.mem_write(a, struct.pack('<I', v & 0xFFFFFFFF))
+
+        # lights
+        lights = [LIGHT0 + 0x600 * k for k in range(16)]
+        for L in lights:
+            word(L, VTABLE)
+            word(L + 4, rng.choice([2 | 0x4800, 2 | 0x4800 | (rng.getrandbits(20) << 12), 2 | 0x4800, 3 | 0x4800, 2 | 0x800]))
+            word(L + 0x30, rng.choice([rng.randrange(4), rng.getrandbits(32)]))
+            word(L + 0x5D0, rng.choice([1, 1, 2, 2, 2, 4, 3]))
+            for k in range(4):
+                word(L + 0x5D4 + 4 * k, plain_float(rng))
+            word(L + 0x5E4, rng.choice([1, 3, 0x10, rng.getrandbits(32)]))
+            for k in range(8):
+                word(L + 0x100 + 4 * k, plain_float(rng))
+        word(VTABLE + 0x4C, VF_BOUNDS)
+        word(VTABLE + 0x50, VF_SECOND)
+        word(VTABLE + 0x54, VF_THIRD)
+        # the scene's two lists (entries may repeat)
+        word(SCENE + 0x20, LIGHT_TABLE)
+        wide = self.wide = seed % 3 == 0  # long lists: the unrolled scale loops repeat
+        # (more than 8 lights overflow the original's lists into its term
+        # arrays, which it then reads as lights: callers ask for at most 8)
+        near = seed % 2 == 0  # wide: eight first-list lights, or few and many type-2 lights
+        n1, n2 = ((rng.randrange(8, 12), rng.randrange(4)) if near else (rng.randrange(0, 5), rng.randrange(4, 10))) if wide             else (rng.randrange(7), rng.randrange(10))
+        word(SCENE + 0x6C, 0)
+        word(SCENE + 0x70, n1)
+        word(SCENE + 0x64, 16)
+        word(SCENE + 0x68, n2)
+        word(SCENE + 0xB78, rng.randrange(4, 12) if wide else rng.randrange(4))
+        if wide:  # type-1 lights first, then distinct type-2 lights that pass every test
+            for k, L in enumerate(lights):
+                word(L + 4, 2 | 0x4800)
+                word(L + 0x5D0, 1 if k < 6 else 2)
+            second = rng.sample(lights[6:], min(n2, 10))
+            n2 = len(second)
+            word(SCENE + 0x68, n2)
+        for k in range(n1):
+            word(LIGHT_TABLE + 4 * k, rng.choice(lights[:6] if wide else lights))
+        for k in range(n2):
+            word(LIGHT_TABLE + 4 * (16 + k), second[k] if wide else rng.choice(lights))
+        # the draw's bounds
+        for k in range(3):
+            lo = rng.uniform(-20, 20)
+            word(BOX + 4 * k, f32(lo))
+            word(BOX + 0x10 + 4 * k, f32(lo + rng.uniform(0, 10)))
+        word(BOX + 0xC, f32(rng.uniform(-1, 1)))
+        word(BOX + 0x1C, f32(rng.uniform(-1, 1)))
+        # the context
+        word(ctx + 0x20, STATES)
+        for cache, source in ((0x2530, 0x2320), (0x2538, 0x2328), (0x2540, 0x2348), (0x2550, 0x2358)):
+            v = rng.getrandbits(32)
+            word(STATES + source, v)
+            word(ctx + cache, v if rng.randrange(2) else rng.getrandbits(32))
+        word(ctx + 0x5C, rng.getrandbits(32))
+        word(ctx + 0x6C, rng.randrange(32))
+        word(ctx + 0x18, PASS_TABLE)
+        word(PASS_TABLE + 0x7B4, PASS_LIGHTS)
+        uc.mem_write(PASS_LIGHTS + 0x18, struct.pack('<H', rng.choice([0x64, 0x64, 0, 4])))
+        word(ctx + 0x24, BASE + 0x44000)
+        word(ctx + 0x28, BASE + 0x44000 + (0x10000 if rng.randrange(3) else rng.randrange(0x100)))
+        # the call
+        sp = SP - 4 * rng.randrange(4)
+        most = 8 if wide else rng.choice([0, 1, 2, 4, 8, 8, 8])
+        args = [ctx, most, BOX, 0xFFFFFFFF if wide else rng.choice([0, 1, 3, 7, rng.getrandbits(32)]),
+                0xFFFFFFFF if wide else rng.choice([0, 1, 0x13, rng.getrandbits(32)]),
+                # the scales never NaN: with two NaN operands mulss gives the
+                # first operand's payload, Unicorn the second's
+                f32(rng.uniform(-4, 4)), f32(rng.uniform(-4, 4)), f32(rng.uniform(-4, 4))]
+        for i, v in enumerate([h.RET] + args):
+            word(sp + 4 * i, v)
+        regs = [rng.getrandbits(32), SCENE, rng.getrandbits(32), rng.getrandbits(32), sp,
+                rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(32)]
+        for reg, v in zip(REGS, regs):
+            uc.reg_write(reg, v)
+        for i in range(8):
+            uc.reg_write(x.UC_X86_REG_XMM0 + i, rng.getrandbits(128))
+        uc.reg_write(x.UC_X86_REG_MXCSR, 0x1F80)
+        uc.reg_write(x.UC_X86_REG_FPCW, 0x37F)
+        uc.reg_write(x.UC_X86_REG_FPSW, 0)
+        uc.reg_write(x.UC_X86_REG_FPTAG, 0xFFFF)
+        uc.reg_write(x.UC_X86_REG_EFLAGS, 0x202 | (rng.getrandbits(12) & 0xCD5))
+        self.initial, self.written, self.events, self.edges, self.last = {}, set(), [], set(), None
+        before = self.snapshot(False)
+        self.active = True
+        uc.emu_start(LIGHTS, h.RET, count=500000)
+        self.active = False
+        assert uc.reg_read(x.UC_X86_REG_EIP) == h.RET
+        return dict(entry=LIGHTS, seed=seed, before=before, initial=sorted(self.initial.items()),
+                    events=self.events, after=self.snapshot(), edges=sorted(self.edges))
+
+
+def record_lights(out):
+    oracle = LightsOracle()
+    cases = [oracle.run(i + 1) for i in range(1500)]
+    edges = {tuple(e) for c in cases for e in c['edges']}
+    missing = [(hex(i.address), hex(t)) for i in branches(LIGHTS)
+               for t in (i.address + i.size, int(i.op_str, 16)) if (i.address, t) not in edges]
+    # Unreachable: an insertion is always below the list's end (the shift
+    # always moves something), and the counts never reach 2^31 (no fild
+    # correction).
+    assert missing == [('0x49b387', '0x49b39d'), ('0x49b3c8', '0x49b3ca'), ('0x49b3e4', '0x49b3e6')], missing
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(dict(
+        source='DDDA.exe 2017-12-13 Steam',
+        exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+        uncovered_edges=missing, cases=cases), separators=(',', ':')))
+    print(f'{len(cases)} light cases, {sum(len(c["events"]) for c in cases)} call boundaries -> {out}')
+
+
 def record_target(out):
     oracle = TargetOracle()
     cases = [oracle.run(i + 1, kind) for i, kind in enumerate(
@@ -876,6 +1077,7 @@ def main():
     p.add_argument('--sort', action='store_true', help='record 0x00FEDD60 (record_sort.json beside --out)')
     p.add_argument('--cull', action='store_true', help='record the frustum tests and the colour (cull.json beside --out)')
     p.add_argument('--update', action='store_true', help='record 0x01062F20 (material_update.json beside --out)')
+    p.add_argument('--lights', action='store_true', help='record 0x0049B1A0 (scene_lights.json beside --out)')
     a = p.parse_args()
     if a.state:
         record_state(Path(a.out).with_name('material_state.json'))
@@ -891,6 +1093,9 @@ def main():
         return
     if a.update:
         record_update(Path(a.out).with_name('material_update.json'))
+        return
+    if a.lights:
+        record_lights(Path(a.out).with_name('scene_lights.json'))
         return
     oracle = Oracle()
     cases, skipped, seed = [], 0, 0

@@ -55,6 +55,11 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         ports.push((0x00ff_0d20, mtdraw::cull::cull_box));
         ports.push((0x00ff_0e60, mtdraw::cull::cull_box_all));
     }
+    // L176: sSceneExt::vf16, the draw's light setup (semantic port,
+    // crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_LIGHTS").as_deref() == Ok("1") {
+        ports.push((0x0049_b1a0, mtdraw::lights::scene_lights));
+    }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
     if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {

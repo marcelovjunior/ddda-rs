@@ -50,7 +50,8 @@ the synthetic memory are skipped), private output
 
 Registered (crates/ddports): 0x01066B10, 0x01067790, 0x01062F20
 (`DDRUNTIME_MATERIAL=1`), 0x00FEFB90 (`DDRUNTIME_SET_TARGET=1`),
-0x00FF0780, 0x00FF0AD0, 0x00FF0D20, 0x00FF0E60 (`DDRUNTIME_CULL=1`). The
+0x00FF0780, 0x00FF0AD0, 0x00FF0D20, 0x00FF0E60 (`DDRUNTIME_CULL=1`),
+0x0049B1A0 (`DDRUNTIME_LIGHTS=1`). The
 L176 ports of 0x01066590, 0x010655A0 and 0x00FEDD60 stay with their tests
 but are not registered: the head keeps claude-2's (L170), codex-10's
 (L174) and the head's (L171) for the train (board #14277).
@@ -205,6 +206,39 @@ Unowned leaves under uBaseModel::vf11 (0x00EA3130) in stacks_c26vk/def
   the refill stub's writes to the context's arena recorded as the call's
   effects and replayed by the test. Mutation check 5/5. 694 -> 517 ns
   (1.3x; the copies dominate). `DDRUNTIME_MATERIAL=1`.
+
+### 0x0049B1A0, sSceneExt::vf16 (the draw's light setup)
+
+The largest unowned function of the model-draw tree (19 samples in
+stacks_c26vk/def). `this->lights(context, most, bounds, kinds, groups,
+y_scale, near_scale, far_scale)` (`ret 0x20`): up to `most` lights from
+the scene's two lists (type-1 lights of the first; the second's by bounds
+overlap and descending priority, duplicates skipped, type-2 lights capped
+by `[this+0xB78]`), three terms each (position words, two vectors from the
+light's virtual +0x50 and +0x54 copied through the x87 stack), scaled;
+four cached context states; the context's light constants (0x190 bytes)
+into a new arena block.
+
+- `crates/mtdraw/src/lights.rs`: `scene_lights`. The original copies the
+  block from its stack frame whole, entries it did not fill included, so
+  the port keeps its locals in guest memory at the original's (16-byte
+  aligned) frame addresses; the priority getter 0x007261D0 (`mov eax,
+  [ecx+0x30]`) is inlined; the virtual calls and the refill are guest
+  calls from the original's frame with its return addresses.
+- Vectors: `record_material.py --lights`, 1500 cases (lists with repeats,
+  equal priorities, wrong states and types; overlapping and disjoint
+  bounds; caches equal or not; recording on or off; arena with or without
+  room; entry stacks at four alignments). Every reachable branch is
+  covered (unreachable: an empty insertion shift; the fild corrections for
+  counts of 2^31 or more). More than 8 lights overflow the original's lists
+  into its term arrays, which it then reads as lights: callers ask for at
+  most 8, the cases too. The scales are never NaN in the cases: with two
+  NaN operands mulss gives the first operand's payload, Unicorn the
+  second's; instead the private benchmark runs the lifted body and the
+  port on the hardware with NaN scales: 1500/1500 cases the same.
+- `tests/material.rs`: 1500 ABI-level cases pass, every guest call checked
+  and its effects replayed; mutation check 6/6.
+- Microbenchmark: 2484 -> 1319 ns per call (1.9x).
 
 Not yet measured in game. Skipped: 0x01066C60 nDraw::Material::vf12 (11
 self samples, ~0x600 bytes, six guest calls: little to gain).

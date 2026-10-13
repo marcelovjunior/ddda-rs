@@ -255,3 +255,19 @@ fn update_material_matches_original() {
     assert!(n > 1000, "{n} cases");
     eprintln!("0x01062F20: {n} ABI-level cases passed");
 }
+
+// verifies 0x0049B1A0 (ABI level; its lights' virtual calls and the arena
+// refill are checked guest calls with replayed effects)
+#[test]
+fn scene_lights_matches_original() {
+    let path = std::env::var("L176_LIGHTS_VECTORS")
+        .unwrap_or_else(|_| "E:/ddda-re/notes/native-L176/scene_lights.json".into());
+    let data: Value = match std::fs::read_to_string(&path) {
+        Ok(t) => serde_json::from_str(&t).unwrap(),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let n = abi_cases_with_call(&data, 0x0049_B1A0, mtdraw::lights::scene_lights);
+    assert!(n > 1000, "{n} cases");
+    eprintln!("0x0049B1A0: {n} ABI-level cases passed");
+}
