@@ -6,6 +6,217 @@ Assigned by head/user 2026-10-13. Runtime only, no agent game/shard runs.
 
 ## Results
 
+### L162e: whole FEE320 capture and timing checkpoint (2026-10-13)
+
+**Implemented, isolated-tested; real capture and native decision pending.**
+This batch installs no native FEE320 replacement and makes no speedup claim.
+The earlier sampled stacks cannot supply its precise wall-time share or
+real inputs. L158's existing leaf corpus is synthetic, not a gameplay
+snapshot (codex-7 confirmed board #13680). No game/GPU/shard execution here.
+
+`DDRUNTIME_FEE320_TRACE=<private directory>` installs three observational
+wrappers: original frame `0041DD60`, shadow callback `00EE2C90`, and whole
+original lifted body `00FEE320`. Only callbacks whose object vtable is
+`0160DF98` (uSkyStableShadow) are selected. Existing frame wrappers are
+chained; a preexisting FEE320 port is rejected. No env switch means no
+wrappers. `DDRUNTIME_FEE320_FIRST` and `DDRUNTIME_FEE320_FRAMES` select
+application frame IDs (default 0/30). One exclusively-created JSON file
+per selected callback avoids overwritten captures. Use a new directory
+for every run. Dispatch hook coordination: claude-2 approved #13707.
+
+- **CAPTURE=0 (default):** the usual Mem/page table remains in place.
+  Records callback wall ns, FEE320 calls/inclusive ns, and top-level
+  external-call ns inside FEE320. Nested external calls are not double
+  counted. The remainder is caller work **plus instrumentation overhead**,
+  not uninstrumented CPU self time. Host descheduling remains included.
+- **CAPTURE=1:** the original lift runs once through a Mem observer with
+  the page-table bypass disabled. Each call records all 84 CPU words
+  (GPRs, all XMM lanes, lazy flags, segments, saved/live MXCSR, full x87),
+  ordered read/write values and widths, probes, allocation returns, and
+  entry/exit CPU at external-call boundaries. Access widths are forwarded
+  intact. Captured durations are deliberately excluded from cost reports.
+- External callees still run normally. Service effects through runtime
+  state or another memory reference are **not** comprehensively observed;
+  replay treats callees as explicit opaque contracts. This proves the
+  complete caller under those observed inputs/contracts, not the original
+  machine instructions or transitive platform implementation. Raw x87
+  host FIP/FDP are kept in captures but excluded from cross-process CPU
+  equality (two dwords only): ASLR/stack addresses differ; guest FNSAVE
+  uses instruction-supplied guest addresses in `x87.rs::fnsave`.
+- Logs bound events/bytes/call records and mark any truncation invalid.
+  The analyzer rejects panic, overflow, missing calls, unbalanced seams,
+  mixed modes/objects and incomplete/duplicate requested frame coverage.
+  The observer preserves MXCSR and parks/restores guest x87 ownership.
+
+`scripts/shadow_fee320.py --replay` extracts only FEE320 and its four
+generated block helpers into a private opt1 crate (base/host opt3). Its
+strict transcript Mem checks every caller access, write and external-call
+entry CPU, restores each recorded callee exit, and checks caller exit
+CPU and full transcript consumption. It is **not a performance harness**:
+transcript parsing/access checking must not be timed as generated-code
+execution. A Pages-backed memory corpus with fully represented callee
+effects is still needed for candidate throughput measurement. This limit
+and the reusable capture API were sent to codex-6 (#13724).
+The shared `capture_call`/`write_call` API also returns original panics for
+the caller to resume. Nested captures are rejected (`capturing()` lets a
+generic wrapper retain its original body instead); direct local/lifted
+call seams require further work for the ranked corpus. FEE320's own calls
+are external or redirected memcpy. Scope agreed on board #13743/#13754.
+
+**Verification:** 128 synthetic whole-lift record/replay cases pass, each
+also rejects a corrupted output CPU. Includes dirty-state copies, resource
+handles, allocation/shader seams, float/x87 writes and memcpy. Callee
+returns in these machinery tests are explicitly synthetic; no gameplay
+branch-coverage or original-instruction oracle claim. Five focused runtime
+tests pass (width/effects, CPU/MXCSR, limits, unwind, nested external seams), six Python analyzer
+tests pass. Full light suite: **259 reported passes / zero failures /
+seven ignored**, four build jobs, no incremental, `C:/ddda-targets/L162`.
+Private log: `E:/ddda-re/notes/native-L162e/light.log`. Game-feature hook
+integration still belongs to the head's one train build.
+The final shared-API refinement passes the focused runtime gate and all
+six isolated tests (five recorder checks plus the 128-case lift test).
+
+**Next required action (head only, after the user's playtest):** integrate
+this checkpoint and collect independent timing and oracle windows from
+the same route with other opt-ins fixed. Example uses frame 6600; choose
+the actual late-game application frame for the new run:
+
+```powershell
+$env:DDRUNTIME_FEE320_TRACE = 'E:/ddda-re/notes/native-L162e/timing-01'
+$env:DDRUNTIME_FEE320_FIRST = '6600'
+$env:DDRUNTIME_FEE320_FRAMES = '30'
+$env:DDRUNTIME_FEE320_CAPTURE = '0'
+# Head launches its integration executable, preserving build/env/exe hash.
+python scripts/shadow_fee320.py E:/ddda-re/notes/native-L162e/timing-01 --first 6600 --frames 30
+
+# Separate head run, new output directory, one frame to bound overhead:
+$env:DDRUNTIME_FEE320_TRACE = 'E:/ddda-re/notes/native-L162e/capture-01'
+$env:DDRUNTIME_FEE320_FRAMES = '1'
+$env:DDRUNTIME_FEE320_CAPTURE = '1'
+# Head launches its integration executable again.
+python scripts/shadow_fee320.py E:/ddda-re/notes/native-L162e/capture-01 --first 6600 --frames 1 --replay
+```
+
+The head must return the capture directories, actual frame selection,
+executable SHA-256, integration commit and full env. Then measure FEE320's
+inclusive and callee-excluded share before deciding whether a complete
+native Rust port can justify the required isolated >=1.5x gain. Neither
+that criterion nor a switch to another family member is established yet.
+
+### L162d: exact long-callback identity and ownership (2026-10-13)
+
+**Analysis posted first:** board #13612, #13635; family split #13641 in
+response to head #13628. No game, GPU or shard execution. No speedup or
+original-image comparison claimed for this analysis-only batch.
+
+The five worst main tails above are the same **uSkyStableShadow** object,
+guest `6873B740`, vtable `0160DF98`, queued callback **00DB7620**. Its
+normal virtual dispatch is **00EE2C90**, inherited `uShadow::vf11`; virtual
+slot +60 is **00EFEF80**, `uStableShadow::vf24`, tail-calling **00EFDC70**.
+DTI registry supplies class/slot identity; read-only Ghidra supplies branch
+and call semantics. DB7620 has an alternate BFC7D0 path, so the trace's
+`resolved` remains formally a candidate. Direct sampled EE2C90 stacks and
+the long duration support the normal path; the trace does not record its
+branch condition. The callback is shadow scene traversal/command building,
+not an animation update or a main-thread-only phase.
+
+Full callback census from both original compressed traces, matching their
+decompressed SHA-256 against the earlier complete-batch selections:
+
+| 150-frame window | h0 6600..6749 | h1 6819..6968 |
+|---|---:|---:|
+| Sky-shadow callbacks / times batch-last | 150 / 150 | 150 / 150 |
+| Main / worker executions | 27 / 123 | 29 / 121 |
+| Inclusive callback wall ms/frame, all lanes | 13.4201 | 11.8191 |
+| Main callback duration range, ms | 10.8263..18.0093 | 10.1433..15.4864 |
+| Worker callback duration range, ms | 9.7832..18.5104 | 9.2528..15.8200 |
+| Main shadow solo tail, ms/frame (before join) | 0.96494 | 0.96200 |
+| Worker shadow solo tail, ms/frame (unclipped) | 3.90542 | 3.65255 |
+
+h0 worker counts in lanes 1070/74/78/7C/80/84 are **20/19/27/23/9/25**.
+Thus the *same object* runs on all six workers as well as main. The earlier
+**2.66139 ms/frame main solo figure covers all callback families**; only
+0.96494 belongs to this shadow callback. Likewise, 2,080 final main
+callbacks are not 2,080 long shadow callbacks. Inclusive wall durations
+contain host scheduling and instrumentation; h0/h1 are not a controlled
+leaf A/B, and none of these figures is a CPU self-time measurement.
+
+**Observed call tree:** c26vk raw stacks are from a different run, so they
+cannot be joined to a particular c31 frame/object. Requiring a visible
+DB7620, EE2C90 and original dispatcher admits **24 main / 129 worker**
+shadow stacks. Main has 106 dispatcher stacks, of which 83 show DB7620;
+worker has 3,939 / 593 respectively. Missing/optimized-away frames are not
+inferred. Main's stable-shadow path is:
+
+```
+DBD8D0 -> DB7620 -> EE2C90 -> [EFEF80 tail] -> EFDC70
+  -> EFD240 -> DB63E0 (sUnit::vf16)
+    -> C52D70 -> 886880 -> FFE5C0 -> EA3130 (uBaseModel::vf11)
+      -> FFC350 / FFC9F0 / EA5320 -> FEEF20 -> FEE320 -> E12A20
+    -> C25EA0 -> FA5860 -> EA3130 -> C24640 -> material/model helpers
+    -> B6A070 -> B89790 -> effect/model helpers
+  -> EEA950 -> DB63E0 -> additional model/effect work
+```
+
+The bracketed tail wrapper is source-confirmed, not a visible sampled
+frame. Main inclusive counts: EFDC70 23/24, EFD240 21, DB63E0 23,
+EA3130 19. Workers: EFDC70 90/129, EFD240 77, DB63E0 87, EA3130 59.
+Another shadow path, EFEFD0 -> EFEDB0 -> EFEA20 -> EFCE40 -> DB5E80,
+appears in 1 main and 38 worker stacks at EFEFD0; do not attribute all
+EE2C90 family samples to the sky object solely from the common base method.
+
+**What dominates:** across the 153 admitted shadow stacks, sampled PCs are
+53 fast loads, 11 fast stores, 31 lifted bodies, 6 flag helpers, 5 x87,
+7 SSE, 4 unresolved and 36 other. The latter include 9 bulk writes,
+9 runtime memory methods, and dispatch/TLS scaffolding. Sixteen stacks
+contain `run_service_as` (2 main / 14 worker), including bulk-memory work;
+this does not mean sixteen OS waits. No named kernel wait appears inside
+these admitted shadow stacks. Evidence favors guest memory/state handling
+through many model/material functions; it does **not** establish x87 or
+one single leaf as the majority cost.
+
+Nearest visible lifted functions (main / worker samples): FEE320 **3/11**,
+EA5B50 **4/5**, FED480 **0/8**, FFC9F0 **0/6**, EFCE40 **0/6**.
+These are sampled attribution candidates, not exclusive self times.
+FEE320 is a substantial state/dependency serialization routine with calls,
+allocation branches and floating-point paths, not a trivial leaf. A whole
+port needs full original-instruction coverage, not only its common path.
+
+**Divisibility:** EFDC70 loops the original shadow slice count (shadow+170
+selects one or +174), prepares transforms, calls EFD240 per slice, then
+EEA950. EFD240 mutates the supplied command context and invokes sUnit slot
++40, DB63E0. DB63E0 already has serial and parallel unit-traversal paths:
+parallel is allowed only when global **018D0BB0 == 0** and scheduler+98 != 1.
+DBE560 calls DC5C20(1) before waking workers and running main callbacks,
+then DC5C20(0) only after their join. DC5C20 writes 018D0BB0/018D0404.
+Therefore these nested shadow traversals deliberately take the serial
+path, regardless of which lane owns the outer callback.
+
+The parallel branch sets up per-lane contexts with FED200/107FF00, uses
+the same global scheduler queue, joins, then merges via 107FF30/FED3B0.
+Clearing the nesting guard would reuse the active queue/counters and is
+not a valid runtime shortcut. Running inner units or slices concurrently
+also needs independent command contexts, source-equivalent state and
+ordered merging. Such a transformation may be possible, but this batch
+does not prove it; additional workers cannot subdivide this existing job.
+
+**Coordinated ownership, board #13641:** codex-7 owns FED480 and next
+EA5B50; codex-9 owns DB63E0/EFD240 and the ordered-divisibility proof
+(L169); codex-11 reserves FEE320 evaluation and family attribution.
+FEDD60 remains with codex-6. EFDC70/EEA950 remain unported, pending further
+evidence. No duplicate ports or scheduler changes in this batch.
+
+**Reproduction:** `scripts/l162_callback_analysis.py STACKS.json` gives
+separate main/worker paths and helper counts; `... TRACE.gz --selection
+WAKE.json` validates trace identity/counts and reports every shadow lane
+plus final-callback family totals. Four synthetic tests pass (visible
+ancestry, measured tail, wrong-source rejection, missing-callback rejection).
+Private outputs: `L162-job-wake/d-stacks.json`, `d-h0.json`, `d-h1.json`.
+Input paths/hashes and frame selections are recorded below; no raw capture
+or decompiler output is committed. Next: independent whole-function oracle
+and production-memory microbench for each assigned port, then one head
+integration train and matched per-callback/image acceptance.
+
 ### L162c: distribution and original host scheduling requests
 
 Merged `task/fps-line` before this follow-up. Read-only Ghidra audit confirms
