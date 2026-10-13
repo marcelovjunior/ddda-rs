@@ -11,7 +11,10 @@ use ddnative_base::mem::{Mem, Pages};
 use ddnative_base::x86::{Cpu, LiftFn};
 
 /// The ports: (address, adapter).
-pub const PORTS: &[(u32, LiftFn)] = &[(0x0106_6590, find_keyed_entry), (0x0105_4700, update_elements), (0x0100_8200, find_hashed_record), (0x0106_58B0, apply_pass_state)];
+/// (0x01066590, 0x01054700 and 0x01008200 have semantic ports on fps-line
+/// already: claude-9's find_parameter, the head's update_joints, codex-6's
+/// single_key; this crate's versions stay unregistered.)
+pub const PORTS: &[(u32, LiftFn)] = &[(0x0106_58B0, apply_pass_state)];
 
 // Translated from 0x01066590 (DDDA.exe 2017-12-13 Steam), FUN_01066590.
 /// `this->find(list, key) -> entry` (thiscall, `ret 8`): the entry with
