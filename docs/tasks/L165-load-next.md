@@ -39,6 +39,10 @@ Probe FPS uses actual elapsed time instead of assuming exactly 1,500 ms.
 - `00E6B1C0` is the texture resource reader and calls buffered skip
   `00CFEEC0` before selected image/mip reads. L163's exact skip opt-in
   already targets that loop; its combo32 effect is still to be measured.
+- Read-only `01105240` includes D3D texture/volume/cube creation, image
+  locking, row copies and unlocks. Its earlier six decoder samples belong
+  to guest-side texture setup, distinct from deferred backend GPU creation.
+  Its individual copy/creation shares remain unresolved; no port selected.
 - `d3d9draw::upload_reads` records producer shadow copy/enqueue duration.
   `ddgpu::create_texture` lazily creates the GPU texture and drains pending
   uploads. `write_image` performs layout/conversion, `wait_finisher`, and
@@ -87,9 +91,21 @@ No per-image logging, waits or backend behavior changes are added.
 - Test logs are private under `C:/ddda-targets/L165/`: `light-complete.log`,
   `final-lib.log`, `final-load.log`, `texture-cpu.log`, `frontend-final.log`.
   All Cargo commands used four jobs and disabled incremental compilation.
+- Commits: autoplay proposal `f6a2d2af` (review independently), optional
+  backend attribution `cc83715a` (can be taken without the autoplay change).
 - Autoplay route, image and boot-time acceptance remain with head.
 - Combo32 files were not available at initial inspection. No new ranking,
   loading speedup or game acceptance is claimed without those captures.
 
 Next action: head reviews isolated autoplay commit `f6a2d2af`; consume
 head's combo32 ARCHIVE_SKIP=0/1, BOOT_DETAIL and load-window raw stacks.
+
+### Verification log SHA-256
+
+| Private log | SHA-256 |
+|---|---|
+| `light-complete.log` | `ab2cff7b9160472fe0b5ff44c8908b22663d8e42126ae68b5331a652fa000199` |
+| `final-lib.log` | `a2613cfa68430e975653c5fca0f2e442002cb13e73593767e1f170b700c8e5f9` |
+| `final-load.log` | `3db33abb83ecc5b6b94b39ac34449de72b482285676872d99b4eec76aa77a07e` |
+| `texture-cpu.log` | `7a2702a460a62ad200bd88ace78e541e1356e958bf589068f2d788cb01cf41f4` |
+| `frontend-final.log` | `c07687690cc3a4ef7baa64b5eb683548212b7063ae3213c9691a19af0ff29bf2` |
