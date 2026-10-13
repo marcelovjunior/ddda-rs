@@ -83,6 +83,8 @@ fn stack_args(target: u32) -> u32 {
         0x0116_6c00 => 2,
         0x00de_46f0 => 1,
         0x011c_3a30 => 0,
+        0x010a_f350 | 0x010b_4710 | 0x010b_4560 | 0x010b_4960 | 0x010f_ea80 | 0x0111_b2b0 => 4,
+        0x0111_b570 => 5,
         _ => panic!("unknown callee {target:x}"),
     }
 }
@@ -210,4 +212,15 @@ fn semantic_probe_segment_matches_original() {
     let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/probe_segment.json", mtcore::semantic_s2::probe_segment);
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none());
     eprintln!("{n} ABI-level probe_segment cases passed");
+}
+
+// verifies 0x0079e200 (ABI level; void). The tiny parameter-block methods
+// are run as the original code by the recorder and done inline by the
+// port; the stack objects are compared at every collision call.
+#[test]
+fn semantic_sweep_step_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L184/sweep_step.json", mtcore::semantic_s2::sweep_step, false);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none());
+    eprintln!("{n} ABI-level sweep_step cases passed");
 }
