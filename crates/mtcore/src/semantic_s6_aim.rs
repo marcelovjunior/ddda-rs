@@ -8,7 +8,7 @@ use ddnative_base::x86::Cpu;
 
 use crate::semantic::call_from;
 use crate::semantic_s6::{invert4, Mat4};
-use crate::semantic_s6_pose::IDENTITY;
+use crate::semantic_s6_pose::{crt_f32_at, IDENTITY};
 
 /// FLT_EPSILON; rotations smaller than this are skipped.
 const MIN_ANGLE: f32 = 1.192_092_9e-7;
@@ -70,11 +70,7 @@ pub fn aim_pose_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, join
         let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x110);
         let saved_ebp = c.ebp;
         c.ebp = entry.wrapping_sub(4);
-        let crt = |m: &mut dyn Mem, c: &mut Cpu, target: u32, back: u32, x: f32| {
-            c.xmm[0][0] = x.to_bits();
-            call_from(m, c, pg, frame, joint, &[], back, |m, c| ddnative_base::x86::call_ext(m, c, target));
-            f32::from_bits(c.xmm[0][0])
-        };
+        let crt = |m: &mut dyn Mem, c: &mut Cpu, target: u32, back: u32, x: f32| crt_f32_at(m, c, pg, frame, target, back, x);
         if swing > MIN_ANGLE {
             if let Some(partner) = partner_joint(m, pg, joint, model) {
                 let axis = axis_in_joint_frame(m, pg, joint, partner);

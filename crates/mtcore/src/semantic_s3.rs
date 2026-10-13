@@ -783,3 +783,709 @@ pub fn apply_effect_toggle(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4 + 4);
 }
+
+// ---------------------------------------------------------------------------
+// Box / sphere distance (0x00D53730, 0x00D53F30, 0x00D13AB0)
+
+/// The extended-precision (x87, 64-bit significand) values the box tests
+/// compute with, in software: the original squares and adds `f32`
+/// differences on the x87 stack and compares the result with the squared
+/// radius, which `f64` arithmetic would not reproduce bit for bit.
+///
+/// Only what the box tests need: conversion from `f32`, subtraction,
+/// multiplication, addition and ordering of non-negative values, each
+/// rounded to nearest-even at 64 bits as the hardware does.
+#[derive(Clone, Copy, Debug)]
+enum Extended {
+    Nan,
+    Infinity(bool),
+    Zero(bool),
+    /// `mantissa * 2^exponent`, `mantissa` normalised (top bit set)
+    Finite { negative: bool, exponent: i32, mantissa: u64 },
+}
+
+impl Extended {
+    fn from_f32(bits: u32) -> Extended {
+        let negative = bits >> 31 != 0;
+        let field = (bits >> 23) & 0xff;
+        let fraction = bits & 0x7f_ffff;
+        match (field, fraction) {
+            (0xff, 0) => Extended::Infinity(negative),
+            (0xff, _) => Extended::Nan,
+            (0, 0) => Extended::Zero(negative),
+            (0, _) => Extended::round(negative, fraction as u128, -149),
+            _ => Extended::round(negative, (fraction | 0x80_0000) as u128, field as i32 - 150),
+        }
+    }
+
+    /// `value * 2^exponent` rounded to a 64-bit significand (nearest even).
+    /// The low bit of `value` may be a sticky bit for bits shifted out.
+    fn round(negative: bool, value: u128, exponent: i32) -> Extended {
+        if value == 0 {
+            return Extended::Zero(false);
+        }
+        let shift = value.leading_zeros();
+        let normalised = value << shift;
+        let mut mantissa = (normalised >> 64) as u64;
+        let rest = normalised as u64;
+        let mut exponent = exponent - shift as i32 + 64;
+        if rest > 1 << 63 || (rest == 1 << 63 && mantissa & 1 == 1) {
+            let (next, carried) = mantissa.overflowing_add(1);
+            mantissa = if carried { 1 << 63 } else { next };
+            exponent += carried as i32;
+        }
+        Extended::Finite { negative, exponent, mantissa }
+    }
+
+    fn negated(self) -> Extended {
+        match self {
+            Extended::Nan => Extended::Nan,
+            Extended::Infinity(n) => Extended::Infinity(!n),
+            Extended::Zero(n) => Extended::Zero(!n),
+            Extended::Finite { negative, exponent, mantissa } => Extended::Finite { negative: !negative, exponent, mantissa },
+        }
+    }
+
+    fn add(self, other: Extended) -> Extended {
+        use Extended::*;
+        match (self, other) {
+            (Nan, _) | (_, Nan) => Nan,
+            (Infinity(a), Infinity(b)) => if a == b { Infinity(a) } else { Nan },
+            (Infinity(a), _) | (_, Infinity(a)) => Infinity(a),
+            (Zero(a), Zero(b)) => Zero(a && b),
+            (Zero(_), value) | (value, Zero(_)) => value,
+            (Finite { negative: na, exponent: ea, mantissa: ma }, Finite { negative: nb, exponent: eb, mantissa: mb }) => {
+                // `high` has the larger magnitude
+                let ((nh, eh, mh), (nl, el, ml)) = if (ea, ma) >= (eb, mb) { ((na, ea, ma), (nb, eb, mb)) } else { ((nb, eb, mb), (na, ea, ma)) };
+                let high = (mh as u128) << 62;
+                let wide = (ml as u128) << 62;
+                let distance = (eh - el) as u32;
+                // shift the smaller right, keeping a sticky bit
+                let low = if distance >= 128 {
+                    1
+                } else {
+                    let lost = wide & ((1u128 << distance) - 1);
+                    (wide >> distance) | (lost != 0) as u128
+                };
+                if nh == nl {
+                    Extended::round(nh, high + low, eh - 62)
+                } else if high == low {
+                    Zero(false)
+                } else {
+                    Extended::round(nh, high - low, eh - 62)
+                }
+            }
+        }
+    }
+
+    fn mul(self, other: Extended) -> Extended {
+        use Extended::*;
+        match (self, other) {
+            (Nan, _) | (_, Nan) => Nan,
+            (Infinity(_), Zero(_)) | (Zero(_), Infinity(_)) => Nan,
+            (Infinity(a), Infinity(b)) => Infinity(a != b),
+            (Infinity(a), Finite { negative, .. }) | (Finite { negative, .. }, Infinity(a)) => Infinity(a != negative),
+            (Zero(a), Zero(b)) => Zero(a != b),
+            (Zero(a), Finite { negative, .. }) | (Finite { negative, .. }, Zero(a)) => Zero(a != negative),
+            (Finite { negative: na, exponent: ea, mantissa: ma }, Finite { negative: nb, exponent: eb, mantissa: mb }) => {
+                Extended::round(na != nb, ma as u128 * mb as u128, ea + eb)
+            }
+        }
+    }
+
+    /// `self < other` for non-negative values, false when unordered.
+    fn less_than(self, other: Extended) -> bool {
+        use Extended::*;
+        let key = |v: Extended| match v {
+            Zero(_) => Some((0u8, 0i32, 0u64)),
+            Finite { exponent, mantissa, .. } => Some((1, exponent, mantissa)),
+            Infinity(_) => Some((2, 0, 0)),
+            Nan => None,
+        };
+        match (key(self), key(other)) {
+            (Some(a), Some(b)) => a < b,
+            _ => false,
+        }
+    }
+
+    fn is_nan(self) -> bool {
+        matches!(self, Extended::Nan)
+    }
+
+    /// The x87 register image (significand, sign and biased exponent) of a
+    /// zero or finite value.
+    fn to_register(self) -> Option<(u64, u16)> {
+        match self {
+            Extended::Zero(negative) => Some((0, (negative as u16) << 15)),
+            Extended::Finite { negative, exponent, mantissa } => Some((mantissa, ((negative as u16) << 15) | (exponent + 63 + 16383) as u16)),
+            _ => None,
+        }
+    }
+}
+
+/// `(dx*dx + dy*dy) + dz*dz` for `d = point - clamped` in software
+/// extended precision (what [`push_squared_distance`] leaves in ST0).
+fn squared_distance_software(point: [u32; 3], clamped: [u32; 3]) -> Extended {
+    let square = |axis: usize| {
+        let difference = Extended::from_f32(point[axis]).add(Extended::from_f32(clamped[axis]).negated());
+        difference.mul(difference)
+    };
+    square(0).add(square(1)).add(square(2))
+}
+
+/// For the tests: the software squared distance as an x87 register image
+/// (`None` for NaN or infinity).
+#[doc(hidden)]
+pub fn squared_distance_software_register(point: [u32; 3], clamped: [u32; 3]) -> Option<(u64, u16)> {
+    squared_distance_software(point, clamped).to_register()
+}
+
+/// For the tests: the hardware x87 sequence of the original, leaving the
+/// squared distance in ST0.
+#[doc(hidden)]
+pub fn squared_distance_hardware(c: &mut Cpu, point: [u32; 3], clamped: [u32; 3]) {
+    push_squared_distance(c, point, clamped)
+}
+
+/// Clamp `point` into the box whose lower corner is at `box_address` and
+/// upper corner at `+0x10` (three floats each): per axis, the lower bound
+/// replaces the coordinate when it is above it, then the upper bound when
+/// the (possibly replaced) coordinate is above it. Comparisons with NaN
+/// are false, so a NaN bound never clamps. Returns the clamped coordinates
+/// (as float bits).
+fn clamp_to_box(m: &dyn Mem, pg: Pages, box_address: u32, point: [u32; 3]) -> [u32; 3] {
+    let float = |address: u32| f32::from_bits(pg.u32(m, address));
+    let mut clamped = point;
+    for axis in 0..3u32 {
+        let coordinate = f32::from_bits(point[axis as usize]);
+        let low = float(box_address.wrapping_add(4 * axis));
+        let high = float(box_address.wrapping_add(0x10 + 4 * axis));
+        if low > coordinate {
+            clamped[axis as usize] = low.to_bits();
+        }
+        if coordinate > high {
+            clamped[axis as usize] = high.to_bits();
+        }
+    }
+    clamped
+}
+
+/// The squared distance between two points, as the original's x87 sequence
+/// computes it, left in ST0: `(dx*dx + dy*dy) + dz*dz` with
+/// `d = point - clamped` and every step in extended precision.
+fn push_squared_distance(c: &mut Cpu, point: [u32; 3], clamped: [u32; 3]) {
+    // FLD m32 point, FSUB m32 clamped (D8 /4)
+    let difference = |c: &mut Cpu, axis: usize| {
+        c.st.push(point[axis]);
+        let mut operand = [0u8; 10];
+        operand[..4].copy_from_slice(&clamped[axis].to_le_bytes());
+        c.st.exec::<0x20d8>(&mut operand);
+    };
+    difference(c, 0);
+    difference(c, 1);
+    difference(c, 2);
+    c.st.register::<0xc2d9>(); // fld st(2)
+    c.st.register::<0xcbde>(); // fmulp st(3), st
+    c.st.register::<0xc1d9>(); // fld st(1)
+    c.st.register::<0xcade>(); // fmulp st(2), st
+    c.st.register::<0xcad9>(); // fxch st(2)
+    c.st.register::<0xc1de>(); // faddp st(1), st
+    c.st.register::<0xc1d9>(); // fld st(1)
+    c.st.register::<0xcade>(); // fmulp st(2), st
+    c.st.register::<0xc1de>(); // faddp st(1), st
+}
+
+fn read_point(m: &dyn Mem, pg: Pages, address: u32) -> [u32; 3] {
+    [0, 4, 8].map(|offset| pg.u32(m, address.wrapping_add(offset)))
+}
+
+// Translated from 0x00d53730 (DDDA.exe 2017-12-13 Steam).
+/// 0x00D53730, `closest_point_on_box(box, point, out) -> distance^2` (cdecl,
+/// plain `ret`): clamp `point` into the axis-aligned box (lower corner at
+/// `box`, upper corner at `box + 0x10`), store the clamped point at
+/// `out[0..3]` and 0.0 at `out[3]`, and return the squared distance between
+/// the point and its clamped copy in ST0 (extended precision).
+pub fn closest_point_on_box(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let box_address = pg.u32(m, entry.wrapping_add(4));
+    let point_address = pg.u32(m, entry.wrapping_add(8));
+    let out = pg.u32(m, entry.wrapping_add(12));
+    let point = read_point(m, pg, point_address);
+    let clamped = clamp_to_box(m, pg, box_address, point);
+    for (axis, bits) in clamped.into_iter().enumerate() {
+        pg.set_u32(m, out.wrapping_add(4 * axis as u32), bits);
+    }
+    pg.set_u32(m, out.wrapping_add(12), 0);
+    push_squared_distance(c, point, clamped);
+    c.esp = entry.wrapping_add(4);
+}
+
+// Translated from 0x00d53f30 (DDDA.exe 2017-12-13 Steam).
+/// 0x00D53F30, `distance_sq_to_box(box, point) -> distance^2` (cdecl, plain
+/// `ret`): 0x00D53730 with a scratch output, the squared distance in ST0.
+pub fn distance_sq_to_box(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let box_address = pg.u32(m, entry.wrapping_add(4));
+    let point = read_point(m, pg, pg.u32(m, entry.wrapping_add(8)));
+    let clamped = clamp_to_box(m, pg, box_address, point);
+    push_squared_distance(c, point, clamped);
+    c.esp = entry.wrapping_add(4);
+}
+
+// Translated from 0x00d13ab0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00D13AB0, `sphere_touches_box(box, sphere) -> bool` (cdecl, plain
+/// `ret`; `sphere` is x, y, z, radius): 1 when the radius squared is at
+/// least the squared distance from the centre to the box (0x00D53F30), 0
+/// otherwise and when either is NaN. The original leaves the radius in the
+/// caller's second argument slot (it reuses it to pass the float through
+/// the x87), so the port stores it there too.
+///
+/// The x87 work is done in software ([`Extended`]) with the same roundings,
+/// so this makes no x87 or guest calls at all.
+pub fn sphere_touches_box(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let box_address = pg.u32(m, entry.wrapping_add(4));
+    let sphere = pg.u32(m, entry.wrapping_add(8));
+    let radius = pg.u32(m, sphere.wrapping_add(0xc));
+    // FLD m32 / FSTP m32 of the radius into the argument slot
+    pg.set_u32(m, entry.wrapping_add(8), through_x87(radius));
+    let centre = read_point(m, pg, sphere);
+    let clamped = clamp_to_box(m, pg, box_address, centre);
+    // Almost every call is decided by a wide margin: estimate both sides in
+    // f64 (relative error below 1e-15, f32 inputs and squares are in range)
+    // and use the exact extended arithmetic only when they are within 1e-12.
+    let estimate = {
+        let difference = |axis: usize| f32::from_bits(centre[axis]) as f64 - f32::from_bits(clamped[axis]) as f64;
+        let (dx, dy, dz) = (difference(0), difference(1), difference(2));
+        let radius = f32::from_bits(radius) as f64;
+        (radius * radius, (dx * dx + dy * dy) + dz * dz)
+    };
+    const MARGIN: f64 = 1e-12;
+    if estimate.0.is_nan() || estimate.1.is_nan() {
+        c.eax = 0;
+        c.esp = entry.wrapping_add(4);
+        return;
+    }
+    if estimate.0 > estimate.1 * (1.0 + MARGIN) || estimate.0 * (1.0 + MARGIN) < estimate.1 {
+        c.eax = (estimate.0 > estimate.1) as u32;
+        c.esp = entry.wrapping_add(4);
+        return;
+    }
+    let squared_distance = squared_distance_software(centre, clamped);
+    let radius = Extended::from_f32(radius);
+    let squared_radius = radius.mul(radius);
+    // fcomip st, st(1): CF = radius^2 < distance^2 or unordered
+    let below = squared_radius.less_than(squared_distance) || squared_radius.is_nan() || squared_distance.is_nan();
+    c.eax = (!below) as u32;
+    c.esp = entry.wrapping_add(4);
+}
+
+// ---------------------------------------------------------------------------
+// Small leaves of the shadow job
+
+// Translated from 0x00ea1eb0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA1EB0, `object->copy_position(out) -> bool` (thiscall, `ret 4`): when
+/// the object has its resource (`+0xf0`), copy its 16-byte position block
+/// (`+0x160`) to `out` and return true. The original sets only AL, so the
+/// rest of EAX is `out` (true) or the caller's EAX (false).
+pub fn copy_position(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (object, entry) = (c.ecx, c.esp);
+    if pg.u32(m, object.wrapping_add(0xf0)) == 0 {
+        c.eax &= !0xff;
+    } else {
+        let out = pg.u32(m, entry.wrapping_add(4));
+        for offset in [0u32, 4, 8, 12] {
+            let word = pg.u32(m, object.wrapping_add(0x160 + offset));
+            pg.set_u32(m, out.wrapping_add(offset), word);
+        }
+        c.eax = (out & !0xff) | 1;
+    }
+    c.esp = entry.wrapping_add(8);
+}
+
+// Translated from 0x00ea1f40 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA1F40, `object->world_position(out) -> out` (thiscall, `ret 4`):
+/// write the object's local position (`+0x160..+0x168`, passed through the
+/// x87 like the original) and 0.0 to `out[0..4]`; then, if the object has a
+/// parent (`+0x30`), walk to the root of the parent chain and call its
+/// virtual `+0x30` with a scratch vector; when that returns true the
+/// vector replaces `out[0..3]`. Returns `out`.
+pub fn world_position(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (object, entry) = (c.ecx, c.esp);
+    let out = pg.u32(m, entry.wrapping_add(4));
+    for axis in 0..3u32 {
+        let bits = pg.u32(m, object.wrapping_add(0x160 + 4 * axis));
+        pg.set_u32(m, out.wrapping_add(4 * axis), through_x87(bits));
+    }
+    pg.set_u32(m, out.wrapping_add(12), 0);
+    c.eax = out;
+    let mut root = pg.u32(m, object.wrapping_add(0x30));
+    if root != 0 {
+        loop {
+            let parent = pg.u32(m, root.wrapping_add(0x30));
+            if parent == 0 {
+                break;
+            }
+            root = parent;
+        }
+        // the original's frame: `push ebp` / 16-byte alignment, 0x1c locals, push esi;
+        // the scratch vector is at +0x10 of the call frame
+        let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x1c + 4);
+        let local = frame.wrapping_add(0x10);
+        let method = pg.u32(m, pg.u32(m, root).wrapping_add(0x30));
+        let found = call_from(m, c, pg, frame, root, &[local], 0x00ea_1f8d, |m, c| call_ext(m, c, method)) & 0xff != 0;
+        c.eax = out;
+        if found {
+            for axis in 0..3u32 {
+                let bits = pg.u32(m, local.wrapping_add(4 * axis));
+                pg.set_u32(m, out.wrapping_add(4 * axis), bits);
+            }
+            pg.set_u32(m, out.wrapping_add(12), 0);
+        }
+    }
+    c.esp = entry.wrapping_add(8);
+}
+
+/// The frustum-test ports `classify_overlap` may call directly instead of
+/// through the guest call dispatch: `(0x00FF0780 cull_sphere, 0x00FF0AD0
+/// cull_oriented)`, set once by the runtime (mtdraw::cull, which this crate
+/// cannot depend on).
+pub static CULL_PORTS: std::sync::OnceLock<(ddnative_base::x86::LiftFn, ddnative_base::x86::LiftFn)> = std::sync::OnceLock::new();
+
+// Translated from 0x00ea1ee0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA1EE0, `object->classify(other) -> mask` (thiscall, `ret 4`): with
+/// none of the low six bits of `+0x108` set the answer is 0x3f. Otherwise
+/// `other->cull_sphere(object + 0x160)` (0x00FF0780) is the answer if it is
+/// not positive; if it is not 0x3f, `other->cull_oriented(object + 0x170,
+/// answer)` (0x00FF0AD0) refines it; a still-positive answer becomes 0x3f
+/// when those bits of `+0x108` equal 1.
+///
+/// The two tests are called directly when [`CULL_PORTS`] is set.
+pub fn classify_overlap(m: &mut dyn Mem, c: &mut Cpu) {
+    classify_overlap_with(m, c, CULL_PORTS.get().copied())
+}
+
+/// [`classify_overlap`] with the frustum tests chosen by the caller (`None`:
+/// guest calls to the originals).
+pub fn classify_overlap_with(m: &mut dyn Mem, c: &mut Cpu, ports: Option<(ddnative_base::x86::LiftFn, ddnative_base::x86::LiftFn)>) {
+    let pg = Pages::of(m);
+    let (object, entry) = (c.ecx, c.esp);
+    let (saved_esi, saved_edi) = (c.esi, c.edi);
+    let finish = |c: &mut Cpu| {
+        (c.esi, c.edi) = (saved_esi, saved_edi);
+        c.esp = entry.wrapping_add(8);
+    };
+    if pg.u8(m, object.wrapping_add(0x108)) & 0x3f == 0 {
+        c.eax = 0x3f;
+        return finish(c);
+    }
+    let other = pg.u32(m, entry.wrapping_add(4));
+    // the original's frame at its calls: esi and edi pushed
+    let frame = entry.wrapping_sub(8);
+    let test = |m: &mut dyn Mem, c: &mut Cpu, port: Option<ddnative_base::x86::LiftFn>, target: u32, args: &[u32], back: u32| {
+        call_from(m, c, pg, frame, other, args, back, |m, c| match port {
+            Some(port) => port(m, c),
+            None => call_ext(m, c, target),
+        })
+    };
+    let mut answer = test(m, c, ports.map(|p| p.0), 0x00ff_0780, &[object.wrapping_add(0x160)], 0x00ea_1f08);
+    if answer as i32 > 0 {
+        if answer != 0x3f {
+            answer = test(m, c, ports.map(|p| p.1), 0x00ff_0ad0, &[object.wrapping_add(0x170), answer], 0x00ea_1f20);
+        }
+        if answer as i32 > 0 && pg.u8(m, object.wrapping_add(0x108)) & 0x3f == 1 {
+            answer = 0x3f;
+        }
+    }
+    c.eax = answer;
+    finish(c)
+}
+
+// Translated from 0x0111d610 (DDDA.exe 2017-12-13 Steam), with 0x01192260 inlined.
+/// 0x0111D610, `state_set->push(value) -> error` (thiscall, `ret 4`): push a
+/// state record onto a set's stack of six (`+0x54` is the depth, records are
+/// 12 bytes from `+0xc`: the value byte, then two zero words) and, first, a
+/// snapshot onto its owner's stack (`+4`: depth at `+0x64`, 16-byte records
+/// from `+4` holding the words `+0x74` and `+0x78`, then 0). Returns 9 when
+/// the set is full, else 0 (the owner being full is not reported).
+pub fn push_state(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let value = pg.u8(m, entry.wrapping_add(4));
+    c.eax = push_state_record(m, pg, c.ecx, value);
+    c.esp = entry.wrapping_add(8);
+}
+
+fn push_state_record(m: &mut dyn Mem, pg: Pages, set: u32, value: u8) -> u32 {
+    let depth = pg.u32(m, set.wrapping_add(0x54));
+    if depth >= 6 {
+        return 9;
+    }
+    let owner = pg.u32(m, set.wrapping_add(4));
+    let slot = set.wrapping_add((depth * 3 + 3) * 4);
+    // 0x01192260 `owner->push_snapshot()`
+    let owner_depth = pg.u32(m, owner.wrapping_add(0x64));
+    if owner_depth < 6 {
+        let record = owner.wrapping_add(owner_depth * 16 + 4);
+        let first = pg.u32(m, owner.wrapping_add(0x74));
+        let second = pg.u32(m, owner.wrapping_add(0x78));
+        pg.set_u32(m, record, first);
+        pg.set_u32(m, record.wrapping_add(4), second);
+        pg.set_u32(m, record.wrapping_add(8), 0);
+        pg.set_u8(m, record.wrapping_add(0xc), 0);
+        let again = pg.u32(m, owner.wrapping_add(0x64)).wrapping_add(1);
+        pg.set_u32(m, owner.wrapping_add(0x64), again);
+    }
+    pg.set_u32(m, slot.wrapping_add(4), 0);
+    pg.set_u32(m, slot.wrapping_add(8), 0);
+    pg.set_u8(m, slot, value);
+    let again = pg.u32(m, set.wrapping_add(0x54)).wrapping_add(1);
+    pg.set_u32(m, set.wrapping_add(0x54), again);
+    0
+}
+
+// Translated from 0x00e61010 (DDDA.exe 2017-12-13 Steam).
+/// 0x00E61010, `set->test(a, b, single, value) -> bool` (thiscall, `ret
+/// 0x10`): a fan-out over the object's `+0xd0` members (`+0x30` array),
+/// each pushed a state record with `value` ([`push_state`], 0x0111D610, run
+/// natively). With `single` clear only the member
+/// at index `a[+0x58]` is asked and its answer returned as is; otherwise
+/// the result is true when any member answered non-zero.
+pub fn any_member_test(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (object, entry) = (c.ecx, c.esp);
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    if arg(m, 2) == 0 {
+        let index = pg.u32(m, arg(m, 0).wrapping_add(0x58));
+        let member = pg.u32(m, object.wrapping_add(index.wrapping_mul(4)).wrapping_add(0x30));
+        let value = arg(m, 3) as u8;
+        c.eax = push_state_record(m, pg, member, value);
+    } else {
+        let mut none_answered = true;
+        let mut i = 0u32;
+        if pg.u32(m, object.wrapping_add(0xd0)) != 0 {
+            loop {
+                let member = pg.u32(m, object.wrapping_add(0x30 + 4 * i));
+                let value = arg(m, 3) as u8;
+                let answer = push_state_record(m, pg, member, value);
+                none_answered = none_answered && answer == 0;
+                i += 1;
+                if i >= pg.u32(m, object.wrapping_add(0xd0)) {
+                    break;
+                }
+            }
+        }
+        c.eax = !none_answered as u32;
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 0x10);
+}
+
+// ---------------------------------------------------------------------------
+// Shader lookup (0x00E12A20) without guest calls
+
+/// The most dependency words the original's 1 KiB stack buffer holds.
+const KEY_WORDS: usize = 256;
+
+/// The key sequence 0x00E10FC0 builds in its stack buffer.
+struct KeyWords {
+    words: [u32; KEY_WORDS],
+    len: usize,
+    /// More words than the buffer holds, or a dependency chain nested too
+    /// deep: the caller falls back to the instruction-level port.
+    overflow: bool,
+}
+
+impl KeyWords {
+    fn push(&mut self, word: u32) {
+        if self.len < KEY_WORDS {
+            self.words[self.len] = word;
+            self.len += 1;
+        } else {
+            self.overflow = true;
+        }
+    }
+
+    /// 0x00E0E5E0: salted word FNV-1 of the sequence.
+    fn hash(&self) -> u32 {
+        let mut hash = 0x811c_9dc5u32;
+        for &word in &self.words[..self.len] {
+            let word = word ^ 0x14da_14da;
+            for shift in [0, 8, 16, 24] {
+                hash = hash.wrapping_mul(0x0100_0193) ^ ((word >> shift) & 255);
+            }
+        }
+        hash
+    }
+
+    /// The table CRC (0x014075C0) of the words' bytes, high byte first. The
+    /// table is constant image data: each entry is read from guest memory
+    /// the first time it is used and kept.
+    fn crc(&self, m: &dyn Mem, pg: Pages) -> u32 {
+        static TABLE: [std::sync::atomic::AtomicU64; 256] = [const { std::sync::atomic::AtomicU64::new(0) }; 256];
+        let mut crc = u32::MAX;
+        for &word in &self.words[..self.len] {
+            for shift in [24u32, 16, 8, 0] {
+                let index = ((word >> shift) ^ crc) & 0xff;
+                let slot = &TABLE[index as usize];
+                let mut entry = slot.load(std::sync::atomic::Ordering::Relaxed);
+                if entry == 0 {
+                    entry = pg.u32(m, 0x0140_75c0u32.wrapping_add(index * 4)) as u64 | 1 << 32;
+                    slot.store(entry, std::sync::atomic::Ordering::Relaxed);
+                }
+                crc = (crc >> 8) ^ entry as u32;
+            }
+        }
+        crc
+    }
+}
+
+/// 0x00E0EC50 `expand` into [`KeyWords`] instead of guest memory: a packed
+/// dependency emits its high part (bits 12..32) when non-zero, then the
+/// expansions of its recursive children and its non-zero terminal values
+/// (see `semantic::expand_dependencies`).
+fn expand_dependency(m: &dyn Mem, pg: Pages, bank: u32, values: u32, packed: u32, depth: u32, out: &mut KeyWords) {
+    if depth > 32 {
+        out.overflow = true;
+        return;
+    }
+    let high = packed & 0xffff_f000;
+    if high != 0 {
+        out.push(high);
+    }
+    let descriptor = bank.wrapping_add((packed & 0xfff).wrapping_mul(8));
+    let mut index = pg.u32(m, descriptor.wrapping_add(4));
+    let counts = pg.u32(m, descriptor);
+    let value_of = |m: &dyn Mem, index: u32| {
+        let child = pg.u16(m, index) as u32;
+        pg.u32(m, values.wrapping_add(child.wrapping_mul(8)).wrapping_add(4))
+    };
+    for _ in 0..(counts >> 20) & 0x3f {
+        let value = value_of(m, index);
+        index = index.wrapping_add(2);
+        expand_dependency(m, pg, bank, values, value, depth + 1, out);
+    }
+    for _ in 0..counts >> 26 {
+        let value = value_of(m, index);
+        index = index.wrapping_add(2);
+        if value != 0 {
+            out.push(value);
+        }
+    }
+}
+
+/// 0x00E10FC0 `intern_keys` without the guest buffer: the key sequence of
+/// `owner` (six packed dependencies), the four `keys` words (tagged with
+/// their slot) and `extra`. `None` when the sequence does not fit the
+/// original stack buffer.
+fn dependency_key_words(m: &dyn Mem, pg: Pages, this: u32, owner: u32, values: u32, keys: u32, extra: u32) -> Option<KeyWords> {
+    let mut out = KeyWords { words: [0; KEY_WORDS], len: 0, overflow: false };
+    for slot in 0..4u32 {
+        let key = pg.u32(m, keys.wrapping_add(4 * slot));
+        if key != 0 {
+            out.push((key & 0xffff_f000) | slot);
+        }
+    }
+    out.push(extra);
+    for field in [0u32, 3, 4, 2, 1, 5] {
+        let packed = pg.u32(m, owner.wrapping_add(4 * field));
+        if packed != 0 {
+            let bank = pg.u32(m, this.wrapping_add(0x28));
+            expand_dependency(m, pg, bank, values, packed, 0, &mut out);
+        }
+    }
+    (!out.overflow).then_some(out)
+}
+
+/// 0x01008260 `package->find_pair(key, crc)`: the record of the node with
+/// both words, or 0.
+fn find_pair(m: &dyn Mem, pg: Pages, package: u32, key: u32, crc: u32) -> u32 {
+    if key | crc == 0 {
+        return 0;
+    }
+    let table = pg.u32(m, package.wrapping_add(0x84));
+    let mut node = pg.u32(m, table.wrapping_add((key & 0xfff) * 4).wrapping_add(0x1c));
+    while node != 0 {
+        if pg.u32(m, node) == key && pg.u32(m, node.wrapping_add(4)) == crc {
+            let index = pg.u32(m, node.wrapping_add(12)) & 0x7fff_ffff;
+            return table.wrapping_add(index.wrapping_mul(36)).wrapping_add(0x401c);
+        }
+        let next = pg.u32(m, node.wrapping_add(8));
+        if next == 0 {
+            return 0;
+        }
+        node = next.wrapping_mul(16).wrapping_add(pg.u32(m, table.wrapping_add(0x18)));
+    }
+    0
+}
+
+/// 0x00E0F4B0 `shaders->find_pair_key(key, crc)`: [`find_pair`] in the six
+/// packages (`+0xab104`), first match.
+fn find_package_pair(m: &dyn Mem, pg: Pages, owner: u32, key: u32, crc: u32) -> u32 {
+    for i in 0..6u32 {
+        let package = pg.u32(m, owner.wrapping_add(0xab104 + 4 * i));
+        if package != 0 {
+            let found = find_pair(m, pg, package, key, crc);
+            if found != 0 {
+                return found;
+            }
+        }
+    }
+    0
+}
+
+// Translated from 0x00e12a20 (DDDA.exe 2017-12-13 Steam).
+/// 0x00E12A20, `shaders->lookup(a, bank, slot, owner_values, keys, extra,
+/// other_bank) -> entry` (thiscall, `ret 0x1c`): the shader/technique
+/// lookup of every model primitive draw, with no guest calls.
+///
+/// The common branch (byte `+0x39` clear) builds the dependency key
+/// sequence of `bucket(bank) + slot * 0x28 + 0x1c` (see
+/// `semantic::intern_dependency_keys`), hashes it and looks the hash up
+/// among the packages' keys (0x00E0F3C0), then the (hash, CRC) pair
+/// (0x00E0F4B0), then the pair of `other_bank`'s sequence. The rare branch
+/// (shader creation) runs the original body, as does a sequence too long
+/// for the original stack buffer (through the instruction-level port).
+pub fn shader_lookup(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let this = c.ecx;
+    if pg.u8(m, this.wrapping_add(0x39)) != 0 {
+        return crate::semantic::shader_lookup(m, c);
+    }
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (bank, slot, values, keys, extra, other) = (arg(m, 1), arg(m, 2), arg(m, 3), arg(m, 4), arg(m, 5), arg(m, 6));
+    let bucket_owner = |m: &dyn Mem, bank: u32, slot: u32| {
+        let table = pg.u32(m, this.wrapping_add(0x24));
+        let bucket = pg.u32(m, table.wrapping_add((bank & 0xfff).wrapping_mul(4)));
+        bucket.wrapping_add(slot.wrapping_mul(0x28)).wrapping_add(0x1c)
+    };
+    let finish = |c: &mut Cpu, result: u32| {
+        c.eax = result;
+        c.esp = entry.wrapping_add(4 + 0x1c);
+    };
+    let Some(words) = dependency_key_words(m, pg, this, bucket_owner(m, bank, slot), values, keys, extra) else {
+        return crate::semantic::shader_lookup(m, c);
+    };
+    let hash = words.hash();
+    let found = crate::semantic_draw_c::find_package_key(m, pg, this, hash);
+    if found != 0 {
+        return finish(c, found);
+    }
+    let found = find_package_pair(m, pg, this, hash, words.crc(m, pg));
+    if found != 0 || pg.u8(m, this.wrapping_add(0xab229)) != 0 || other == 0 {
+        return finish(c, found);
+    }
+    let owner = pg.u32(m, pg.u32(m, this.wrapping_add(0x24)).wrapping_add((other & 0xfff).wrapping_mul(4))).wrapping_add(0x1c);
+    let Some(words) = dependency_key_words(m, pg, this, owner, values, keys, extra) else {
+        return crate::semantic::shader_lookup(m, c);
+    };
+    let found = find_package_pair(m, pg, this, words.hash(), words.crc(m, pg));
+    finish(c, found)
+}

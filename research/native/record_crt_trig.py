@@ -47,7 +47,7 @@ def main():
         uc.emu_start(SIN if kind == 0 else COS, h.RET)
         res = uc.reg_read(x.UC_X86_REG_XMM0) & 0xFFFFFFFF
         cases.append([kind, bits, res])
-    json.dump(dict(cases=cases), open(out, 'w'))
+    json.dump(dict(tables=[[0x144B410, list(h.code(0x144B410, 0x400))], [0x144B870, list(h.code(0x144B870, 0x400))]], cases=cases), open(out, 'w'))
     print(len(cases), 'cases')
 
 main()

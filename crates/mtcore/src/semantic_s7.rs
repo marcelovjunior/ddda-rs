@@ -232,10 +232,10 @@ fn sin_cos_of_angles(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, angles
     let mut sin = [ZERO; 3];
     let mut cos = [ZERO; 3];
     for k in 0..3 {
-        sin[k] = sinf(angles[k].0).map(F).unwrap_or_else(|| guest(m, c, CRT_SINF, SIN_BACK[k], angles[k]));
+        sin[k] = sinf(&*m, pg, angles[k].0).map(F).unwrap_or_else(|| guest(m, c, CRT_SINF, SIN_BACK[k], angles[k]));
     }
     for k in 0..3 {
-        cos[k] = cosf(angles[k].0).map(F).unwrap_or_else(|| guest(m, c, CRT_COSF, COS_BACK[k], angles[k]));
+        cos[k] = cosf(&*m, pg, angles[k].0).map(F).unwrap_or_else(|| guest(m, c, CRT_COSF, COS_BACK[k], angles[k]));
     }
     (sin, cos)
 }

@@ -563,6 +563,8 @@ struct CastVariant {
     walk_a: u32,
     walk_b: u32,
     walk_c: u32,
+    /// The same three walks as native ports.
+    native: [ddnative_base::x86::LiftFn; 3],
 }
 
 const CAST_BACKWARD: CastVariant = CastVariant {
@@ -571,6 +573,7 @@ const CAST_BACKWARD: CastVariant = CastVariant {
     walk_a: 0x0116_6a60,
     walk_b: 0x0116_68a0,
     walk_c: 0x0116_5ef0,
+    native: [walk_single_backward, walk_low_backward, walk_high_backward],
 };
 
 const CAST_FORWARD: CastVariant = CastVariant {
@@ -579,19 +582,31 @@ const CAST_FORWARD: CastVariant = CastVariant {
     walk_a: 0x0116_69b0,
     walk_b: 0x0116_67b0,
     walk_c: 0x0116_5e00,
+    native: [walk_single_forward, walk_low_forward, walk_high_forward],
 };
 
 /// 0x01166C00, `world->cast_shape_b(shape, query) -> hit_mask` (thiscall,
 /// `ret 8`): run `shape` through the world's collision layers for `query`.
 /// See [`cast_shape`].
 pub fn cast_shape_b(m: &mut dyn Mem, c: &mut Cpu) {
-    cast_shape(m, c, &CAST_BACKWARD)
+    cast_shape(m, c, &CAST_BACKWARD, true)
+}
+
+/// [`cast_shape_b`] with the three layer walks as guest calls (for tests
+/// against recordings that stub them).
+pub fn cast_shape_b_guest_walks(m: &mut dyn Mem, c: &mut Cpu) {
+    cast_shape(m, c, &CAST_BACKWARD, false)
+}
+
+/// [`cast_shape_a`] with the three layer walks as guest calls.
+pub fn cast_shape_a_guest_walks(m: &mut dyn Mem, c: &mut Cpu) {
+    cast_shape(m, c, &CAST_FORWARD, false)
 }
 
 /// 0x01166B10, `world->cast_shape_a(shape, query) -> hit_mask` (thiscall,
 /// `ret 8`): as [`cast_shape_b`] with query mode 0 and the matching walks.
 pub fn cast_shape_a(m: &mut dyn Mem, c: &mut Cpu) {
-    cast_shape(m, c, &CAST_FORWARD)
+    cast_shape(m, c, &CAST_FORWARD, true)
 }
 
 // Translated from 0x01166c00 / 0x01166b10 (DDDA.exe 2017-12-13 Steam).
@@ -603,7 +618,7 @@ pub fn cast_shape_a(m: &mut dyn Mem, c: &mut Cpu) {
 /// three layer walks (each over the 32 layer grids), flag 8 with the
 /// block's byte +0xB8 set runs 0x01164500; 0x01165560 always runs. Returns
 /// the OR of all results. (0x00FB38E0, a bare field read, is skipped.)
-fn cast_shape(m: &mut dyn Mem, c: &mut Cpu, v: &CastVariant) {
+fn cast_shape(m: &mut dyn Mem, c: &mut Cpu, v: &CastVariant, native_walks: bool) {
     let pg = Pages::of(m);
     let (this, entry) = (c.ecx, c.esp);
     let shape = pg.u32(m, entry.wrapping_add(4));
@@ -627,9 +642,16 @@ fn cast_shape(m: &mut dyn Mem, c: &mut Cpu, v: &CastVariant) {
     pg.set_u32(m, query.wrapping_add(0xe8), slot);
     let mut hits = 0u32;
     if flags & 4 != 0 {
-        hits = call_from(m, c, pg, frame, this, &[shape, query], v.back[2], guest(v.walk_a));
-        hits |= call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[3], guest(v.walk_b));
-        hits |= call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[4], guest(v.walk_c));
+        let walk = |i: usize, target: u32| move |m: &mut dyn Mem, c: &mut Cpu| {
+            if native_walks {
+                (v.native[i])(m, c)
+            } else {
+                ddnative_base::x86::call_ext(m, c, target)
+            }
+        };
+        hits = call_from(m, c, pg, frame, this, &[shape, query], v.back[2], walk(0, v.walk_a));
+        hits |= call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[3], walk(1, v.walk_b));
+        hits |= call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[4], walk(2, v.walk_c));
     }
     if pg.u8(m, block.wrapping_add(0xb8)) != 0 && flags & 8 != 0 {
         hits |= call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[5], guest(0x0116_4500));
@@ -880,4 +902,256 @@ pub fn segment_cast(m: &mut dyn Mem, c: &mut Cpu) {
     c.eax = kind;
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4 + 0x14);
+}
+
+// ---------------------------------------------------------------------
+// The layer-grid walks of the collision cast (0x011669B0 and five siblings)
+// ---------------------------------------------------------------------
+
+/// How a layer walk visits the world's 32 layer grids (0x40 bytes each).
+#[derive(Clone, Copy)]
+enum GridSet {
+    /// One grid per layer from `world + 0x1C0`; skipped unless bit 1 of the
+    /// parameter block's flags (+0x14) is set.
+    Single,
+    /// Two grids per layer: `world + 0x9C0 + 0x800` then `world + 0x9C0`.
+    PairLow,
+    /// Two grids per layer: `world + 0x21C0 - 0x800` then `world + 0x21C0`.
+    PairHigh,
+}
+
+/// One of the six layer walks. They differ in the grid set, the node
+/// callback handed to 0x011787C0, the walk mode flag and the return
+/// addresses of the original's calls.
+struct LayerWalk {
+    grids: GridSet,
+    callback: u32,
+    mode: u8,
+    /// Return addresses of the original's first and second 0x011787C0 call.
+    back: [u32; 2],
+}
+
+const WALK_SINGLE_FORWARD: LayerWalk = LayerWalk { grids: GridSet::Single, callback: 0x0116_6990, mode: 0, back: [0x0116_6a46, 0] };
+const WALK_SINGLE_BACKWARD: LayerWalk = LayerWalk { grids: GridSet::Single, callback: 0x0116_69a0, mode: 1, back: [0x0116_6af6, 0] };
+const WALK_LOW_FORWARD: LayerWalk = LayerWalk { grids: GridSet::PairLow, callback: 0x0116_6020, mode: 0, back: [0x0116_683c, 0x0116_6867] };
+const WALK_LOW_BACKWARD: LayerWalk = LayerWalk { grids: GridSet::PairLow, callback: 0x0116_6020, mode: 1, back: [0x0116_692c, 0x0116_6957] };
+const WALK_HIGH_FORWARD: LayerWalk = LayerWalk { grids: GridSet::PairHigh, callback: 0x0116_5d40, mode: 0, back: [0x0116_5e98, 0x0116_5ec3] };
+const WALK_HIGH_BACKWARD: LayerWalk = LayerWalk { grids: GridSet::PairHigh, callback: 0x0116_5d40, mode: 1, back: [0x0116_5f88, 0x0116_5fb3] };
+
+/// 0x011669B0 `world->walk_single_forward(shape, query) -> hits` (thiscall, `ret 8`).
+pub fn walk_single_forward(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_SINGLE_FORWARD, Some(node_dispatch))
+}
+/// [`walk_single_forward`] with the node dispatch as a guest call (for tests against recordings that stub it).
+pub fn walk_single_forward_guest_nodes(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_SINGLE_FORWARD, None)
+}
+/// 0x01166A60 `world->walk_single_backward(shape, query) -> hits` (thiscall, `ret 8`).
+pub fn walk_single_backward(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_SINGLE_BACKWARD, Some(node_dispatch))
+}
+/// [`walk_single_backward`] with the node dispatch as a guest call (for tests against recordings that stub it).
+pub fn walk_single_backward_guest_nodes(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_SINGLE_BACKWARD, None)
+}
+/// 0x011667B0 `world->walk_low_forward(shape, query, slot) -> hits` (thiscall, `ret 0xc`).
+pub fn walk_low_forward(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_LOW_FORWARD, Some(node_dispatch))
+}
+/// [`walk_low_forward`] with the node dispatch as a guest call (for tests against recordings that stub it).
+pub fn walk_low_forward_guest_nodes(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_LOW_FORWARD, None)
+}
+/// 0x011668A0 `world->walk_low_backward(shape, query, slot) -> hits` (thiscall, `ret 0xc`).
+pub fn walk_low_backward(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_LOW_BACKWARD, Some(node_dispatch))
+}
+/// [`walk_low_backward`] with the node dispatch as a guest call (for tests against recordings that stub it).
+pub fn walk_low_backward_guest_nodes(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_LOW_BACKWARD, None)
+}
+/// 0x01165E00 `world->walk_high_forward(shape, query, slot) -> hits` (thiscall, `ret 0xc`).
+pub fn walk_high_forward(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_HIGH_FORWARD, Some(node_dispatch))
+}
+/// [`walk_high_forward`] with the node dispatch as a guest call (for tests against recordings that stub it).
+pub fn walk_high_forward_guest_nodes(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_HIGH_FORWARD, None)
+}
+/// 0x01165EF0 `world->walk_high_backward(shape, query, slot) -> hits` (thiscall, `ret 0xc`).
+pub fn walk_high_backward(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_HIGH_BACKWARD, Some(node_dispatch))
+}
+/// [`walk_high_backward`] with the node dispatch as a guest call (for tests against recordings that stub it).
+pub fn walk_high_backward_guest_nodes(m: &mut dyn Mem, c: &mut Cpu) {
+    layer_walk(m, c, &WALK_HIGH_BACKWARD, None)
+}
+
+// Translated from 0x011669b0, 0x01166a60, 0x011667b0, 0x011668a0, 0x01165e00
+// and 0x01165ef0 (DDDA.exe 2017-12-13 Steam).
+/// A collision cast's walk over the world's 32 layer grids: for every layer
+/// whose bit is set in the parameter block's layer mask (`block[8]`, the
+/// block being `query[0x98]`) and whose grid is not empty (`grid[4] != 0`),
+/// hand the grid to 0x011787C0 (the node dispatch by shape type) with the
+/// cast target (`query[0xB8]` when `query[0xB4]` is set, else the shape),
+/// the world, the node callback, the query, the mode flag and the thread
+/// slot; the result is the OR of all of them. The query's +0x90 is set to
+/// the shape first. The single-grid walks take the slot from `query[0xE8]`
+/// and return 0 straight away unless block flag 2 is set.
+fn layer_walk(m: &mut dyn Mem, c: &mut Cpu, walk: &LayerWalk, node: Option<ddnative_base::x86::LiftFn>) {
+    let pg = Pages::of(m);
+    let (world, entry) = (c.ecx, c.esp);
+    let shape = pg.u32(m, entry.wrapping_add(4));
+    let query = pg.u32(m, entry.wrapping_add(8));
+    let single = matches!(walk.grids, GridSet::Single);
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let args = if single { 8 } else { 0xc };
+    let block = pg.u32(m, query.wrapping_add(0x98));
+    if single && pg.u8(m, block.wrapping_add(0x14)) & 2 == 0 {
+        c.eax = 0;
+        c.esp = entry.wrapping_add(4 + args);
+        return;
+    }
+    let slot = if single { pg.u32(m, query.wrapping_add(0xe8)) } else { pg.u32(m, entry.wrapping_add(0xc)) };
+    pg.set_u32(m, query.wrapping_add(0x90), shape);
+    let mask = pg.u32(m, block.wrapping_add(8));
+    let target = if pg.u8(m, query.wrapping_add(0xb4)) != 0 { pg.u32(m, query.wrapping_add(0xb8)) } else { shape };
+    // the original's frame at its calls: the saved registers and locals
+    let frame = entry.wrapping_sub(if matches!(walk.grids, GridSet::PairHigh) { 0x24 } else { 0x1c });
+    let scratch = entry.wrapping_sub(0xc);
+    let first = match walk.grids {
+        GridSet::Single => world.wrapping_add(0x1c0),
+        GridSet::PairLow => world.wrapping_add(0x9c0),
+        GridSet::PairHigh => world.wrapping_add(0x21c0),
+    };
+    if matches!(walk.grids, GridSet::PairHigh) {
+        // the cast context handed to the callback: target, query, slot
+        pg.set_u32(m, scratch, target);
+        pg.set_u32(m, scratch.wrapping_add(4), query);
+        pg.set_u32(m, scratch.wrapping_add(8), slot);
+    }
+    let node_arg = if matches!(walk.grids, GridSet::PairHigh) { scratch } else { query };
+    let mut hits = 0u32;
+    for layer in 0..32u32 {
+        let base = first.wrapping_add(0x40 * layer);
+        if mask & (1 << layer) == 0 {
+            continue;
+        }
+        (c.ebx, c.ebp, c.esi, c.edi) = (1 << layer, hits, base, query);
+        let visit = |m: &mut dyn Mem, c: &mut Cpu, grid: u32, back: u32| -> u32 {
+            if pg.u32(m, grid.wrapping_add(4)) == 0 {
+                return 0;
+            }
+            call_from(m, c, pg, frame, grid, &[target, world, walk.callback, node_arg, u32::from(walk.mode), slot], back, |m, c| match node {
+                Some(native) => native(m, c),
+                None => ddnative_base::x86::call_ext(m, c, 0x0117_87c0),
+            })
+        };
+        match walk.grids {
+            GridSet::Single => hits |= visit(m, c, base, walk.back[0]),
+            GridSet::PairLow => {
+                let low = visit(m, c, base.wrapping_add(0x800), walk.back[0]);
+                hits |= visit(m, c, base, walk.back[1]) | low;
+            }
+            GridSet::PairHigh => {
+                let low = visit(m, c, base.wrapping_sub(0x800), walk.back[0]);
+                hits |= visit(m, c, base, walk.back[1]) | low;
+            }
+        }
+    }
+    c.eax = hits;
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + args);
+}
+
+// ---------------------------------------------------------------------
+// The per-grid node dispatch (0x011787C0)
+// ---------------------------------------------------------------------
+
+/// The leaf cast routine for each shape-type class: `[class]` of the
+/// jump table, with the return address of the original's call. The first
+/// table is for mode 1 (backward walks), the second for mode 0.
+const NODE_LEAVES_BACKWARD: [(u32, u32); 7] = [
+    (0x0117_3dc0, 0x0117_8939),
+    (0x0117_40a0, 0x0117_8959),
+    (0x0117_3800, 0x0117_88f9),
+    (0x0117_3ae0, 0x0117_8919),
+    (0x0117_31b0, 0x0117_88b9), // the AABB case, built below
+    (0x0117_3520, 0x0117_88d9),
+    (0x0117_4380, 0x0117_8979),
+];
+const NODE_LEAVES_FORWARD: [(u32, u32); 7] = [
+    (0x0117_5340, 0x0117_8adc),
+    (0x0117_5620, 0x0117_8afc),
+    (0x0117_4d80, 0x0117_8a9c),
+    (0x0117_5060, 0x0117_8abc),
+    (0x0117_4730, 0x0117_8a5c), // the AABB case, built below
+    (0x0117_4aa0, 0x0117_8a7c),
+    (0x0117_5900, 0x0117_8b1c),
+];
+
+/// The shape class (index into the leaf tables) of shape type `type - 2`,
+/// or 7 for none (the dispatch then returns 0).
+const NODE_CLASS: [u8; 20] = [0, 1, 7, 2, 3, 4, 5, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 6];
+
+// Translated from 0x011787c0 (DDDA.exe 2017-12-13 Steam).
+/// 0x011787C0, `grid->cast_node(target, world, callback, query, mode,
+/// slot) -> hits` (thiscall, `ret 0x18`): pick the cast routine for the
+/// target shape's type (`target[4]`, 2..=0x15) and call it with the target,
+/// its geometry (`target + 0x10`), the world, the callback, the query and
+/// the slot. The mode byte selects the backward (non-zero) or forward leaf
+/// table. An AABB target (class 4) is first rebuilt on the stack with some
+/// lanes of its bounds replaced by constants (lane mask at 0x0162AC60,
+/// values at 0x018CFE80) and handed over as a bounds object instead.
+/// Unknown types return 0.
+pub fn node_dispatch(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (grid, entry) = (c.ecx, c.esp);
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let target = arg(m, 0);
+    let kind = pg.u32(m, target.wrapping_add(4)).wrapping_sub(2);
+    let mode = pg.u8(m, entry.wrapping_add(0x14)) != 0;
+    let finish = |c: &mut Cpu, eax: u32| {
+        c.eax = eax;
+        c.esp = entry.wrapping_add(4 + 0x18);
+    };
+    if kind > 0x13 {
+        return finish(c, 0);
+    }
+    let class = NODE_CLASS[kind as usize] as usize;
+    if class == 7 {
+        return finish(c, 0);
+    }
+    let (leaf, back) = if mode { NODE_LEAVES_BACKWARD[class] } else { NODE_LEAVES_FORWARD[class] };
+    let (world, callback, query, slot) = (arg(m, 1), arg(m, 2), arg(m, 3), arg(m, 5));
+    // the original's frame: 16-aligned, 0x40 bytes of locals
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x40);
+    let at = |off: u32| frame.wrapping_add(off);
+    let guest = move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, leaf);
+    let eax = if class == 4 {
+        let epsilon = pg.u32(m, 0x0162_adb0);
+        pg.set_u32(m, at(0x18), epsilon);
+        let mut lanes = [[0u32; 3]; 2];
+        for (set, source) in [(0usize, 0x10u32), (1, 0x20)] {
+            for k in 0..3u32 {
+                let mask = pg.u32(m, 0x0162_ac60 + 4 * k);
+                let value = pg.u32(m, target.wrapping_add(source + 4 * k));
+                let constant = pg.u32(m, 0x018c_fe80 + 4 * k);
+                lanes[set][k as usize] = (value & !mask) | (constant & mask);
+            }
+        }
+        // the box (min at +0x20, max at +0x30) and its header (+0x10: vtable, 7, epsilon)
+        for k in 0..3usize {
+            pg.set_u32(m, at(0x20 + 4 * k as u32), lanes[0][k]);
+            pg.set_u32(m, at(0x30 + 4 * k as u32), lanes[1][k]);
+        }
+        pg.set_u32(m, at(0x2c), 0);
+        pg.set_u32(m, at(0x3c), 0);
+        pg.set_u32(m, at(0x14), 7);
+        pg.set_u32(m, at(0x10), 0x0159_4890);
+        call_from(m, c, pg, frame, grid, &[at(0x10), at(0x20), world, callback, query, slot], back, guest)
+    } else {
+        call_from(m, c, pg, frame, grid, &[target, target.wrapping_add(0x10), world, callback, query, slot], back, guest)
+    };
+    finish(c, eax);
 }

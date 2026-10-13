@@ -79,9 +79,20 @@ fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu), matrix_at: 
     };
     let data: Value = serde_json::from_str(&text).unwrap();
     let cases = data["cases"].as_array().unwrap();
+    // tables the original's run need not have touched (see the recorder)
+    let table: Vec<(u32, u8)> = match data.get("table") {
+        Some(t) => {
+            let base = n(&data["table_base"]);
+            t.as_array().unwrap().iter().enumerate().map(|(i, b)| (base + i as u32, n(b) as u8)).collect()
+        }
+        None => Vec::new(),
+    };
     let (mut nan_total, mut nan_differing) = (0usize, 0usize);
     for (i, case) in cases.iter().enumerate() {
         let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
+        for &(a, b) in &table {
+            m.bytes.entry(a).or_insert(b);
+        }
         let before = regs(&case["before"]);
         let after = regs(&case["after"]);
         let mut c = Cpu::default();

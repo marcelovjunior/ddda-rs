@@ -98,15 +98,12 @@ class Oracle:
     def __init__(self):
         self.covered = set()
         uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
-        uc.mem_map(CODE_PAGES[0], CODE_PAGES[1])
-        uc.mem_write(CODE_PAGES[0], h.code(CODE_PAGES[0], CODE_PAGES[1]))
-        for page in CONST_PAGES:
-            uc.mem_map(page, 0x1000)
-            uc.mem_write(page, h.code(page, 0x1000))
-        for page in sorted({a & ~0xFFF for a in (SIN, COS)}):
-            uc.mem_map(page, 0x1000)
-        uc.mem_write(SIN, b'\xc3')
-        uc.mem_write(COS, b'\xc3')
+        # the whole exe image: sinf/cosf run as the original's code (the port
+        # computes them natively) except for arguments it hands back
+        for va, data in h.image()[1]:
+            lo, hi = va & ~0xFFF, (va + len(data) + 0xFFF) & ~0xFFF
+            uc.mem_map(lo, hi - lo)
+            uc.mem_write(va, data)
         for base, size in ((JOINT, 0x1000), (MODEL, 0x1000), (JOINTS, 0x1000), (TABLE, 0x1000), (SOURCE, 0x1000),
                            (OUT, 0x1000), (STACK, 0x10000), (h.RET, 0x1000)):
             uc.mem_map(base, size)
@@ -138,8 +135,10 @@ class Oracle:
             return
         if address not in (SIN, COS):
             self.covered.add(address)
-            assert CODE_PAGES[0] <= address < CODE_PAGES[0] + CODE_PAGES[1], hex(address)
             return
+        v = from_bits(self.xmm0())
+        if not (math.isfinite(v) and abs(v) >= 8192.0):
+            return  # the real sinf/cosf runs (the port handles all but large finite arguments)
         esp = uc.reg_read(x.UC_X86_REG_ESP)
         window = [(esp + i, b) for i, b in enumerate(uc.mem_read(esp, 4))]
         before = dict(regs=self.regs(), xmm0=self.xmm0(), memory=window)
@@ -168,7 +167,7 @@ class Oracle:
             matrix[12:15] = [0.0, 0.0, 0.0]
         self.put(JOINT + 0x10, matrix)
         angle = rng.choice((0.0, -0.0, 1e-9, 1e-5, 0.01, -0.01, 0.5, -0.5, 3.0, -3.0, 20.0, -20.0, 45.0, -45.0, 90.0,
-                            179.0, 1000.0, -1000.0, math.nan, math.inf, rng.uniform(-60, 60), rng.uniform(-60, 60),
+                            179.0, 1000.0, -1000.0, 9000.0, -90000.0, math.nan, math.inf, rng.uniform(-60, 60), rng.uniform(-60, 60),
                             rng.uniform(-60, 60), rng.uniform(-5, 5)))
         uc.mem_write(SOURCE + 0x538, struct.pack('<f', angle))
         no_joints = rng.random() < 0.05  # a null joint array: joint 0 is "no joint"

@@ -43,6 +43,7 @@ fn regs(v: &Value) -> [u32; 8] {
 fn stack_args(target: u32) -> u32 {
     match target {
         0x3000_0020 => 1, // skeleton->root_matrix(-1)
+        0x00d8_e400 => 5, // simplex->tetrahedron_closest(out, p0, p1, p2, p3)
         _ => panic!("unexpected call target {target:x}"),
     }
 }
@@ -79,13 +80,19 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
         let after = regs(&case["after"]);
         let mut c = Cpu::default();
         [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = before;
-        let events: Vec<Value> = case["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|e| e.get("target").map_or(true, |t| !native_callees.contains(&n(t))))
-            .cloned()
-            .collect();
+        // paired format: a native callee's call event and its return event both go
+        let mut events: Vec<Value> = Vec::new();
+        let all = case["events"].as_array().unwrap();
+        let mut at = 0;
+        while at < all.len() {
+            let skip = all[at].get("target").is_some_and(|t| native_callees.contains(&n(t)));
+            if skip {
+                at += if all[at].get("kind").is_some() { 2 } else { 1 };
+            } else {
+                events.push(all[at].clone());
+                at += 1;
+            }
+        }
         let events = Rc::new(events);
         let cursor = Rc::new(RefCell::new(0usize));
         let (trace, position) = (events.clone(), cursor.clone());
@@ -135,6 +142,9 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
         })));
         body(&mut m, &mut c);
         x86::set_ext_calls(None);
+        if c.st.home != 0 {
+            (ddnative_base::hooks::get().x87_release)(&mut c.st);
+        }
         assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
         let eax = if returns { [c.eax, after[0]] } else { [0, 0] };
         let got = [eax[0], c.ebx, c.esp, c.ebp, c.esi, c.edi];
@@ -173,4 +183,71 @@ fn semantic_look_at_frame_matches_original() {
     let path = std::env::var("S8_LOOKAT_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/look_at_frame.json".into());
     let n = abi_cases_with_calls(&path, mtcore::semantic_s8::look_at_frame);
     eprintln!("{n} ABI-level look_at_frame cases passed");
+}
+
+// verifies 0x00d7cf70 (ABI level, EAX included) with its real helpers run natively
+#[test]
+fn semantic_sweep_capsule_triangle_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S8_SWEEP_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/sweep.json".into());
+    let n = abi_cases_with_calls(&path, mtcore::semantic_s8_sweep::sweep_capsule_triangle);
+    eprintln!("{n} ABI-level sweep cases passed");
+}
+
+// verifies the triangle reduction inside 0x00d7cf70 (case 3 of its simplex switch)
+#[test]
+fn semantic_triangle_reduction_matches_original() {
+    use ddnative_base::mem::Pages;
+    let path = std::env::var("S8_TRIANGLE_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/sweep_triangle.json".into());
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let cases = data["cases"].as_array().unwrap();
+    for (i, case) in cases.iter().enumerate() {
+        let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
+        let pg = Pages::of(&m);
+        mtcore::semantic_s8_sweep::reduce_triangle(pg, &mut m, 0x2000_5000);
+        let expected = pairs(&case["after"]);
+        for (&a, &b) in &expected {
+            assert_eq!(m.bytes.get(&a).copied(), Some(b), "case {i}: memory {a:x}");
+        }
+        for (&a, &b) in &m.writes {
+            assert!(expected.get(&a).map_or(false, |&e| e == b), "case {i}: extra write {a:x}");
+        }
+    }
+    eprintln!("{} triangle reduction cases passed", cases.len());
+}
+
+// verifies 0x00d63ff0, 0x00d1b540 and 0x00d12e10 alone (ABI level, EAX included)
+#[test]
+fn semantic_collision_helpers_match_original() {
+    ddnative_host::install();
+    let dir = "E:/ddda-re/notes/native-L184";
+    let n = abi_cases_with_calls(&format!("{dir}/support.json"), mtcore::semantic_s8_sweep::shape_support);
+    let m = abi_cases_with_calls(&format!("{dir}/add_point.json"), mtcore::semantic_s8_sweep::simplex_add_point);
+    let k = abi_cases_with_calls(&format!("{dir}/segment.json"), mtcore::semantic_s8_sweep::simplex_segment_closest);
+    eprintln!("{n} support, {m} add_point, {k} segment cases passed");
+}
+
+// verifies 0x00e10fc0 with the sequence built, expanded and hashed natively: vectors from the
+// original run with its real callees 0x00e0ec50 and 0x00e0e5e0 inline and the real CRC table
+// (research/native/record_intern_keys.py); both the cached-table and the per-lookup table path
+#[test]
+fn semantic_intern_keys_native_matches_original() {
+    ddnative_host::install();
+    let path = "E:/ddda-re/notes/native-L184/intern_keys.json";
+    let a = abi_cases_with_calls(path, |m, c| mtcore::semantic::intern_dependency_keys_table(m, c, false));
+    assert!(a >= 1000);
+    eprintln!("{a} native intern cases passed");
+}
+
+// verifies 0x00e0e5e0 (the key hash, stdcall `ret 0xc`)
+#[test]
+fn semantic_key_hash_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/key_hash.json", mtcore::semantic::hash_key_words);
+    eprintln!("{n} key hash cases passed");
 }

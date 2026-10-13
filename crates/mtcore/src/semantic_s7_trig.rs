@@ -12,75 +12,14 @@
 //! there and the caller makes the guest call.
 //!
 //! Translated from 0x012F0906 and 0x012F0A55 (DDDA.exe 2017-12-13 Steam).
+use ddnative_base::mem::{Mem, Pages};
 
-/// `(sin(k pi/32), cos(k pi/32))` as doubles for k = 0..63 (the table at
-/// 0x0144B410 / 0x0144B870, which is the same in both functions).
-const TABLE: [(u64, u64); 64] = [
-    (0x0000000000000000, 0x3ff0000000000000),
-    (0x3fb917a6bc29b42c, 0x3fefd88da3d12526),
-    (0x3fc8f8b83c69a60b, 0x3fef6297cff75cb0),
-    (0x3fd294062ed59f06, 0x3fee9f4156c62dda),
-    (0x3fd87de2a6aea963, 0x3fed906bcf328d46),
-    (0x3fde2b5d3806f63b, 0x3fec38b2f180bdb1),
-    (0x3fe1c73b39ae68c8, 0x3fea9b66290ea1a3),
-    (0x3fe44cf325091dd6, 0x3fe8bc806b151741),
-    (0x3fe6a09e667f3bcd, 0x3fe6a09e667f3bcd),
-    (0x3fe8bc806b151741, 0x3fe44cf325091dd6),
-    (0x3fea9b66290ea1a3, 0x3fe1c73b39ae68c8),
-    (0x3fec38b2f180bdb1, 0x3fde2b5d3806f63b),
-    (0x3fed906bcf328d46, 0x3fd87de2a6aea963),
-    (0x3fee9f4156c62dda, 0x3fd294062ed59f06),
-    (0x3fef6297cff75cb0, 0x3fc8f8b83c69a60b),
-    (0x3fefd88da3d12526, 0x3fb917a6bc29b42c),
-    (0x3ff0000000000000, 0x0000000000000000),
-    (0x3fefd88da3d12526, 0xbfb917a6bc29b42c),
-    (0x3fef6297cff75cb0, 0xbfc8f8b83c69a60b),
-    (0x3fee9f4156c62dda, 0xbfd294062ed59f06),
-    (0x3fed906bcf328d46, 0xbfd87de2a6aea963),
-    (0x3fec38b2f180bdb1, 0xbfde2b5d3806f63b),
-    (0x3fea9b66290ea1a3, 0xbfe1c73b39ae68c8),
-    (0x3fe8bc806b151741, 0xbfe44cf325091dd6),
-    (0x3fe6a09e667f3bcd, 0xbfe6a09e667f3bcd),
-    (0x3fe44cf325091dd6, 0xbfe8bc806b151741),
-    (0x3fe1c73b39ae68c8, 0xbfea9b66290ea1a3),
-    (0x3fde2b5d3806f63b, 0xbfec38b2f180bdb1),
-    (0x3fd87de2a6aea963, 0xbfed906bcf328d46),
-    (0x3fd294062ed59f06, 0xbfee9f4156c62dda),
-    (0x3fc8f8b83c69a60b, 0xbfef6297cff75cb0),
-    (0x3fb917a6bc29b42c, 0xbfefd88da3d12526),
-    (0x0000000000000000, 0xbff0000000000000),
-    (0xbfb917a6bc29b42c, 0xbfefd88da3d12526),
-    (0xbfc8f8b83c69a60b, 0xbfef6297cff75cb0),
-    (0xbfd294062ed59f06, 0xbfee9f4156c62dda),
-    (0xbfd87de2a6aea963, 0xbfed906bcf328d46),
-    (0xbfde2b5d3806f63b, 0xbfec38b2f180bdb1),
-    (0xbfe1c73b39ae68c8, 0xbfea9b66290ea1a3),
-    (0xbfe44cf325091dd6, 0xbfe8bc806b151741),
-    (0xbfe6a09e667f3bcd, 0xbfe6a09e667f3bcd),
-    (0xbfe8bc806b151741, 0xbfe44cf325091dd6),
-    (0xbfea9b66290ea1a3, 0xbfe1c73b39ae68c8),
-    (0xbfec38b2f180bdb1, 0xbfde2b5d3806f63b),
-    (0xbfed906bcf328d46, 0xbfd87de2a6aea963),
-    (0xbfee9f4156c62dda, 0xbfd294062ed59f06),
-    (0xbfef6297cff75cb0, 0xbfc8f8b83c69a60b),
-    (0xbfefd88da3d12526, 0xbfb917a6bc29b42c),
-    (0xbff0000000000000, 0x0000000000000000),
-    (0xbfefd88da3d12526, 0x3fb917a6bc29b42c),
-    (0xbfef6297cff75cb0, 0x3fc8f8b83c69a60b),
-    (0xbfee9f4156c62dda, 0x3fd294062ed59f06),
-    (0xbfed906bcf328d46, 0x3fd87de2a6aea963),
-    (0xbfec38b2f180bdb1, 0x3fde2b5d3806f63b),
-    (0xbfea9b66290ea1a3, 0x3fe1c73b39ae68c8),
-    (0xbfe8bc806b151741, 0x3fe44cf325091dd6),
-    (0xbfe6a09e667f3bcd, 0x3fe6a09e667f3bcd),
-    (0xbfe44cf325091dd6, 0x3fe8bc806b151741),
-    (0xbfe1c73b39ae68c8, 0x3fea9b66290ea1a3),
-    (0xbfde2b5d3806f63b, 0x3fec38b2f180bdb1),
-    (0xbfd87de2a6aea963, 0x3fed906bcf328d46),
-    (0xbfd294062ed59f06, 0x3fee9f4156c62dda),
-    (0xbfc8f8b83c69a60b, 0x3fef6297cff75cb0),
-    (0xbfb917a6bc29b42c, 0x3fefd88da3d12526),
-];
+/// Address of the table of `(sin(k pi/32), cos(k pi/32))` as doubles for
+/// k = 0..63 (16 bytes per entry; the same table serves both functions,
+/// each keeps its own copy: sinf at 0x0144B410, cosf at 0x0144B870). It is read from the
+/// guest's image on each call (entry `k` only), never copied here.
+const SIN_TABLE_ADDRESS: u32 = 0x0144_b410;
+const COS_TABLE_ADDRESS: u32 = 0x0144_b870;
 
 /// Float 32/pi, the multiplier that gives the argument in units of pi/32.
 const UNITS_PER_RADIAN: f32 = f32::from_bits(0x4122_f983);
@@ -144,7 +83,7 @@ fn non_finite_result(x: f32) -> f32 {
 
 /// Table-driven evaluation for `Range::Normal`.
 #[inline(always)]
-fn evaluate(x: f32, kind: Kind) -> f32 {
+fn evaluate(m: &dyn Mem, pg: Pages, x: f32, kind: Kind) -> f32 {
     let scaled = UNITS_PER_RADIAN * x;
     // cvtss2si: round to nearest even (the default MXCSR rounding)
     let quarter_count = scaled.round_ties_even() as i32 as u32;
@@ -163,16 +102,18 @@ fn evaluate(x: f32, kind: Kind) -> f32 {
     let square = reduced * reduced;
     let cos_poly = (MINUS_HALF * square + ONE) + ONE_24TH * (square * square);
     let sin_poly = (MINUS_SIXTH * square + ONE) + ONE_120TH * (square * square);
-    let (table_sin, table_cos) = TABLE[index];
-    let (table_sin, table_cos) = (f64::from_bits(table_sin), f64::from_bits(table_cos));
+    let table = if kind == Kind::Cos { COS_TABLE_ADDRESS } else { SIN_TABLE_ADDRESS };
+    let entry = table + 16 * index as u32;
+    let read = |a: u32| f64::from_bits(pg.u32(m, a) as u64 | (pg.u32(m, a + 4) as u64) << 32);
+    let (table_sin, table_cos) = (read(entry), read(entry + 8));
     (table_sin * cos_poly + (correction * table_cos) * sin_poly) as f32
 }
 
 /// The CRT `sinf`; `None` when the original takes its x87 path.
 #[inline]
-pub fn sinf(x: f32) -> Option<f32> {
+pub fn sinf(m: &dyn Mem, pg: Pages, x: f32) -> Option<f32> {
     match classify(x) {
-        Range::Normal => Some(evaluate(x, Kind::Sin)),
+        Range::Normal => Some(evaluate(m, pg, x, Kind::Sin)),
         Range::Tiny => Some(((x as f64) * SIN_TINY_SCALE) as f32),
         Range::Large if x.to_bits() & 0x7f80_0000 == 0x7f80_0000 => Some(non_finite_result(x)),
         Range::Large => None,
@@ -181,9 +122,9 @@ pub fn sinf(x: f32) -> Option<f32> {
 
 /// The CRT `cosf`; `None` when the original takes its x87 path.
 #[inline]
-pub fn cosf(x: f32) -> Option<f32> {
+pub fn cosf(m: &dyn Mem, pg: Pages, x: f32) -> Option<f32> {
     match classify(x) {
-        Range::Normal => Some(evaluate(x, Kind::Cos)),
+        Range::Normal => Some(evaluate(m, pg, x, Kind::Cos)),
         Range::Tiny => {
             let x = x as f64;
             Some((ONE - x * x) as f32)

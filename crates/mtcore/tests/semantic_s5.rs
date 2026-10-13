@@ -43,7 +43,7 @@ fn regs(v: &Value) -> [u32; 8] {
 /// Run `body` on every case of `path`, replaying and checking the
 /// recorded guest calls. `compare_registers(target)` says which of
 /// [eax, ecx, edx, ebx, esp, ebp, esi, edi] the callee takes as inputs.
-fn cases(path: &str, body: x86::LiftFn, input_registers: fn(u32) -> &'static [usize]) -> usize {
+fn cases(path: &str, body: x86::LiftFn, input_registers: fn(u32) -> &'static [usize], returns: bool) -> usize {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
@@ -89,12 +89,18 @@ fn cases(path: &str, body: x86::LiftFn, input_registers: fn(u32) -> &'static [us
             c.esp = regs(back)[4];
             *position.borrow_mut() += 1;
         })));
+        if std::env::var_os("S5_TRACE").is_some() {
+            eprintln!("case {i} mode {}", case["mode"]);
+        }
         body(&mut m, &mut c);
         x86::set_ext_calls(None);
         assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
         let got = [c.ebx, c.esp, c.ebp, c.esi, c.edi];
         let want = [after[3], after[4], after[5], after[6], after[7]];
         assert_eq!(got, want, "case {i} (mode {}): ebx/esp/ebp/esi/edi", case["mode"]);
+        if returns {
+            assert_eq!(c.eax, after[0], "case {i}: eax");
+        }
         let esp = after[4];
         let expected = pairs(&case["after"]["memory"]);
         for (&a, &b) in &expected {
@@ -125,7 +131,7 @@ fn input_registers(target: u32) -> &'static [usize] {
 fn semantic_cns_edit_matches_original() {
     ddnative_host::install();
     let path = std::env::var("S5_CNS_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/cns_edit.json".into());
-    let count = cases(&path, mtcore::semantic_s5::constraint_edit_apply, input_registers);
+    let count = cases(&path, mtcore::semantic_s5::constraint_edit_apply, input_registers, false);
     eprintln!("{count} ABI-level uCnsEdit::vf24 cases passed");
 }
 
@@ -175,4 +181,33 @@ fn semantic_crt_sincos_matches_original() {
         }
     }
     eprintln!("{fast} native + {slow} guest-delegated sin/cos cases passed");
+}
+
+/// Registers the callee takes inputs in, as above, for the parent-space edit
+/// (0x0086b2e0): only its virtual accessor is called.
+// verifies 0x0086b2e0 (ABI level; EAX = the output buffer)
+#[test]
+fn semantic_scale_translate_in_parent_space_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S5_PARENT_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/cns_parent.json".into());
+    let count = cases(&path, mtcore::semantic_s5::scale_translate_in_parent_space, input_registers, true);
+    eprintln!("{count} ABI-level 0x0086b2e0 cases passed");
+}
+
+// verifies 0x00864660 (ABI level; EAX = the output buffer)
+#[test]
+fn semantic_aim_twist_provider_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S5_AIM_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/cns_aim.json".into());
+    let count = cases(&path, mtcore::semantic_s5::aim_twist_provider, input_registers, true);
+    eprintln!("{count} ABI-level 0x00864660 cases passed");
+}
+
+// verifies 0x00865990 (ABI level; EAX = the output buffer)
+#[test]
+fn semantic_euler_twist_provider_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S5_EULER_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/cns_euler.json".into());
+    let count = cases(&path, mtcore::semantic_s5::euler_twist_provider, input_registers, true);
+    eprintln!("{count} ABI-level 0x00865990 cases passed");
 }
