@@ -7,13 +7,15 @@
   us/draw**. Uniform data prefilled; no texture sampling/gameplay claim.
 - 900 one-draw clear passes: **7.146 / 7.151 / 1.351 us/pass**, respectively.
   Bundles reduce repeated draw processing but do not remove pass overhead.
-- Native API: **2 GPU tests pass**, including eight exact D3D9/host-driver
-  cases and texture/constants/ring checks; **3 CPU tests pass**. Full-block
-  native workload **6.538 us/draw** under CPU contention (target not met).
+- Native API: **4 GPU tests pass**, including full/compact exact D3D9/host
+  comparisons and texture/constants/ring checks; **5 CPU tests pass**.
+- Matched 5,000-draw native workload: full **3.839**, compact **1.692**,
+  compact range updates **1.433 us/draw**, including upload/finish/submit
+  (three alternating repeats). Minimal shaders; no gameplay/FPS claim.
 - wgpu-owned texture/buffer -> raw Vulkan/hal -> wgpu readback passes with
   separate ordered encoders; mixing raw and normal encoding in one fails.
-- Runtime light suite **152 pass / 1 existing gamma-reset failure / 1
-  ignored**. Next: L90 compact native constant layouts and repeat timings.
+- Current-base runtime light suite **167 pass / 1 existing gamma-reset
+  failure / 2 ignored**. Next: L119 integration and one captured-pass oracle.
   Details and limitations: `docs/tasks/L110-native-device.md`.
 
 ### L111 nDraw executor observer (2026-10-13)

@@ -90,7 +90,7 @@ fn call(t: &Target, indexed: bool, blended: bool, scissor: bool, colour: [f32; 4
             ..Default::default()
         }
         .into(),
-        textures: vec![],
+        textures: vec![].into(),
         render_states: states.into(),
         viewport: [0, 0, 8, 8, 0, 1f32.to_bits()],
         scissor: [1, 1, 5, 6],
@@ -100,6 +100,13 @@ fn call(t: &Target, indexed: bool, blended: bool, scissor: bool, colour: [f32; 4
 }
 #[test]
 fn native_matches_d3d9_backend_and_driver() {
+    compare_constant_draws(false);
+}
+#[test]
+fn native_compact_matches_d3d9_backend_and_driver() {
+    compare_constant_draws(true);
+}
+fn compare_constant_draws(compact: bool) {
     let Some(mut gpu) = ddgpu::WgpuBackend::headless() else {
         eprintln!("SKIP no GPU");
         return;
@@ -109,8 +116,15 @@ fn native_matches_d3d9_backend_and_driver() {
     let legacy_target = target(0x200);
     let mut device = Device::from_backend(&mut gpu);
     let view = device.import_target(&mut gpu, &native_target, false).unwrap();
-    let vertex_shader = device.create_shader(&vs(), Stage::Vertex).unwrap();
-    let pixel_shader = device.create_shader(&ps(), Stage::Pixel).unwrap();
+    let make_shader = if compact {
+        Device::create_compact_shader
+    } else {
+        Device::create_shader
+    };
+    let vertex_shader = make_shader(&mut device, &vs(), Stage::Vertex).unwrap();
+    let pixel_shader = make_shader(&mut device, &ps(), Stage::Pixel).unwrap();
+    let vl = device.shader_constant_layout(vertex_shader);
+    let pl = device.shader_constant_layout(pixel_shader);
     let input = device
         .create_input_layout(InputLayoutDesc {
             streams: vec![InputStream {
@@ -175,11 +189,11 @@ fn native_matches_d3d9_backend_and_driver() {
         "empty sets shared across pipeline states"
     );
     let mut recorder = Recorder::new(&device, 128 * 1024);
-    let pc = recorder.create_constant_buffer(Stage::Pixel);
-    let vc = recorder.create_constant_buffer(Stage::Vertex);
-    let mut vs_bytes = vec![0; constant_block_size(Stage::Vertex)];
-    vs_bytes[4608..4612].copy_from_slice(&(1.0f32 / 8.0).to_le_bytes());
-    vs_bytes[4612..4616].copy_from_slice(&(-1.0f32 / 8.0).to_le_bytes());
+    let pc = recorder.create_constant_buffer_for_shader(pixel_shader);
+    let vc = recorder.create_constant_buffer_for_shader(vertex_shader);
+    let mut vs_bytes = vec![0; vl.byte_len];
+    vs_bytes[vl.extra_offset..vl.extra_offset + 4].copy_from_slice(&(1.0f32 / 8.0).to_le_bytes());
+    vs_bytes[vl.extra_offset + 4..vl.extra_offset + 8].copy_from_slice(&(-1.0f32 / 8.0).to_le_bytes());
     recorder.set_constants(pc);
     recorder.set_constants(vc);
     recorder.set_vertex_buffer(
@@ -225,7 +239,7 @@ fn native_matches_d3d9_backend_and_driver() {
             recorder.set_texture_set(set);
         }
         recorder.update_constants(vc, &vs_bytes).unwrap();
-        let mut ps_bytes = vec![0; constant_block_size(Stage::Pixel)];
+        let mut ps_bytes = vec![0; pl.byte_len];
         for (dst, value) in ps_bytes[..16].chunks_exact_mut(4).zip(colour) {
             dst.copy_from_slice(&value.to_le_bytes());
         }
@@ -264,6 +278,13 @@ fn native_matches_d3d9_backend_and_driver() {
 
 #[test]
 fn native_imported_texture_and_constant_generations() {
+    compare_texture_constants(false);
+}
+#[test]
+fn native_compact_texture_and_constant_generations() {
+    compare_texture_constants(true);
+}
+fn compare_texture_constants(compact: bool) {
     use d3d9cmd::{TexKind, TextureBinding as LegacyTexture, Upload};
     let Some(mut gpu) = ddgpu::WgpuBackend::headless() else {
         eprintln!("SKIP no GPU");
@@ -306,7 +327,7 @@ fn native_imported_texture_and_constant_generations() {
     };
     let mut d = call(&t, false, false, false, [0.25, 0.25, 0.0, 0.0]);
     d.pixel_shader = Some(ps_tex.clone().into());
-    d.textures.push(texture.clone());
+    d.textures = vec![texture.clone()].into();
     let mut oracle = d3d9ref::Oracle::new().expect("D3D9");
     let expected = oracle
         .render(
@@ -332,8 +353,15 @@ fn native_imported_texture_and_constant_generations() {
             ..Default::default()
         })
         .is_ok());
-    let vertex_shader = device.create_shader(&vs(), Stage::Vertex).unwrap();
-    let pixel_shader = device.create_shader(&ps_tex, Stage::Pixel).unwrap();
+    let make_shader = if compact {
+        Device::create_compact_shader
+    } else {
+        Device::create_shader
+    };
+    let vertex_shader = make_shader(&mut device, &vs(), Stage::Vertex).unwrap();
+    let pixel_shader = make_shader(&mut device, &ps_tex, Stage::Pixel).unwrap();
+    let vl = device.shader_constant_layout(vertex_shader);
+    let pl = device.shader_constant_layout(pixel_shader);
     let input = device
         .create_input_layout(InputLayoutDesc {
             streams: vec![InputStream {
@@ -392,17 +420,17 @@ fn native_imported_texture_and_constant_generations() {
             size: 48,
         },
     );
-    let pc = r.create_constant_buffer(Stage::Pixel);
-    let vc = r.create_constant_buffer(Stage::Vertex);
+    let pc = r.create_constant_buffer_for_shader(pixel_shader);
+    let vc = r.create_constant_buffer_for_shader(vertex_shader);
     r.set_constants(pc);
     r.set_constants(vc);
-    let mut bytes = vec![0; constant_block_size(Stage::Pixel)];
+    let mut bytes = vec![0; pl.byte_len];
     bytes[..4].copy_from_slice(&0.25f32.to_le_bytes());
     bytes[4..8].copy_from_slice(&0.25f32.to_le_bytes());
     r.update_constants(pc, &bytes).unwrap();
-    let mut vs_bytes = vec![0; constant_block_size(Stage::Vertex)];
-    vs_bytes[4608..4612].copy_from_slice(&0.125f32.to_le_bytes());
-    vs_bytes[4612..4616].copy_from_slice(&(-0.125f32).to_le_bytes());
+    let mut vs_bytes = vec![0; vl.byte_len];
+    vs_bytes[vl.extra_offset..vl.extra_offset + 4].copy_from_slice(&0.125f32.to_le_bytes());
+    vs_bytes[vl.extra_offset + 4..vl.extra_offset + 8].copy_from_slice(&(-0.125f32).to_le_bytes());
     r.update_constants(vc, &vs_bytes).unwrap();
     assert!(r.update_constants(pc, &[0; 16]).is_err());
     for frame in 0..2 {
@@ -431,17 +459,20 @@ fn native_imported_texture_and_constant_generations() {
         gpu.present(&t);
         assert_eq!(gpu.last_frame.as_ref().unwrap().rgba, expected.rgba);
     }
-    for x in [0.1f32, 0.2, 0.3] {
+    let mut last = 0.25f32;
+    let mut exhausted = false;
+    for i in 1..128 {
+        let x = i as f32 / 128.0;
         bytes[..4].copy_from_slice(&x.to_le_bytes());
-        r.update_constants(pc, &bytes).unwrap();
+        if r.update_constants(pc, &bytes).is_err() {
+            exhausted = true;
+            break;
+        }
+        last = x;
     }
+    assert!(exhausted, "bounded ring reports exhaustion");
     let writes = r.stats.uniform_writes;
-    bytes[..4].copy_from_slice(&0.4f32.to_le_bytes());
-    assert!(
-        r.update_constants(pc, &bytes).is_err(),
-        "bounded ring reports exhaustion"
-    );
-    bytes[..4].copy_from_slice(&0.3f32.to_le_bytes());
+    bytes[..4].copy_from_slice(&last.to_le_bytes());
     r.update_constants(pc, &bytes).unwrap();
     assert_eq!(
         r.stats.uniform_writes, writes,

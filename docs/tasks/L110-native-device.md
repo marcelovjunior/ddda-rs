@@ -137,5 +137,65 @@ guarded buffer; ash descriptor/vertex binding directly to wgpu buffers
 would need an accessor patch or separately owned/imported buffers. The
 probe demonstrates transfers, not a production mixed-rendering backend.
 
-Next: adopt the already integrated L90 compact shader ABI from fps-line,
-add compact native constant layouts and repeat image/timing checks.
+### Compact constants: final L110 result
+
+Merged the current integration dependency `fbf4a606` as `12ce295d`, preserving
+both sides of independent documentation appends. No new translator/runtime
+implementation edits: native compact shaders use the merged L90
+`Options::compact_constants` and `Shader::float_constant_count` APIs.
+
+`create_compact_shader` exposes a `ConstantLayout`; its buffers use
+`create_constant_buffer_for_shader`. Float extents, subsequent int/bool
+banks and extra offsets agree with the translated shader. Full layouts
+remain supported. Bound layout mismatches fail explicitly. Compact ring
+allocations retain enough tail for the fixed maximum bind-group ranges.
+
+The final serialized Vulkan gate (`HEAVY_BIG=1`, `heavy.py`, 60-second cap
+and pause checks per process) passes **4 GPU tests**: both full and compact
+versions of all eight state combinations and texture/constant/ring/delta
+checks. The interop probe passes again. **5 ddgpu CPU tests pass**, including
+the Send/Sync contract for sharing immutable devices and moving recorders.
+Current-base runtime light suite: **167 passed / 1 inherited fullscreen
+gamma Reset failure / 2 ignored**, 24 suite results; no checks weakened.
+
+Three alternating runs per mode, 20 measured frames plus 3 warmups each,
+5,000 draws/frame, identical native shaders/geometry/resources:
+
+| Native mode | Median total us/draw | Three run medians |
+|---|---:|---|
+| Full blocks | 3.839 | 3.401, 3.839, 4.038 |
+| Compact blocks | 1.692 | 1.692, 1.460, 1.729 |
+| Compact + range deltas | **1.433** | 1.376, 1.433, 1.667 |
+
+Totals include recording, ring upload, finish and submit, excluding GPU
+completion waits and object creation. Record-only range-delta medians are
+0.327/0.410/0.309 us/draw (median 0.327). PS/VS blocks shrink from
+4,192/4,624 to 624/544 bytes for these minimal shaders. Each run records
+115,000 draws and 230,000 uniform snapshots, including warmups. Thus the
+**<2 us synthetic target is met**, without a gameplay/FPS claim. The 40
+pipeline handles have common layouts; 200 texture sets use distinct sampled
+textures. This is not a full game shader workload.
+
+Same current-base `draw_cost_game 5000 10`: 6.24 us/draw submitted, 3.45
+deferred; GPU-waited frame means 44.35/47.26 ms. Larger shaders, six sampled
+textures, different target sizes and state distribution prevent interpreting
+this as a matched native-versus-D3D9 speedup. Only the native mode comparison
+above holds the workload fixed.
+
+The benchmark defaults to compact range deltas; select `native` for full,
+`compact` for compact whole-block writes, `all` for backend floors, or
+`interop` for the raw-resource readback probe.
+
+Integration handoff to L119: use an owned native-command transport in the
+same DeferredBackend FIFO, prewarm a consecutive native batch then record
+it, flushing when switching producers. Guest object IDs need generation/
+release handling. The current recorder borrows the immutable Device; a
+persistent owned recording context is follow-up plumbing if dispatch must
+enter once per native command. No closures/downcasts or per-draw submissions
+are required by this API. Real nDraw parity (floating depth bias, clip/AA/
+border cases, feedback, query ownership) still belongs to pass-by-pass
+integration, as documented by L117; this API does not claim those untested
+game semantics. Vertex sampler nonzero LOD bias is explicitly rejected.
+
+Next: head integrates L110 with L119 and compares one real native pass
+against the captured D3D9 frame, retaining fallback for unsupported states.

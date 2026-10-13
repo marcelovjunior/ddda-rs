@@ -1,9 +1,10 @@
-//! L110 backend floor: precreated objects, 5,000 indexed draws, 40 pipelines,
-//! 200 descriptor groups, a distinct dynamic uniform offset on every draw.
+//! L110 native cost: 5,000 indexed draws, 40 pipeline handles, 200 texture
+//! sets, changed constants every draw. Default mode is compact range updates.
+//! `all` additionally measures prefilled wgpu/bundles/ash backend floors.
 //! Run optimized with WGPU_BACKEND=vulkan. CPU timing includes pass end,
 //! encoder finish, and queue submit; GPU completion waits are outside timing.
-//! This is a tiny-triangle backend floor, NOT a gameplay/FPS prediction.
-//! `native_draw_cost [frames=20] [draws=5000] [mode=all|core|bundles|ash|native|interop] [passes=1]`
+//! Minimal shaders and tiny triangles, NOT a gameplay/FPS prediction.
+//! `native_draw_cost [frames=20] [draws=5000] [mode=all|core|bundles|ash|native|compact|delta|interop] [passes=1]`
 use std::{
     future::Future,
     sync::Arc,
@@ -78,7 +79,14 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let frames: usize = args.first().and_then(|v| v.parse().ok()).unwrap_or(20);
     let draws: usize = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(5000);
-    let mode = args.get(2).map(String::as_str).unwrap_or("all");
+    let mode = args.get(2).map(String::as_str).unwrap_or("delta");
+    assert!(
+        matches!(
+            mode,
+            "all" | "core" | "bundles" | "ash" | "native" | "compact" | "delta" | "interop"
+        ),
+        "unknown benchmark mode"
+    );
     let passes: usize = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(1);
     assert!(frames > 0 && draws > 0 && passes > 0 && passes <= draws);
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -86,7 +94,7 @@ fn main() {
     let instance = wgpu::Instance::new(descriptor);
     let adapter = block_on(instance.request_adapter(&Default::default())).expect("Vulkan adapter");
     println!(
-        "adapter {:?}; build {}; tiny triangle 16x16; uniform data prefilled, update copies excluded",
+        "adapter {:?}; build {}; tiny triangle 16x16",
         adapter.get_info(),
         if cfg!(debug_assertions) {
             "debug (NOT acceptance)"
@@ -99,10 +107,11 @@ fn main() {
         interop_probe(&device, &queue);
         return;
     }
-    if mode == "native" {
-        native_workload(&device, &queue, frames, draws);
+    if matches!(mode, "native" | "compact" | "delta") {
+        native_workload(&device, &queue, frames, draws, mode != "native", mode == "delta");
         return;
     }
+    println!("backend floor: uniform data prefilled, update copies excluded");
     if mode == "all" || mode == "ash" {
         vulkan::run(&device, frames, draws, passes);
     }
@@ -452,28 +461,39 @@ fn interop_probe(device: &wgpu::Device, queue: &wgpu::Queue) {
 /// Game-shaped object churn, minimal synthetic shaders: 40 pipeline handles,
 /// 200 distinct sampled textures, full VS/PS blocks changed every draw. This
 /// measures our API and uploads as well as wgpu, unlike the prefilled floor.
-fn native_workload(gpu: &wgpu::Device, queue: &wgpu::Queue, frames: usize, draws: usize) {
+fn native_workload(
+    gpu: &wgpu::Device,
+    queue: &wgpu::Queue,
+    frames: usize,
+    draws: usize,
+    compact: bool,
+    delta: bool,
+) {
     use ddgpu::native::*;
     let mut device = Device::new(gpu.clone(), queue.clone());
-    let vertex_shader = device
-        .create_shader(
-            &[
-                0xfffe0300, 0x0200001f, 0x80000000, 0x900f0000, 0x0200001f, 0x80000000, 0xe00f0000,
-                0x02000001, 0xe00f0000, 0x90e40000, 0xffff,
-            ],
-            Stage::Vertex,
-        )
-        .unwrap();
-    let pixel_shader = device
-        .create_shader(
-            &[
-                0xffff0300, 0x0200001f, 0x90000000, 0xa00f0800, 0x02000001, 0x800f0001, 0xa0e40000,
-                0x03000042, 0x800f0000, 0x80e40001, 0xa00f0800, 0x03000002, 0x800f0800, 0x80e40000,
-                0xa0e40000, 0xffff,
-            ],
-            Stage::Pixel,
-        )
-        .unwrap();
+    let make_shader = if compact {
+        Device::create_compact_shader
+    } else {
+        Device::create_shader
+    };
+    let vertex_shader = make_shader(
+        &mut device,
+        &[
+            0xfffe0300, 0x0200001f, 0x80000000, 0x900f0000, 0x0200001f, 0x80000000, 0xe00f0000, 0x02000001,
+            0xe00f0000, 0x90e40000, 0xffff,
+        ],
+        Stage::Vertex,
+    )
+    .unwrap();
+    let pixel_shader = make_shader(
+        &mut device,
+        &[
+            0xffff0300, 0x0200001f, 0x90000000, 0xa00f0800, 0x02000001, 0x800f0001, 0xa0e40000, 0x03000042,
+            0x800f0000, 0x80e40001, 0xa00f0800, 0x03000002, 0x800f0800, 0x80e40000, 0xa0e40000, 0xffff,
+        ],
+        Stage::Pixel,
+    )
+    .unwrap();
     let input = device
         .create_input_layout(InputLayoutDesc {
             streams: vec![InputStream {
@@ -562,18 +582,24 @@ fn native_workload(gpu: &wgpu::Device, queue: &wgpu::Queue, frames: usize, draws
     .collect();
     let vb = device.create_buffer(&verts, wgpu::BufferUsages::VERTEX);
     let ib = device.create_buffer(&[0, 0, 1, 0, 2, 0], wgpu::BufferUsages::INDEX);
-    let bytes =
-        ((constant_block_size(Stage::Pixel) + constant_block_size(Stage::Vertex) + 512) * draws) as u64;
+    let pl = device.shader_constant_layout(pixel_shader);
+    let vl = device.shader_constant_layout(vertex_shader);
+    let bytes = ((pl.byte_len + vl.byte_len + 512) * draws + constant_block_size(Stage::Vertex)) as u64;
     let mut recorder = Recorder::new(&device, bytes);
-    let pc = recorder.create_constant_buffer(Stage::Pixel);
-    let vc = recorder.create_constant_buffer(Stage::Vertex);
+    let pc = recorder.create_constant_buffer_for_shader(pixel_shader);
+    let vc = recorder.create_constant_buffer_for_shader(vertex_shader);
     recorder.set_constants(pc);
     recorder.set_constants(vc);
     recorder.set_texture_set(empty);
-    let mut pb = vec![0u8; constant_block_size(Stage::Pixel)];
-    let mut vb_bytes = vec![0u8; constant_block_size(Stage::Vertex)];
-    vb_bytes[4608..4612].copy_from_slice(&(1.0f32 / SIZE as f32).to_le_bytes());
-    vb_bytes[4612..4616].copy_from_slice(&(-1.0f32 / SIZE as f32).to_le_bytes());
+    let mut pb = vec![0u8; pl.byte_len];
+    let mut vb_bytes = vec![0u8; vl.byte_len];
+    vb_bytes[vl.extra_offset..vl.extra_offset + 4].copy_from_slice(&(1.0f32 / SIZE as f32).to_le_bytes());
+    vb_bytes[vl.extra_offset + 4..vl.extra_offset + 8]
+        .copy_from_slice(&(-1.0f32 / SIZE as f32).to_le_bytes());
+    if delta {
+        recorder.update_constants(pc, &pb).unwrap();
+        recorder.update_constants(vc, &vb_bytes).unwrap();
+    }
     let mut samples = vec![];
     for frame in 0..frames + 3 {
         let start = Instant::now();
@@ -607,8 +633,13 @@ fn native_workload(gpu: &wgpu::Device, queue: &wgpu::Queue, frames: usize, draws
             );
             pb[..4].copy_from_slice(&((k % 256) as f32 / 255.0).to_le_bytes());
             vb_bytes[..4].copy_from_slice(&(k as f32).to_le_bytes());
-            recorder.update_constants(pc, &pb).unwrap();
-            recorder.update_constants(vc, &vb_bytes).unwrap();
+            if delta {
+                recorder.update_constant_range(pc, 0, &pb[..4]).unwrap();
+                recorder.update_constant_range(vc, 0, &vb_bytes[..4]).unwrap();
+            } else {
+                recorder.update_constants(pc, &pb).unwrap();
+                recorder.update_constants(vc, &vb_bytes).unwrap();
+            }
             recorder.draw_indexed(0..3, 0, 0..1).unwrap();
         }
         let record = start.elapsed().as_secs_f64();
@@ -625,10 +656,21 @@ fn native_workload(gpu: &wgpu::Device, queue: &wgpu::Queue, frames: usize, draws
         }
     }
     println!(
-        "native includes full constant updates + uploads; finish included in submit column; {:?}",
-        recorder.stats
+        "native includes constant updates + uploads; compact={compact}, delta={delta}, PS={} VS={} bytes; finish included in submit column; {:?}",
+        pl.byte_len, vl.byte_len, recorder.stats
     );
-    report("native recorder (minimal shaders)", &mut samples, draws, 1);
+    report(
+        if delta {
+            "native compact deltas (minimal shaders)"
+        } else if compact {
+            "native compact (minimal shaders)"
+        } else {
+            "native full (minimal shaders)"
+        },
+        &mut samples,
+        draws,
+        1,
+    );
 }
 
 mod vulkan {

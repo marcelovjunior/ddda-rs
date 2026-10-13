@@ -864,15 +864,16 @@ waiting indefinitely. Test coverage and measurement limits are recorded in
 `ddgpu::native` adds immutable state/resource handles, cached pipelines and
 texture sets, separate recorders with generation-aware constant rings,
 coalesced range updates and redundant draw-state filtering. The D3D9 path
-is unchanged. Two Vulkan image tests match synthetic native draws exactly
-to the D3D9 backend and host D3D9 driver; three CPU tests pass. Full-block
-native workload is 6.538 us/draw under shared CPU load, so the <2 us target
-remains open. Full-frame/gameplay equality is not claimed.
+is unchanged. Four Vulkan image tests match full/compact synthetic native
+draws exactly to the D3D9 backend and host D3D9 driver; five CPU tests pass.
+Matched native medians: full blocks 3.839, compact 1.692, compact range
+updates 1.433 us/draw including upload/finish/submit. The <2 us synthetic
+target is met; full-frame/gameplay equality is not claimed.
 
 The wgpu/ash interop readback probe passes using separate ordered command
 encoders and explicit resource transitions; raw and normal commands cannot
 share one encoder in wgpu 29.0.4. See `docs/tasks/L110-native-device.md` for
-ownership limits, benchmark conditions and the next compact-constant step.
+ownership limits, benchmark conditions and the L119 integration handoff.
 
 
 

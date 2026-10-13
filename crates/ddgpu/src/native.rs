@@ -179,6 +179,8 @@ pub struct PipelineDesc {
 struct ShaderObject {
     tokens: Vec<u32>,
     stage: Stage,
+    compact: bool,
+    constants: ConstantLayout,
 }
 struct SamplerObject {
     gpu: wgpu::Sampler,
@@ -193,6 +195,7 @@ struct PipelineObject {
     layouts: [wgpu::BindGroupLayout; 2],
     kinds: [Vec<(u32, d3d9wgsl::TextureKind)>; 2],
     desc: PipelineDesc,
+    constants: [ConstantLayout; 2],
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextureBinding {
@@ -370,7 +373,20 @@ impl Device {
         Ok(insert!(self, inputs, InputLayout, desc))
     }
     pub fn create_shader(&mut self, tokens: &[u32], stage: Stage) -> Result<Shader, String> {
-        d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
+        self.create_shader_layout(tokens, stage, false)
+    }
+    /// L90's bytecode-proven extent; relative addressing keeps the full bank.
+    /// Pair with `Recorder::create_constant_buffer_for_shader`.
+    pub fn create_compact_shader(&mut self, tokens: &[u32], stage: Stage) -> Result<Shader, String> {
+        self.create_shader_layout(tokens, stage, true)
+    }
+    fn create_shader_layout(
+        &mut self,
+        tokens: &[u32],
+        stage: Stage,
+        compact: bool,
+    ) -> Result<Shader, String> {
+        let parsed = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
         let tag = tokens[0] >> 16;
         if tag != if stage == Stage::Vertex { 0xfffe } else { 0xffff } {
             return Err("shader stage mismatch".into());
@@ -381,9 +397,24 @@ impl Device {
             Shader,
             ShaderObject {
                 tokens: tokens.to_vec(),
-                stage
+                stage,
+                compact,
+                constants: ConstantLayout::new(
+                    stage,
+                    if compact {
+                        parsed.float_constant_count().max(1)
+                    } else if stage == Stage::Pixel {
+                        224
+                    } else {
+                        256
+                    }
+                ),
             }
         ))
+    }
+    pub fn shader_constant_layout(&self, shader: Shader) -> ConstantLayout {
+        self.check(shader.owner);
+        self.shaders[shader.index as usize].constants
     }
     pub fn import_buffer(
         &mut self,
@@ -470,6 +501,7 @@ impl Device {
         let parsed = d3d9shader::parse(&s.tokens).map_err(|e| e.to_string())?;
         let first = d3d9wgsl::translate(&parsed).map_err(|e| e.to_string())?;
         let mut options = d3d9wgsl::Options::default();
+        options.compact_constants = s.compact;
         if s.stage == Stage::Vertex {
             options.half_pixel = true;
             let layout = &self.inputs[input.index as usize];
@@ -725,6 +757,10 @@ impl Device {
         if let Some(e) = crate::block_on(scope.pop()) {
             return Err(e.to_string());
         }
+        let constants = [
+            self.shader_constant_layout(desc.pixel_shader),
+            self.shader_constant_layout(desc.vertex_shader),
+        ];
         let h = insert!(
             self,
             pipelines,
@@ -733,7 +769,8 @@ impl Device {
                 gpu,
                 layouts,
                 kinds,
-                desc
+                desc,
+                constants,
             }
         );
         self.pipeline_cache.insert(desc, h);
@@ -830,14 +867,57 @@ pub fn constant_block_size(stage: Stage) -> usize {
 }
 struct ConstantObject {
     stage: Stage,
+    layout: ConstantLayout,
     bytes: Vec<u8>,
     offset: Option<(u64, u32)>,
     uploaded_bias: [u32; 16],
 }
-fn write_bias(dst: &mut [u8], bias: [u32; 16]) {
-    for (word, value) in dst[4112..4176].chunks_exact_mut(4).zip(bias) {
+/// Offsets are bytes; floats/int/bool slots are 16 bytes each. In compact
+/// layouts the following banks move with the proven float prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConstantLayout {
+    pub stage: Stage,
+    pub floats: usize,
+    pub int_offset: usize,
+    pub bool_offset: usize,
+    pub extra_offset: usize,
+    pub byte_len: usize,
+}
+impl ConstantLayout {
+    fn new(stage: Stage, floats: usize) -> Self {
+        let int_offset = floats * 16;
+        let bool_offset = int_offset + 256;
+        let extra_offset = bool_offset + 256;
+        Self {
+            stage,
+            floats,
+            int_offset,
+            bool_offset,
+            extra_offset,
+            byte_len: extra_offset + if stage == Stage::Pixel { 96 } else { 16 },
+        }
+    }
+}
+fn write_bias(dst: &mut [u8], bias: [u32; 16], extra_offset: usize) {
+    for (word, value) in dst[extra_offset + 16..extra_offset + 80]
+        .chunks_exact_mut(4)
+        .zip(bias)
+    {
         word.copy_from_slice(&value.to_le_bytes());
     }
+}
+fn allocate_uniform(
+    ring: &mut Ring,
+    layout: ConstantLayout,
+    align: u64,
+) -> Result<(u64, &mut [u8]), &'static str> {
+    // Bind group ranges remain the ABI maxima. A compact allocation can
+    // overlap the following binding's unused tail, but must fit the buffer.
+    if !ring.fits(constant_block_size(layout.stage) as u64, align) {
+        return Err("native uniform ring full: submit before retrying");
+    }
+    ring.alloc(layout.byte_len as u64, align)
+        .ok_or("native uniform ring full: submit before retrying")
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BufferSlice {
@@ -944,13 +1024,23 @@ impl<'a> Recorder<'a> {
         }
     }
     pub fn create_constant_buffer(&mut self, stage: Stage) -> ConstantBuffer {
+        self.create_constant_layout(ConstantLayout::new(
+            stage,
+            if stage == Stage::Pixel { 224 } else { 256 },
+        ))
+    }
+    pub fn create_constant_buffer_for_shader(&mut self, shader: Shader) -> ConstantBuffer {
+        self.create_constant_layout(self.device.shader_constant_layout(shader))
+    }
+    fn create_constant_layout(&mut self, layout: ConstantLayout) -> ConstantBuffer {
         insert!(
             self,
             constants,
             ConstantBuffer,
             ConstantObject {
-                stage,
-                bytes: vec![0; constant_block_size(stage)],
+                stage: layout.stage,
+                layout,
+                bytes: vec![0; layout.byte_len],
                 offset: None,
                 uploaded_bias: [0; 16]
             }
@@ -976,14 +1066,11 @@ impl<'a> Recorder<'a> {
             return Ok(());
         }
         let align = self.device.gpu.limits().min_uniform_buffer_offset_alignment as u64;
-        let (off, dst) = self
-            .ring
-            .alloc(bytes.len() as u64, align)
-            .ok_or("native uniform ring full: submit before retrying")?;
+        let (off, dst) = allocate_uniform(&mut self.ring, c.layout, align)?;
         dst.copy_from_slice(bytes);
         c.bytes.copy_from_slice(bytes);
         if c.stage == Stage::Pixel {
-            write_bias(dst, bias);
+            write_bias(dst, bias, c.layout.extra_offset);
             c.uploaded_bias = bias;
         }
         c.offset = Some((self.ring.generation, off as u32));
@@ -1160,20 +1247,21 @@ impl<'a> Recorder<'a> {
         for (n, off) in offsets.iter_mut().enumerate() {
             let handle = self.bound_constants[n].ok_or("native constant buffer not bound")?;
             let c = &mut self.constants[handle.index as usize];
+            if c.layout != p.constants[n] {
+                return Err("constant layout does not match bound shader");
+            }
             let bias = self.sets[0].map_or([0; 16], |h| self.device.sets[h.index as usize].bias);
             if !c.offset.is_some_and(|(g, _)| g == self.ring.generation)
                 || (n == 0 && c.uploaded_bias != bias)
             {
-                let (offset, bytes) = self
-                    .ring
-                    .alloc(
-                        c.bytes.len() as u64,
-                        self.device.gpu.limits().min_uniform_buffer_offset_alignment as u64,
-                    )
-                    .ok_or("native uniform ring full: submit before retrying")?;
+                let (offset, bytes) = allocate_uniform(
+                    &mut self.ring,
+                    c.layout,
+                    self.device.gpu.limits().min_uniform_buffer_offset_alignment as u64,
+                )?;
                 bytes.copy_from_slice(&c.bytes);
                 if n == 0 {
-                    write_bias(bytes, bias);
+                    write_bias(bytes, bias, c.layout.extra_offset);
                     c.uploaded_bias = bias;
                 }
                 c.offset = Some((self.ring.generation, offset as u32));
@@ -1307,5 +1395,16 @@ impl Drop for Recorder<'_> {
         // before its encoder (regardless of the struct's field order).
         self.pass.take();
         self.encoder.take();
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    #[test]
+    fn immutable_device_is_shared_and_recorders_can_move_to_workers() {
+        fn shared<T: Send + Sync>() {}
+        fn movable<T: Send>() {}
+        shared::<super::Device>();
+        movable::<super::Recorder<'static>>();
     }
 }
