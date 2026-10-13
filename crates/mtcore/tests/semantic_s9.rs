@@ -81,7 +81,9 @@ fn abi_cases(path: &str, body: LiftFn) -> usize {
 fn stack_args(target: u32) -> u32 {
     match target {
         0x00fe_d890 | 0x00ff_1310 | 0x00da_7d70 => 1,
-        0x00fe_66a0 | 0x2500_0000 => 4,
+        0x00fe_66a0 => 4,
+        0x2500_0000 | 0x0117_87c0 => 6,
+        0x2500_0100 | 0x00fe_4f30 => 2,
         0x0105_4690 => 0,
         0x3000_0000 => 0, // find_sorted vectors: the count stub
         0x3000_0010 => 1, // and the entry(i) stub
@@ -164,7 +166,7 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             // the return address and the callee's own stack arguments
             let words = 1 + stack_args(target);
             for (&a, &b) in &recorded {
-                let argument = (a >= esp && a < esp + 4 * words) || target == 0x00fe_66a0 || target == 0x2500_0000;
+                let argument = (a >= esp && a < esp + 4 * words) || target == 0x00fe_66a0 || target == 0x2500_0000 || target == 0x0117_87c0;
                 let data = a >= buffer && a < buffer.wrapping_add(len);
                 if argument || data {
                     assert_eq!(m.u8(a), b, "case {i}: call {target:x} memory {a:x}");
@@ -286,4 +288,13 @@ fn copy_guest_is_overlap_safe() {
         let got: Vec<u8> = (0..size).map(|i| m.u8(base + i as u32)).collect();
         assert!(got == want, "case {case}: src {src:#x} dst {dst:#x} len {len:#x} paged {paged_run}");
     }
+}
+
+// verifies 0x00feb1f0 (ABI level; void; the sphere test 0x00d13600 is folded in)
+#[test]
+fn scene_collect_visible_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L184/scene_collect_visible.json", mtcore::semantic_s9::scene_collect_visible, false, &[]);
+    assert!(n >= 1000, "{n} cases");
+    eprintln!("{n} ABI-level scene_collect_visible cases passed");
 }

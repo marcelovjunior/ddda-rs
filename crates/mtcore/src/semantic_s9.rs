@@ -436,3 +436,413 @@ pub fn set_fade(m: &mut dyn Mem, c: &mut Cpu) {
     pg.set_u32(m, field(0x154), dirty);
     pg.set_u32(m, block.wrapping_add(0x10), value_bits);
 }
+
+/// 0x00D13600, `sphere_contains(center, probe)` (cdecl, two pointers to
+/// `[x, y, z, radius]`): true when the probe point is within the sum of the
+/// two radii of the center (`(r1 + r2)^2 >= |probe - center|^2`; a NaN
+/// anywhere makes it false). Folded natively into [`scene_collect_visible`].
+fn sphere_contains(m: &dyn Mem, pg: Pages, center: u32, probe: u32) -> bool {
+    let f = |a: u32, k: u32| f32::from_bits(pg.u32(m, a.wrapping_add(4 * k)));
+    let dx = f(probe, 0) - f(center, 0);
+    let dy = f(probe, 1) - f(center, 1);
+    let dz = f(probe, 2) - f(center, 2);
+    let reach = f(center, 3) + f(probe, 3);
+    let reach2 = reach * reach;
+    let distance2 = (dx * dx + dy * dy) + dz * dz;
+    reach2 >= distance2
+}
+
+/// The scene collector's working state (0x00FEB1F0): the guest frame holds
+/// the selection array and its count because the virtual callees fill them.
+struct Collect<'a> {
+    m: &'a mut dyn Mem,
+    c: &'a mut Cpu,
+    pg: Pages,
+    frame: u32,
+    scene: u32,
+    ctx: u32,
+    mask: u32,
+    max: u32,
+    probe: u32,
+}
+
+/// Offsets inside the collector's guest frame.
+const COUNT: u32 = 0x14;
+const SELECTED: u32 = 0x6c;
+
+/// The scene's object-state slot tables, in the order the passes below
+/// walk them (DTI-style ids: the low 12 bits are the slot number).
+const SLOT_TABLE_RESET_A: u32 = 0x0143_a61c;
+const SLOT_TABLE_CLEAR_B: u32 = 0x0143_a5fc;
+const SLOT_TABLE_CLEAR_C: u32 = 0x0142_ec54;
+const SLOT_TABLE_RESET_D: u32 = 0x0142_ec34;
+const SLOT_TABLE_E: u32 = 0x0143_a5dc;
+
+impl Collect<'_> {
+    fn word(&self, address: u32) -> u32 {
+        self.pg.u32(self.m, address)
+    }
+    fn set_word(&mut self, address: u32, v: u32) {
+        self.pg.set_u32(self.m, address, v);
+    }
+    fn scene(&self, offset: u32) -> u32 {
+        self.word(self.scene.wrapping_add(offset))
+    }
+    fn ctx(&self, offset: u32) -> u32 {
+        self.word(self.ctx.wrapping_add(offset))
+    }
+    fn set_ctx(&mut self, offset: u32, v: u32) {
+        self.set_word(self.ctx.wrapping_add(offset), v);
+    }
+    fn count(&self) -> u32 {
+        self.word(self.frame.wrapping_add(COUNT))
+    }
+    fn set_count(&mut self, v: u32) {
+        self.set_word(self.frame.wrapping_add(COUNT), v);
+    }
+    fn selected(&self, i: u32) -> u32 {
+        self.word(self.frame.wrapping_add(SELECTED).wrapping_add(4 * i))
+    }
+    fn set_selected(&mut self, i: u32, v: u32) {
+        self.set_word(self.frame.wrapping_add(SELECTED).wrapping_add(4 * i), v);
+    }
+    fn guest_call(&mut self, target: u32, this: u32, args: &[u32], back: u32) {
+        let (pg, frame) = (self.pg, self.frame);
+        crate::semantic::call_from(self.m, self.c, pg, frame, this, args, back, move |m: &mut dyn Mem, c: &mut Cpu| {
+            ddnative_base::x86::call_ext(m, c, target)
+        });
+    }
+    /// A call through slot `slot` of `object`'s vtable.
+    fn virtual_call(&mut self, object: u32, slot: u32, args: &[u32], back: u32) {
+        let method = self.word(self.word(object).wrapping_add(slot));
+        self.guest_call(method, object, args, back);
+    }
+    fn add_dirty(&mut self, bits: u32) {
+        let v = self.ctx(0x154) | bits;
+        self.set_ctx(0x154, v);
+    }
+
+    // The object-state slot table at `ctx + 0x1f8` (8 bytes per slot: value, tag).
+    fn value(&self, slot: u32) -> u32 {
+        self.ctx(0x1f8 + slot * 8)
+    }
+    fn tag(&self, slot: u32) -> u32 {
+        self.ctx(0x1fc + slot * 8)
+    }
+    /// The slot's default value, from the table at `[ctx + 0x20]`.
+    fn default_value(&self, slot: u32) -> u32 {
+        self.word(self.ctx(0x20).wrapping_add(slot * 8))
+    }
+    /// Append (slot, value, tag) to the undo log when logging is on.
+    fn log(&mut self, slot: u32) {
+        if self.pg.u8(self.m, self.ctx.wrapping_add(0x5c)) & 0x80 == 0 {
+            return;
+        }
+        let count = self.ctx(0x6c);
+        let entry = 0x30c7c_u32.wrapping_add(count.wrapping_mul(12));
+        self.set_ctx(entry, slot);
+        let (value, tag) = (self.value(slot), self.tag(slot));
+        self.set_ctx(entry + 4, value);
+        self.set_ctx(entry + 8, tag);
+        self.set_ctx(0x6c, count.wrapping_add(1));
+    }
+    /// Put the slot back to its default value (tagged with its own number).
+    fn reset_slot(&mut self, slot: u32) {
+        if self.value(slot) == self.default_value(slot) {
+            return;
+        }
+        self.log(slot);
+        let default = self.default_value(slot);
+        self.set_ctx(0x1f8 + slot * 8, default);
+        self.set_ctx(0x1fc + slot * 8, slot);
+        self.add_dirty(3);
+    }
+    /// Clear the slot's value and tag.
+    fn clear_slot(&mut self, slot: u32) {
+        if self.value(slot) == 0 {
+            return;
+        }
+        self.log(slot);
+        self.set_ctx(0x1f8 + slot * 8, 0);
+        if self.tag(slot) != 0 {
+            self.set_ctx(0x1fc + slot * 8, 0);
+            self.add_dirty(2);
+        }
+        self.add_dirty(1);
+    }
+    fn slot_of(&self, table: u32, index: u32) -> u32 {
+        self.word(table.wrapping_add(4 * index)) & 0xfff
+    }
+
+    /// An object passes the scene filter: it is in the mask, drawn in this
+    /// pass, of kind 2 and flagged 0x4800 (and has a render block).
+    fn passes_filter(&self, object: u32, passbit: u32) -> bool {
+        if self.word(object.wrapping_add(0x34)) & self.mask == 0 {
+            return false;
+        }
+        let flags = self.word(object.wrapping_add(4));
+        (flags >> 16) & passbit & 0x3ff != 0 && flags & 7 == 2 && flags & 0x4800 == 0x4800
+    }
+
+    /// The `n` objects drawn this pass, in the first list of the scene.
+    fn select_first_list(&mut self, passbit: u32) {
+        let remaining = self.scene(0x38);
+        if remaining == 0 {
+            return;
+        }
+        let mut cursor = self.scene(0x20).wrapping_add(self.scene(0x34).wrapping_mul(4));
+        let mut selected = 0;
+        for _ in 0..remaining {
+            let object = self.word(cursor);
+            if self.passes_filter(object, passbit) && selected < self.max && self.word(object.wrapping_add(0x1e0)) != 0 {
+                self.set_selected(selected, object);
+                selected += 1;
+            }
+            cursor = cursor.wrapping_add(4);
+        }
+        self.set_count(selected);
+    }
+
+    /// Insert the objects of the second list that contain the probe point
+    /// into the selection, keeping it ordered by descending `u16` at +0x32.
+    fn select_second_list(&mut self, passbit: u32) {
+        if self.scene(0x30) == 0 {
+            return;
+        }
+        let mut i = 0u32;
+        loop {
+            let slot = self.scene(0x2c).wrapping_add(i);
+            let object = self.word(self.scene(0x20).wrapping_add(slot.wrapping_mul(4)));
+            if self.passes_filter(object, passbit)
+                && self.word(object.wrapping_add(0x1e0)) != 0
+                && sphere_contains(&*self.m, self.pg, object.wrapping_add(0x210), self.probe)
+            {
+                self.insert_ordered(object);
+            }
+            i += 1;
+            if i >= self.scene(0x30) {
+                break;
+            }
+        }
+    }
+
+    /// Put `object` into the selection before the first entry whose `u16`
+    /// at +0x32 is smaller, or at the end; the selection never grows past
+    /// `max` (an insertion into a full selection pushes the last entry out).
+    fn insert_ordered(&mut self, object: u32) {
+        let count = self.count();
+        let key = self.pg.u16(self.m, object.wrapping_add(0x32));
+        let at = (0..count).find(|&at| {
+            let other = self.selected(at);
+            self.pg.u16(self.m, other.wrapping_add(0x32)) < key
+        });
+        match at {
+            Some(at) => {
+                let mut k = count;
+                while k > at {
+                    let previous = self.selected(k - 1);
+                    self.set_selected(k, previous);
+                    k -= 1;
+                }
+                self.set_selected(at, object);
+            }
+            None if count < self.max => self.set_selected(count, object),
+            None => return,
+        }
+        if count < self.max {
+            self.set_count(count + 1);
+        }
+    }
+
+    /// Selection sort of the chosen objects by the low 12 bits of their
+    /// +0x1e0 (stable for equal keys: the first minimum wins).
+    fn sort_selected(&mut self, count: u32) {
+        let key = |this: &Self, i: u32| this.word(this.selected(i).wrapping_add(0x1e0)) & 0xfff;
+        for i in 0..count {
+            let mut best = i;
+            let mut best_key = key(self, i);
+            for j in i + 1..count {
+                let k = key(self, j);
+                if best_key > k {
+                    best_key = k;
+                    best = j;
+                }
+            }
+            let (a, b) = (self.selected(i), self.selected(best));
+            self.set_selected(i, b);
+            self.set_selected(best, a);
+        }
+    }
+
+    /// For the unused selection positions `count..8`, restore the slots
+    /// those positions would have used.
+    fn release_unused_positions(&mut self, count: u32) {
+        for k in count..8 {
+            let slot = self.slot_of(SLOT_TABLE_RESET_A, k);
+            self.reset_slot(slot);
+            let slot = self.slot_of(SLOT_TABLE_CLEAR_B, k);
+            self.clear_slot(slot);
+            let slot = self.slot_of(SLOT_TABLE_CLEAR_C, k);
+            self.clear_slot(slot);
+        }
+        for k in count..8 {
+            let slot = self.slot_of(SLOT_TABLE_RESET_D, k);
+            self.reset_slot(slot);
+        }
+    }
+
+    /// Merge the slot bindings of neighbouring positions: while the
+    /// bindings of positions 0.. agree with the id they were bound as,
+    /// carry on; at the first position bound differently, copy that
+    /// binding's default over the first position's slot and refresh the
+    /// related slots.
+    fn merge_bindings(&mut self, count: u32) {
+        let positions = count.saturating_sub(1);
+        let bound_id = |this: &Self, table_value: u32| {
+            let slot = table_value & 0xfff;
+            let id = this.tag(slot) & 0xfff;
+            let entry = this.word(this.ctx(0x1c).wrapping_add(id * 8));
+            (entry << 12) | id
+        };
+        let mut i = 0;
+        while i < positions {
+            let wanted = self.word(SLOT_TABLE_RESET_D.wrapping_add(4 * i));
+            if bound_id(self, wanted) != wanted {
+                i += 1;
+                continue;
+            }
+            let mut j = i + 1;
+            if j >= positions {
+                return;
+            }
+            let different = loop {
+                let value = self.word(SLOT_TABLE_RESET_D.wrapping_add(4 * j));
+                let bound = bound_id(self, value);
+                if bound != value {
+                    break bound;
+                }
+                j += 1;
+                if j >= positions {
+                    return;
+                }
+            };
+            if different == 0 {
+                return;
+            }
+            let wanted_slot = wanted & 0xfff;
+            let source = different & 0xfff;
+            if self.value(wanted_slot) != self.default_value(source) {
+                self.log(wanted_slot);
+                let default = self.default_value(source);
+                self.set_ctx(0x1f8 + wanted_slot * 8, default);
+                self.set_ctx(0x1fc + wanted_slot * 8, ((wanted ^ different) & 0xffff_f000) | source);
+                self.add_dirty(3);
+            }
+            // The related slot of position j, then of position i.
+            let other = self.slot_of(SLOT_TABLE_E, j);
+            let mut replacement = self.value(other) & 0xffff_fff0;
+            let own = self.word(SLOT_TABLE_E.wrapping_add(4 * i)) & 0xfff;
+            if replacement == 0 {
+                replacement = self.default_value(own);
+            }
+            if self.value(own) & 0xffff_fff0 != replacement || self.tag(own) != 0 {
+                self.log(own);
+                let old_tag = self.tag(own);
+                self.set_ctx(0x1f8 + own * 8, replacement);
+                if old_tag != 0 {
+                    self.set_ctx(0x1fc + own * 8, 0);
+                    self.add_dirty(2);
+                }
+                self.add_dirty(1);
+            }
+            let slot = self.word(SLOT_TABLE_RESET_D.wrapping_add(4 * j)) & 0xfff;
+            self.reset_slot(slot);
+            i += 1;
+        }
+    }
+}
+
+/// 0x00FEB1F0, `scene->collect_visible(ctx, mask, max, probe)` (thiscall,
+/// `ret 0x10`, void; `sScene::vf13`): choose up to `max` objects of the
+/// scene for one draw pass, let them prepare their draw state, and bring
+/// the draw context's object-state slots in line with that choice.
+///
+/// 1. From the scene's first object list take those in `mask`, drawn in
+///    this pass (`ctx + 0x168` selects the bit), of kind 2, flagged 0x4800
+///    and holding a render block (+0x1e0), up to `max`.
+/// 2. The scene's selection virtual (+0x64) adds more (mode 0).
+/// 3. When the scene has a spatial index (`+0xb5c`, `+0xb60`) the index
+///    query 0x011787c0 adds those inside the `probe` sphere; otherwise the
+///    second object list is scanned for objects containing the probe
+///    (0x00D13600), inserted ordered by descending `u16` at +0x32.
+/// 4. The selection virtual again (mode 1), a selection sort by the low 12
+///    bits of each object's +0x1e0, and each object's virtual +0x50
+///    (`prepare(ctx, index)`).
+/// 5. The slots of the unused positions are reset or cleared, adjacent
+///    bound positions merged, and the scene's final pass 0x00FE4F30 runs.
+// Translated from 0x00FEB1F0 (DDDA.exe 2017-12-13 Steam)
+pub fn scene_collect_visible(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (ctx, mask, max, probe) = (arg(m, 0), arg(m, 1), arg(m, 2), arg(m, 3));
+    let scene = c.ecx;
+    // The original's frame: push ebp; and esp, -16; 0x84 locals; 3 pushes.
+    let frame = (entry.wrapping_sub(4) & !0xf).wrapping_sub(0x84 + 12);
+    let passbit = 1u32 << (pg.u8(m, ctx.wrapping_add(0x168)) & 31);
+    let mut s = Collect { m, c, pg, frame, scene, ctx, mask, max, probe };
+    // The selection array (nine slots) starts empty.
+    for i in 0..9 {
+        s.set_selected(i, 0);
+    }
+    s.set_count(0);
+    s.select_first_list(passbit);
+    let selection = frame.wrapping_add(SELECTED);
+    let count_address = frame.wrapping_add(COUNT);
+    s.virtual_call(scene, 0x64, &[ctx, mask, max, selection, count_address, 0], 0x00fe_b2da);
+    let index = if pg.u8(s.m, scene.wrapping_add(0xb5c)) != 0 { s.scene(0xb60) } else { 0 };
+    if pg.u8(s.m, scene.wrapping_add(0xb5c)) != 0 && index != 0 {
+        // The index query's argument block lives in this frame.
+        let block = frame.wrapping_add(0x2c);
+        let query = frame.wrapping_add(0x40);
+        let radius_constant = s.word(0x0162_adb0);
+        let (p0, p1, p2, p3) = (s.word(probe), s.word(probe + 4), s.word(probe + 8), s.word(probe + 12));
+        let count = s.count();
+        for (offset, v) in [
+            (0x48, radius_constant),
+            (0x2c, mask),
+            (0x38, count),
+            (0x50, p0),
+            (0x54, p1),
+            (0x34, max),
+            (0x3c, selection),
+            (0x40, 0x0157_92e8),
+            (0x44, 5),
+            (0x58, p2),
+            (0x5c, p3),
+            (0x30, passbit),
+        ] {
+            s.set_word(frame.wrapping_add(offset), v);
+        }
+        s.guest_call(0x0117_87c0, index, &[query, scene, 0x00fe_5690, block, 0, 0xffff_ffff], 0x00fe_b362);
+        let found = s.word(frame.wrapping_add(0x38));
+        s.set_count(found);
+    } else {
+        s.select_second_list(passbit);
+    }
+    s.virtual_call(scene, 0x64, &[ctx, mask, max, selection, count_address, 1], 0x00fe_b44d);
+    let count = s.count();
+    s.sort_selected(count);
+    let mut i = 0;
+    let mut count = count;
+    while i < count {
+        let object = s.selected(i);
+        s.virtual_call(object, 0x50, &[ctx, i], 0x00fe_b4e3);
+        count = s.count();
+        i += 1;
+    }
+    s.release_unused_positions(count);
+    s.merge_bindings(count);
+    s.guest_call(0x00fe_4f30, scene, &[ctx, mask], 0x00fe_bb10);
+    s.c.esp = entry.wrapping_add(4 + 0x10);
+}
