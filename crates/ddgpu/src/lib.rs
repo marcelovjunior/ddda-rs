@@ -20,7 +20,8 @@
 //! like a fresh one).
 use d3d9cmd::{ClearCall, CopyCall, DrawCall, FillCall, GammaRamp, GraphicsBackend, Indices, Target, TargetTexture, TexKind, TextureBinding, USAGE_DEPTHSTENCIL, USAGE_RENDERTARGET, Upload, Vertices};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 mod cache;
 mod pipelines;
@@ -309,6 +310,8 @@ pub struct Frame {
 
 pub struct WgpuBackend {
     shader_identities: shader_identity::ShaderIdentities,
+    /// Derived draw state by what it derives from (L99), DRAW_MEMO slots.
+    memo: Vec<Option<DrawMemo>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     textures: cache::FxMap<u32, Tex>,
@@ -419,6 +422,40 @@ type PassKey = (Vec<Option<wgpu::TextureView>>, Option<wgpu::TextureView>, Optio
 /// in a pass each: a draw sets all the pass state it uses (pipeline, bind
 /// groups, viewport, stencil reference, blend constant, buffers), and the
 /// scissor rectangle when its scissor test is on.
+/// The draw memo's size: one slot per (shaders, declaration, render-state
+/// list) hash; a collision derives again.
+const DRAW_MEMO: usize = 256;
+
+/// What try_draw derives before binding resources (L99).
+struct Derived {
+    ps_kinds: Vec<(u32, u8)>,
+    vs_kinds: Vec<(u32, u8)>,
+    layout1: wgpu::BindGroupLayout,
+    layout2: wgpu::BindGroupLayout,
+    depth_bias: bool,
+    streams: Vec<u32>,
+    colour: Vec<Option<(wgpu::TextureView, wgpu::TextureFormat)>>,
+    depth: Option<(wgpu::TextureView, wgpu::TextureFormat)>,
+    max_out: usize,
+    pipeline: wgpu::RenderPipeline,
+}
+
+/// A memo entry: the inputs a Derived was derived from, and it.
+struct DrawMemo {
+    vs: Arc<[u32]>,
+    ps: Arc<[u32]>,
+    declaration: Arc<[[u8; 8]]>,
+    states: d3d9cmd::RenderStateList,
+    primitive: u32,
+    index_format: u32,
+    ones: u64,
+    instanced: Vec<u32>,
+    targets: [Option<Target>; 4],
+    depth: Option<Target>,
+    strides: Vec<(u32, u32)>,
+    derived: Arc<Derived>,
+}
+
 struct OpenPass {
     pass: wgpu::RenderPass<'static>,
     key: PassKey,
@@ -544,6 +581,7 @@ impl WgpuBackend {
             open_draws: Cell::new(0),
             open_uses: RefCell::new(cache::FxSet::default()),
             shader_identities: Default::default(),
+            memo: (0..DRAW_MEMO).map(|_| None).collect(),
             last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX), (Default::default(), Vec::new(), 0, u64::MAX)]),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
@@ -1422,13 +1460,13 @@ impl WgpuBackend {
         Some(Frame { width: rt.width, height: rt.height, rgba })
     }
 
-    fn try_draw(&mut self, d: &DrawCall) -> Result<(), String> {
+    /// What a draw derives from its shaders, declaration, render states,
+    /// targets and streams: the shader modules, target views, the pipeline
+    /// and its layouts (L99: kept in the draw memo).
+    fn derive(&mut self, d: &DrawCall, instanced: &[u32]) -> Result<Derived, String> {
         let state = |s: u32| d.render_states.binary_search_by_key(&s, |&(k, _)| k).ok().map(|i| d.render_states[i].1).unwrap_or(0);
         let vs_tokens = d.vertex_shader.as_ref().ok_or("draws without a vertex shader (fixed function) are not implemented")?;
         let ps_tokens = d.pixel_shader.as_ref().ok_or("draws without a pixel shader (fixed function) are not implemented")?;
-        if d.declaration.is_empty() {
-            return Err("FVF draws are not implemented".into());
-        }
         let (vh, ph) = (self.shader_identities.key(vs_tokens), self.shader_identities.key(ps_tokens));
         // the shaders' input declarations (usage, index), parsed once
         let dcl_inputs = |tokens: &[u32]| -> Result<Vec<(u32, u32)>, String> {
@@ -1470,8 +1508,7 @@ impl WgpuBackend {
         // D3D9's depth bias in the pixel shader (see d3d9wgsl Options::depth_bias)
         let depth_bias = d.depth.is_some() && state(7) != 0 && (state(195) != 0 || state(175) != 0);
         // render-target textures lack channels D3D9 samples as 1
-        let ones = d.textures.iter().filter(|t| t.sampler < 16 && t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0)
-            .fold(0u64, |m, t| m | (missing_channels(t.format) as u64) << (4 * t.sampler));
+        let ones = sampler_ones(d);
         let ps_options = |b: &Self| d3d9wgsl::Options { ps_input_locations: Some(locations(b)), alpha_test: true, lod_bias: true, depth_bias, sampler_ones: ones, ..Default::default() };
         let (ps_module, ps_iface) = self.module(ps_tokens, ps_options, (ph, vh, depth_bias, ones))?;
 
@@ -1593,7 +1630,6 @@ impl WgpuBackend {
                 Vertices::Inline { stride, .. } => Ok(*stride),
             }
         };
-        let (instances, instanced) = instancing(d)?;
         let mut buffers = Vec::new();
         for &s in &streams {
             let attrs = elements.iter().filter(|e| e.0 == s).map(|e| (e.2, e.1, e.3)).collect();
@@ -1682,6 +1718,56 @@ impl WgpuBackend {
                 pipeline
             }
         };
+        Ok(Derived { ps_kinds, vs_kinds, layout1, layout2, depth_bias, streams, colour, depth, max_out, pipeline })
+    }
+
+    /// The draw's derived state from the memo, or derived now (L99). The
+    /// key holds the shader, declaration and render-state lists themselves
+    /// (shared Arcs, compared by pointer; held, so an address is not reused
+    /// while its entry lives) and the rest compared by value. release()
+    /// clears the memo with the target views its entries hold.
+    fn derived(&mut self, d: &DrawCall, vs: &Arc<[u32]>, ps: &Arc<[u32]>, instanced: &[u32]) -> Result<Arc<Derived>, String> {
+        let ones = sampler_ones(d);
+        let index_format = match &d.indices {
+            Indices::Buffer(_, f) | Indices::Inline { format: f, .. } => *f,
+            Indices::None => 0,
+        };
+        let slot = {
+            let p = |x: usize| (x >> 4) as u64;
+            let h = (p(Arc::as_ptr(vs) as *const u8 as usize) ^ p(Arc::as_ptr(ps) as *const u8 as usize).rotate_left(16)
+                ^ p(Arc::as_ptr(&d.declaration) as *const u8 as usize).rotate_left(32) ^ d.render_states.address().rotate_left(48))
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            (h >> 56) as usize % DRAW_MEMO
+        };
+        if let Some(m) = &self.memo[slot] {
+            if Arc::ptr_eq(&m.vs, vs) && Arc::ptr_eq(&m.ps, ps) && Arc::ptr_eq(&m.declaration, &d.declaration)
+                && m.states.ptr_eq(&d.render_states) && m.primitive == d.primitive && m.index_format == index_format
+                && m.ones == ones && m.instanced[..] == *instanced && m.targets == d.targets && m.depth == d.depth
+                && m.strides.iter().copied().eq(strides(d)) {
+                return Ok(m.derived.clone());
+            }
+        }
+        let derived = Arc::new(self.derive(d, instanced)?);
+        self.memo[slot] = Some(DrawMemo {
+            vs: vs.clone(), ps: ps.clone(), declaration: d.declaration.clone(), states: d.render_states.clone(),
+            primitive: d.primitive, index_format, ones, instanced: instanced.to_vec(),
+            targets: d.targets.clone(), depth: d.depth.clone(), strides: strides(d).collect(),
+            derived: derived.clone(),
+        });
+        Ok(derived)
+    }
+
+    fn try_draw(&mut self, d: &DrawCall) -> Result<(), String> {
+        let state = |s: u32| d.render_states.binary_search_by_key(&s, |&(k, _)| k).ok().map(|i| d.render_states[i].1).unwrap_or(0);
+        let vs_tokens = d.vertex_shader.as_ref().ok_or("draws without a vertex shader (fixed function) are not implemented")?;
+        let ps_tokens = d.pixel_shader.as_ref().ok_or("draws without a pixel shader (fixed function) are not implemented")?;
+        if d.declaration.is_empty() {
+            return Err("FVF draws are not implemented".into());
+        }
+        let (instances, instanced) = instancing(d)?;
+        let x = self.derived(d, vs_tokens, ps_tokens, &instanced)?;
+        let (ps_kinds, vs_kinds, layout1, layout2, streams) = (&x.ps_kinds, &x.vs_kinds, &x.layout1, &x.layout2, &x.streams);
+        let (colour, depth, max_out, depth_bias, pipeline) = (&x.colour, &x.depth, x.max_out, x.depth_bias, &x.pipeline);
         // A texture sampled by a draw that also renders into it: D3D9 leaves
         // this to the driver (the samples read what was there before the
         // draw); wgpu forbids one texture as both binding and attachment in
@@ -1723,7 +1809,7 @@ impl WgpuBackend {
         }
         // texture bind groups, by what they bind
         let mut groups = Vec::new();
-        for (kinds, layout, base, vs) in [(&ps_kinds, &layout1, 0u32, false), (&vs_kinds, &layout2, 257u32, true)] {
+        for (kinds, layout, base, vs) in [(ps_kinds, layout1, 0u32, false), (vs_kinds, layout2, 257u32, true)] {
             let mut gkey = Vec::with_capacity(kinds.len());
             for &(n, kind) in kinds {
                 match d.textures.iter().find(|t| t.sampler == base + n) {
@@ -1777,7 +1863,7 @@ impl WgpuBackend {
         }
         // vertex and index data
         let mut vbufs = Vec::new();
-        for &s in &streams {
+        for &s in streams {
             match &d.vertices {
                 Vertices::Streams(v) => {
                     let (_, res, off, _, _) = *v.iter().find(|x| x.0 == s).unwrap();
@@ -1878,7 +1964,7 @@ impl WgpuBackend {
             if let Some(s) = slot {
                 pass.begin_occlusion_query(s % OCCLUSION_SET);
             }
-            if last.pipeline.as_ref() != Some(&pipeline) {
+            if last.pipeline.as_ref() != Some(pipeline) {
                 pass.set_pipeline(&pipeline);
                 last.pipeline = Some(pipeline.clone());
             }
@@ -1975,6 +2061,22 @@ impl WgpuBackend {
 /// a non-indexed draw ignores the count and draws once, its instance-data
 /// streams still giving every vertex instance 0's element. Returns the
 /// instance count and the instanced streams.
+/// Render-target textures lack channels D3D9 samples as 1: the pixel
+/// samplers' masks (4 bits each).
+fn sampler_ones(d: &DrawCall) -> u64 {
+    d.textures.iter().filter(|t| t.sampler < 16 && t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0)
+        .fold(0u64, |m, t| m | (missing_channels(t.format) as u64) << (4 * t.sampler))
+}
+
+/// (stream, stride) of each vertex stream; inline vertices are stream MAX.
+fn strides(d: &DrawCall) -> impl Iterator<Item = (u32, u32)> + '_ {
+    let (streams, inline) = match &d.vertices {
+        Vertices::Streams(v) => (&v[..], None),
+        Vertices::Inline { stride, .. } => (&[][..], Some((u32::MAX, *stride))),
+    };
+    streams.iter().map(|x| (x.0, x.3)).chain(inline)
+}
+
 fn instancing(d: &DrawCall) -> Result<(u32, Vec<u32>), String> {
     const INDEXEDDATA: u32 = 0x4000_0000;
     const INSTANCEDATA: u32 = 0x8000_0000;
@@ -2381,6 +2483,8 @@ impl GraphicsBackend for WgpuBackend {
         // cached views and bind groups may hold the resource
         self.tex_groups.clear();
         self.target_views.clear();
+        // memo entries hold target views (L99)
+        self.memo.iter_mut().for_each(|m| *m = None);
         self.textures.remove(&resource);
         self.pending.remove(&resource);
         self.buffers.remove(&resource);
