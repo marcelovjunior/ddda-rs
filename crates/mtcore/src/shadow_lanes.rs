@@ -79,12 +79,37 @@ pub enum BindingKind {
     Streams,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Binding {
     pub kind: BindingKind,
     /// First-use identity preserves pointer reuse (executor batching/cache tests).
     pub identity: usize,
     pub bytes: Vec<u8>,
+    /// Shader bindings: where each byte of an uploaded constant block came
+    /// from (`shader_constant_layout`), for diagnostics and the explicit
+    /// allowance of `first_difference_allowing`. Not compared: two
+    /// executions place the same constants at different addresses.
+    pub constants: Vec<(u32, ConstByte)>,
+}
+
+impl PartialEq for Binding {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.identity == other.identity && self.bytes == other.bytes
+    }
+}
+impl Eq for Binding {}
+
+/// A byte of a shader binding's encoding copied from a constant block that
+/// 0x00DAA8B0 uploads: its stage (0 vertex, 1 pixel), descriptor section (1
+/// float, 2 integer, 3 bool), the register it lands in, the byte within
+/// that register, and the guest address it was read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConstByte {
+    pub stage: u8,
+    pub section: u8,
+    pub register: u16,
+    pub byte: u8,
+    pub source: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,7 +143,39 @@ pub struct Difference {
 impl StreamSnapshot {
     /// Report a bounded diagnostic rather than dumping shader or game bytes.
     pub fn first_difference(&self, other: &Self) -> Option<Difference> {
-        fn entries(a: &[Entry], b: &[Entry], path: &mut Vec<usize>) -> Option<Difference> {
+        self.first_difference_allowing(other, &mut |_, _, _, _| false)
+    }
+
+    /// As `first_difference`, but a byte that differs between two bindings
+    /// of equal kind, identity and length is passed to `allow` (the entry
+    /// path, both bindings, the byte offset); the bindings are equal when
+    /// every differing byte is allowed. Everything else stays exact.
+    pub fn first_difference_allowing(
+        &self,
+        other: &Self,
+        allow: &mut dyn FnMut(&[usize], &Binding, &Binding, usize) -> bool,
+    ) -> Option<Difference> {
+        fn bindings_equal(
+            a: &[Binding],
+            b: &[Binding],
+            path: &[usize],
+            allow: &mut dyn FnMut(&[usize], &Binding, &Binding, usize) -> bool,
+        ) -> bool {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(a, b)| {
+                    a == b
+                        || (a.kind == b.kind
+                            && a.identity == b.identity
+                            && a.bytes.len() == b.bytes.len()
+                            && (0..a.bytes.len()).all(|i| a.bytes[i] == b.bytes[i] || allow(path, a, b, i)))
+                })
+        }
+        fn entries(
+            a: &[Entry],
+            b: &[Entry],
+            path: &mut Vec<usize>,
+            allow: &mut dyn FnMut(&[usize], &Binding, &Binding, usize) -> bool,
+        ) -> Option<Difference> {
             if a.len() != b.len() {
                 return Some(Difference {
                     path: path.clone(),
@@ -133,7 +190,7 @@ impl StreamSnapshot {
                     Some("record header")
                 } else if a.record.words != b.record.words {
                     Some("record payload")
-                } else if a.record.bindings != b.record.bindings {
+                } else if !bindings_equal(&a.record.bindings, &b.record.bindings, path, allow) {
                     Some("bindings")
                 } else {
                     None
@@ -144,14 +201,14 @@ impl StreamSnapshot {
                         field,
                     });
                 }
-                if let Some(diff) = entries(&a.record.children, &b.record.children, path) {
+                if let Some(diff) = entries(&a.record.children, &b.record.children, path, allow) {
                     return Some(diff);
                 }
                 path.pop();
             }
             None
         }
-        entries(&self.entries, &other.entries, &mut Vec::new())
+        entries(&self.entries, &other.entries, &mut Vec::new(), allow)
     }
 }
 
@@ -172,6 +229,16 @@ pub fn capture_context(m: &dyn Mem, context: u32, limits: Limits) -> Result<Stre
 /// comparison than rendering equivalence). Counts/ranges follow that consumer,
 /// not guessed allocation sizes. Derived temporary overreads are refused.
 pub fn capture_shader(m: &dyn Mem, binding: u32, max_bytes: usize) -> Result<Vec<u8>, CaptureError> {
+    encode_shader(m, binding, max_bytes).map(|(bytes, _)| bytes)
+}
+
+/// The constant-block bytes of `capture_shader`'s encoding: (offset in the
+/// encoding, origin). Same walk, same refusals.
+pub fn shader_constant_layout(m: &dyn Mem, binding: u32, max_bytes: usize) -> Result<Vec<(u32, ConstByte)>, CaptureError> {
+    encode_shader(m, binding, max_bytes).map(|(_, layout)| layout)
+}
+
+fn encode_shader(m: &dyn Mem, binding: u32, max_bytes: usize) -> Result<(Vec<u8>, Vec<(u32, ConstByte)>), CaptureError> {
     struct Reader<'a> {
         m: &'a dyn Mem,
         p: Pages,
@@ -221,6 +288,7 @@ pub fn capture_shader(m: &dyn Mem, binding: u32, max_bytes: usize) -> Result<Vec
         out: Vec::new(),
         max: max_bytes,
     };
+    let mut layout: Vec<(u32, ConstByte)> = Vec::new();
     let metadata = r.word(binding, 8)?;
     // Header words (including metadata identity) and the metadata's fixed fields.
     r.block(binding, 12)?;
@@ -292,7 +360,18 @@ pub fn capture_shader(m: &dyn Mem, binding: u32, max_bytes: usize) -> Result<Vec
                         }
                         let source = Capture::address(value & !15, ((d >> 6) & 1023) * 4)?;
                         // BOOL uploads count scalar words; integer/float count vec4s.
-                        r.block(source, count * if section == 3 { 4 } else { 16 })?;
+                        let stride = if section == 3 { 4 } else { 16 };
+                        let at = r.out.len() as u32;
+                        r.block(source, count * stride)?;
+                        for i in 0..count * stride {
+                            layout.push((at + i, ConstByte {
+                                stage: stage as u8,
+                                section: section as u8,
+                                register: ((d >> 16 & 255) + i / stride) as u16,
+                                byte: (i % stride) as u8,
+                                source: source.wrapping_add(i),
+                            }));
+                        }
                     }
                 }
             }
@@ -307,7 +386,7 @@ pub fn capture_shader(m: &dyn Mem, binding: u32, max_bytes: usize) -> Result<Vec
         r.value(usage as u32)?;
         r.value(if usage == 1 { value & 15 } else { value })?;
     }
-    Ok(r.out)
+    Ok((r.out, layout))
 }
 
 /// A result is equal only after both complete captures succeed. Never compare
@@ -401,10 +480,19 @@ impl Capture<'_> {
                 bytes
             }
         };
+        // where the uploaded constants came from (never compared)
+        let constants = match kind {
+            BindingKind::Shader => shader_constant_layout(self.m, address, self.limits.bytes)
+                .ok()
+                .filter(|l| l.iter().all(|&(at, _)| (at as usize) < bytes.len()))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         Ok(Binding {
             kind,
             identity,
             bytes,
+            constants,
         })
     }
 
