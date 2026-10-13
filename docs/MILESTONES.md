@@ -782,6 +782,26 @@
 - Next: head's same-scene loading/image/FPS measurement. Details and
   timing/profile limits: `docs/tasks/L129-dead-flags.md`.
 
+### L141 native jobs (`DDDRAW_NATIVE=1`) viable (2026-10-13)
+
+- Implemented (task/L141-native-viable, merged up to 32f6792f in combo29):
+  one native worker kept across releases (only what the guest released is
+  forgotten), render-target channel fill and D3D9 depth bias in the pixel
+  shader as the D3D9 path does, strips by the D3D9 path's rule, draws that
+  sample their own target through a snapshot copy, draws inside a query
+  span left to the D3D9 path, and no per-job finisher wait (a ring of
+  scatter sources with submission tickets).
+- **Compared with the D3D9 path in game**: combo29 `compare` with
+  DDGPU_VK=1, 143,744 passes matched, 0 mismatched. combo29 native VK1:
+  20.6 fps (combo28 17.0), worker_instances 1, 6 jobs refused (indexed
+  line strips); sink refusals per frame: Instanced 90, FloatsUncovered 44,
+  Query 6.
+- After combo29, tested but not yet run in game: 58093ee0 (codex-11's L154
+  sink allocation fixes, reviewed), ef80de30 (NativeDraw constants as
+  Arc<NativeConstants>, made once per bank: c29nat1's render thread spent
+  15% in native_draw's per-draw constants), c49461f6 (a test race).
+- Next: the head's native VK1, compare VK1 and default runs of ef80de30.
+
 ### L119 native sink: drawcall is the default (2026-10-13)
 
 - The executor's scene-pass draw records are decoded straight from the
