@@ -3,10 +3,17 @@
 Suspends each thread of the target at a fixed rate, walks its stack with
 dbghelp (StackWalk64 over the image's unwind tables), and resumes it. The
 report, per busy thread: the hottest leaf functions (self time), the
-hottest lifted game functions (the nearest `f_XXXXXXXX` frame: which
-original function the time belongs to) and inclusive frames.
+hottest lifted game functions (nearest caller, including runtime helpers),
+inclusive guest addresses and 2/3-level lifted caller chains. Percentages
+are sample shares, not exact CPU-time measurements.
 
-    python scripts/sample_profile.py --name ddplay.exe --seconds 20 > profile.txt
+    python scripts/sample_profile.py --name ddplay.exe --seconds 60 --hz 100 \
+        --threads "guest main thread,guest thread 0x1070" \
+        --save-stacks E:/ddda-re/notes/runs/profile_L131.json > profile.txt
+    python scripts/sample_profile.py --input E:/ddda-re/notes/runs/profile_L131.json
+
+Store captures outside the repository; JSON retains raw symbols and leaf-first
+stacks for offline re-attribution. --threads uses exact thread descriptions.
 
 Diagnostics only: it pauses the target briefly per sample (a few tens of
 microseconds), so frame rates measured during a profile are lower.
@@ -17,6 +24,10 @@ import collections
 import ctypes
 import ctypes.wintypes as wt
 import sys
+import json
+from functools import lru_cache
+import re
+from pathlib import Path
 import time
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -186,6 +197,79 @@ WAITS = ("NtWait", "ZwWait", "NtDelayExecution", "NtRemoveIoCompletion", "NtUser
          "NtSignalAndWaitForSingleObject", "NtUserWaitMessage")
 
 
+@lru_cache(maxsize=65536)
+def lifted_address(symbol):
+    """Recognize the actual function suffix, not a crate in helper generics.
+
+    DbgHelp emits v0 with either R or _R and sometimes partially decoded
+    paths. Match before pretty(), which is only a display heuristic.
+    """
+    match = re.search(r"(?:10|::|^)f_([0-9a-fA-F]{8})(?:E|::h[0-9a-fA-F]+)?(?:[.+][^ ]*|\s*\+\s*0x[0-9a-fA-F]+)?$", symbol)
+    if match and ("ddlift" in symbol or "lifted_" in symbol or symbol.startswith("f_")):
+        return "0x" + match[1].lower()
+    return None
+
+
+def thread_filter(value):
+    return {part.strip() for part in value.split(",") if part.strip()}
+
+
+def selected_thread(name, filters):
+    return not filters or name in filters
+
+
+def attribution(stacks):
+    """Input is leaf-first. Exclusive ownership includes ALL non-lifted callees.
+
+    Inclusive counts a guest address once per sample (including recursion).
+    Chains end at the nearest lifted frame and read caller -> callee; helpers
+    are omitted and recursive lifted frames are deliberately retained.
+    """
+    guest, inclusive = collections.Counter(), collections.Counter()
+    chains = {depth: collections.Counter() for depth in (2, 3)}
+    for stack_names in stacks:
+        frames = [address for frame in stack_names if (address := lifted_address(frame))]
+        guest[frames[0] if frames else "(no lifted frame)"] += 1
+        inclusive.update(set(frames))
+        for depth, counter in chains.items():
+            if len(frames) >= depth:
+                counter[" -> ".join(reversed(frames[:depth]))] += 1
+    return guest, inclusive, chains
+
+
+def report(capture, top, filters):
+    wall = capture["wall"]
+    print(f"pid {capture['pid']}: {capture['rounds']} rounds in {wall:.1f} s "
+          f"({capture['rounds'] / wall:.0f}/s)")
+    print("Percentages/counts use non-wait samples per thread, not measured CPU seconds. "
+          "Nearest ownership includes runtime helpers; incomplete stacks remain unattributed.")
+    symbols = capture["symbols"]
+    for thread in sorted(capture["threads"], key=lambda t: -(t["cpu"] or 0)):
+        if not selected_thread(thread["name"], filters):
+            continue
+        named = [[symbols[str(pc)] for pc in stack] for stack in thread["stacks"]]
+        valid = [stack for stack in named if stack]
+        busy = [stack for stack in valid if not any(w in stack[0] for w in WAITS)]
+        waiting = len(valid) - len(busy)
+        c = thread["cpu"]
+        cpu_label = "unknown" if c is None else f"{c:.1f} s ({100 * c / wall:.0f}%)"
+        print(f"\n== thread {thread['tid']} {thread['name']!r}: cpu {cpu_label} of {wall:.1f} s, "
+              f"busy {len(busy)}/{len(named)} samples, wait {waiting}, empty {len(named) - len(valid)}")
+        if not busy:
+            continue
+        guest, inclusive, chains = attribution(busy)
+        sections = [("self (host leaf)", collections.Counter(pretty(s[0]) for s in busy)),
+                    ("nearest lifted function (self + non-lifted callees)", guest),
+                    ("inclusive lifted functions", inclusive)]
+        sections += [(f"lifted call chains ({depth} levels, caller -> callee)", counter)
+                     for depth, counter in chains.items()]
+        sections.append(("inclusive (host frames)", collections.Counter(f for s in busy for f in set(map(pretty, s)))))
+        for title, counter in sections:
+            print(f"  -- {title}")
+            for name, count in counter.most_common(top):
+                print(f"  {100 * count / len(busy):5.1f}%  {count:7d}  {name}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", default="ddplay.exe")
@@ -195,7 +279,16 @@ def main():
     ap.add_argument("--depth", type=int, default=64)
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--symbols", help="directories with the PDBs (the exe names only its PDB's file name)")
+    ap.add_argument("--threads", default="", help="comma-separated exact thread descriptions; default all")
+    ap.add_argument("--save-stacks", type=Path, help="save raw symbols and stacks as private JSON for replay")
+    ap.add_argument("--input", type=Path, help="re-report a --save-stacks JSON without attaching")
     a = ap.parse_args()
+    if a.seconds <= 0 or a.hz <= 0 or a.depth <= 0 or a.top <= 0:
+        ap.error("seconds, hz, depth and top must be positive")
+    filters = thread_filter(a.threads)
+    if a.input:
+        report(json.loads(a.input.read_text(encoding="utf-8")), a.top, filters)
+        return
     pid = a.pid or find_pid(a.name)
     hproc = k32.OpenProcess(PROCESS_ACCESS, False, pid)
     if not hproc:
@@ -218,7 +311,10 @@ def main():
                         handles[tid], names[tid], cpu0[tid] = h, thread_name(h), cpu_time(h)
             # sample only threads that used CPU since the last check
             now = {tid: cpu_time(h) for tid, h in handles.items()}
-            active = {tid for tid in handles if rounds == 0 or now[tid] - last.get(tid, 0) > 0.002}
+            # Re-read descriptions: threads may be named after initial discovery.
+            names.update({tid: thread_name(h) for tid, h in handles.items()})
+            active = {tid for tid in handles if selected_thread(names[tid], filters)
+                      and (rounds == 0 or now[tid] - last.get(tid, 0) > 0.002)}
             last = now
         for tid, h in [(t, handles[t]) for t in active if t in handles]:
             if k32.SuspendThread(h) == 0xFFFFFFFF:
@@ -244,30 +340,19 @@ def main():
         if pc not in sym_cache:
             info.SizeOfStruct, info.MaxNameLen = 88, 1024
             disp = ctypes.c_uint64()
-            sym_cache[pc] = pretty(info.Name) if dbg.SymFromAddrW(hproc, pc, ctypes.byref(disp), ctypes.byref(info)) else f"?{pc:#x}"
+            sym_cache[pc] = info.Name if dbg.SymFromAddrW(hproc, pc, ctypes.byref(disp), ctypes.byref(info)) else f"?{pc:#x}"
         return sym_cache[pc]
 
     probe = sorted({pc for st in samples.values() for s in st for pc in s})
     named = sum(not sym(pc).startswith("?") for pc in probe)
     print(f"symbols: {named} of {len(probe)} distinct addresses named")
-    print(f"pid {pid}: {rounds} rounds in {wall:.1f} s ({rounds / wall:.0f}/s), {len(samples)} threads")
-    order = sorted(samples, key=lambda t: -cpu.get(t, 0))
-    for tid in order:
-        stacks = samples[tid]
-        named = [[sym(pc) for pc in s] for s in stacks]
-        busy = [s for s in named if not any(w in s[0] for w in WAITS)]
-        c = cpu.get(tid)
-        if not busy or (c is not None and c < 0.02 * wall):
-            continue
-        print(f"\n== thread {tid} {names.get(tid, '')!r}: cpu {c:.1f} s of {wall:.1f} s "
-              f"({100 * c / wall:.0f}%), busy {len(busy)}/{len(named)} samples")
-        leaf = collections.Counter(s[0] for s in busy)
-        guest = collections.Counter(next((f for f in s if "::f_" in f), "(no lifted frame)") for s in busy)
-        incl = collections.Counter(f for s in busy for f in set(s))
-        for title, counter in (("self", leaf), ("nearest lifted function", guest), ("inclusive", incl)):
-            print(f"  -- {title}")
-            for name, n in counter.most_common(a.top):
-                print(f"  {100 * n / len(busy):5.1f}%  {name}")
+    capture = {"version": 1, "pid": pid, "rounds": rounds, "wall": wall,
+               "symbols": {str(pc): name for pc, name in sym_cache.items()},
+               "threads": [{"tid": tid, "name": names.get(tid, ""), "cpu": cpu.get(tid),
+                            "stacks": stacks} for tid, stacks in samples.items()]}
+    if a.save_stacks:
+        a.save_stacks.write_text(json.dumps(capture), encoding="utf-8")
+    report(capture, a.top, filters)
     for h in handles.values():
         k32.CloseHandle(h)
 
