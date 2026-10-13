@@ -1963,3 +1963,18 @@ opening (codex-31), route perf (codex-29).
   timings improve, but total frame time does not establish an FPS improvement.
 - Next: finish the bounded gate/timing, then head-run gameplay A/B. No game or
   lifted-shard build by this lane. Details: `tasks/L89-backend-worker.md`.
+
+
+### L98 clean resource flushes (2026-10-13)
+
+- Draw reads use a 42-slot stack array and one batched objects access.
+  Dirty resource/owner indexing skips clean mip walks, preserving upload
+  order and surface aliases; opt-in debug audit checks skipped dirty flags.
+- Audit-enabled light suite: **152 passed, 1 failed, 1 ignored**; the sole
+  fullscreen-gamma Reset failure also reproduces on the untouched base.
+  Two new alias/copy/relock/all-42-read/cube/volume regressions pass.
+- Three paired debug draw samples: median **35.03 -> 28.51 us/draw**,
+  allocations **12 -> 10/draw**. Synthetic service timing only, no game run.
+- Next: head integrates with the relocated L90 snapshot and compares FPS;
+  full-suite green also requires resolving the existing gamma/Reset failure.
+  Details: `docs/tasks/L98-clean-flush.md`.

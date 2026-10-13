@@ -164,53 +164,93 @@ fn image_upload(m: &dyn Mem, resource: u32, index: u32, format: u32, img: &Image
 
 /// Upload what `resource` has dirty (texture levels, a surface, a buffer).
 pub(crate) fn flush(m: &dyn Mem, resource: u32) {
-    // collect dirty images, clearing the flags: a texture's volumes, then
-    // its level surfaces in order (L78: in one pass, without copying the
-    // texture's surface list; a draw flushes everything it reads)
+    flush_reads(m, [resource]);
+}
+
+/// All of a draw's reads share one objects access. Preserve read order,
+/// duplicates, and the old per-resource volume/face/mip upload order.
+pub(crate) fn flush_reads(m: &dyn Mem, reads: impl IntoIterator<Item = u32>) {
     let out = objects(|o| {
-        let mut out = Vec::new();
-        let surfaces = match o.live.get_mut(&resource).map(|x| &mut x.kind) {
-            Some(Kind::Texture { data, .. }) => {
-                for (k, v) in data.volumes.iter_mut().enumerate() {
-                    if std::mem::take(&mut v.dirty) && v.shadow != 0 {
-                        out.push((k as u32, data.format, v.clone()));
-                    }
-                }
-                std::mem::take(&mut data.surfaces)
+        let mut out = Vec::new(); // no allocation unless an image needs upload
+        #[cfg(debug_assertions)]
+        let verify = verify_dirty_flush();
+        for resource in reads {
+            let dirty = o.dirty.remove(&resource);
+            // Opt-in slow audit, including dirty images without a shadow:
+            // the old walk would clear those too, even though it emits nothing.
+            #[cfg(debug_assertions)]
+            if verify && !dirty {
+                assert!(!resource_has_dirty(o, resource), "unindexed dirty D3D resource {resource:#x}");
             }
-            Some(Kind::Surface { desc, image, .. }) => {
-                if std::mem::take(&mut image.dirty) && image.shadow != 0 {
-                    out.push((0, desc.format, image.clone()));
-                }
-                return out;
+            if dirty {
+                collect_dirty(o, resource, &mut out);
             }
-            Some(Kind::Buffer { data, .. }) => {
-                if std::mem::take(&mut data.image.dirty) && data.image.shadow != 0 {
-                    out.push((u32::MAX, 0, data.image.clone()));
-                }
-                return out;
-            }
-            _ => return out,
-        };
-        for (k, s) in surfaces.iter().enumerate() {
-            if let Some(Kind::Surface { desc, image, .. }) = o.live.get_mut(s).map(|x| &mut x.kind) {
-                if std::mem::take(&mut image.dirty) && image.shadow != 0 {
-                    out.push((k as u32, desc.format, image.clone()));
-                }
-            }
-        }
-        if let Some(Kind::Texture { data, .. }) = o.live.get_mut(&resource).map(|x| &mut x.kind) {
-            data.surfaces = surfaces;
         }
         out
     });
-    for (index, format, img) in out {
+    for (resource, index, format, img) in out {
         let u = if index == u32::MAX {
             Upload::Buffer { resource, bytes: read_bytes(m, img.shadow, img.size) }
         } else {
             image_upload(m, resource, index, format, &img)
         };
         backend(|b| b.upload(u));
+    }
+}
+
+#[cfg(debug_assertions)]
+fn verify_dirty_flush() -> bool {
+    static VERIFY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *VERIFY.get_or_init(|| std::env::var_os("DDRUNTIME_VERIFY_DIRTY_FLUSH").is_some_and(|v| v == "1"))
+}
+
+#[cfg(debug_assertions)]
+fn resource_has_dirty(o: &crate::d3d9dev::Objects, resource: u32) -> bool {
+    match o.live.get(&resource).map(|x| &x.kind) {
+        Some(Kind::Texture { data, .. }) => data.volumes.iter().any(|i| i.dirty)
+            || data.surfaces.iter().any(|s| matches!(o.live.get(s).map(|x| &x.kind),
+                Some(Kind::Surface { image, .. }) if image.dirty)),
+        Some(Kind::Surface { image, .. }) => image.dirty,
+        Some(Kind::Buffer { data, .. }) => data.image.dirty,
+        _ => false,
+    }
+}
+
+// The old flush walk, with the same dirty-flag clearing and descriptor order.
+fn collect_dirty(o: &mut crate::d3d9dev::Objects, resource: u32, out: &mut Vec<(u32, u32, u32, Image)>) {
+    let surfaces = match o.live.get_mut(&resource).map(|x| &mut x.kind) {
+        Some(Kind::Texture { data, .. }) => {
+            for (k, v) in data.volumes.iter_mut().enumerate() {
+                if std::mem::take(&mut v.dirty) && v.shadow != 0 {
+                    out.push((resource, k as u32, data.format, v.clone()));
+                }
+            }
+            std::mem::take(&mut data.surfaces)
+        }
+        Some(Kind::Surface { desc, image, .. }) => {
+            if std::mem::take(&mut image.dirty) && image.shadow != 0 {
+                out.push((resource, 0, desc.format, image.clone()));
+            }
+            return;
+        }
+        Some(Kind::Buffer { data, .. }) => {
+            if std::mem::take(&mut data.image.dirty) && data.image.shadow != 0 {
+                out.push((resource, u32::MAX, 0, data.image.clone()));
+            }
+            return;
+        }
+        _ => return,
+    };
+    for (k, s) in surfaces.iter().enumerate() {
+        o.dirty.remove(s);
+        if let Some(Kind::Surface { desc, image, .. }) = o.live.get_mut(s).map(|x| &mut x.kind) {
+            if std::mem::take(&mut image.dirty) && image.shadow != 0 {
+                out.push((resource, k as u32, desc.format, image.clone()));
+            }
+        }
+    }
+    if let Some(Kind::Texture { data, .. }) = o.live.get_mut(&resource).map(|x| &mut x.kind) {
+        data.surfaces = surfaces;
     }
 }
 
@@ -286,20 +326,22 @@ pub fn vertex_count(primitive: u32, primitives: u32) -> Option<u32> {
 fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, base_vertex: i32, min_index: u32,
             vertex_count: u32, vertices: Option<Vertices>, indices: Option<Indices>) -> DrawCall {
     // what the draw reads, flushed first (flushing changes no device state)
-    let (reads, rts, ds) = with_device(dev, |d| {
+    let (reads, read_count, rts, ds) = with_device(dev, |d| {
         let state = &d.state;
-        let mut reads: Vec<u32> = state.textures.values().copied().collect();
-        reads.extend(state.streams.iter().map(|s| s.0).filter(|&b| b != 0));
-        // the device's index buffer only for a draw that uses it (indexed, not UP)
-        if state.indices != 0 && indices.is_none() {
-            reads.push(state.indices);
+        // SetTexture accepts 16 pixel + displacement + 4 vertex samplers;
+        // state has 16 streams, one index buffer, and 4 render targets.
+        let mut reads = [0; 21 + 16 + 1 + 4];
+        let mut count = 0;
+        for resource in state.textures.values().copied()
+            .chain(state.streams.iter().map(|s| s.0).filter(|&b| b != 0))
+            .chain((state.indices != 0 && indices.is_none()).then_some(state.indices))
+            .chain(d.render_targets.iter().copied().filter(|&s| s != 0)) {
+            reads[count] = resource;
+            count += 1;
         }
-        reads.extend(d.render_targets.iter().copied().filter(|&s| s != 0));
-        (reads, d.render_targets, d.depth_stencil)
+        (reads, count, d.render_targets, d.depth_stencil)
     });
-    for r in reads {
-        flush(m, r);
-    }
+    flush_reads(m, reads[..read_count].iter().copied());
     // the state the draw carries, read in place (L78: the whole device
     // state, every map of it, was cloned for each draw)
     struct Read {

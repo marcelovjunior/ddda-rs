@@ -93,6 +93,32 @@ pub(crate) struct Objects {
     vtables: HashMap<&'static str, u32>,
     /// by guest address (L78: a fast hash; looked up several times a draw)
     pub(crate) live: crate::fasthash::FxMap<u32, Object>,
+    /// Conservative dirty index: surface IDs AND their texture owner IDs.
+    /// A directly flushed child can leave a clean parent indexed until its
+    /// next flush; false positives cost one scan, never change uploads.
+    pub(crate) dirty: crate::fasthash::FxSet<u32>,
+}
+
+impl Objects {
+    /// All dirty writers pass here: d3d9res surface_image (surface/flat/cube
+    /// UnlockRect and restored images), texture (volume UnlockBox and restored
+    /// volumes), buffer (Unlock and restored image), d3d9copy mark_dirty and
+    /// surface_shadow restoration, and new_object for initially dirty images.
+    /// New images otherwise start clean. Flush alone clears flags. Indexing
+    /// both a child and its owner preserves direct-surface vs texture uploads;
+    /// never clear a parent's entry just because one child was flushed.
+    pub(crate) fn track_dirty(&mut self, resource: u32) {
+        let owner = match self.live.get(&resource).map(|x| &x.kind) {
+            Some(Kind::Surface { image, owner, .. }) if image.dirty => *owner,
+            Some(Kind::Texture { data, .. }) if data.volumes.iter().any(|i| i.dirty) => 0,
+            Some(Kind::Buffer { data, .. }) if data.image.dirty => 0,
+            _ => return,
+        };
+        self.dirty.insert(resource);
+        if owner != 0 {
+            self.dirty.insert(owner);
+        }
+    }
 }
 
 pub(crate) fn objects<R>(f: impl FnOnce(&mut Objects) -> R) -> R {
@@ -233,7 +259,10 @@ pub fn refs(object: u32) -> Option<(&'static str, u32)> {
 pub(crate) fn new_object(m: &mut dyn Mem, iface: &'static str, kind: Kind) -> u32 {
     let vtable = objects(|o| o.vtables.get(iface).copied()).unwrap_or_else(|| panic!("no vtable for {iface}"));
     let p = interfaces::object(m, vtable, 16);
-    objects(|o| o.live.insert(p, Object { iface, refs: 1, kind }));
+    objects(|o| {
+        o.live.insert(p, Object { iface, refs: 1, kind });
+        o.track_dirty(p);
+    });
     p
 }
 
@@ -253,7 +282,10 @@ pub(crate) fn release_of(object: u32) -> u32 {
     let (left, gone) = objects(|o| {
         let x = o.live.get_mut(&object).unwrap_or_else(|| panic!("Release on {object:#x}, not a live D3D9 object"));
         x.refs -= 1;
-        if x.refs == 0 { (0, o.live.remove(&object)) } else { (x.refs, None) }
+        if x.refs == 0 {
+            o.dirty.remove(&object);
+            (0, o.live.remove(&object))
+        } else { (x.refs, None) }
     });
     if let Some(x) = gone {
         if crate::threads::holds_guest_lock() {
@@ -300,7 +332,7 @@ fn destroy(object: u32, x: Object) {
             Kind::Texture { data, .. } => {
                 // the level surfaces go with the texture (they share its count)
                 for s in &data.surfaces {
-                    if let Some(x) = objects(|o| o.live.remove(s)) {
+                    if let Some(x) = objects(|o| { o.dirty.remove(s); o.live.remove(s) }) {
                         if let Kind::Surface { image, .. } = x.kind {
                             image.free();
                         }
