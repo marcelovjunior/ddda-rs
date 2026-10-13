@@ -5,60 +5,33 @@
 //! Through `&dyn Mem` every word is a virtual call and a page lookup
 //! (3.5 ns); a [`View`] takes the page table once and reads inline, as the
 //! lifted code's fast path does: one permission test and one load, the
-//! same bytes, the same atomicity (an aligned load is one Acquire access),
-//! lazy pages reading zero. Anything else (a fault, an access across a page
-//! end, a memory without a page table) goes to the `Mem` as before, so
-//! faults panic exactly as they did.
+//! same bytes, the same atomicity (an aligned load is one Acquire access).
+//! Anything else (a lazy page, a fault, an access across a page end, a
+//! memory without a page table) goes to the `Mem` as before, so faults
+//! panic exactly as they did.
 //!
 //! All host reads should go through here: when guest memory becomes one
-//! flat reservation (L142), [`View::load`] and [`View::read`] become base +
-//! address and every caller follows.
-use ddnative_base::mem::{load_at, Mem, PageTable, PAGE, READ};
+//! flat reservation (L142), ddnative-base's `Pages` (behind [`View::load`])
+//! and `Mem::read_bytes` change and every caller follows.
+use ddnative_base::mem::{load_at, Mem, Pages, PAGE, READ};
 
-/// Reads of one guest address space, the page table taken once.
+/// Reads of one guest address space, the page table taken once
+/// (ddnative-base's [`Pages`], which the readable ports use too).
 #[derive(Clone, Copy)]
 pub struct View<'a> {
     m: &'a dyn Mem,
-    table: Option<&'a PageTable>,
+    pages: Pages,
 }
 
 impl<'a> View<'a> {
     pub fn new(m: &'a dyn Mem) -> View<'a> {
-        // SAFETY: page_table()'s contract: the table lives as long as the
-        // memory and never moves
-        let table = m.page_table().map(|t| unsafe { &*t.as_ptr() });
-        View { m, table }
+        View { m, pages: Pages::of(m) }
     }
 
     /// `width` (1, 2 or 4) bytes at `addr`, little-endian.
     #[inline]
     pub fn load(&self, addr: u32, width: u32) -> u32 {
-        if let Some(t) = self.table {
-            let off = (addr % PAGE) as usize;
-            if off + width as usize <= PAGE as usize {
-                let p = (addr / PAGE) as usize;
-                // READ is only ever set on mapped pages
-                if t.perm(p) & READ != 0 {
-                    let page = t.page(p);
-                    if page.is_null() {
-                        return 0; // lazy: zero until written
-                    }
-                    // SAFETY: width bytes inside a backed page
-                    return unsafe { load_at(page.add(off), width as usize) };
-                }
-            }
-        }
-        self.slow(addr, width)
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn slow(&self, addr: u32, width: u32) -> u32 {
-        match width {
-            1 => self.m.u8(addr) as u32,
-            2 => self.m.u16(addr) as u32,
-            _ => self.m.u32(addr),
-        }
+        self.pages.load(self.m, addr, width as usize)
     }
 
     #[inline]
@@ -89,7 +62,8 @@ impl<'a> View<'a> {
 
     /// `count` consecutive words at `addr`, appended to `out`: page by
     /// page, one table lookup per page and an Acquire load per aligned word
-    /// (the same access as `u32`); anything else word by word.
+    /// (the same access as `u32`); anything else (lazy pages, unaligned
+    /// words) word by word.
     pub fn extend_words(&self, addr: u32, count: u32, out: &mut Vec<u32>) {
         out.reserve(count as usize);
         let mut k = 0u32;
@@ -98,17 +72,10 @@ impl<'a> View<'a> {
             let off = (a % PAGE) as usize;
             // the words of this run that lie wholly in the page
             let run = ((PAGE as usize - off) / 4).min((count - k) as usize) as u32;
-            match self.table {
-                Some(t) if a % 4 == 0 && run > 0 && t.perm((a / PAGE) as usize) & READ != 0 => {
-                    let page = t.page((a / PAGE) as usize);
-                    if page.is_null() {
-                        out.extend(std::iter::repeat_n(0, run as usize)); // lazy: zero until written
-                    } else {
-                        // SAFETY: `run` aligned words inside a backed page
-                        out.extend((0..run as usize).map(|j| unsafe {
-                            u32::from_le((*(page.add(off + 4 * j) as *const std::sync::atomic::AtomicU32)).load(std::sync::atomic::Ordering::Acquire))
-                        }));
-                    }
+            match self.pages.bytes(a, 4 * run as usize, READ) {
+                Some(at) if a % 4 == 0 && run > 0 => {
+                    // SAFETY: `run` aligned words inside a backed page
+                    out.extend((0..run as usize).map(|j| unsafe { load_at(at.add(4 * j), 4) }));
                     k += run;
                 }
                 _ => {

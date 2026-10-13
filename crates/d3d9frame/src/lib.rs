@@ -883,6 +883,9 @@ impl Drop for Capture {
 }
 
 impl GraphicsBackend for Capture {
+    fn shader_created(&mut self, tokens: std::sync::Arc<[u32]>) {
+        self.inner.shader_created(tokens);
+    }
     fn fence(&mut self) {
         self.inner.fence();
     }
