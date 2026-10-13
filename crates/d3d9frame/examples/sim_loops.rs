@@ -62,7 +62,8 @@ fn main() {
     let path = args.get(1).expect("capture path");
     let want: usize = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(2);
     let show_shaders = args.iter().any(|a| a == "--shaders");
-    let reader = Reader::open(path).expect("open capture");
+    // the blobs stay in the file: memory bounded by the cache (256 MB)
+    let reader = Reader::open_indexed(path, 256 << 20).expect("open capture");
     if args.iter().any(|a| a == "--count") {
         // commands per frame by kind (frames end at Present)
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
@@ -214,6 +215,12 @@ fn main() {
                 "  draw {n}: prim {} x{} verts {} {} | {} | vs {vs} ps {ps} | vs c changed {:?} ps c changed {:?} | vp {:?}",
                 d.primitive, d.primitives, d.vertex_count, targets(d), sampled(d), cv, cp, &d.viewport[..4]
             );
+            if prev.is_none() {
+                for t in d.textures.iter() {
+                    println!("      s{} levels {} states {:?}", t.sampler, t.levels, t.states);
+                }
+                println!("      render states {:?}", d.render_states.iter().filter(|(k, _)| [7, 14, 15, 22, 27, 168, 174, 194, 206].contains(k)).collect::<Vec<_>>());
+            }
             if prev.is_none() || li == 0 && *n == l[0].0 {
                 for k in 0..d.ps_constants.f.len().min(16) {
                     println!("      ps c{k} = {}", floats(&d.ps_constants, k));
@@ -249,6 +256,9 @@ fn main() {
             println!("\nSHADER #{id} ({} tokens)", tokens.len());
             match d3d9shader::parse(tokens) {
                 Ok(s) => {
+                    if s.stage == d3d9shader::Stage::Pixel {
+                        println!("  interpolants: {:?}", d3d9shader::flow::interpolants_only_address(&s));
+                    }
                     if let Some(t) = d3d9shader::ctab::table(&s) {
                         println!("  creator {:?}", t.creator);
                         for c in &t.constants {
