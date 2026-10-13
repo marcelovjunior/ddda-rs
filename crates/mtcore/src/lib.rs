@@ -50,4 +50,7 @@ pub mod semantic_c2;
 pub mod semantic_s2;
 pub mod semantic_s3;
 pub mod semantic_s5;
+pub mod semantic_s6;
+pub mod semantic_s6_aim;
+pub mod semantic_s6_pose;
 pub mod tree;
