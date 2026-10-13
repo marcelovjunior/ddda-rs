@@ -155,7 +155,17 @@ pub(crate) struct DirtySet(crate::fasthash::FxSet<u32>);
 impl DirtySet {
     fn publish(&self) {
         let n = self.0.len();
-        crate::runtime::with(|rt| rt.d3d_dirty.store(n, std::sync::atomic::Ordering::Release));
+        crate::runtime::with(|rt| {
+            rt.d3d_dirty.store(n, std::sync::atomic::Ordering::Release);
+            // (L180, claude-2: every change, for readers keeping a copy)
+            rt.d3d_dirty_generation.fetch_add(1, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    /// The dirty resources, into `out` (cleared first).
+    pub(crate) fn snapshot(&self, out: &mut Vec<u32>) {
+        out.clear();
+        out.extend(self.0.iter().copied());
     }
 
     pub(crate) fn insert(&mut self, resource: u32) -> bool {
@@ -191,6 +201,13 @@ impl DirtySet {
 /// before acting on it.
 pub(crate) fn dirty_count() -> usize {
     crate::runtime::with(|rt| rt.d3d_dirty.load(std::sync::atomic::Ordering::Acquire))
+}
+
+/// A number that changes with every change of the dirty index (L180): a
+/// copy of the index taken at one value is the index while it holds. Exact
+/// under the D3D lock; without it, stale like [`dirty_count`].
+pub(crate) fn dirty_generation() -> u64 {
+    crate::runtime::with(|rt| rt.d3d_dirty_generation.load(std::sync::atomic::Ordering::Acquire))
 }
 
 /// A live device's boxed data: the box does not move while the object is
@@ -1352,6 +1369,7 @@ const STATE_SLOTS: &[u32] = &[
 pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) -> Result<(), Conflict> {
     objects(|o| *o = Objects::default());
     crate::runtime::with(|rt| rt.d3d_dirty.store(0, std::sync::atomic::Ordering::Release));
+    crate::runtime::with(|rt| rt.d3d_dirty_generation.fetch_add(1, std::sync::atomic::Ordering::Release));
     crate::runtime::with(|rt| rt.queries.lock().unwrap_or_else(|e| e.into_inner()).clear());
     for spec in INTERFACES.iter().chain(crate::d3dx::INTERFACES) {
         let v = interfaces::vtable(m, registry, tokens, spec)?;
@@ -1431,10 +1449,17 @@ mod tests {
         crate::runtime::enter(Arc::new(crate::runtime::Runtime::default()));
         assert_eq!(dirty_count(), 0);
         let mut set = DirtySet::default();
+        let generation = dirty_generation();
         assert!(set.insert(0x100));
         assert!(!set.insert(0x100));
         assert!(set.insert(0x200));
         assert_eq!(dirty_count(), 2);
+        // L180: two changes (the repeat is none), and the copy is the set
+        assert_eq!(dirty_generation(), generation + 2);
+        let mut copy = vec![9];
+        set.snapshot(&mut copy);
+        copy.sort_unstable();
+        assert_eq!(copy, [0x100, 0x200]);
         assert!(!set.remove(&0x300));
         assert!(set.remove(&0x100));
         assert_eq!(dirty_count(), 1);
