@@ -37,10 +37,7 @@ pub(super) fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32,
     let mut texture_count = 0;
     let (state, uploads) = objects(|o| {
         let flush = super::needs_flush(o);
-        let d = match o.live.get_mut(&dev).map(|o| &mut o.kind) {
-            Some(Kind::Device(d)) => d,
-            _ => panic!("{dev:#x} is not a live IDirect3DDevice9"),
-        };
+        let d = o.device_mut(dev).unwrap_or_else(|| panic!("{dev:#x} is not a live IDirect3DDevice9"));
         if flush {
             let s = &d.state;
             let mut read = |id| { if id != 0 { reads[read_count] = id; read_count += 1; } };

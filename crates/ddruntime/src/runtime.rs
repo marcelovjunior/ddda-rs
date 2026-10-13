@@ -225,6 +225,7 @@ impl std::ops::Deref for Pinned {
 }
 
 impl Drop for Pinned {
+    #[inline]
     fn drop(&mut self) {
         // SAFETY: Pinned is !Send/!Sync (raw pointers), and cannot outlive
         // CURRENT through this module's scoped uses. Retired owners are only
@@ -236,6 +237,17 @@ impl Drop for Pinned {
             drop(retired);
         }
     }
+}
+
+/// The runtimes `enter` replaced while pinned, once the last pin is gone.
+#[cold]
+#[inline(never)]
+fn release_retired() {
+    // (at thread exit the runtime has already gone with CURRENT)
+    let _ = CURRENT.try_with(|c| {
+        let retired = std::mem::take(&mut *c.retired.borrow_mut());
+        drop(retired);
+    });
 }
 
 /// Run `f` with this thread's runtime (the pointer is not borrowed while

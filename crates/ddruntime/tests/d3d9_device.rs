@@ -207,3 +207,28 @@ fn a_clear_carries_the_viewport_scissor_and_srgb_write() {
     assert_eq!((a.scissor, a.srgb), (None, false));
     assert_eq!((b.scissor, b.srgb), (Some([5, 6, 100, 120]), true));
 }
+
+/// A released device's methods do not reach a later device created at the
+/// same address through the runtime's cached device (L144, Objects::device_mut):
+/// the new device starts with its own default states.
+#[test]
+fn a_new_device_does_not_see_a_released_ones_state() {
+    let Some((mut s, dev, hwnd)) = device_session() else { return };
+    // D3DRS_FILLMODE (8): D3DFILL_SOLID (3) by default; wireframe on the first device
+    assert_eq!(com(&mut s, dev, 57, &[8, 2]), 0);
+    assert_eq!(com(&mut s, dev, 58, &[8, OUT]), 0);
+    assert_eq!(s.mem.u32(OUT), 2);
+    assert_eq!(com(&mut s, dev, 2, &[]), 0, "the last reference");
+    assert!(refs(dev).is_none(), "the device is gone");
+    let token = |s: &Session, n: &str| s.imports.iter().find(|i| i.full_name() == n).unwrap().token;
+    let Outcome::Returned(cpu) = s.call(token(&s, "d3d9.dll!Direct3DCreate9"), 0, &[32]) else { panic!() };
+    let d3d = cpu.eax;
+    write_pp(&mut s, [0, 0, 0, 0, 0, 0, 1, hwnd, 1, 1, 75, 0, 0, 0]);
+    let create = s.mem.u32(s.mem.u32(d3d) + 4 * 16);
+    let Outcome::Returned(_) = s.call(create, 0, &[d3d, 0, 1, hwnd, 0x46, PP, OUT]) else { panic!() };
+    let second = s.mem.u32(OUT);
+    assert_eq!(com(&mut s, second, 58, &[8, OUT]), 0);
+    assert_eq!(s.mem.u32(OUT), 3, "a fresh device's fill mode (first {dev:#x}, second {second:#x})");
+    // and the first one's address, if reused, is the second device
+    assert_eq!(refs(dev).is_some(), dev == second);
+}

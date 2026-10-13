@@ -1172,6 +1172,59 @@ targets, and ordinary/step-enabled binding replacement. The 12-log audit found
 activation in a game run remains for head to verify. See
 `tasks/L136-ports-dispatch.md` for counts and their phase/frequency limits.
 
+## L144 render worker host costs (2026-10-13)
+
+The render worker (guest thread 0x1034, 0x00DAC090) was the frame's
+critical path at 71-73% CPU (profiles c22e2, c23def): the main thread
+waits on it. L144 cuts what the runtime's own Rust does per D3D call,
+outside `ndraw_native.rs` (L141) and mtdraw (task/L144-mtdraw-reads).
+
+- `ddruntime::guest::View`: host reads of guest memory through the page
+  table taken once (one permission test and one Acquire load, lazy pages
+  zero, anything else through the `Mem`). It is the one function L142's
+  flat memory changes. The D3D9 setters (viewport, scissor, transform,
+  shader constants page by page) read through it.
+- `GuestMemory::read_bytes` in parallel mode copies aligned 8-byte words
+  (each 4-byte word still one atomic access on x86-64), not bytes.
+- IDirect3DQuery9::GetData runs without the D3D or guest lock: the
+  query's type, state and value live in a shared cell, written by Issue
+  (value, then state, Release) and read by GetData (state, then value,
+  Acquire). The main thread's frame-latency polling (0x01148290) had
+  waited on the render thread's D3D lock.
+- No heap allocation per draw on the clean path: draws reach the deferred
+  backend by value (`GraphicsBackend::draw_owned`, `Work::Draw`; no clone,
+  no boxed closure), the snapshot builds texture bindings in
+  uninitialised storage (no 3 KB zeroing). The one allocation left is
+  the texture binding list when the textures changed. Interning it would
+  cost a content hash of up to 21 × 25 words, about as much as the
+  allocation, so it isn't done.
+- Stage textures in a 21-entry array (`StageTextures`), not a hash map.
+- Upload buffers are recycled (`d3d9cmd::bytes`, 64 KB and up, at most
+  32 MB held): the recorder takes them, ddgpu gives them back once
+  written. A fresh 2 MB `vec![0]` was ~520 us of page faults and zeroing.
+  ddgpu writes a 4-aligned buffer without its padded copy.
+
+Measurements are release builds of `cargo run --release -p ddruntime
+--no-default-features --example render_worker` (parallel mode, a Null
+backend behind the deferred queue, 3,000 extra live objects; noisy on a
+loaded machine, best of rounds):
+
+| | before | after |
+|---|---|---|
+| `read_bytes` 64 KB | 3.3 GB/s | 12-17 GB/s |
+| DrawIndexedPrimitive, clean | ~675-860 ns | ~425-475 ns |
+| SetVSConstantF(16) | 546 ns | ~190-290 ns |
+| SetTexture | 200 ns | ~150-250 ns |
+| allocations per iteration (clean / 4 KB dirty buffer) | 2 / 5 | 1 / 3 |
+| 2 MB buffer locked, written, uploaded | ~620-860 us | ~250-290 us |
+
+Implemented and tested: ddruntime lib tests (View against the Mem,
+read_bytes alignment cases, queries), d3d9cmd tests (deferred order, the
+pool). Not yet compared in game; the ddgpu GPU tests haven't been run
+(the GPU gate's). Open: a locked-range upload (`Upload::BufferRange`)
+instead of whole buffers, dense object handles (an FxMap lookup is
+~5-10 ns of a call), and per-call dispatch overhead (TLS keys, MXCSR).
+
 ### L143 backend worker storage
 
 The deferred FIFO stores common commands directly in preallocated channel
