@@ -1121,11 +1121,16 @@ fn compare_replays(
     // incoming ESP (uninitialized locals). Two extra serial runs fill them
     // with 0x00 and 0xFF; a stream byte that changes with them depends on
     // memory the original never initialized.
+    let readable = |a: u32| input.probe(a, 4, false).ok().map(|_| input.u32(a));
     let residue: Vec<Range<u32>> = {
-        let render = input.u32(0x018d08f4);
-        let index = input.u32(render + 0x33db8);
-        let base = input.u32(render + 0x33dc0 + index * 4);
-        let (cursor, capacity) = (input.u32(render + 0x33dc8), input.u32(render + 0x33dcc));
+        // (no renderer in the capture: only the stack is a residue source)
+        let arena = (|| {
+            let render = readable(0x018d08f4).filter(|&r| r != 0)?;
+            let index = readable(render + 0x33db8)?;
+            let base = readable(render + 0x33dc0 + index * 4)?;
+            Some((base, readable(render + 0x33dc8)?, readable(render + 0x33dcc)?))
+        })();
+        let (base, cursor, capacity) = arena.unwrap_or((0, 0, 0));
         let below = std::env::var("DDRUNTIME_PARALLEL_SHADOW_POISON_STACK")
             .ok()
             .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
@@ -1731,13 +1736,23 @@ fn compare_replays(
             run.2.get(&at).copied().unwrap_or_else(|| input.u8(at))
         }))
     };
-    let render = input.u32(0x018d08f4);
-    let arena_base = input.u32(render + 0x33dc0 + input.u32(render + 0x33db8) * 4);
-    let (cursor_in, capacity) = (input.u32(render + 0x33dc8), input.u32(render + 0x33dcc));
+    // (a capture without the renderer or sPrimitive has none of their classes)
+    let readable = |a: u32| input.probe(a, 4, false).ok().map(|_| input.u32(a));
+    let render = readable(0x018d08f4).filter(|&r| r != 0);
+    let arena_base = render
+        .and_then(|r| readable(r + 0x33db8).and_then(|i| readable(r + 0x33dc0 + i * 4)))
+        .unwrap_or(0);
+    let (cursor_in, capacity) = render
+        .and_then(|r| Some((readable(r + 0x33dc8)?, readable(r + 0x33dcc)?)))
+        .unwrap_or((0, 0));
     let fresh_arena = arena_base.wrapping_add(cursor_in)..arena_base.wrapping_add(capacity);
-    let cursor_word = render + 0x33dc8;
-    let cursors = (final_word(&results[0], cursor_word), final_word(&results[1], cursor_word));
-    let cursor_ok = cursors.0 >= cursor_in && cursors.1 >= cursor_in && cursors.1 <= capacity;
+    let cursor_word = render.map_or(0, |r| r + 0x33dc8);
+    let cursors = if render.is_some() {
+        (final_word(&results[0], cursor_word), final_word(&results[1], cursor_word))
+    } else {
+        (0, 0)
+    };
+    let cursor_ok = render.is_some() && cursors.0 >= cursor_in && cursors.1 >= cursor_in && cursors.1 <= capacity;
     // - sPrimitive lane state-stack slots above the live top: sPrimitive
     //   ([0x018D1848]) keeps one state object per lane (+0x30 + 4 * lane,
     //   lane < +0xD0). Its vf11 0x00E61010 pushes onto the running lane's
@@ -1748,11 +1763,15 @@ fn compare_replays(
     //   them before any read).
     let mut dead_slots: Vec<Range<u32>> = Vec::new();
     {
-        let sp = input.u32(0x018d1848);
-        let lanes = input.u32(sp + 0xd0).min(8);
+        let sp = readable(0x018d1848).filter(|&p| p != 0);
+        let lanes = sp.and_then(|sp| readable(sp + 0xd0)).unwrap_or(0).min(8);
         for lane in 0..lanes {
-            let object = input.u32(sp + 0x30 + 4 * lane);
-            for (base, count_at, stride) in [(object + 0xc, object + 0x54, 12u32), (input.u32(object + 4) + 4, input.u32(object + 4) + 0x64, 16)] {
+            let Some(object) = sp.and_then(|sp| readable(sp + 0x30 + 4 * lane)) else { continue };
+            let Some(sub) = readable(object + 4) else { continue };
+            for (base, count_at, stride) in [(object + 0xc, object + 0x54, 12u32), (sub + 4, sub + 0x64, 16)] {
+                if readable(count_at).is_none() {
+                    continue;
+                }
                 let (a, b) = (final_word(&results[0], count_at), final_word(&results[1], count_at));
                 if a == b && a <= 6 {
                     dead_slots.push(base + stride * a..base + stride * 6);
@@ -2392,11 +2411,30 @@ mod tests {
             compare_control_state(&cpu, 0x1f80, &changed, 0x1f80),
             Err("MXCSR")
         );
-        for byte in [0, 4, 8, 28, 107] {
+        // the environment is exact
+        for byte in [0, 4, 8, 12, 27] {
             let mut changed = cpu.clone();
             changed.st.state[byte] ^= 1;
             assert_eq!(
                 compare_control_state(&cpu, 0x1f80, &changed, 0x1f80),
+                Err("x87 image")
+            );
+        }
+        // registers tagged empty (FNINIT) cannot be read: their bytes may differ
+        for byte in [28, 107] {
+            let mut changed = cpu.clone();
+            changed.st.state[byte] ^= 1;
+            assert_eq!(compare_control_state(&cpu, 0x1f80, &changed, 0x1f80), Ok(()));
+        }
+        // ... valid ones are exact (tag word 0: all valid)
+        let mut valid = cpu.clone();
+        valid.st.state[8] = 0;
+        valid.st.state[9] = 0;
+        for byte in [28, 107] {
+            let mut changed = valid.clone();
+            changed.st.state[byte] ^= 1;
+            assert_eq!(
+                compare_control_state(&valid, 0x1f80, &changed, 0x1f80),
                 Err("x87 image")
             );
         }
