@@ -1140,10 +1140,10 @@ impl Worker {
                 let v = d.viewport;
                 let extra = [1.0 / v[2] as f32, -1.0 / v[3] as f32, 0.0, 0.0].map(f32::to_bits);
                 let shader = p.shaders[1];
-                recorder.update_constant_range(
+                recorder.update_constant_words(
                     constants[&shader],
                     self.device.shader_constant_layout(shader).extra_offset,
-                    &words_bytes(&extra),
+                    &extra,
                 )?;
                 recorder.set_viewport([
                     v[0] as f32,
@@ -1296,9 +1296,6 @@ fn primitive_vertices(kind: u32, primitives: u32) -> Result<u32, String> {
         _ => None,
     }
     .ok_or("native primitive range unsupported/overflow".into())
-}
-fn words_bytes(words: &[u32]) -> Vec<u8> {
-    words.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 /// The same register arrays (by pointer: they are immutable and held) at
 /// the same registers: applying `b` after `a` changes nothing.
