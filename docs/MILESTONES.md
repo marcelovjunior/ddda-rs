@@ -136,7 +136,10 @@
   1704 uploads (29 conservative refusals).
 - Live output remains serial; publication and FPS/job-time acceptance are
   OPEN. No TRAIN READY. One next action: self-serve R172 build and replay48124
-  to trace the root22 shader constant producer.
+  for the root22 shader consumer. Original producer writes CBSkinning xyz
+  only; installed MFX declares scalar+float2, but shader indirect indexing
+  prevents blanket padding proof. V4 adds exact referenced shader bytecode
+  to private captures (v3 readable); request head-only fresh capture.
   Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)

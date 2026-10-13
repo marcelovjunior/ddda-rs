@@ -3,7 +3,7 @@
 use super::*;
 use std::io::{self, Read, Write};
 
-const MAGIC: &[u8; 8] = b"DDSH172\x03";
+const MAGIC: &[u8; 8] = b"DDSH172\x04";
 const CPU_WORDS: usize = 84;
 
 pub(super) struct Fixture {
@@ -18,6 +18,8 @@ pub(super) struct Fixture {
     pub writes: BTreeMap<u32, u8>,
     /// Incomplete captures are diagnostic artifacts, never accepted proofs.
     pub rejection: Option<String>,
+    /// Exact host shader objects referenced by the captured stream (private data).
+    pub shaders: BTreeMap<u32, Vec<u32>>,
 }
 
 fn invalid() -> io::Error {
@@ -111,12 +113,28 @@ impl Fixture {
             put(out, address)?;
             out.write_all(&[value])?;
         }
+        put(out, self.shaders.len() as u32)?;
+        let mut total = 0usize;
+        if self.shaders.len() > 4096 {
+            return Err(invalid());
+        }
+        for (&handle, tokens) in &self.shaders {
+            total = total.checked_add(tokens.len()).ok_or_else(invalid)?;
+            if handle == 0 || tokens.is_empty() || total > 1 << 20 {
+                return Err(invalid());
+            }
+            put(out, handle)?;
+            put(out, tokens.len() as u32)?;
+            for &token in tokens {
+                put(out, token)?;
+            }
+        }
         Ok(())
     }
     pub fn read(input: &mut impl Read) -> io::Result<Self> {
         let mut magic = [0; 8];
         input.read_exact(&mut magic)?;
-        if &magic != MAGIC {
+        if &magic != MAGIC && &magic != b"DDSH172\x03" {
             return Err(invalid());
         }
         let (context, scheduler, low, high) = (word(input)?, word(input)?, word(input)?, word(input)?);
@@ -150,6 +168,26 @@ impl Fixture {
                 return Err(invalid());
             }
         }
+        let mut shaders = BTreeMap::new();
+        if &magic == MAGIC {
+            let count = word(input)?;
+            if count > 4096 {
+                return Err(invalid());
+            }
+            let mut total = 0usize;
+            for _ in 0..count {
+                let handle = word(input)?;
+                let len = word(input)? as usize;
+                total = total.checked_add(len).ok_or_else(invalid)?;
+                if handle == 0 || len == 0 || total > 1 << 20 {
+                    return Err(invalid());
+                }
+                let tokens = (0..len).map(|_| word(input)).collect::<io::Result<Vec<_>>>()?;
+                if shaders.insert(handle, tokens).is_some() {
+                    return Err(invalid());
+                }
+            }
+        }
         let mut trailing = [0];
         if input.read(&mut trailing)? != 0 {
             return Err(invalid());
@@ -165,6 +203,7 @@ impl Fixture {
             stack: low..high,
             writes,
             rejection,
+            shaders,
         })
     }
 }
@@ -200,6 +239,7 @@ mod tests {
             stack: 0x1000..0x2000,
             writes: BTreeMap::from([(0x1100, 5)]),
             rejection: Some("synthetic diagnostic capture only".into()),
+            shaders: BTreeMap::from([(0x1234, vec![0xfffe0300, 0xffff])]),
         };
         let mut bytes = Vec::new();
         fixture.write(&mut bytes).unwrap();
@@ -210,10 +250,26 @@ mod tests {
         assert_ne!(decoded.result_mxcsr, decoded.outgoing.mxcsr.0);
         assert_eq!(decoded.writes, fixture.writes);
         assert_eq!(decoded.rejection, fixture.rejection);
+        assert_eq!(decoded.shaders, fixture.shaders);
         assert_eq!(decoded.input.u32(0x1100), 0);
         let mut again = Vec::new();
         decoded.write(&mut again).unwrap();
         assert_eq!(bytes, again);
+        // Legacy captures have no shader bank; they remain strict byte proofs.
+        let bank_start = bytes.len() - 20;
+        let mut legacy = bytes[..bank_start].to_vec();
+        legacy[7] = 3;
+        assert!(Fixture::read(&mut &legacy[..]).unwrap().shaders.is_empty());
+        let mut oversized = bytes.clone();
+        oversized[bank_start..bank_start + 4].copy_from_slice(&4097u32.to_le_bytes());
+        assert!(Fixture::read(&mut &oversized[..]).is_err());
+        let mut duplicate = bytes.clone();
+        duplicate[bank_start..bank_start + 4].copy_from_slice(&2u32.to_le_bytes());
+        duplicate.extend_from_slice(&bytes[bank_start + 4..]);
+        assert!(Fixture::read(&mut &duplicate[..]).is_err());
+        let mut oversized = bytes.clone();
+        oversized[bank_start + 8..bank_start + 12].copy_from_slice(&((1u32 << 20) + 1).to_le_bytes());
+        assert!(Fixture::read(&mut &oversized[..]).is_err());
         assert!(Fixture::read(&mut &bytes[..bytes.len() - 1]).is_err());
         bytes[0] ^= 1;
         assert!(Fixture::read(&mut &bytes[..]).is_err());
