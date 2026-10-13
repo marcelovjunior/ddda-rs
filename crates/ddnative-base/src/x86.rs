@@ -412,8 +412,9 @@ impl Flags {
     fn imul_overflow(&self) -> bool {
         (self.a as i32 as i64) * (self.b as i32 as i64) != self.r as i32 as i64
     }
-    #[inline]
-    fn mask(&self) -> u32 { if self.bits == 32 { u32::MAX } else { (1 << self.bits) - 1 } }
+    /// The width mask (bits is 8, 16 or 32 wherever a Flags is built).
+    #[inline(always)]
+    fn mask(&self) -> u32 { u32::MAX >> (32 - self.bits) }
     #[inline]
     fn sign(&self, v: u32) -> bool { (v >> (self.bits - 1)) & 1 != 0 }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
@@ -421,6 +422,10 @@ impl Flags {
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
     fn zf_value(&self) -> bool {
+        // L185: add, sub, logic, inc and dec (nearly every use): nothing to check
+        if (ADD..=DEC).contains(&self.kind) {
+            return self.r & self.mask() == 0;
+        }
         self.defined(0x40);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x40 != 0; }
         if self.kind == COMISS { return self.r != 1 && self.r != 2 } // r: 0 equal, 1 greater, 2 less, 3 unordered
@@ -430,12 +435,23 @@ impl Flags {
     pub fn sf(&self) -> bool { self.sf_value() }
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
-    fn sf_value(&self) -> bool { self.defined(0x80); if matches!(self.kind, RAW | PARTIAL) { self.r & 0x80 != 0 } else { self.kind != COMISS && self.sign(self.r) } }
+    fn sf_value(&self) -> bool {
+        // L185: the ALU kinds first, without the undefined-flag check
+        if (ADD..=DEC).contains(&self.kind) { return self.sign(self.r); }
+        self.defined(0x80); if matches!(self.kind, RAW | PARTIAL) { self.r & 0x80 != 0 } else { self.kind != COMISS && self.sign(self.r) } }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn cf(&self) -> bool { self.cf_value() }
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
     fn cf_value(&self) -> bool {
+        // L185: the common kinds first, without the undefined-flag check
+        match self.kind {
+            SUB => { let m = self.mask(); return (self.a & m) < (self.b & m); }
+            ADD => { let m = self.mask(); return (self.a & m) as u64 + (self.b & m) as u64 > m as u64; }
+            LOGIC => return false,
+            INC | DEC => return self.cf_in,
+            _ => {}
+        }
         self.defined(1);
         let m = self.mask();
         match self.kind {
@@ -456,6 +472,15 @@ impl Flags {
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
     fn of_value(&self) -> bool {
+        // L185: the ALU kinds first, without the undefined-flag check
+        match self.kind {
+            ADD => { let (a, b, r) = (self.sign(self.a), self.sign(self.b), self.sign(self.r)); return a == b && r != a; }
+            SUB => { let (a, b, r) = (self.sign(self.a), self.sign(self.b), self.sign(self.r)); return a != b && r != a; }
+            LOGIC => return false,
+            INC => return !self.sign(self.a) && self.sign(self.r),
+            DEC => return self.sign(self.a) && !self.sign(self.r),
+            _ => {}
+        }
         self.defined(0x800);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x800 != 0; }
         let (a, b, r) = (self.sign(self.a), self.sign(self.b), self.sign(self.r));
@@ -475,6 +500,8 @@ impl Flags {
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
     fn pf_value(&self) -> bool {
+        // L185: the ALU kinds first, without the undefined-flag check
+        if (ADD..=DEC).contains(&self.kind) { return (self.r & 0xFF).count_ones() % 2 == 0; }
         self.defined(4);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 4 != 0; }
         if self.kind == COMISS { return self.r == 3 }
