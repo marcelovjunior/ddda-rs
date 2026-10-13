@@ -512,7 +512,7 @@ impl WgpuBackend {
 impl Worker {
     fn new(backend: &WgpuBackend) -> Self {
         Self {
-            device: n::Device::new(backend.device.clone(), backend.queue.clone()),
+            device: n::Device::new_cached(backend),
             recording: None,
             constants: Default::default(),
             shaders: Default::default(),

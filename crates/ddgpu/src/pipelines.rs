@@ -189,8 +189,9 @@ pub fn save_pipeline_caches() {
     }
 }
 
-/// Where a host keeps the cache by default: %LOCALAPPDATA%\ddda-rs\pipelines
-/// (outside the game's installation).
+/// Same sandbox root as ddruntime::services::sandbox_home. The GPU crate
+/// does not depend on the runtime. Explicit host cache overrides still work.
 pub fn default_cache_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("ddda-rs").join("pipelines"))
+    Some(std::env::var_os("DDRUNTIME_HOME").map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("ddruntime")).join("pipelines"))
 }

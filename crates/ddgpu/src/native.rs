@@ -238,6 +238,7 @@ pub struct Device {
     buffers: Vec<wgpu::Buffer>,
     pipelines: Vec<PipelineObject>,
     pipeline_cache: FxMap<PipelineDesc, Pipeline>,
+    disk_cache: Option<std::sync::Arc<crate::pipelines::Persistent>>,
     sets: Vec<TextureSetObject>,
     texture_layouts: FxMap<(Stage, Vec<(u32, u8)>), wgpu::BindGroupLayout>,
     set_cache: FxMap<(wgpu::BindGroupLayout, Vec<TextureBinding>), TextureSet>,
@@ -260,7 +261,14 @@ macro_rules! insert {
 impl Device {
     pub fn from_backend(backend: &mut crate::WgpuBackend) -> Self {
         backend.flush();
-        Self::new(backend.device.clone(), backend.queue.clone())
+        Self::new_cached(backend)
+    }
+    pub(crate) fn new_cached(backend: &crate::WgpuBackend) -> Self {
+        let mut device = Self::new(backend.device.clone(), backend.queue.clone());
+        if std::env::var("DDGPU_NATIVE_PIPELINE_CACHE").as_deref() == Ok("1") {
+            device.disk_cache = backend.pipeline_cache.clone();
+        }
+        device
     }
     pub fn new(gpu: wgpu::Device, queue: wgpu::Queue) -> Self {
         let entry = |binding, visibility| wgpu::BindGroupLayoutEntry {
@@ -297,6 +305,7 @@ impl Device {
             buffers: vec![],
             pipelines: vec![],
             pipeline_cache: Default::default(),
+            disk_cache: None,
             sets: vec![],
             texture_layouts: Default::default(),
             set_cache: Default::default(),
@@ -782,10 +791,14 @@ impl Device {
                 alpha_to_coverage_enabled: blend.alpha_to_coverage,
             },
             multiview_mask: None,
-            cache: None,
+            cache: self.disk_cache.as_ref().map(|cache| &cache.cache),
         });
         if let Some(e) = crate::block_on(scope.pop()) {
             return Err(e.to_string());
+        }
+        if let Some(cache) = &self.disk_cache {
+            cache.created();
+            cache.save_if_due();
         }
         let constants = [
             self.shader_constant_layout(desc.pixel_shader),
