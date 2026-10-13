@@ -106,7 +106,6 @@ impl std::hash::Hasher for FxHasher {
 }
 
 pub(crate) type FxMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<FxHasher>>;
-pub(crate) type FxSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<FxHasher>>;
 
 /// A shader's identity for the backend's caches (L94: it was SipHash over
 /// the tokens, a few kilobytes, twice per draw): a multiply-fold hash over
