@@ -44,4 +44,5 @@ pub mod shadow_pass;
 pub mod shadow_lanes;
 pub mod semantic_c2;
 pub mod semantic_s8;
+pub mod semantic_s8_sweep;
 pub mod tree;

@@ -43,6 +43,7 @@ fn regs(v: &Value) -> [u32; 8] {
 fn stack_args(target: u32) -> u32 {
     match target {
         0x3000_0020 => 1, // skeleton->root_matrix(-1)
+        0x00d8_e400 => 5, // simplex->tetrahedron_closest(out, p0, p1, p2, p3)
         _ => panic!("unexpected call target {target:x}"),
     }
 }
@@ -135,6 +136,9 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
         })));
         body(&mut m, &mut c);
         x86::set_ext_calls(None);
+        if c.st.home != 0 {
+            (ddnative_base::hooks::get().x87_release)(&mut c.st);
+        }
         assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
         let eax = if returns { [c.eax, after[0]] } else { [0, 0] };
         let got = [eax[0], c.ebx, c.esp, c.ebp, c.esi, c.edi];
@@ -173,4 +177,40 @@ fn semantic_look_at_frame_matches_original() {
     let path = std::env::var("S8_LOOKAT_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/look_at_frame.json".into());
     let n = abi_cases_with_calls(&path, mtcore::semantic_s8::look_at_frame);
     eprintln!("{n} ABI-level look_at_frame cases passed");
+}
+
+// verifies 0x00d7cf70 (ABI level, EAX included) with its real helpers run natively
+#[test]
+fn semantic_sweep_capsule_triangle_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S8_SWEEP_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/sweep.json".into());
+    let n = abi_cases_with_calls(&path, mtcore::semantic_s8_sweep::sweep_capsule_triangle);
+    eprintln!("{n} ABI-level sweep cases passed");
+}
+
+// verifies the triangle reduction inside 0x00d7cf70 (case 3 of its simplex switch)
+#[test]
+fn semantic_triangle_reduction_matches_original() {
+    use ddnative_base::mem::Pages;
+    let path = std::env::var("S8_TRIANGLE_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/sweep_triangle.json".into());
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let cases = data["cases"].as_array().unwrap();
+    for (i, case) in cases.iter().enumerate() {
+        let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
+        let pg = Pages::of(&m);
+        mtcore::semantic_s8_sweep::reduce_triangle(pg, &mut m, 0x2000_5000);
+        let expected = pairs(&case["after"]);
+        for (&a, &b) in &expected {
+            assert_eq!(m.bytes.get(&a).copied(), Some(b), "case {i}: memory {a:x}");
+        }
+        for (&a, &b) in &m.writes {
+            assert!(expected.get(&a).map_or(false, |&e| e == b), "case {i}: extra write {a:x}");
+        }
+    }
+    eprintln!("{} triangle reduction cases passed", cases.len());
 }
