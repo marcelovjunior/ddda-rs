@@ -11,15 +11,17 @@
   inside the private batch. Real lane dependency merge PASSES. Full stream
   comparison refuses root entry2 header; bounded exact-bit diagnostics added.
   No masks or comparator relaxation; publication still gated.
-- Sequence rebasing helper source-backed/tested but NOT WIRED: preserves
-  every other header bit, checks complete local ordinal domains.
+- Exact diagnostic: root2 headers162AC/16923, equal sort key,66/66 entries.
+  Sequence rebasing now integrated from CAPTURED lane starts (FED200 retains
+  +74, correcting the unwired prototype). Every other header bit remains
+  exact; complete ordinal domains and parent invariants checked.
 - Latest focused shadow:37 passed/0 failed. Latest full default light at
   8750e8bf:290 passed/0 failed/7 ignored. Synthetic tests are not original
   acceptance. Prior oracle:8 original FED3B0 returns and227 shader fixtures,
   1704 uploads (29 conservative refusals).
 - Live output remains serial; publication and FPS/job-time acceptance are
-  OPEN. No TRAIN READY. One next action: after R172 warm receipt, replay48124
-  with exact-header diagnostics before integrating counter rebasing.
+  OPEN. No TRAIN READY. One next action: self-serve R172 build and replay48124
+  with counter rebasing, then close remaining equality differences.
   Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)

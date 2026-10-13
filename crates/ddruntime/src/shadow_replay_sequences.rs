@@ -1,5 +1,5 @@
 //! Deterministic recording-counter relocation for contiguous private lanes.
-//! Header layout/increment: 00FEF830, 00FFC8E6; counter reset: 00FED200;
+//! Header layout/increment: 00FEF830, 00FFC8E6; counter retained by 00FED200;
 //! ascending lane merge: 00FED3B0 (DDDA.exe 2017-12-13 Steam).
 //! This changes candidate bytes to the serial counter domain; it never masks
 //! the comparator. Every local ordinal must be accounted for before any store.
@@ -10,11 +10,11 @@ pub(super) fn rebase(
     memory: &mut dyn Mem,
     parent: u32,
     lane_base: u32,
-    participants: u32,
+    initial_lanes: &[u32],
     initial_counter: u32,
     initial_roots: u32,
 ) -> Result<usize, String> {
-    if participants == 0 || participants > 8 || memory.u32(parent + 0x74) != initial_counter {
+    if initial_lanes.is_empty() || initial_lanes.len() > 8 || memory.u32(parent + 0x74) != initial_counter {
         return Err("recording counter parent changed outside private lanes".into());
     }
     fn gather(
@@ -24,11 +24,15 @@ pub(super) fn rebase(
         ordinals: &mut BTreeMap<u32, (u32, u32)>,
         visited: &mut BTreeSet<u32>,
         depth: usize,
+        initial: u32,
     ) -> Result<(), String> {
         if depth > 128 || count > 32768 || entries.checked_add(count.saturating_mul(8)).is_none() {
             return Err("recording counter traversal bound".into());
         }
         for index in 0..count {
+            if visited.len() == 32768 {
+                return Err("recording counter traversal record bound".into());
+            }
             let record = m.u32(entries + index * 8 + 4);
             if record == 0 || !visited.insert(record) {
                 return Err("recording counter repeated/null record".into());
@@ -43,6 +47,7 @@ pub(super) fn rebase(
                     ordinals,
                     visited,
                     depth + 1,
+                    initial,
                 )?,
                 kind => {
                     return Err(format!(
@@ -50,7 +55,7 @@ pub(super) fn rebase(
                     ))
                 }
             }
-            let ordinal = header & 0x7fff; // Producer 00FEF830 preserves all other bits.
+            let ordinal = (header & 0x7fff).wrapping_sub(initial & 0x7fff) & 0x7fff; // Producer 00FEF830 preserves all other bits.
             if ordinals.insert(ordinal, (record, header)).is_some() {
                 return Err("recording counter duplicate ordinal".into());
             }
@@ -58,11 +63,12 @@ pub(super) fn rebase(
         Ok(())
     }
     let mut patches = Vec::new();
+    let mut all_records = BTreeSet::new();
     let mut counter = initial_counter;
     let mut roots = initial_roots;
-    for lane in 0..participants {
-        let context = lane_base + lane * LANE_BYTES;
-        let count = memory.u32(context + 0x74);
+    for (lane, &initial) in initial_lanes.iter().enumerate() {
+        let context = lane_base + lane as u32 * LANE_BYTES;
+        let count = memory.u32(context + 0x74).wrapping_sub(initial);
         if count > 32768 {
             return Err("recording counter lane wraps its ordinal domain".into());
         }
@@ -78,11 +84,15 @@ pub(super) fn rebase(
             &mut ordinals,
             &mut BTreeSet::new(),
             0,
+            initial,
         )?;
         if ordinals.len() != count as usize || ordinals.keys().copied().ne(0..count) {
             return Err("recording counter has missing local ordinals".into());
         }
         for (ordinal, (record, header)) in ordinals {
+            if !all_records.insert(record) {
+                return Err("recording counter record shared between lanes".into());
+            }
             patches.push((
                 record,
                 (header & !0x7fff) | (counter.wrapping_add(ordinal) & 0x7fff),
@@ -124,16 +134,19 @@ mod tests {
             let context = 0x4000 + lane * LANE_BYTES;
             m.set_u32(context + 0x44, 0x101000 + lane * 0x20);
             m.set_u32(context + 0x48, roots);
-            m.set_u32(context + 0x74, 2);
+            m.set_u32(
+                context + 0x74,
+                [0x1234u32, u32::MAX - 1][lane as usize].wrapping_add(2),
+            );
         }
         m.set_u32(0x101004, 0x100000);
         m.set_u32(0x10100c, 0x100020);
         m.set_u32(0x101024, 0x100060);
         m.set_u32(0x101044, 0x100040);
-        m.set_u32(0x100000, 0xabc1_8000);
-        m.set_u32(0x100020, 0x1231_0001);
-        m.set_u32(0x100040, 0x9871_0000);
-        m.set_u32(0x100060, 0x0096_0001);
+        m.set_u32(0x100000, 0xabc1_9234);
+        m.set_u32(0x100020, 0x1231_1235);
+        m.set_u32(0x100040, 0x9871_7ffe);
+        m.set_u32(0x100060, 0x0096_7fff);
         m.set_u32(0x100068, 0x101040);
         m.set_u32(0x10006c, 1);
         m
@@ -142,7 +155,10 @@ mod tests {
     #[test]
     fn serial_counter_rebase_preserves_every_other_header_bit_and_nested_order() {
         let mut m = input();
-        assert_eq!(rebase(&mut m, 0x1000, 0x4000, 2, 0x7ffe, 2), Ok(4));
+        assert_eq!(
+            rebase(&mut m, 0x1000, 0x4000, &[0x1234, u32::MAX - 1], 0x7ffe, 2),
+            Ok(4)
+        );
         assert_eq!(m.u32(0x100000), 0xabc1_fffe);
         assert_eq!(m.u32(0x100020), 0x1231_7fff);
         assert_eq!(m.u32(0x100040), 0x9871_0000);
@@ -153,17 +169,17 @@ mod tests {
     #[test]
     fn invalid_counter_domains_refuse_before_changing_any_header() {
         for (address, value) in [
-            (0x100020, 0x1231_0000), // Duplicate.
-            (0x100020, 0x1231_0003), // Missing.
-            (0x1048, 6),             // Unaccounted parent root.
-            (0x1074, 0),             // Unaccounted parent counter change.
-            (0x100060, 0x0094_0001), // Associated draw not proven.
-            (0x4074, 32769),         // Ambiguous local wrap.
+            (0x100020, 0x1231_1234),  // Duplicate.
+            (0x100020, 0x1231_1237),  // Missing.
+            (0x1048, 6),              // Unaccounted parent root.
+            (0x1074, 0),              // Unaccounted parent counter change.
+            (0x100060, 0x0094_0001),  // Associated draw not proven.
+            (0x4074, 0x1234 + 32769), // Ambiguous local wrap.
         ] {
             let mut m = input();
             m.set_u32(address, value);
-            assert!(rebase(&mut m, 0x1000, 0x4000, 2, 0x7ffe, 2).is_err());
-            assert_eq!(m.u32(0x100000), 0xabc1_8000);
+            assert!(rebase(&mut m, 0x1000, 0x4000, &[0x1234, u32::MAX - 1], 0x7ffe, 2).is_err());
+            assert_eq!(m.u32(0x100000), 0xabc1_9234);
         }
     }
 }

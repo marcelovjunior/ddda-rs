@@ -933,6 +933,9 @@ fn compare_replays(
     if input.u32(SCHEDULER_GLOBAL) != scheduler {
         return Err("capture scheduler pointer disagrees with recorded memory".into());
     }
+    if observed.entries.len() <= input.u32(context + 0x48) as usize {
+        return Err("traversal appended no commands; existing stream is not shadow acceptance".into());
+    }
     let abi = |c: &Cpu| [c.eax, c.ebx, c.esi, c.edi, c.ebp, c.esp];
     let scratch = stack.start..outgoing.esp;
     let verify_serial = |result: &ReplayResult| -> Result<(), String> {
@@ -1029,6 +1032,16 @@ fn compare_replays(
                     },
                     |m| {
                         let nesting = [m.u8(NESTING), m.u8(NESTING_OTHER)];
+                        let initial_counter = m.u32(context + 0x74);
+                        let initial_roots = m.u32(context + 0x48);
+                        let lane_base = cpu.ecx + 0xd40;
+                        let initial_lanes: Vec<_> = if parallel {
+                            (0..2)
+                                .map(|lane| m.u32(lane_base + lane * LANE_BYTES + 0x74))
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
                         if parallel {
                             if let Some(range) = &arena {
                                 m.set_u32(context + 0x54, range.start);
@@ -1057,6 +1070,17 @@ fn compare_replays(
                         }
                         if arena.is_some() {
                             m.set_u32(context + 0x54, 0);
+                        }
+                        if parallel {
+                            let count = sequences::rebase(
+                                m,
+                                context,
+                                lane_base,
+                                &initial_lanes,
+                                initial_counter,
+                                initial_roots,
+                            )?;
+                            eprintln!("parallel-shadow recording counters rebased records={count}");
                         }
                         let published = PublishedView {
                             memory: m,
@@ -1134,9 +1158,6 @@ fn compare_replays(
     }
     compare_control_state(&results[0].0, results[0].3, &results[1].0, results[1].3)
         .map_err(|field| format!("serial/parallel {field} mismatch"))?;
-    if observed.entries.len() <= input.u32(context + 0x48) as usize {
-        return Err("traversal appended no commands; existing stream is not shadow acceptance".into());
-    }
     Ok(observed.entries.len())
 }
 
@@ -1395,11 +1416,15 @@ mod tests {
         let job = (cpu.ecx - 0x3000) / 0x10;
         let entry = 0x2000 + job * 8;
         let record = 0x2100 + job * 16;
-        let second_lane = m.u32(cpu.esp + 4) == 0x7100;
+        let context = m.u32(cpu.esp + 4);
+        let second_lane = m.u32(context + 0x58) == 1;
         let mutation = m.u32(0x1010);
         m.set_u32(entry, job);
         m.set_u32(entry + 4, record);
-        m.set_u32(record, 7 << 16);
+        let counter = m.u32(context + 0x74);
+        m.set_u32(record, (7 << 16) | (counter & 0x7fff));
+        m.set_u32(context + 0x74, counter.wrapping_add(1));
+        m.set_u32(context + 0x48, m.u32(context + 0x48) + 1);
         m.set_u32(record + 4, job + 100);
         m.set_u32(record + 8, if second_lane && mutation == 1 { 9 } else { 1 });
         m.set_u8(0x1400 + job, if second_lane && mutation == 2 { 9 } else { 1 });
@@ -1414,8 +1439,16 @@ mod tests {
             m.set_u8(cpu.ecx + 0xd40 + LANE_BYTES, 99);
         }
         if parallel {
+            let manager = cpu.ecx;
             cpu.ecx = m.u32(SCHEDULER_GLOBAL);
             assert_ne!(cpu.ecx, 0x40000);
+            for lane in 0..2 {
+                let context = manager + 0xd40 + lane * LANE_BYTES;
+                m.set_u32(cpu.ecx + 0x1bdd0 + lane * 0x20, context);
+                m.set_u32(context + 0x44, 0x2000 + lane * 16);
+                m.set_u32(context + 0x48, 0);
+                m.set_u32(context + 0x58, lane);
+            }
             m.set_u32(cpu.ecx + 0x8c, 4);
             push(m, cpu, 1);
             push(m, cpu, 0x1234);
@@ -1423,7 +1456,7 @@ mod tests {
         } else {
             for job in 0..4 {
                 cpu.ecx = 0x3000 + job * 16;
-                push(m, cpu, 0x7000);
+                push(m, cpu, 0x1000);
                 push(m, cpu, 0x1234);
                 synthetic_job(m, cpu);
             }
@@ -1435,7 +1468,14 @@ mod tests {
                 4 => resolve(0x12345678)(m, cpu),
                 5 => m.set_u8(NESTING, 1),
                 6 => m.set_u32(SCHEDULER_GLOBAL, 0x40000),
-                7 => m.set_u32(0x2004, m.u32(SCHEDULER_GLOBAL)),
+                7 => {
+                    let record = m.u32(0x2004);
+                    let forbidden = m.u32(SCHEDULER_GLOBAL);
+                    for offset in [0, 4, 8] {
+                        m.set_u32(forbidden + offset, m.u32(record + offset));
+                    }
+                    m.set_u32(0x2004, forbidden);
+                }
                 _ => {}
             }
         }
@@ -1460,6 +1500,9 @@ mod tests {
         }
         live.set_u32(0x1010, mutation);
         live.set_u32(0x200020, 0x12345678);
+        live.set_u32(0x200000 + 0xd40 + 0x74, 11);
+        live.set_u32(0x200000 + 0xd40 + LANE_BYTES + 0x74, 23);
+        live.set_u32(0x1074, 5);
         live.set_u32(0x1044, 0x2000);
         live.set_u32(0x104c, 16);
         live.set_u32(SCHEDULER_GLOBAL, 0x40000);
@@ -1485,7 +1528,7 @@ mod tests {
             for (address, value) in [
                 (0x2000 + job * 8, job),
                 (0x2004 + job * 8, 0x2100 + job * 16),
-                (0x2100 + job * 16, 7 << 16),
+                (0x2100 + job * 16, (7 << 16) | (5 + job)),
                 (0x2104 + job * 16, job + 100),
                 (0x2108 + job * 16, 1),
             ] {
@@ -1493,7 +1536,7 @@ mod tests {
             }
             expected.set_u8(0x1400 + job, 1);
         }
-        for (address, value) in [(0x1048, 4)] {
+        for (address, value) in [(0x1048, 4), (0x1074, 9)] {
             expected.set_u32(address, value);
         }
         let incoming = Cpu {

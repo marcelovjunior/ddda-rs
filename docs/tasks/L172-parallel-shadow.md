@@ -358,7 +358,7 @@ offline rebuild/replay to identify exact bits and trace original consumer.
 
 2026-10-13 source-backed sequence relocation helper (NOT WIRED):
 FEF830/FFC8E6 store context+74 in header low15 and increment the full
-context counter. FED200 zeros child counters; FED3B0 joins lanes in order.
+context counter. CORRECTION: FED200 retains child counters; FED3B0 joins lanes in order.
 The helper validates complete, unique local ordinal domains and parent
 root/counter invariants, then rebases candidate low15 into serial ordinal
 space in lane order and advances the parent counter. All other bits remain
@@ -369,3 +369,14 @@ missing ordinals and no writes on refusal.37 focused pass/0 failed.
 Complete default light at8750e8bf:290 passed/0 failed/7 ignored.
 Awaiting initial R172 warm build, then exact header diagnostic BEFORE
 integrating the helper; future offline builds self-served via head script.
+
+2026-10-13 self-serve R1721f6e756f replay48124 exact diagnostic:
+root2 key5B010B77 matches; serial header162AC vs parallel16923;66/66
+entries. Only low15 differ. Correction to the unwired prototype: FED200
+retains +74; it does NOT reset it. Corrected helper captures each lane
+starting counter, computes wrapping full-counter deltas and relative low15
+ordinals, then rebases to parent serial space. Integrated only after this
+exact evidence; comparator remains byte/field strict. Synthetic integration
+uses distinct retained lane counters and validates complete output, state,
+FP and escape refusals.37 focused pass. Next: immediate self-serve build
+and original replay; no new capture/head rebuild request.
