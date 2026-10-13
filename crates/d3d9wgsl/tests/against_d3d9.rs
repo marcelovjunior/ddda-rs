@@ -8,6 +8,11 @@
 use d3d9ref::{Oracle, PixelRun, Texture, TextureKind};
 use std::future::Future;
 
+#[path = "support/unlinked.rs"]
+mod unlinked;
+#[path = "support/pairings.rs"]
+mod pairings;
+
 fn block_on<F: Future>(f: F) -> F::Output {
     struct Wake(std::thread::Thread);
     impl std::task::Wake for Wake {
@@ -70,7 +75,11 @@ struct VOut {
 
 impl Gpu {
     fn new() -> Option<Gpu> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        // Test-only backend selection (e.g. WGPU_BACKEND=vulkan when another
+        // backend stalls during initialization). Keep validation flags intact.
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = descriptor.backends.with_env();
+        let instance = wgpu::Instance::new(descriptor);
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         if !adapter.features().contains(wgpu::Features::FLOAT32_FILTERABLE) {
             return None;

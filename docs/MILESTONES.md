@@ -1,5 +1,20 @@
 # Milestones
 
+### L79 unlinked pixel-input investigation (2026-10-12)
+
+- Baseline: **60,524 shader variants validate, zero failures** across all
+  29,198 installed shaders. No undeclared inputs in 27,070 pixel shaders.
+- Driver measurements found a real mismatch: missing COLOR0 reads white,
+  while COLOR1/TEXCOORD read zero. Installed root shader
+  `2681fe2cf6b72f46` reproduces the color error; the candidate fix passes all
+  14 d3d9wgsl tests and 60,524 shader variants.
+- COLOR0 fix applied after head approval. CPU pairing sweep validates
+  153,742 linkage maps across 21,744 v0/COLOR0 shaders and 10 VS signatures
+  lacking COLOR0. No runtime pairing capture was available. The
+  separate runtime `v0 undefined` report remains unreproduced. See
+  `docs/tasks/L79-wgsl-unlinked-input.md` for tests and GPU-suite caveats.
+- Next: head reruns the failing draw; use its capture for exact-pair checks.
+
 ### L66 hot/cold build (2026-10-12)
 
 - Optional function-level hot packages implemented; 20 focused Python tests,

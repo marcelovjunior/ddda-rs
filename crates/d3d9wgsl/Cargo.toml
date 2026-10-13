@@ -10,6 +10,8 @@ publish.workspace = true
 d3d9shader = { path = "../d3d9shader" }
 
 [dev-dependencies]
+d3d9cmd = { path = "../d3d9cmd" }
+d3d9frame = { path = "../d3d9frame" }
 d3d9ref = { path = "../d3d9ref" }
 mtarc = { path = "../mtarc" }
 naga = { version = "29.0.4", features = ["wgsl-in"] }
