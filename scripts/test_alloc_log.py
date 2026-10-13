@@ -7,6 +7,19 @@ import unittest
 
 
 class AllocLogTests(unittest.TestCase):
+    def test_stack_ranking_uses_latest_counters_and_merges_duplicate_stacks(self):
+        from alloc_sites import latest
+        text = '\n'.join([
+            'alloc-site id=3 bytes=200 calls=2 base=1000 pcs=1001,1002,0',
+            'alloc-site id=3 bytes=900 calls=9 base=1000 pcs=1001,1002,0',
+            'alloc-site id=4 bytes=100 calls=1 base=1000 pcs=1001,1002,0',
+            'alloc-site id=5 bytes=950 calls=5 base=1000 pcs=1100,1200,0',
+        ])
+        self.assertEqual(latest(text), [
+            (1000, 10, 0x1000, (0x1001, 0x1002)),
+            (950, 5, 0x1000, (0x1100, 0x1200)),
+        ])
+
     def test_system_allocator_forwarding_and_switch(self):
         root = Path(__file__).resolve().parents[1]
         target = Path(os.environ.get('CARGO_TARGET_DIR', root / 'target'))

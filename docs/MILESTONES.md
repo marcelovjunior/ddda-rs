@@ -4,12 +4,14 @@
 
 - Exact opt-in Adler helper: 45 original-instruction cases pass, including
   eight installed ARC payloads; 128 KiB microbenchmark 495 -> 44 us/call.
+  16 whole-stream A/B cases match across 607 returns (state/output/registers).
   Outer zlib state machine remains original; caller/helper census added.
 - Opt-in CRT scratch removes repeated host allocation for bounded copies
   and all memset sizes. Identity, overlap and allocation-count checks pass.
   Opt-in allocator stack census supports offline top-ten attribution.
 - Existing Vulkan persistence/warmup audited; cache follows runtime sandbox,
   native-device cache hookup opt-in. Two cold/warm GPU image tests pass.
+- Final runtime light: 203 pass, one inherited gamma failure, four ignored.
 - Next: head's separate allocation census and unskipped loading A/B; whole
   loading gains and top-ten game sites remain unmeasured. Details and final
   suite status: `docs/tasks/L140-loading.md`.
