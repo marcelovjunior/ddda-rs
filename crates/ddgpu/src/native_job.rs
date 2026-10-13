@@ -357,16 +357,38 @@ impl WgpuBackend {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct NativeJobStats {
     pub accepted: u64,
     pub rejected: u64,
+    pub rejected_draws: u64,
+    pub rejected_passes: u64,
     pub draws: u64,
     pub passes: u64,
     pub upload_bytes: u64,
     pub dirty_registers: u64,
     pub bundle_builds: u64,
     pub bundle_hits: u64,
+    /// Worker refusals, not producer enqueue failures. At most 64 exact
+    /// reasons plus an overflow bucket, to bound diagnostic memory.
+    pub rejection_reasons: std::collections::BTreeMap<String, u64>,
+}
+impl NativeJobStats {
+    fn reject(&mut self, reason: &str, passes: u64, draws: u64) {
+        self.rejected += 1;
+        self.rejected_passes += passes;
+        self.rejected_draws += draws;
+        let key = if self.rejection_reasons.contains_key(reason) || self.rejection_reasons.len() < 64 {
+            reason
+        } else {
+            "other (reason limit)"
+        };
+        let count = self.rejection_reasons.entry(key.to_owned()).or_default();
+        *count += 1;
+        if *count == 1 || self.rejected <= 16 || count.is_power_of_two() {
+            eprintln!("native job rejected before submit: {reason} (reason_count={count})");
+        }
+    }
 }
 struct ShaderEntry {
     _tokens: Arc<[u32]>,
@@ -419,7 +441,26 @@ struct PreparedPass {
 }
 impl WgpuBackend {
     pub fn native_job_stats(&self) -> NativeJobStats {
-        self.native_stats
+        self.native_stats.clone()
+    }
+    fn report_native_worker_stats(&self) {
+        let s = &self.native_stats;
+        let attempted = s.accepted + s.rejected;
+        if attempted == 1 || attempted % 1024 == 0 {
+            let (pipelines, texture_sets) = self
+                .native_worker
+                .as_ref()
+                .map(|w| (w.device.pipeline_count(), w.device.texture_set_count()))
+                .unwrap_or_default();
+            // These are worker outcomes, unlike the producer's enqueue totals.
+            // Submitted does not mean GPU-complete or image-verified.
+            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} pipelines={pipelines} texture_sets={texture_sets}",
+                s.accepted, s.rejected, s.rejected_draws, s.rejected_passes, s.draws, s.passes, s.upload_bytes,
+                s.dirty_registers, s.bundle_builds, s.bundle_hits);
+            if !s.rejection_reasons.is_empty() {
+                eprintln!("native-worker refusal histogram: {:?}", s.rejection_reasons);
+            }
+        }
     }
     pub(crate) fn run_native_job(&mut self, job: NativeJob) -> Result<(), NativeJob> {
         self.poll_native_comparisons_internal();
@@ -430,8 +471,11 @@ impl WgpuBackend {
         job: NativeJob,
         overrides: &[ComparePair],
     ) -> Result<(), NativeJob> {
+        let draws = job.passes.iter().map(|p| p.draws.len() as u64).sum::<u64>();
+        let passes = job.passes.len() as u64;
         if !self.active_queries.is_empty() {
-            self.native_stats.rejected += 1;
+            self.native_stats.reject("occlusion query active", passes, draws);
+            self.report_native_worker_stats();
             return Err(job);
         }
         // Hand off earlier D3D9 draws. Native preparation/recording can overlap
@@ -440,9 +484,8 @@ impl WgpuBackend {
         let mut worker = self.native_worker.take().unwrap_or_else(|| Worker::new(self));
         let result = worker.run(self, &job, overrides);
         self.native_worker = Some(worker);
-        match result {
+        let outcome = match result {
             Ok(()) => {
-                let draws = job.passes.iter().map(|p| p.draws.len() as u64).sum::<u64>();
                 self.native_stats.accepted += 1;
                 self.native_stats.draws += draws;
                 self.native_stats.passes += job.passes.len() as u64;
@@ -454,13 +497,12 @@ impl WgpuBackend {
                 Ok(())
             }
             Err(reason) => {
-                self.native_stats.rejected += 1;
-                if self.native_stats.rejected <= 16 {
-                    eprintln!("native job rejected before submit: {reason}");
-                }
+                self.native_stats.reject(&reason, passes, draws);
                 Err(job)
             }
-        }
+        };
+        self.report_native_worker_stats();
+        outcome
     }
 }
 impl Worker {
@@ -1313,6 +1355,22 @@ impl ConstantReads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn refusal_histogram_counts_exact_reasons_and_bounds_distinct_storage() {
+        let mut stats = NativeJobStats::default();
+        stats.reject("indexed strip", 2, 3);
+        stats.reject("indexed strip", 1, 4);
+        stats.reject("occlusion query active", 1, 5);
+        assert_eq!(stats.rejected, 3);
+        assert_eq!(stats.rejected_passes, 4);
+        assert_eq!(stats.rejected_draws, 12);
+        assert_eq!(stats.rejection_reasons["indexed strip"], 2);
+        for i in 0..100 {
+            stats.reject(&format!("reason {i}"), 0, 0);
+        }
+        assert_eq!(stats.rejection_reasons.len(), 65);
+        assert_eq!(stats.rejection_reasons.values().sum::<u64>(), stats.rejected);
+    }
     #[test]
     fn coverage_rejects_missing_out_of_range_and_accepts_def_constants() {
         let mut shader =
