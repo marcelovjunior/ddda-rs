@@ -89,6 +89,20 @@
   levels. No gameplay FPS/image improvement claimed from these tests.
 - Next: head integrates the separate helper/codegen and default-generated
   commits together and profiles gameplay, especially guest thread 0x1038.
+### L152 native-job raw Vulkan bridge (2026-10-13)
+
+- `DDGPU_VK=1` routes accepted native jobs through raw pass/draw caches;
+  device-owned pipelines survive resource resets. Public native API stays
+  the wgpu oracle; fallback, comparison and submission ordering remain.
+- Dirty constant scatter and rendering share one ordered queue batch/job;
+  identical resident snapshots skip the dirty-register scan.
+- **27 CPU + 53 GPU cases pass**, zero GPU failures/timeouts; 96-job replay
+  is byte-exact. Runtime light **212 pass / inherited gamma failure / 5 ignored**.
+- Minimal-shader native wgpu/raw medians: changing 5,000-draw jobs
+  **1.249/1.197 us per draw**; 64-draw jobs **2.495/2.505**; other fixtures
+  regress. Remains opt-in, no native-game FPS claim.
+- Next: head native VK=0/1 image/FPS/profile and VK=1 compare (zero mismatches).
+  Evidence and remaining timing isolation: `docs/tasks/L152-native-vk.md`.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)

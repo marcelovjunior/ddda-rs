@@ -155,11 +155,11 @@ fn pack_deltas(current: &[u8], previous: &mut [u8], updates: &mut Vec<u8>) {
     assert_eq!(current.len() % 16, 0);
     updates.clear();
     updates.resize(16, 0);
-    for (index, (now, old)) in current
-        .chunks_exact(16)
-        .zip(previous.chunks_exact_mut(16))
-        .enumerate()
-    {
+    // Repeated jobs can preserve the entire snapshot sequence. One bulk
+    // equality check avoids scanning each register in that common exact case.
+    // Otherwise retain the scalar path, including ordered dirty records.
+    if previous.starts_with(current) { return; }
+    for (index, (now, old)) in current.chunks_exact(16).zip(previous.chunks_exact_mut(16)).enumerate() {
         if now != old {
             updates.extend_from_slice(&(index as u32).to_le_bytes());
             updates.extend_from_slice(now);
@@ -190,5 +190,66 @@ mod tests {
         now[0] = 7;
         pack_deltas(&now[..16], &mut old[..16], &mut updates);
         assert_eq!(old, now);
+    }
+
+    #[test]
+    fn bulk_equal_deltas_match_scalar_records_across_snapshot_lengths() {
+        for registers in [0, 1, 15, 16, 17, 63, 257] {
+            let mut old = vec![0u8; registers * 16];
+            let mut now = old.clone();
+            for generation in 0..5 {
+                for (i, byte) in now.iter_mut().enumerate() {
+                    if (i + generation * 13) % 37 == 0 { *byte = (i + generation) as u8; }
+                }
+                let mut expected = vec![0; 16];
+                for (i,(a,b)) in now.chunks_exact(16).zip(old.chunks_exact(16)).enumerate() {
+                    if a != b { expected.extend_from_slice(&(i as u32).to_le_bytes()); expected.extend_from_slice(a); }
+                }
+                let count = (expected.len()-16)/20;
+                expected[..4].copy_from_slice(&(count as u32).to_le_bytes());
+                let mut actual = vec![];
+                pack_deltas(&now,&mut old,&mut actual);
+                assert_eq!(actual,expected);
+                assert_eq!(old,now);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "CPU dirty-scan timing; run optimized on a quiet machine"]
+    fn resident_dirty_scan_cost() {
+        fn scalar(current: &[u8], previous: &mut [u8], updates: &mut Vec<u8>) {
+            updates.clear(); updates.resize(16,0);
+            for (index,(now,old)) in current.chunks_exact(16).zip(previous.chunks_exact_mut(16)).enumerate() {
+                if now != old {
+                    updates.extend_from_slice(&(index as u32).to_le_bytes());
+                    updates.extend_from_slice(now); old.copy_from_slice(now);
+                }
+            }
+            let count=(updates.len()-16)/20;
+            updates[..4].copy_from_slice(&(count as u32).to_le_bytes());
+        }
+        let size=256*1024;
+        for stride in [0,4096,16] {
+            let a=vec![0;size]; let mut b=a.clone();
+            if stride != 0 { for i in (0..size).step_by(stride) { b[i]=1; } }
+            let mut expected=vec![]; let mut actual=vec![];
+            scalar(&b,&mut a.clone(),&mut expected);
+            pack_deltas(&b,&mut a.clone(),&mut actual);
+            assert_eq!(actual,expected);
+            for round in 0..3 {
+                for fast in if round%2 == 0 { [false,true] } else { [true,false] } {
+                    let mut old=a.clone(); let mut updates=Vec::with_capacity(size*5/4+16);
+                    let start=std::time::Instant::now();
+                    for i in 0..2000 {
+                        let current=std::hint::black_box(if i%2 == 0 { &b } else { &a });
+                        if fast { pack_deltas(current,&mut old,&mut updates); }
+                        else { scalar(current,&mut old,&mut updates); }
+                        std::hint::black_box(&updates);
+                    }
+                    eprintln!("L152 dirty_scan stride={stride} round={round} bulk_equal={fast} ns_per_scan={:.1}",start.elapsed().as_nanos() as f64/2000.0);
+                }
+            }
+        }
     }
 }

@@ -49,6 +49,9 @@ constant blocks from them again. That re-derivation is the cost:
 | combo24 default (+L141 native keep-worker, L138 raw Vulkan opt-in, L144 render-worker cuts) | 21.9 / 22.7-25.3 (back-to-back A/B: combo23 20.8 / 21.3-23.3) | 3.88 us per decided draw |
 | combo24 DDGPU_VK=1 | 9.6 / 8.0 | raw passes 664k, fallback 46k, no thread above 50% CPU, GPU 36%: a wait somewhere (codex-9) |
 | combo24 DDDRAW_NATIVE=1 | 12.0 / 8.7-9.3 | worker_instances 1, 95% of jobs native; bound d3d9-backend 63%; compare 130,304 matched, 0 mismatched |
+| combo25 default (+L146 gated pin, L143 backend, L147, L145 zlib fast, L144, L149 timeline, L148 VK frontend) | 21.4 / 22.7-24.0 (same-session combo24: 19.9) | 3.98 us/decided draw; DDGPU_VK=1 22.2 / 24-24.7, 3.77 us |
+| combo26 (+L144 Pages host reads, L153 sync, L151 pipeline threads) | 21.0 default, 22.3 DDGPU_VK=1 (24.7-26 end) | no thread saturated: render worker busy 49%, main 22%: the frame is a wait chain (render worker waits ~7 ms/frame for main at 0x00DAC0B4; main waits ~4.7 ms/frame at the job join 0x00DBE66D) |
+| combo27 (+L146 typed x87 / live flag predicates, regenerated shards) | 22.6 default, 22.5 VK (25-27.3 end); same-session combo26 21.6 / 22.3 | L142 flat memory measured separately: no game gain, not accepted |
 
 (average / end of the run; L114, inlining the memory and flag helpers into
 the shards, gave no gain for 2.5x the compile time and was dropped.)
