@@ -19,6 +19,14 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_JOB_HASH").as_deref() == Ok("1") {
         ports.push((0x00e0e5e0, mtcore::job_hash::dependency_hash));
     }
+    // L170 (claude-2): semantic (ABI-level) rewrites, with the other
+    // semantic ports (L171), over any port at the same address
+    if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
+        for &(a, f) in mtcore::semantic_c2::PORTS {
+            ports.retain(|p| p.0 != a);
+            ports.push((a, f));
+        }
+    }
     ports
 }
 

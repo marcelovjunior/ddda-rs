@@ -30,4 +30,5 @@ pub mod job_hash;
 pub mod machine;
 pub mod object;
 pub mod property;
+pub mod semantic_c2;
 pub mod tree;
