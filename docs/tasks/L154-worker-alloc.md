@@ -122,7 +122,7 @@ a separate uninstrumented profile with `sample_profile.py --seconds 30 --hz
 - Allocation fixes and head gameplay evidence pending. Head ownership questions
   #12744 / #12831 explicitly list the four proposed ndraw hunks; file not edited.
   Blocker #12877 records the missing ownership decision and live census. The
-  tested patch is `C:/ddda-targets/L154/ndraw_candidate.patch` until integrated.
+  tested patch is `target/l154-review/ndraw_candidate.patch` (ignored review artifact) until integrated.
 - Next: head captures worker census; coordinate ndraw allocation hunks, rank
   measured sites, and gate targeted fixes. No FPS or image comparison claim.
 
@@ -190,3 +190,19 @@ prune 2, textures 1, shadow_samplers 1. Three contain `__rust_realloc`: command,
 draw_call and prune once each. This supports the prepared temporary-buffer
 candidates but is **not an allocation-operation or byte census**. Exact live
 counts/bytes and gameplay effects remain pending the head's instrumented run.
+
+## Handoff
+
+Branch `task/L154-worker-alloc`: census `1eea00dd`, completion/benchmark
+`2d0795bb`, isolated-candidate results `11df0ca4`, wait reporter/classifier
+`4dfa0ead`. No game execution, shard builds or push. Runtime source fixes are
+**prepared and tested, not integrated**: the board still assigns ndraw_native.rs
+to claude-2, and ownership requests #12744 / #12831 / #12877 / #12984 await a
+head/owner decision. Exact live allocation-operation and byte ranks also await
+the instrumented executable; caller sample rankings are explicitly separate.
+
+Verification logs and raw analysis outputs are archived privately under
+`E:/ddda-re/notes/L154`. The source-only tested candidate patch is preserved in
+this worktree's ignored `target/l154-review/ndraw_candidate.patch` so the head
+can review/apply it after resolving ownership. The C:/ddda-targets/L154 build
+cache is removed at handoff per head #12750; no owned process remains.
