@@ -276,5 +276,56 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     assert_eq!((job.passes.len(), job.passes[0].draws.len(), calls.len()), (1, 2, 2));
     assert_eq!(job.passes[0].colours[0].as_ref().unwrap().surface, target);
     assert!(p.take().is_none());
+
+    // NDRAW_BENCH=1 (release): what a taken draw costs, by part
+    if std::env::var_os("NDRAW_BENCH").is_some() {
+        let n = 200_000;
+        let time = |what: &str, f: &mut dyn FnMut()| {
+            let t = std::time::Instant::now();
+            for _ in 0..n {
+                f();
+            }
+            eprintln!("{what}: {:.3} us", t.elapsed().as_secs_f64() * 1e6 / n as f64);
+        };
+        let mem = &s.mem;
+        time("draw_call from the caches", &mut || {
+            std::hint::black_box(draw_call(mem, &info, &mut caches, CONTEXT, record, 1).unwrap());
+        });
+        let d = draw_call(mem, &info, &mut caches, CONTEXT, record, 1).unwrap().call;
+        time("flush_reads (nothing dirty)", &mut || ddruntime::ndraw_native::flush_draw(mem, &d));
+        time("DrawCall clone", &mut || {
+            std::hint::black_box(d.clone());
+        });
+        ddruntime::d3d9draw::set_backend(Box::new(Null));
+        time("send to the deferred backend alone (null worker)", &mut || ddruntime::ndraw_native::send_draw(&d));
+        let mut run = Vec::with_capacity(64);
+        time("send in runs of 64 (null worker), per draw", &mut || {
+            run.push(d.clone());
+            if run.len() == 64 {
+                ddruntime::ndraw_native::send_draws(std::mem::take(&mut run));
+            }
+        });
+    }
     assert_eq!(com(&mut s, dev, 42, &[]), 0); // EndScene
+}
+
+/// A backend that does nothing (the benchmark's worker).
+struct Null;
+impl d3d9cmd::GraphicsBackend for Null {
+    fn upload(&mut self, _: d3d9cmd::Upload) {}
+    fn draw(&mut self, _: &d3d9cmd::DrawCall) {}
+    fn clear(&mut self, _: &d3d9cmd::ClearCall) {}
+    fn present(&mut self, _: &d3d9cmd::Target) {}
+    fn copy(&mut self, _: &d3d9cmd::CopyCall) {}
+    fn fill(&mut self, _: &d3d9cmd::FillCall) {}
+    fn read_back(&mut self, _: &d3d9cmd::Target) -> Option<Vec<u8>> {
+        None
+    }
+    fn query_begin(&mut self, _: u32) {}
+    fn query_end(&mut self, _: u32) {}
+    fn query_result(&mut self, _: u32) -> Option<u64> {
+        None
+    }
+    fn gamma(&mut self, _: Option<&d3d9cmd::GammaRamp>) {}
+    fn release(&mut self, _: u32) {}
 }
