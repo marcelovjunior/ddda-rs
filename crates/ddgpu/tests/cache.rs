@@ -86,6 +86,11 @@ fn bytes(v: &[[f32; 6]]) -> Vec<u8> {
 /// and a few draws with random states, some into two targets (the second
 /// of a random format).
 fn frame(rng: &mut Rng) -> (Vec<Upload>, Vec<ClearCall>, Vec<DrawCall>, Target) {
+    frame_of(rng, 4)
+}
+
+/// A frame of `count` draws (as [`frame`]).
+fn frame_of(rng: &mut Rng, count: usize) -> (Vec<Upload>, Vec<ClearCall>, Vec<DrawCall>, Target) {
     let mut uploads = Vec::new();
     let second = second_target(rng.pick(&[21u32, 113, 114]));
     // three textures; their formats vary between frames
@@ -118,7 +123,7 @@ fn frame(rng: &mut Rng) -> (Vec<Upload>, Vec<ClearCall>, Vec<DrawCall>, Target) 
         });
     }
     let mut draws = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..count {
         let mrt = rng.next() % 3 == 0;
         let textured = !mrt && rng.next().is_multiple_of(2);
         let tex = rng.next() % 3;
@@ -210,4 +215,51 @@ fn a_long_lived_backend_draws_every_frame_like_a_fresh_one() {
         }
     }
     assert!(differ.is_empty(), "frames that differ from a fresh backend: {differ:?}");
+}
+
+/// L72: consecutive draws into the same attachments share one render pass.
+/// Frames of 16 random draws (scissor test on and off, one or two targets,
+/// depth and stencil on and off) drawn that way equal the same frames with
+/// every draw in a pass of its own (a read-back after each draw submits).
+#[test]
+fn draws_sharing_a_render_pass_draw_what_a_pass_each_draws() {
+    let Some(mut batched) = ddgpu::WgpuBackend::headless() else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    let mut rng = Rng(0x7A55_E5C0);
+    let mut differ = Vec::new();
+    let mut draws_made = 0;
+    for k in 0..40 {
+        let (uploads, clears, draws, second) = frame_of(&mut rng, 16);
+        for r in [0x200, 0x201, 0x202, 0x102] {
+            batched.release(r);
+        }
+        let ours = run(&mut batched, &uploads, &clears, &draws, &second);
+        let mut separate = ddgpu::WgpuBackend::headless().unwrap();
+        for u in &uploads {
+            separate.upload(u.clone());
+        }
+        for c in &clears {
+            separate.clear(c);
+        }
+        for d in &draws {
+            separate.draw(d);
+            let _ = separate.read_back(&back_buffer());
+        }
+        separate.present(&back_buffer());
+        assert!(separate.errors.is_empty(), "{:?}", separate.errors);
+        let (recorded, passes) = separate.pass_counts();
+        assert_eq!(recorded, passes, "a pass per draw");
+        let theirs = (separate.last_frame.clone().expect("frame").rgba, separate.read_back(&second).expect("second target"));
+        if ours != theirs {
+            differ.push(k);
+        }
+        draws_made += draws.len() as u64;
+    }
+    let (recorded, passes) = batched.pass_counts();
+    eprintln!("{recorded} draws in {passes} render passes");
+    assert_eq!(recorded, draws_made);
+    assert!(passes < recorded, "draws shared passes");
+    assert!(differ.is_empty(), "frames that differ from a pass per draw: {differ:?}");
 }

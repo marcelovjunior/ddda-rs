@@ -109,5 +109,7 @@ pub(crate) const UNIFORM_ALIGN: u64 = 256;
 pub(crate) const UNIFORM_RING: u64 = 8 << 20;
 pub(crate) const INLINE_RING: u64 = 4 << 20;
 /// Draws recorded before they are submitted anyway (the GPU starts on a
-/// frame while the guest still records it).
-pub(crate) const DRAWS_PER_SUBMIT: u32 = 128;
+/// frame while the guest still records it). L72: each submission ends the
+/// open render pass, so this is high (it was 128): the uniform ring fills
+/// first (about 500 draws), or Present comes.
+pub(crate) const DRAWS_PER_SUBMIT: u32 = 1024;
