@@ -43,7 +43,8 @@ fn crt_scratch_byte_identity_and_requested_bytes() {
             let ns = start.elapsed().as_nanos() / 20;
             ACTIVE.with(|v| v.set(false));
             let requested = BYTES.with(Cell::get);
-            let expected = if on && (label == "fill" || size <= 2 << 20) { 0 } else { size * 20 };
+            // L170: up to 256 bytes on the stack, scratch or not
+            let expected = if size <= 256 || (on && (label == "fill" || size <= 2 << 20)) { 0 } else { size * 20 };
             assert_eq!(requested, expected, "{label} size={size}");
             let mut actual = vec![0; size]; m.read_bytes(output, &mut actual);
             if label == "copy" { assert_eq!(actual, data); } else { assert!(actual.iter().all(|&b| b == 0xa5)); }

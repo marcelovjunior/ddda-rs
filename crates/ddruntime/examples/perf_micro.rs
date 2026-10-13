@@ -68,6 +68,10 @@ fn main() {
     let mut registry = Registry::new();
     registry.insert(0x0100_0000, Binding::Service(just_return)).unwrap();
     registry.insert(0x0100_0010, Binding::Lifted(just_return)).unwrap();
+    // the CRT's memcpy service, bound as the runtime binds it (LockFree) and
+    // on the Integer path
+    registry.insert(0x0100_0020, Binding::LockFree(ddruntime::fastmem::memcpy)).unwrap();
+    registry.insert(0x0100_0030, Binding::Integer(ddruntime::fastmem::memcpy)).unwrap();
     let registry = std::sync::Arc::new(registry);
     registry.install();
     let mut cpu = Cpu { esp: 0x1008_0000, ..Cpu::default() };
@@ -96,6 +100,20 @@ fn main() {
         direct(&mut mem, &mut cpu);
     }
     println!("direct call (push, ret): {:.2} ns per call", ns(t, N));
+    for (label, target) in [("LockFree", 0x0100_0020u32), ("Integer", 0x0100_0030)] {
+        for n in [32u32, 256] {
+            let t = Instant::now();
+            for _ in 0..N / 10 {
+                cpu.esp -= 16;
+                for (k, v) in [0x1234_5678, 0x1000_1000, 0x1000_2000, n].into_iter().enumerate() {
+                    mem.set_u32(cpu.esp + 4 * k as u32, v);
+                }
+                x86::call_ext(&mut mem, &mut cpu, target);
+                cpu.esp += 12;
+            }
+            println!("memcpy {n} B through call_ext ({label}): {:.2} ns per call", ns(t, N / 10));
+        }
+    }
     x86::set_ext_calls(None);
 
     for round in 0..2 {

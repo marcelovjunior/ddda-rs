@@ -38,7 +38,7 @@ fn snapshot(m: &GuestMemory) -> Vec<u8> {
 
 #[test]
 fn bulk_memcpy_and_memset_equal_the_byte_wise_models() {
-    let cases: [(fn(&mut dyn Mem, &mut Cpu), fn(&mut dyn Mem, &mut Cpu), [u32; 3]); 7] = [
+    let cases: [(fn(&mut dyn Mem, &mut Cpu), fn(&mut dyn Mem, &mut Cpu), [u32; 3]); 15] = [
         (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_3000, 0x0010_0100, 0x2345]), // page crossing
         (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_0200, 0x0010_0100, 0x1800]), // overlap, dst > src
         (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_0100, 0x0010_0200, 0x1800]), // overlap, dst < src
@@ -46,6 +46,15 @@ fn bulk_memcpy_and_memset_equal_the_byte_wise_models() {
         (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_4000, 0x0020_1000, 0x800]),  // from a lazy page
         (ddruntime::fastmem::memset, ddnative_base::platform::memset, [0x0010_0FFE, 0x1A5, 0x2003]),
         (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_0000, 0x0010_0000, 0]),
+        // L170: the stack buffer's sizes (up to 256 bytes) and its edge
+        (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_0FF0, 0x0010_2FE0, 0x40]),  // both crossing pages
+        (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_0110, 0x0010_0100, 100]),   // overlap, dst > src
+        (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_0100, 0x0010_0110, 100]),   // overlap, dst < src
+        (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0020_0FC0, 0x0010_0000, 256]),   // into lazy pages
+        (ddruntime::fastmem::memcpy, ddnative_base::platform::memcpy, [0x0010_4000, 0x0010_0003, 257]),
+        (ddruntime::fastmem::memset, ddnative_base::platform::memset, [0x0010_0FF0, 0x7F, 0x40]),
+        (ddruntime::fastmem::memset, ddnative_base::platform::memset, [0x0020_1F00, 0x1C3, 256]),
+        (ddruntime::fastmem::memset, ddnative_base::platform::memset, [0x0010_0001, 0x5A, 1]),
     ];
     for (fast, model, args) in cases {
         let (mut a, mut b) = (setup(), setup());

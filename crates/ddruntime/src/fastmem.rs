@@ -39,6 +39,10 @@ pub const MEMSET: u32 = 0x012E_FE20;
 /// 0x012EFEA0: memcpy(dst, src, n), cdecl, eax = dst (overlap as memmove).
 pub const MEMCPY: u32 = 0x012E_FEA0;
 
+/// Copies and fills up to this size use a stack buffer (L170: most of the
+/// game's are small, and a heap buffer each cost more than the copy).
+const SMALL: usize = 256;
+
 fn arg(m: &dyn Mem, cpu: &Cpu, k: u32) -> u32 {
     m.u32(cpu.esp.wrapping_add(4 + 4 * k))
 }
@@ -82,7 +86,8 @@ pub fn memcpy(m: &mut dyn Mem, cpu: &mut Cpu) {
         m.read_bytes(src, bytes);
         write_bulk(m, dst, bytes);
     };
-    if reuse_scratch() { with_scratch(n as usize, copy); }
+    if n as usize <= SMALL { copy(&mut [0u8; SMALL][..n as usize]); }
+    else if reuse_scratch() { with_scratch(n as usize, copy); }
     else { copy(&mut vec![0u8; n as usize]); }
     cpu.eax = dst;
     let _ = m.u32(cpu.esp); // the return address
@@ -91,7 +96,9 @@ pub fn memcpy(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 pub fn memset(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dst, c, n) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    if reuse_scratch() {
+    if n as usize <= SMALL {
+        write_bulk(m, dst, &[c as u8; SMALL][..n as usize]);
+    } else if reuse_scratch() {
         let bytes = [c as u8; PAGE as usize];
         let mut offset = 0;
         while offset < n {
