@@ -48,14 +48,21 @@
   after construction; original CPU/eight clamp and frame activation remain.
   No cap patch. Intended head A/B: seven vs eight participants, main included.
 - Wake analyzer reports per-batch jobs/participants, callback gaps,
-  final-job solo tails and join overlaps; **13 parser tests pass**.
+  final-job solo tails and join overlaps; **16 parser tests pass**.
   Signaled lanes are distinct from active participation (one-job bypass).
 - Full light gate **234 reported passes / two inherited failures / seven
   ignored**; Present timing passes its isolated retry, gamma remains.
-  Both new ABI/configuration tests pass. Actual wake latency and
-  performance/image acceptance pending. No speculative sync fix.
-- Next: head capture with L158 and this setter, exact env in
-  `docs/tasks/L162-job-wake.md`; analyze matched 7/8 joins and hashes.
+  First-frame follow-up: **242 reported passes / inherited Present timing
+  failure / seven ignored**, three focused ABI/configuration tests pass.
+- c31 h0/h1: 150 frames each, 62,100 paired wakes each, no selected-batch
+  rejects. Signal-to-wait p50/p95 **11.5/52.2 -> 10.6/25.0 us**;
+  final-callback solo overlap **7.086 -> 6.887 ms/frame** dominates wakes.
+  40 of 69 parallel batches/frame have >=8 jobs (h0).
+- Ctor-only p8 configured eight but seventh worker remains idle in profile.
+  First-frame original-setter reapplication candidate logs actual activation;
+  head acceptance remains pending. No speculative sync primitive change.
+- Next: instrumented p8 activation check and matched cache/futex A/B;
+  exact measurements, hashes and limitations: `docs/tasks/L162-job-wake.md`.
 
 ### L160 job worker sizing and wake analysis (2026-10-13)
 

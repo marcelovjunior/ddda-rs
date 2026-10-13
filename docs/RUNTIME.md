@@ -1503,8 +1503,12 @@ unestablished. Sources, hashes, measurements and limits:
 ## L162 job participant diagnostic
 
 `DDRUNTIME_JOB_PARTICIPANTS=1..8` invokes original `00DBD620` after sMain
-construction. It sets configured participation (main included), subject to
+construction and once at the first `00DBFA90` entry after startup configuration.
+It sets configured participation (main included), subject to
 the original CPU/eight cap; the normal frame-start path activates it.
 Absent preserves defaults. It neither patches caps nor changes CPU reporting.
+First-frame stderr reports actual activation. C31's ctor-only option produced
+configured eight but an idle seventh worker; the first-frame follow-up still
+needs head acceptance. Later game/user configuration changes remain effective.
 See `docs/tasks/L162-job-wake.md` for exact 7/8 capture env, verification
 status and the `scripts/job_wake.py` per-join latency/tail report.

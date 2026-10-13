@@ -2,11 +2,14 @@
 //! No CPU report, pool allocation, or scheduler cap is changed.
 #![cfg_attr(not(feature = "game"), allow(dead_code))]
 use ddnative_base::{mem::Mem, x86::{Cpu, LiftFn}};
-use std::sync::OnceLock;
+use std::{collections::HashSet, sync::{Mutex, OnceLock}};
 
 const CONSTRUCTOR: u32 = 0x00dbe810;
 const SETTER: u32 = 0x00dbd620;
+const FRAME: u32 = 0x00dbfa90;
 static HOOK: OnceLock<(LiftFn, LiftFn, u32)> = OnceLock::new();
+static FRAME_BODY: OnceLock<LiftFn> = OnceLock::new();
+static PENDING: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
 
 fn requested(value: Option<&str>) -> Result<Option<u32>, &'static str> {
     match value {
@@ -27,14 +30,42 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
     let find = |address| ports.iter().chain(bodies).find(|(a, _)| *a == address)
         .map(|(_, f)| *f).expect("job participant option requires original constructor and setter bodies");
     let hook = (find(CONSTRUCTOR), find(SETTER), count);
+    FRAME_BODY.set(find(FRAME)).expect("job participant frame hook installed once");
     HOOK.set(hook).expect("job participant hook installed once before overrides freeze");
     ports.retain(|(a, _)| *a != CONSTRUCTOR);
     ports.push((CONSTRUCTOR, construct));
+    ports.retain(|(a, _)| *a != FRAME);
+    ports.push((FRAME, frame));
 }
 
 fn construct(m: &mut dyn Mem, cpu: &mut Cpu) {
     let &(original, setter, count) = HOOK.get().expect("participant hook installed");
     construct_with(m, cpu, original, setter, count);
+    PENDING.get_or_init(Default::default).lock().unwrap().insert(cpu.eax);
+}
+
+fn frame(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let apply = PENDING.get_or_init(Default::default).lock().unwrap().remove(&cpu.ecx);
+    let &(_, setter, count) = HOOK.get().unwrap();
+    frame_with(m, cpu, *FRAME_BODY.get().unwrap(), setter, count, apply);
+}
+
+fn frame_with(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, setter: LiftFn, count: u32, apply: bool) {
+    let object = cpu.ecx;
+    if apply {
+        // 0041B400 continues initialization after its DBE810 base ctor call.
+        // Apply once at 0041DDFD -> DBFA90, after that startup configuration,
+        // immediately before the ORIGINAL frame body promotes +9C to +98.
+        apply_setter(m, cpu, object, setter, count);
+    }
+    original(m, cpu);
+    if apply {
+        ddnative_base::x87::park();
+        let mxcsr = ddnative_base::x86::stmxcsr();
+        eprintln!("job participants: first-frame active={} configured={} requested={count}",
+            m.u32(object.wrapping_add(0x98)), m.u32(object.wrapping_add(0x9c)));
+        ddnative_base::x86::ldmxcsr(mxcsr);
+    }
 }
 
 fn construct_with(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, setter: LiftFn, count: u32) {
@@ -45,6 +76,10 @@ fn construct_with(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, setter: Lift
     // writes +9C; DBFA90 promotes +9C to active +98 at frame start.
     // Invoke the existing body, never duplicate its logic or patch +98.
     assert_eq!(cpu.eax, object, "sMain constructor return contract");
+    apply_setter(m, cpu, object, setter, count);
+}
+
+fn apply_setter(m: &mut dyn Mem, cpu: &Cpu, object: u32, setter: LiftFn, count: u32) {
     let mut call_cpu = cpu.clone();
     let stack = cpu.esp.wrapping_sub(8);
     let saved = [m.u32(stack), m.u32(stack.wrapping_add(4))];
@@ -112,5 +147,32 @@ mod tests {
         assert_eq!(m.u32(0x8000), 0xabcdef01);
         assert_eq!(m.u32(0x1098), 7); // never patch active count
         assert_eq!(m.u32(0x109c), 3); // original setter owns clamping
+    }
+
+    fn frame_body(m: &mut dyn Mem, cpu: &mut Cpu) {
+        // ABI spy for the documented activation boundary, not a game port.
+        m.set_u32(cpu.ecx + 0x98, m.u32(cpu.ecx + 0x9c));
+        cpu.eax = 42;
+        cpu.esp += 4;
+    }
+
+    #[test]
+    fn first_frame_reapplies_after_configuration_then_leaves_future_frames_alone() {
+        let mut m = Sparse::default();
+        m.set_u32(0x7ff8, 0x12345678);
+        m.set_u32(0x7ffc, 0xabcdef01);
+        m.set_u32(0x1098, 7);
+        m.set_u32(0x109c, 7); // startup configuration after the base ctor
+        m.set_u32(0x1000 + 0x1c040, 16);
+        let mut cpu = Cpu { ecx: 0x1000, esp: 0x8000, ..Cpu::default() };
+        frame_with(&mut m, &mut cpu, frame_body, setter, 8, true);
+        assert_eq!(m.u32(0x1098), 3); // only original frame body activates setter result
+        assert_eq!(cpu.eax, 42);
+        assert_eq!(cpu.esp, 0x8004);
+        assert_eq!(m.u32(0x7ff8), 0x12345678);
+        assert_eq!(m.u32(0x7ffc), 0xabcdef01);
+        m.set_u32(0x109c, 2); // later user/game changes remain authoritative
+        frame_with(&mut m, &mut cpu, frame_body, setter, 8, false);
+        assert_eq!(m.u32(0x1098), 2);
     }
 }

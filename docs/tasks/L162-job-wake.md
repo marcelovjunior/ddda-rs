@@ -16,6 +16,14 @@ report, active-count patch, worker array, scheduler cap, or background
 pool behavior is changed. Constructor CPU state and temporary stack words
 are preserved. Startup stderr records requested/configured/active/CPUs.
 
+Follow-up: reapply the original setter once on the first `00DBFA90` entry,
+after the rest of `0041B400` initialization, before the original frame body
+promotes configured to active. Log the resulting active count after that
+frame body. Subsequent frames do not enforce the override. This is a
+candidate activation correction: c31's ctor-only option logged configured
+eight, but its seventh worker stayed idle. A later configuration reset is
+suspected, not yet established; the follow-up needs an instrumented head run.
+
 Evidence: `crates/ddlift/lift_27/src/generated/lifted_024.rs`, raw body
 registry in its `mod.rs`, and L160 original instruction audit. This is an
 invocation of existing game code, not a new translated setter.
@@ -87,7 +95,7 @@ Codex-7 authorized narrow dispatch/lib integration (#13162).
 
 ## Verification / remaining work
 
-- 14 offline parser tests pass, including overlapping tails, gap clipping,
+- 16 offline parser tests pass, including overlapping tails, gap clipping,
   missing wakes and bad joins; original seven pairing guards retained.
 - Initial light library run: 86 passed / one inherited Present throughput
   timing failure / five ignored. Both new ABI/configuration tests passed.
@@ -100,9 +108,99 @@ Codex-7 authorized narrow dispatch/lib integration (#13162).
   `present-retry.log`. Full log SHA-256:
   `4db8f6045c599e322a2c6e8aa796ef9f1ad925729b468900ae92d469ceaa87ef`.
 - No game, GPU, shard build or original-game image comparison by this agent.
-- **Pending:** head trace, actual per-join numbers, 7/8 activation comparison,
-  and any measured >20 us wake fix coordinated with codex-10 (L153).
-  Existing aggregate logs do not establish wake latency; no speculative
-  sync change or speedup claim is made.
-- Next action: head integrates this checkpoint with L158 and captures the
-  matched trace; codex-11 analyzes it and reports hashes and per-join numbers.
+- **Pending after c31:** instrumented 7/8 activation comparison and matched
+  cache/futex capture to identify a causal wake fix, coordinated with codex-10
+  (L153). No speculative sync change or speedup claim is made.
+- Next action: head integrates the first-frame setter follow-up and checks
+  active participation, then holds hash/participants fixed for sync A/B.
+
+## Combo31 measured wake windows (2026-10-13)
+
+Head build `01c7f74d`, VK=1; `L158_h0.trace` with JOB_HASH=0 and
+`L158_h1.trace` with JOB_HASH=1, both SYNC_PROFILE and CRITICAL_JOBS on.
+Cache/futex inherited values await head confirmation. These are not a sync
+A/B and include diagnostic overhead and shared-machine load.
+
+Each sample has **150 late gameplay frames, 12,600 complete batches,
+62,100 paired worker wakes, zero rejected selected batches**. All report
+seven active/configured participants. h0 frames 6600..6749; h1 6819..6968.
+The two-pass file reader hashes both scans and rejects changing captures,
+retaining only selected batches. Explicit `--allow-truncated-tail` discards
+43/70 unterminated EOF bytes; unfinished batches are still rejected.
+The 1.7/1.8 GB originals are never loaded wholesale.
+
+Times below are microseconds, median / p95 / p99:
+
+| Metric | h0 | h1 |
+|---|---:|---:|
+| Signal entry -> worker wait return | 11.5 / 52.2 / 131.8 | 10.6 / 25.0 / 75.4 |
+| Signal entry -> first callback (workers obtaining work) | 16.7 / 38.1 / 84.7 | 15.0 / 24.8 / 52.0 |
+| Wait return -> first callback | 5.0 / 9.7 / 25.9 | 4.3 / 8.2 / 12.2 |
+| SetEvent service duration | 3.1 / 5.9 / 19.0 | 2.9 / 5.0 / 9.4 |
+| No-callback gap while another callback unstarted | 1.4 / 19.6 / 42.7 | 1.4 / 17.0 / 25.9 |
+| Last callback solo tail | 2.3 / 433.7 / 3790 | 1.3 / 401.5 / 3675 |
+
+Signal-to-first-callback exceeds 20 us in **13,402/48,436 (27.67%)** h0
+and **7,796/49,547 (15.73%)** h1 working-worker samples. Signal-to-wait
+means are 17.825/11.786 us. Tails exceed 20 us, but medians and means do
+not establish a uniformly slow wake implementation.
+
+Per-frame critical-path accounting (overlapping quantities, not additive):
+
+| Quantity, ms/frame | h0 | h1 |
+|---|---:|---:|
+| Main join waits | 14.819 | 13.526 |
+| Join overlap with final callback running alone | 7.086 | 6.887 |
+| Join time after last callback completes | 1.633 | 1.223 |
+| Join overlap with latest wait return after all callbacks complete | 0.307 | 0.142 |
+
+Both last rows are clipped to the main join interval. Unclipped values
+(1.826/1.401 and 0.408/0.221 ms) included time before main entered its join
+and are not join-cost attribution. The last row is a lower bound on late
+idle-worker completion costs, not total synchronization cost. L158's
+independent analysis agrees with the clipped join and solo measurements.
+The largest five h0 solo tails overlapping a
+join are **7.084..7.730 ms**, all callback `00DB7620`, candidate resolved
+target `00EE2C90`. Four of those batches have maximum wake delay only
+13.5..17.9 us. Thus the dominant long joins are callback tails; these data
+do not justify changing L153 primitives by attributing the whole join to
+kernel wakes. Results posted to codex-10 and codex-7 (#13370/#13375/#13431).
+Next synchronization experiment: hold JOB_HASH and participants fixed and
+capture cache/futex 0/0 vs 1/1 before choosing a wake-path change.
+
+### Jobs versus participants; eight-participant caveat
+
+In h0, 84 batch entries/frame include nine empty and six single-job batches;
+**69/frame wake workers**. **51/frame have >=7 jobs; 40/frame have >=8**
+(57.97% of parallel batches). Queues reach 529 in this sample. Eight lanes
+therefore have potential work in many batches, but cannot subdivide the
+millisecond-scale final callback. These counts establish available queued
+callbacks, not a speedup guarantee.
+
+The profile-off `run_c31p8.log` confirms the original setter produced
+requested=8/configured=8/active=7 at construction on 16 CPUs. However,
+`profile_c31p8.txt` reports the seventh worker (`guest 0x1088`) at **0.0 CPU
+seconds / zero busy / 100 wait samples**, as in the default run. The other
+six workers are busy. Therefore c31p8 does **not** verify active eight-lane
+execution or its FPS effect. Head reports 19.8 vs 21.1 average FPS and warns
+that differences below 8% are noise on this busy machine. No gain claimed.
+The first-frame reapplication/activation log is the next candidate, with
+**three focused runtime tests passing**, including configuration overwritten
+between base construction and first frame and respecting later changes.
+The complete follow-up light gate reports **242 passes / one inherited
+Present throughput timing failure / seven ignored**; gamma passes this time.
+Private final log: `E:/ddda-re/notes/L162-job-wake/first-frame-light.log`.
+
+### Reproducible private outputs
+
+Full per-join rows (wake pairs, gaps, last job, join overlaps):
+`E:/ddda-re/notes/L162-job-wake/h0-6600-6749.json` and
+`h1-6819-6968.json`. They contain the original trace source hashes:
+
+- h0: `6804199b37027679b142ade4ef6d70f0d330379046cee60c595f241fdb1eecfa`
+- h1: `c515d899df51c41497d05e4f832cfef71c8d8931f48e2be53d76531c132a9f65`
+
+Example: `python scripts/job_wake.py PRIVATE.trace --min-frame 6600
+--max-frame 6749 --allow-truncated-tail > PRIVATE.json`. Add `--summary-only`
+for small output. Head authorized trace compression after both owners finish;
+codex-7 notified that L162 no longer needs uncompressed originals (#13432).
