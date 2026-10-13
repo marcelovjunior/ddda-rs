@@ -26,6 +26,13 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_JOB_SHADOW_SAVE").as_deref() == Ok("1") {
         ports.push((0x00fed480, mtcore::job_shadow::save_state));
     }
+    // L169: preserve the original serial/queued decision and callback order.
+    if std::env::var("DDRUNTIME_SHADOW_TRAVERSAL").as_deref() == Ok("1") {
+        ports.push((0x00db63e0, mtcore::shadow_traversal::traverse));
+    }
+    if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
+        ports.push((0x00efd240, mtcore::shadow_pass::setup));
+    }
     ports
 }
 
