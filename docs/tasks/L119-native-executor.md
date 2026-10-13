@@ -150,3 +150,17 @@ the combo15 profile (E:/ddda-re/notes/runs/profile_c15b.txt):
   executor's own; 19 other sites have one without the other. A heuristic,
   not a proof.
 - Not yet compared in game: needs `DDDRAW_NATIVE=verify` (0 mismatches).
+
+## L141: float registers a binding does not write (2026-10-13)
+
+- eb71284f: a draw whose shaders read float registers its binding does not
+  write is taken. The D3D9 path draws with what the device holds there,
+  and the binding's own apply does not touch those registers. So the
+  value at decide time is the value at the draw: the newest pending upload
+  of the taken draws writing it (flush_uploads's rule), else the device's
+  register. Such a draw gets constant banks of its own.
+- Oracle test on the runtime device: a VS reading c0..c7 whose binding
+  writes c0..c5 gets the device's c6/c7, equal to the D3D9 path's
+  DrawCall. Integer and boolean registers left unwritten are still
+  refused (none seen in c29nat1).
+- Not yet compared in game: needs `DDDRAW_NATIVE=verify`.
