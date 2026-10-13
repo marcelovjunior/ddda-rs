@@ -781,7 +781,8 @@ impl WgpuBackend {
     }
 
     /// Record observed recipes and precompile a previous run's pipelines on a
-    /// background thread. The executable is read only, hashed off-thread.
+    /// creator pool (DDGPU_PIPELINE_THREADS=1..4, default 1). The executable
+    /// is read only, hashed off-thread.
     /// DDGPU_PIPELINE_WARMUP=0 records recipes without speculative compilation.
     pub fn enable_pipeline_warmup(&mut self, dir: &std::path::Path, exe: &std::path::Path) -> bool {
         let Some(cache) = self.pipeline_cache.clone() else { return false };
@@ -2753,6 +2754,9 @@ fn rect_or_full(r: [i32; 4], w: u32, h: u32) -> [i32; 4] {
 }
 
 impl GraphicsBackend for WgpuBackend {
+    fn shader_created(&mut self, tokens: std::sync::Arc<[u32]>) {
+        if let Some(warmup) = &self.warmup { warmup.shader_created(&tokens); }
+    }
     fn native_supported(&self) -> bool { true }
     fn native_compare_begin(&mut self, begin: d3d9cmd::NativeCompareBegin) -> bool { self.begin_native_comparison(begin) }
     fn native_compare_end(&mut self, id: u64, job: d3d9cmd::NativeJob) -> Result<(), d3d9cmd::NativeJob> { self.end_native_comparison(id, job) }

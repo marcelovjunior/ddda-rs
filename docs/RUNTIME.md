@@ -1257,3 +1257,28 @@ pipeline creation. The adopted exact optimization is the independently
 opt-in L145 `DDRUNTIME_ZLIB_FAST=1`; outer `DDRUNTIME_ZLIB_PORT` stays off
 for the requested A/B. Full definitions, caveats, source evidence and head
 run environment: `docs/tasks/L149-load-timeline.md`.
+
+
+## L151 parallel pipeline preparation
+
+`DDGPU_PIPELINE_THREADS=2..4` opts into parallel creation of L116's recorded
+exact pipeline variants (default one; invalid/zero one; larger values cap at
+four). Modules are created once per source digest across background creators;
+they share the persistent driver cache. `DDGPU_SHADER_PREFETCH=1` sends
+successful shader-object creation events through a nonblocking advisory command,
+forwarded by capture, to prioritize matching saved recipes. A full draw FIFO
+drops the hint. No new capture format or guest-visible rendering state.
+
+Current WGSL must still match a saved pipeline's source digests. Draws never
+wait for speculative work and retain normal creation on misses or failures.
+Unknown cold variants require draw state; native/raw-Vulkan objects are not
+covered. Existing startup hook is after device/runtime initialization, before
+guest game execution. Changed source invalidates the recipe namespace, so seed
+the candidate before measuring warm-cache runs. `DDGPU_WARMUP` reports counts
+and background elapsed time; it is not critical-path loading duration.
+
+Seven warmup CPU, 22 command/capture and six bounded GPU checks pass, including
+N=1/2/4 exact two-target images during and after warmup. Full light suite has
+inherited gamma and load-sensitive timing failures (timing passes alone).
+No original-game comparison or loading gain established; c25 timeline awaited.
+See [L151 evidence, controls and receipts](tasks/L151-load-parallel.md).
