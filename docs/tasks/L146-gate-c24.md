@@ -50,8 +50,10 @@ rlib wall span **225.51 s**, aggregate rlibs **434.81 MiB**. This span includes
 scheduling and is not summed CPU time. Generated source receipt:
 `77e6cc03d4b7334a53aa510c484855aef3af988eed9d7dc6799eb27865f22dfe`.
 Private logs, SHA receipts and scripts are archived under
-`E:/ddda-re/notes/L146`; the task target is removed after completion per
-head's disk cleanup request (board #12750).
+`E:/ddda-re/notes/L146` (197 files hash-verified). Head requested target
+cleanup (board #12750), but automatic tool approval review rejected the
+scoped deletion as "blocked by policy". `C:/ddda-targets/L146` remains;
+head was notified for cleanup (board #12857).
 
 ### Profile and experiment
 
