@@ -3370,7 +3370,8 @@ def shard_fn(f, owner=shard):
 
     def platform(match):
         return f"x86::call_local(m, cpu, 0x{model[match[1]]:08X}, crate::platform::{match[1]})"
-    return PLATFORM_CALL.sub(platform, CALLEE.sub(target, rust_fn(f["addr"], f["name"], f["arms"])))
+    import inline_flags
+    return inline_flags.retarget(PLATFORM_CALL.sub(platform, CALLEE.sub(target, rust_fn(f["addr"], f["name"], f["arms"]))))
 
 
 def lifted_test_source(decl):
