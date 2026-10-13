@@ -26,6 +26,7 @@ use std::sync::Arc;
 mod cache;
 mod pipelines;
 mod shader_cache;
+mod pipeline_log;
 pub mod present;
 pub use pipelines::{default_cache_dir, pipeline_stats, report_pipeline_stats_every, save_pipeline_caches, PipelineStats};
 use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
@@ -965,7 +966,7 @@ impl WgpuBackend {
             wgsl.push_str(&slots.iter().map(|k| format!("p.c[{k}]")).collect::<Vec<_>>().join(", "));
             wgsl.push_str("); }\n");
         }
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("clear"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) });
+        let module = crate::pipeline_log::timed("module", "object-miss", || self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("clear"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }));
         let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX_FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }],
@@ -973,7 +974,7 @@ impl WgpuBackend {
         let pl = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
         let targets: Vec<Option<wgpu::ColorTargetState>> = colours.iter().map(|f| f.map(|format| wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })).collect();
         let replace = wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: wgpu::StencilOperation::Replace, depth_fail_op: wgpu::StencilOperation::Replace, pass_op: wgpu::StencilOperation::Replace };
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = crate::pipeline_log::timed("pipeline", "object-miss", || self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("clear"),
             layout: Some(&pl),
             vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
@@ -993,7 +994,7 @@ impl WgpuBackend {
             fragment: (!slots.is_empty()).then(|| wgpu::FragmentState { module: &module, entry_point: Some("fs"), compilation_options: Default::default(), targets: &targets }),
             multiview_mask: None,
             cache: None,
-        });
+        }));
         self.clears.insert(key.clone(), (pipeline.clone(), layout.clone()));
         (pipeline, layout)
     }
@@ -1137,7 +1138,7 @@ impl WgpuBackend {
              @fragment fn stencil_fs(@builtin(position) pos: vec4<f32>{si}) {{\n\
                let v = textureLoad(st, vec2<i32>(pos.xy), {level}).r;\n\
                if ((v & p.bit.x) == 0u) {{ discard; }}\n}}\n");
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("depth copy"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) });
+        let module = crate::pipeline_log::timed("module", "object-miss", || self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("depth copy"), source: wgpu::ShaderSource::Wgsl(wgsl.into()) }));
         let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
@@ -1148,7 +1149,7 @@ impl WgpuBackend {
         });
         let pl = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
         let face = |op| wgpu::StencilFaceState { compare: wgpu::CompareFunction::Always, fail_op: op, depth_fail_op: op, pass_op: op };
-        let pipeline = |entry: &str, write_depth: bool, write_mask: u32| self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = |entry: &str, write_depth: bool, write_mask: u32| crate::pipeline_log::timed("pipeline", "object-miss", || self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("depth copy"),
             layout: Some(&pl),
             vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
@@ -1168,7 +1169,7 @@ impl WgpuBackend {
             fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some(entry), compilation_options: Default::default(), targets: &[] }),
             multiview_mask: None,
             cache: None,
-        });
+        }));
         let depth_pipe = pipeline("depth_fs", true, 0xFF);
         let bit_pipes: Vec<wgpu::RenderPipeline> = if stencil { (0..8).map(|b| pipeline("stencil_fs", false, 1 << b)).collect() } else { vec![] };
         let dview = stex.create_view(&wgpu::TextureViewDescriptor { aspect: wgpu::TextureAspect::DepthOnly, ..Default::default() });
@@ -1226,7 +1227,7 @@ impl WgpuBackend {
         if let Some(p) = self.blits.get(&(format, samples)) {
             return p.clone();
         }
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("blit"), source: wgpu::ShaderSource::Wgsl(BLIT.into()) });
+        let module = crate::pipeline_log::timed("module", "object-miss", || self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("blit"), source: wgpu::ShaderSource::Wgsl(BLIT.into()) }));
         let layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
@@ -1236,7 +1237,7 @@ impl WgpuBackend {
             ],
         });
         let pl = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = crate::pipeline_log::timed("pipeline", "object-miss", || self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("blit"),
             layout: Some(&pl),
             vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
@@ -1246,7 +1247,7 @@ impl WgpuBackend {
             fragment: Some(wgpu::FragmentState { module: &module, entry_point: Some("fs"), compilation_options: Default::default(), targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
             multiview_mask: None,
             cache: None,
-        });
+        }));
         self.blits.insert((format, samples), (pipeline.clone(), layout.clone()));
         (pipeline, layout)
     }
@@ -1450,13 +1451,13 @@ impl WgpuBackend {
         let started = std::time::Instant::now();
         options.compact_constants = true;
         let shader = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
-        let t = d3d9wgsl::translate_with(&shader, options).map_err(|e| e.to_string())?;
+        let t = pipeline_log::timed("translation", "miss", || d3d9wgsl::translate_with(&shader, options)).map_err(|e| e.to_string())?;
         pipelines::translated(started);
         // Resolve parse/cache errors before opening the device error scope.
         // wgpu still validates the exact cached IR against this device.
         let source = shader_cache::source(t.wgsl)?;
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source });
+        let module = crate::pipeline_log::timed("module", "object-miss", || self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source }));
         if let Some(e) = block_on(scope.pop()) {
             return Err(format!("{e}"));
         }
@@ -1748,7 +1749,7 @@ impl WgpuBackend {
                     .map(|(b, a)| wgpu::VertexBufferLayout { array_stride: b.0, step_mode: b.1, attributes: a })
                     .collect();
                 let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-                let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                let pipeline = crate::pipeline_log::timed("pipeline", "object-miss", || self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: None,
                     layout: Some(&self.pipeline_layouts[&layout_key]),
                     vertex: wgpu::VertexState { module: &vs_module, entry_point: Some("main"), compilation_options: Default::default(), buffers: &layouts },
@@ -1758,7 +1759,7 @@ impl WgpuBackend {
                     fragment: Some(wgpu::FragmentState { module: &ps_module, entry_point: Some("main"), compilation_options: Default::default(), targets: &key.targets }),
                     multiview_mask: None,
                     cache: self.pipeline_cache.as_ref().map(|p| &p.cache),
-                });
+                }));
                 if let Some(e) = block_on(scope.pop()) {
                     return Err(format!("pipeline: {e}"));
                 }
@@ -2604,6 +2605,7 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn present(&mut self, back_buffer: &Target) {
+        pipeline_log::present();
         self.flush();
         if let Some(p) = &self.pipeline_cache {
             p.save_if_due();
