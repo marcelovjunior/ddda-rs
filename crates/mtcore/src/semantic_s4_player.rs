@@ -127,7 +127,7 @@ pub fn player_post_update(m: &mut dyn Mem, c: &mut Cpu) {
     macro_rules! w32 { ($addr:expr, $v:expr) => { pg.set_u32(m, $addr, $v) }; }
     macro_rules! wf { ($addr:expr, $v:expr) => { pg.set_u32(m, $addr, f32::to_bits($v)) }; }
     // `FSTP m32` of the float a guest callee returned in ST0
-    macro_rules! store_st0 { ($addr:expr) => { c.st.memory::<0x18d9, 4, true>(m, $addr) }; }
+    macro_rules! store_st0 { ($addr:expr) => { c.st.real_memory::<0x18d9, 4, true>(m, $addr) }; }
     // a guest call from the original's frame
     macro_rules! gcall {
         ($target:expr, $regs:expr, [$($arg:expr),*], $back:expr) => {{
