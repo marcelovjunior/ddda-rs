@@ -1,5 +1,15 @@
 # Phase 1 runtime proposal (R01)
 
+## L173 semantic model-draw leaves
+
+`DDRUNTIME_SEMANTIC=1` additionally replaces FF1920 (shadow draw copies),
+FF14D0 (extra material passes), and FEFB90 (render-target/viewport binding).
+480 original ABI cases and production serial/atomic memory replay pass;
+runtime light 255 pass, zero failures, seven ignored. Full train and live
+image/per-job acceptance remain head-owned. See
+[L173 evidence](tasks/L173-semantic-draw-a.md) for isolated timings and
+the x87 signaling-NaN oracle limitation.
+
 ## L168 guest-memory backing experiment
 
 `DDNATIVE_BACKING=regions` opts into 2 MiB-aligned host regions with lazy

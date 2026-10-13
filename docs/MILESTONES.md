@@ -1,5 +1,17 @@
 # Milestones
 
+### L173 semantic model draw leaves (2026-10-13)
+
+- Native FF1920/FF14D0/FEFB90 under `DDRUNTIME_SEMANTIC=1`: 480 original
+  ABI returns pass, including all heap writes and external call arguments.
+  Seven isolated checks pass with lifted/semantic serial/atomic Pages;
+  runtime light 255 pass, zero failures, seven ignored.
+- Median isolated gains across four cases: FF1920 1.07–2.02x,
+  FF14D0 2.25–2.56x, FEFB90 1.48–1.67x. Synthetic callees; no gameplay or
+  FPS acceptance. x87 signaling-NaN emulator limit documented.
+- Next: head combined train/image acceptance; priority EA5320 oracle next.
+  Evidence and reproduction: `docs/tasks/L173-semantic-draw-a.md`.
+
 ### L162c job distribution and host scheduling (2026-10-13)
 
 - c31 h0 150-frame census: main 65,186 callbacks, six workers
