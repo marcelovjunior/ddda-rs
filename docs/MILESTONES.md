@@ -14,6 +14,20 @@
   Four parser tests pass. Details: `docs/tasks/L153-sync.md`.
 - Next: head profile-on same-route census, then profile-off matched
   cache/futex A/B and image acceptance before changing defaults.
+### L151 parallel pipeline preparation (2026-10-13)
+
+- Opt-in 2-4 creator threads precompile L116 exact recipes with L140 driver
+  cache; shared module cells avoid duplicate background compilation. Shader
+  creation events prioritize recorded variants and drop on a full draw FIFO.
+- Draws never wait for creators; source checks and normal miss creation stay.
+  Cold unknown variants still need first-use state. Native/raw-Vulkan objects
+  are outside this recipe path. Default creator count remains one.
+- 7 warmup CPU + 22 command/capture + 6 bounded GPU checks pass; identical
+  two-target image hashes for N=1/2/4, including in-flight fallback. Runtime
+  211 reported passes / 2 failures / 5 ignored; timing retry passes, inherited
+  gamma failure remains. No game loading gain established.
+- Next: head supplies c25 FAST timeline, seeds candidate recipe namespace,
+  then matched N=1/2 loading/image A/B. `docs/tasks/L151-load-parallel.md`.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)
