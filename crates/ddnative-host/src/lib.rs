@@ -59,6 +59,8 @@ fn preempt_point() {
 /// dispatch cache. The hit path saves no registers and ends in a tail
 /// jump to the callee; everything else is out of line.
 fn call_lifted(m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+    #[cfg(feature = "private-replay")]
+    if x86::private_calls::dispatch(m, cpu, target) { return; }
     if PREEMPT.load(Ordering::Relaxed) {
         return call_lifted_slow(m, cpu, target);
     }
@@ -195,4 +197,49 @@ pub fn lifted_target(target: u32) -> LiftFn {
         resolved()[slot(target)].set((target, Some(f)));
         f
     })
+}
+
+#[cfg(test)]
+mod private_call_measurement {
+    use super::*;
+    struct Empty;
+    impl Mem for Empty {
+        fn u8(&self, _: u32) -> u8 { unreachable!() }
+        fn set_u8(&mut self, _: u32, _: u8) { unreachable!() }
+    }
+    #[inline(never)]
+    fn body(_: &mut dyn Mem, cpu: &mut Cpu) { cpu.eax = cpu.eax.wrapping_add(1); }
+    fn lookup(_: u32) -> Option<LiftFn> { Some(body) }
+    #[inline(never)]
+    fn previous_path(m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        if PREEMPT.load(Ordering::Relaxed) { return call_lifted_slow(m, cpu, target); }
+        match cached(target) { Some(f) => f(m, cpu), None => call_lifted_slow(m, cpu, target) }
+    }
+
+    /// Isolated runtime microbenchmark, not game performance. Run at opt3.
+    #[test]
+    #[ignore = "opt3 timing comparison, run explicitly on a quiet host"]
+    fn default_private_resolver_cost() {
+        use std::{hint::black_box, time::Instant};
+        install();
+        x86::set_lifted_lookup(lookup);
+        let mut cpu = Cpu::default();
+        call_lifted(&mut Empty, &mut cpu, 0x400010);
+        let sample = |entry: LiftEntry, cpu: &mut Cpu| {
+            let start = Instant::now();
+            for _ in 0..1_000_000 { black_box(entry)(&mut Empty, cpu, black_box(0x400010)); }
+            start.elapsed().as_nanos() as f64 / 1_000_000.0
+        };
+        type LiftEntry = fn(&mut dyn Mem, &mut Cpu, u32);
+        for pair in 0..9 {
+            let (old, new) = if pair % 2 == 0 {
+                (sample(previous_path, &mut cpu), sample(call_lifted, &mut cpu))
+            } else {
+                let new = sample(call_lifted, &mut cpu);
+                (sample(previous_path, &mut cpu), new)
+            };
+            eprintln!("private-resolver pair={pair} previous_ns={old:.3} default_ns={new:.3} ratio={:.3}", new / old);
+        }
+        black_box(cpu.eax);
+    }
 }
