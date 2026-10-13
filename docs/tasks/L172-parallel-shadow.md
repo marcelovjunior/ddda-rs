@@ -299,3 +299,19 @@ Shared allocation dependency regression now invokes the actual tracked
 InterlockedExchangeAdd service. Focused shadow:33 passed/0 failed.
 The complete default light suite at661bdb1a:288 passed/0 failed/7 ignored.
 Original parallel equality remains OPEN; head offline example rebuild next.
+
+2026-10-13 original replay at head build aeada9d1 (includes1b384b1f):
+serial/live6 entries PASS; private scheduler mode1/jobs1 gets past XADD.
+Next refusal is MissingPage0x64d31820 at EA5B50, a fresh DA7D70 command
+allocation. The serial root reused its current page (cursor advanced0x410;
+render cursor stayed0x1e000). Capture now seeds the current DA7D70 arena
+from render+33DC0+4*ring_index, index at+33DB8, capacity at+33DCC.
+All bytes come from the same live capture; absent old-fixture bytes are
+never fabricated. Regression covers inactive-ring exclusion and previously
+unvisited pages, including an unaligned arena end, with no live writes.
+Focused shadow:34 passed/0 failed. Next head action: rebuild ddplay plus
+shadow_replay with ddruntime/parallel-shadow and run capture with
+DDRUNTIME_PARALLEL_SHADOW=1 DDRUNTIME_PARALLEL_SHADOW_AFTER_MS=60000
+DDRUNTIME_PARALLEL_SHADOW_FIRST=0 DDRUNTIME_PARALLEL_SHADOW_COUNT=1
+DDRUNTIME_PARALLEL_SHADOW_DUMP=E:/ddda-re/notes/native-L172/replay.
+Still no original parallel equality, production publication or TRAIN READY.
