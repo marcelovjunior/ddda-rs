@@ -53,7 +53,7 @@
 //! +0x1C (type 1) its base vertex; a view's +0x14 is its D3D surface, +0x18
 //! its width (u16) and +0x1A its height (u16, the top bit an sRGB flag).
 
-use crate::d3d9dev::{objects, with_device, Kind};
+use crate::d3d9dev::{objects, Kind};
 use crate::fasthash::{FxMap, FxSet};
 use d3d9cmd::{
     Constants, DrawCall, Indices, NativeBoolWrite, NativeConstants, NativeDraw, NativeFixedState, NativeFloatWrite,
@@ -285,24 +285,7 @@ pub fn decode(m: &dyn Mem, record: u32, invalid_viewport: [u32; 4], srgb: bool) 
 /// base vertex and vertex count, as 0x00DAB480 computes them (mtdraw's
 /// `primitives`, `draw_primitive`, `draw_indexed`).
 pub fn draw_params(m: &dyn Mem, record: u32, kind: u32, extent: u32) -> Result<(u32, u32, u32, i32, u32), Refusal> {
-    let code = (m.u32(m.u32(record.wrapping_add(0xC))) >> 21) & 0xFF;
-    let count = m.u32(record.wrapping_add(0x14));
-    let (primitive, primitives) = match code.wrapping_sub(1) {
-        0 => (2, count >> 1),
-        1 => (3, count.wrapping_sub(1)),
-        2 => (4, count / 3),
-        3 => (5, count.wrapping_sub(2)),
-        _ => (1, count),
-    };
-    let vertices = crate::d3d9draw::vertex_count(primitive, primitives).ok_or(Refusal::Primitive)?;
-    let start = m.u32(record.wrapping_add(0x18));
-    Ok(match kind {
-        0 => (primitive, primitives, start, 0, vertices),
-        _ => {
-            let base = m.u32(record.wrapping_add(0x1C));
-            (primitive, primitives, start, base as i32, extent.wrapping_sub(base))
-        }
-    })
+    draw_params_of(&G::new(m), record, kind, extent)
 }
 
 // --- what shaders read ---------------------------------------------------------
@@ -375,51 +358,550 @@ pub fn reads(tokens: &[u32]) -> Result<Reads, Refusal> {
 }
 
 // --- the DrawCall ---------------------------------------------------------------
+//
+// A draw's state comes from four bindings. The objects behind them are
+// decoded once and cached: the fixed-state objects by identity (address and
+// hash at +0xC, raster variant), shader metadata by address (its shaders
+// and declaration checked again once a frame), sampler objects by identity.
+// The bindings themselves live in the frame's command memory: target,
+// stream and shader bindings are cached per frame by address (their values,
+// the constants they point at included, do not change while the executor
+// runs: the D3D9 path relies on that too, it skips uploads by pointer).
+// Per draw: four lookups, the draw's own parameters and the flush.
 
-/// The render states the backend reads (crates/ddgpu `derive`/`try_draw`).
-/// A draw carries the applies' values, and the device's for those the
-/// applies did not set (162, 194 and 206 never; the alpha test's 15, 24
-/// and 25 when the binding leaves it off).
-const BACKEND_STATES: [u32; 37] = [
-    7, 8, 14, 15, 19, 20, 22, 23, 24, 25, 27, 52, 53, 54, 55, 56, 57, 58, 59, 162, 168, 171, 174, 175, 185, 186,
-    187, 188, 189, 190, 191, 192, 193, 194, 195, 206, 207,
-];
-const BACKEND_STATES_MORE: [u32; 2] = [208, 209];
+/// Guest reads through the page table.
+#[derive(Clone, Copy)]
+struct G<'a> {
+    m: &'a dyn Mem,
+    pt: Option<std::ptr::NonNull<ddnative_base::mem::PageTable>>,
+}
 
-/// Per-run caches: the shaders' reads by bytecode, the render-state lists
-/// by content (one shared list per distinct state: the backend memoizes
-/// draws by the list's address).
+impl<'a> G<'a> {
+    fn new(m: &'a dyn Mem) -> Self {
+        G { m, pt: m.page_table() }
+    }
+    fn u32(&self, a: u32) -> u32 {
+        self.m.fast_u32(self.pt, a)
+    }
+    fn u16(&self, a: u32) -> u32 {
+        self.m.fast_u16(self.pt, a) as u32
+    }
+    fn u8(&self, a: u32) -> u32 {
+        self.m.fast_u8(self.pt, a) as u32
+    }
+}
+
+/// The render states the backend reads (crates/ddgpu `derive`/`try_draw`)
+/// that the applies never set: taken from the device once a frame.
+const DEVICE_STATES: [u32; 3] = [162, 194, 206];
+
+/// The blend, depth-stencil and rasterizer objects of a fixed-state
+/// binding: the states the full apply sets (0x00DAA5F0 with nothing
+/// applied, mtstate's tables).
+pub struct FixedPart {
+    states: Vec<(u32, u32)>,
+    /// blend-factor blending (see the module notes)
+    blend_factor: bool,
+}
+
+fn fixed_part(g: &G, id: &NativeStateIdentity) -> FixedPart {
+    let words = |a: u32, n: u32| -> Vec<u32> { (0..n).map(|k| g.u32(a.wrapping_add(4 * k))).collect() };
+    let raster = id.raster.address.wrapping_add(0x20 + 12 * id.raster_flip as u32);
+    let mut calls = mtstate::packed(mtstate::BLEND, &words(id.blend.address.wrapping_add(0x20), 2), None, None, 0);
+    calls.extend(mtstate::packed(mtstate::DEPTH, &words(id.depth.address.wrapping_add(0x18), 2), None, None, 0));
+    calls.extend(mtstate::packed(mtstate::RASTER, &words(raster, 3), None, None, 0));
+    let states: Vec<(u32, u32)> = calls.iter().map(|c| (c.args[0], c.args[1])).collect();
+    let state = |s: u32| states.iter().find(|e| e.0 == s).map(|e| e.1);
+    // D3DBLEND_BLENDFACTOR / INVBLENDFACTOR
+    let blend_factor = state(27) == Some(1) && [19, 20, 207, 208].iter().any(|&s| matches!(state(s), Some(14 | 15)));
+    FixedPart { states, blend_factor }
+}
+
+/// A sampler descriptor (0x00DAA8B0): the stage, and the binding values
+/// holding the SamplerState and the Texture.
+#[derive(Clone, Copy, Debug)]
+struct SamplerSlot {
+    stage: u32,
+    sampler: u32,
+    texture: u32,
+}
+
+/// A constant descriptor (0x00DAA8B0): the section (0 float, 1 int,
+/// 2 bool, 3 derived), the binding value, the source dword offset, the
+/// first register and count, int-to-float conversion, the derived kind.
+#[derive(Clone, Copy, Debug)]
+struct Upload {
+    section: u8,
+    value: u32,
+    offset: u32,
+    register: u32,
+    count: u32,
+    convert: bool,
+    kind: u32,
+}
+
+/// A shader metadata object: its shaders and declaration (handles and the
+/// runtime's objects), what the shaders read, and its descriptors.
+pub struct MetaPart {
+    handles: [u32; 3],
+    vs: Arc<[u32]>,
+    ps: Arc<[u32]>,
+    declaration: Arc<[[u8; 8]]>,
+    floats: [usize; 2],
+    reads: [Reads; 2],
+    samplers: [Vec<SamplerSlot>; 2],
+    uploads: [Vec<Upload>; 2],
+    /// the frame it was last checked against the runtime's objects
+    checked: std::sync::atomic::AtomicU64,
+}
+
+/// The runtime's shader bytecode and float count, and declaration, of
+/// [vs, ps, declaration] handles.
+fn shader_objects(handles: [u32; 3]) -> Option<((Arc<[u32]>, usize), (Arc<[u32]>, usize), Arc<[[u8; 8]]>)> {
+    objects(|o| {
+        let shader = |h: u32| match o.live.get(&h).map(|x| &x.kind) {
+            Some(Kind::Shader { tokens, float_constants, .. }) => Some((tokens.clone(), *float_constants)),
+            _ => None,
+        };
+        let declaration = match o.live.get(&handles[2]).map(|x| &x.kind) {
+            Some(Kind::Declaration { elements, .. }) => Some(elements.clone()),
+            _ => None,
+        };
+        Some((shader(handles[0])?, shader(handles[1])?, declaration?))
+    })
+}
+
+fn meta_part(g: &G, metadata: u32, reads_cache: &mut FxMap<usize, (Arc<[u32]>, Reads)>, frame: u64) -> Result<MetaPart, Refusal> {
+    let handles = [0x10, 0x14, 0x18].map(|o| g.u32(metadata.wrapping_add(o)));
+    if handles[0] == 0 || handles[1] == 0 {
+        return Err(Refusal::Missing);
+    }
+    let ((vs, vs_floats), (ps, ps_floats), declaration) = shader_objects(handles).ok_or(Refusal::Missing)?;
+    let mut shader_reads = [Reads::default(); 2];
+    for (k, tokens) in [&vs, &ps].into_iter().enumerate() {
+        let key = Arc::as_ptr(tokens) as *const u32 as usize;
+        shader_reads[k] = match reads_cache.get(&key) {
+            Some((_, r)) => *r,
+            None => {
+                let r = reads(tokens)?;
+                // the Arc is held, so its address is not reused while cached
+                reads_cache.insert(key, (tokens.clone(), r));
+                r
+            }
+        };
+    }
+    // the descriptors, in 0x00DAA8B0's order (mtstate::shader)
+    let descriptors = g.u32(metadata.wrapping_add(4));
+    let mut samplers: [Vec<SamplerSlot>; 2] = Default::default();
+    let mut uploads: [Vec<Upload>; 2] = Default::default();
+    for stage in 0..2usize {
+        let pixel = stage == 1;
+        let summary = g.u32(metadata.wrapping_add(if pixel { 12 } else { 8 }));
+        let mut desc = descriptors.wrapping_add(if pixel { (g.u32(metadata.wrapping_add(8)) & 255) * 4 } else { 0 });
+        for _ in 0..(summary >> 8 & 15) {
+            let d = g.u32(desc);
+            desc = desc.wrapping_add(4);
+            samplers[stage].push(SamplerSlot { stage: (d & 4095) + if pixel { 0 } else { 257 }, sampler: d >> 12 & 1023, texture: d >> 22 });
+        }
+        for (section, count) in [(0u8, summary >> 12 & 127), (1, summary >> 19 & 15), (2, summary >> 23 & 31), (3, summary >> 28)] {
+            for _ in 0..count {
+                let d = g.u32(desc);
+                desc = desc.wrapping_add(4);
+                let u = Upload {
+                    section,
+                    value: d >> 1 & if section == 3 { 127 } else { 31 },
+                    offset: d >> 6 & 1023,
+                    register: d >> 16 & 255,
+                    count: d >> 24,
+                    convert: section == 0 && d & 1 != 0,
+                    kind: d >> 8 & 255,
+                };
+                // derived constants other than these read undefined stack data
+                if section == 3 && (!matches!(u.kind, 3 | 7) || u.count > 1) {
+                    return Err(Refusal::Decode);
+                }
+                uploads[stage].push(u);
+            }
+        }
+    }
+    Ok(MetaPart {
+        handles, vs, ps, declaration, floats: [vs_floats, ps_floats], reads: shader_reads, samplers, uploads,
+        checked: frame.into(),
+    })
+}
+
+/// A shader binding of this frame: its metadata, the alpha test, the
+/// textures with their sampler states and the constant banks.
+pub struct BindingPart {
+    meta: Arc<MetaPart>,
+    /// (ALPHAFUNC, ALPHAREF) when the binding enables the alpha test
+    alpha: Option<(u32, u32)>,
+    textures: Arc<[TextureBinding]>,
+    constants: [Arc<Constants>; 2],
+}
+
+/// A shader binding's state as the full apply sets it (0x00DAA8B0 with
+/// nothing applied: every sampler, texture and upload).
+fn binding_part(g: &G, c: &mut Caches, info: &FrameInfo, binding: u32) -> Result<BindingPart, Refusal> {
+    let flags = g.u32(binding);
+    let alpha = if flags & 0x18_0000 == 0x18_0000 {
+        let comparison = flags >> 3 & 255;
+        // table 0x01445A70 has eight entries
+        if comparison >= 8 {
+            return Err(Refusal::Decode);
+        }
+        Some((comparison + 1, flags >> 11 & 255))
+    } else {
+        None
+    };
+    let metadata = g.u32(binding.wrapping_add(8));
+    if metadata == 0 {
+        return Err(Refusal::Missing);
+    }
+    let meta = c.meta(g, metadata)?;
+    let value = |n: u32| g.u32(binding.wrapping_add(12 + 4 * n));
+    // textures and sampler states (a later descriptor on a stage wins)
+    let mut bound: Vec<(u32, u32, [u32; 14])> = Vec::new();
+    for slot in meta.samplers.iter().flatten() {
+        let (sampler, texture) = (value(slot.sampler), value(slot.texture));
+        if sampler == 0 || texture == 0 {
+            return Err(Refusal::Missing);
+        }
+        let mut row = c.frame_row(slot.stage);
+        for (ty, v) in c.sampler(g, sampler) {
+            row[ty as usize] = v;
+        }
+        if (1..=5).contains(&info.filtering) && row[6] == 3 {
+            // 0x00DA7250's non-null branch (see the module notes)
+            if info.filtering == 1 {
+                row[5] = 2;
+                row[6] = 2;
+                row[7] = 2;
+            } else {
+                row[10] = 1 << (info.filtering - 1);
+            }
+        }
+        if slot.stage < 16 && info.srgb {
+            row[11] = (g.u32(texture.wrapping_add(0x20)) & 0x4000_0000 != 0 && g.u32(texture.wrapping_add(0x2C)) & 0x8_0000 == 0) as u32;
+        }
+        let handle = g.u32(texture.wrapping_add(0x34));
+        match bound.iter_mut().find(|b| b.0 == slot.stage) {
+            Some(b) => *b = (slot.stage, handle, row),
+            None => bound.push((slot.stage, handle, row)),
+        }
+    }
+    bound.retain(|b| b.1 != 0);
+    bound.sort_unstable_by_key(|b| b.0);
+    let mut textures = Vec::with_capacity(bound.len());
+    for &(stage, handle, states) in &bound {
+        let t = c.texture(handle).ok_or(Refusal::Missing)?;
+        textures.push(TextureBinding { sampler: stage, resource: handle, states, ..t });
+    }
+    // constants: the binding's registers over zeros
+    let mut banks = [
+        Constants { f: vec![[0; 4]; meta.floats[0].min(FLOATS[0])], ..Default::default() },
+        Constants { f: vec![[0; 4]; meta.floats[1].min(FLOATS[1])], ..Default::default() },
+    ];
+    let mut written = [([0u64; 4], 0u16, 0u16); 2];
+    for stage in 0..2 {
+        let bank = &mut banks[stage];
+        let w = &mut written[stage];
+        for u in &meta.uploads[stage] {
+            let v = value(u.value);
+            match u.section {
+                3 => {
+                    if u.count == 0 {
+                        continue;
+                    }
+                    let dims = [g.u16(v.wrapping_add(0x20)), g.u16(v.wrapping_add(0x22)) & 0x3FFF, g.u16(v.wrapping_add(0x26)) & 0x7FF];
+                    let mut r = [0u32; 4];
+                    for k in 0..3 {
+                        r[k] = if u.kind == 3 { (1.0f32 / dims[k] as f32).to_bits() } else { (dims[k] as f32).to_bits() };
+                    }
+                    set_float(bank, w, u.register, r);
+                }
+                0 => {
+                    let at = (v & !15).wrapping_add(u.offset * 4);
+                    let count = if v & 15 != 0 { u.count.min((v & 15) * 16) } else { u.count };
+                    for i in 0..count {
+                        let r: [u32; 4] = std::array::from_fn(|j| g.u32(at.wrapping_add(i * 16 + j as u32 * 4)));
+                        let r = if u.convert { r.map(|x| (x as i32 as f32).to_bits()) } else { r };
+                        set_float(bank, w, u.register + i, r);
+                    }
+                }
+                1 => {
+                    let at = (v & !15).wrapping_add(u.offset * 4);
+                    for i in 0..u.count {
+                        let n = u.register + i;
+                        if n < 16 {
+                            bank.i[n as usize] = std::array::from_fn(|j| g.u32(at.wrapping_add(i * 16 + j as u32 * 4)) as i32);
+                            w.1 |= 1 << n;
+                        }
+                    }
+                }
+                _ => {
+                    let at = (v & !15).wrapping_add(u.offset * 4);
+                    for i in 0..u.count {
+                        let n = u.register + i;
+                        if n < 16 {
+                            bank.b[n as usize] = g.u32(at.wrapping_add(i * 4));
+                            w.2 |= 1 << n;
+                        }
+                    }
+                }
+            }
+        }
+        // every register and sampler the shaders read comes from here
+        let r = &meta.reads[stage];
+        if (0..4).any(|k| r.floats[k] & !w.0[k] != 0) {
+            return Err(Refusal::FloatsUncovered);
+        }
+        if r.ints & !w.1 != 0 {
+            return Err(Refusal::IntsUncovered);
+        }
+        if r.bools & !w.2 != 0 {
+            return Err(Refusal::BoolsUncovered);
+        }
+        let base = if stage == 0 { 257 } else { 0 };
+        if (0..16).any(|s| r.samplers >> s & 1 != 0 && !bound.iter().any(|b| b.0 == base + s)) {
+            return Err(Refusal::SamplersUncovered);
+        }
+    }
+    let [vs, ps] = banks;
+    Ok(BindingPart { meta, alpha, textures: textures.into(), constants: [Arc::new(vs), Arc::new(ps)] })
+}
+
+fn set_float(bank: &mut Constants, written: &mut ([u64; 4], u16, u16), n: u32, r: [u32; 4]) {
+    if n < 256 {
+        written.0[n as usize / 64] |= 1 << (n % 64);
+    }
+    if let Some(x) = bank.f.get_mut(n as usize) {
+        *x = r;
+    }
+}
+
+/// A stream binding of this frame (0x00DAA7C0 with nothing applied).
+pub struct StreamPart {
+    streams: Arc<[(u32, u32, u32, u32, u32)]>,
+    indices: u32,
+    extent: u32,
+}
+
+fn stream_part(g: &G, binding: u32) -> Result<StreamPart, Refusal> {
+    let mut streams = Vec::with_capacity(4);
+    let mut extent = 0u32;
+    for k in 0..4u32 {
+        let vb = g.u32(binding.wrapping_add(4 * k));
+        if vb == 0 {
+            continue;
+        }
+        let offset = g.u32(binding.wrapping_add(0x14 + 4 * k));
+        let stride = g.u8(binding.wrapping_add(0x10 + k));
+        if stride == 0 {
+            return Err(Refusal::ZeroStride);
+        }
+        extent = extent.max(g.u32(vb.wrapping_add(0x14)).wrapping_sub(offset) / stride);
+        let handle = g.u32(vb.wrapping_add(0x20));
+        if handle != 0 {
+            // non-instanced: frequency 1
+            streams.push((k, handle, offset, stride, 1));
+        }
+    }
+    let ib = g.u32(binding.wrapping_add(0x28));
+    Ok(StreamPart { streams: streams.into(), indices: if ib == 0 { 0 } else { g.u32(ib.wrapping_add(0x20)) }, extent })
+}
+
+/// A target binding of this frame (0x00DA6FE0 with nothing applied).
+pub struct TargetPart {
+    targets: [Option<Target>; 4],
+    depth: Option<Target>,
+    viewport: [u32; 6],
+    scissor: [i32; 4],
+}
+
+fn target_part(g: &G, c: &mut Caches, info: &FrameInfo, binding: u32) -> Result<TargetPart, Refusal> {
+    let views: [u32; 5] = std::array::from_fn(|k| g.u32(binding.wrapping_add(4 * k as u32)));
+    if views[0] == 0 {
+        return Err(Refusal::NoColourTarget);
+    }
+    let surface = |v: u32| if v == 0 { 0 } else { g.u32(v.wrapping_add(0x14)) };
+    let targets: [Option<Target>; 4] = std::array::from_fn(|k| c.target(surface(views[k])));
+    if targets[0].is_none() {
+        return Err(Refusal::Missing);
+    }
+    let depth = c.target(surface(views[4]));
+    let rect = |a: u32| -> [i32; 4] { std::array::from_fn(|k| g.u32(a.wrapping_add(4 * k as u32)) as i32) };
+    let normalize = |r: &mut [i32; 4]| {
+        if r[2] < r[0] {
+            r[0] = 0;
+            r[2] = 0;
+        }
+        if r[3] < r[1] {
+            r[1] = 0;
+            r[3] = 0;
+        }
+    };
+    let alternate = (g.u32(binding.wrapping_add(0x14)) >> 9 & 1) * 16;
+    let mut v = rect(binding.wrapping_add(0x18 + alternate));
+    v[0] = v[0].max(0);
+    v[1] = v[1].max(0);
+    v[2] = v[2].min(g.u16(binding.wrapping_add(0x58)) as i32);
+    v[3] = v[3].min(g.u16(binding.wrapping_add(0x5A)) as i32);
+    normalize(&mut v);
+    // a target was set, so the cached viewport is the invalid one: equal,
+    // no SetViewport is made
+    if v == info.invalid_viewport.map(|x| x as i32) {
+        return Err(Refusal::ViewportGlobals);
+    }
+    let mut s = rect(binding.wrapping_add(0x38 + alternate));
+    s[0] = s[0].max(v[0]);
+    s[1] = s[1].max(v[1]);
+    s[2] = s[2].min(v[2]);
+    s[3] = s[3].min(v[3]);
+    normalize(&mut s);
+    let viewport = [v[0] as u32, v[1] as u32, (v[2] - v[0]) as u32, (v[3] - v[1]) as u32, 0, 1f32.to_bits()];
+    Ok(TargetPart { targets, depth, viewport, scissor: s })
+}
+
+/// What a texture binding takes from the runtime's texture object.
+fn texture_info(handle: u32) -> Option<TextureBinding> {
+    objects(|o| match o.live.get(&handle).map(|x| &x.kind) {
+        Some(Kind::Texture { data, .. }) => Some(TextureBinding {
+            sampler: 0, resource: handle, states: [0; 14],
+            kind: data.kind, format: data.format, width: data.width, height: data.height,
+            depth: data.depth, levels: data.levels, usage: data.usage,
+        }),
+        _ => None,
+    })
+}
+
+/// The device state a frame's taken draws take over: what the applies do
+/// not set.
+#[derive(Clone, Default)]
+struct DeviceFrame {
+    usable: bool,
+    /// DEVICE_STATES, then ALPHAREF (24) and ALPHAFUNC (25), as present
+    states: Vec<(u32, u32)>,
+    /// sampler rows of stages 0..15 and 257..260
+    rows: FxMap<u32, [u32; 14]>,
+}
+
+/// A render-state list: the fixed part, stencil reference, blend factor,
+/// alpha test and the device's states.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct StatesKey {
+    fixed: usize,
+    stencil: u32,
+    factor: u32,
+    alpha: Option<(u32, u32)>,
+    device: u64,
+}
+
+/// The caches (see above): across frames by identity, and this frame's.
 #[derive(Default)]
 pub struct Caches {
+    frame: u64,
+    device: DeviceFrame,
+    /// a generation of the device's states (part of the render-state keys)
+    device_generation: u64,
     reads: FxMap<usize, (Arc<[u32]>, Reads)>,
-    states: FxMap<Vec<(u32, u32)>, RenderStateList>,
+    fixed: FxMap<NativeStateIdentity, Arc<FixedPart>>,
+    metas: FxMap<u32, Arc<MetaPart>>,
+    samplers: FxMap<(u32, u32), Vec<(u32, u32)>>,
+    states: FxMap<StatesKey, RenderStateList>,
     /// native fixed state by identity and render-state list (its address:
     /// the list is held in `states`)
-    fixed: FxMap<(NativeStateIdentity, u64), Arc<NativeFixedState>>,
-    /// target surfaces of this frame
+    native_fixed: FxMap<(NativeStateIdentity, u64), Arc<NativeFixedState>>,
+    // this frame's
+    bindings: FxMap<u32, Result<Arc<BindingPart>, Refusal>>,
+    streams: FxMap<u32, Result<Arc<StreamPart>, Refusal>>,
+    target_bindings: FxMap<u32, Result<Arc<TargetPart>, Refusal>>,
     targets: FxMap<u32, Option<Target>>,
-    key: Vec<(u32, u32)>,
+    textures: FxMap<u32, Option<TextureBinding>>,
+    index_formats: FxMap<u32, Option<u32>>,
 }
 
 impl Caches {
-    fn reads(&mut self, tokens: &Arc<[u32]>) -> Result<Reads, Refusal> {
-        let key = Arc::as_ptr(tokens) as *const u32 as usize;
-        if let Some((_, r)) = self.reads.get(&key) {
-            return Ok(*r);
+    /// A new frame: what the device holds that the applies do not set
+    /// (with the D3D lock held).
+    pub fn begin_frame(&mut self, info: &FrameInfo) {
+        self.frame += 1;
+        self.bindings.clear();
+        self.streams.clear();
+        self.target_bindings.clear();
+        self.targets.clear();
+        self.textures.clear();
+        self.index_formats.clear();
+        let device = objects(|o| match o.live.get(&info.device).map(|x| &x.kind) {
+            Some(Kind::Device(d)) => {
+                let s = &d.state;
+                let states: Vec<(u32, u32)> =
+                    DEVICE_STATES.iter().chain(&[24, 25]).filter_map(|&k| s.render.get(&k).map(|&v| (k, v))).collect();
+                let rows = (0..16).chain(257..261).map(|t| (t, s.sampler.row(t))).collect();
+                // a taken draw carries streams 0..3 only
+                let usable = s.in_scene && s.streams[4..].iter().all(|x| x.0 == 0);
+                Some(DeviceFrame { usable, states, rows })
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+        if device.states != self.device.states {
+            self.device_generation += 1;
         }
-        let r = reads(tokens)?;
-        if self.reads.len() > 8192 {
-            self.reads.clear();
+        self.device = device;
+        if self.states.len() > 4096 {
+            self.states.clear();
+            self.native_fixed.clear();
         }
-        // the Arc is held, so its address is not reused while cached
-        self.reads.insert(key, (tokens.clone(), r));
-        Ok(r)
     }
+
+    fn frame_row(&self, stage: u32) -> [u32; 14] {
+        self.device.rows.get(&stage).copied().unwrap_or([0; 14])
+    }
+
     fn target(&mut self, surface: u32) -> Option<Target> {
         if surface == 0 {
             return None;
         }
         self.targets.entry(surface).or_insert_with(|| crate::d3d9draw::target(surface)).clone()
+    }
+
+    fn texture(&mut self, handle: u32) -> Option<TextureBinding> {
+        self.textures.entry(handle).or_insert_with(|| texture_info(handle)).clone()
+    }
+
+    /// A SamplerState's (type, value) pairs (0x00DA7250, null old payload).
+    fn sampler(&mut self, g: &G, sampler: u32) -> Vec<(u32, u32)> {
+        let key = (sampler, g.u32(sampler.wrapping_add(0xC)));
+        if let Some(v) = self.samplers.get(&key) {
+            return v.clone();
+        }
+        let words: Vec<u32> = (0..3).map(|k| g.u32(sampler.wrapping_add(0x30 + 4 * k))).collect();
+        let v: Vec<(u32, u32)> =
+            mtstate::packed(mtstate::SAMPLER, &words, None, Some(0), 0).iter().map(|c| (c.args[1], c.args[2])).collect();
+        self.samplers.insert(key, v.clone());
+        v
+    }
+
+    fn meta(&mut self, g: &G, metadata: u32) -> Result<Arc<MetaPart>, Refusal> {
+        if let Some(m) = self.metas.get(&metadata) {
+            if m.checked.load(std::sync::atomic::Ordering::Relaxed) == self.frame {
+                return Ok(m.clone());
+            }
+            // once a frame: the same shader and declaration objects
+            let handles = [0x10, 0x14, 0x18].map(|o| g.u32(metadata.wrapping_add(o)));
+            if handles == m.handles {
+                if let Some(((vs, _), (ps, _), d)) = shader_objects(handles) {
+                    if Arc::ptr_eq(&vs, &m.vs) && Arc::ptr_eq(&ps, &m.ps) && Arc::ptr_eq(&d, &m.declaration) {
+                        m.checked.store(self.frame, std::sync::atomic::Ordering::Relaxed);
+                        return Ok(m.clone());
+                    }
+                }
+            }
+        }
+        let m = Arc::new(meta_part(g, metadata, &mut self.reads, self.frame)?);
+        self.metas.insert(metadata, m.clone());
+        Ok(m)
     }
 }
 
@@ -444,221 +926,181 @@ impl FrameInfo {
     }
 }
 
-fn mask_has(bits: &[u64; 4], n: u32) -> bool {
-    n < 256 && bits[n as usize / 64] >> (n % 64) & 1 != 0
+/// Look up `key` in a per-frame map, building it on a miss.
+fn part<T>(map: &mut FxMap<u32, Result<Arc<T>, Refusal>>, key: u32, build: impl FnOnce() -> Result<T, Refusal>) -> Result<Arc<T>, Refusal> {
+    if let Some(r) = map.get(&key) {
+        return r.clone();
+    }
+    let r = build().map(Arc::new);
+    map.insert(key, r.clone());
+    r
 }
 
 /// The DrawCall the D3D9 path makes for draw record `record` (type 0 or
-/// 1), and the resources it reads (for flush_reads); with the D3D lock
-/// held.
-pub fn draw_call(m: &dyn Mem, info: &FrameInfo, caches: &mut Caches, record: u32, kind: u32) -> Result<(DrawCall, Vec<u32>), Refusal> {
-    let f = decode(m, record, info.invalid_viewport, info.srgb)?;
-    let viewport = f.viewport.ok_or(Refusal::ViewportGlobals)?;
-    if f.targets[0] == 0 {
-        return Err(Refusal::NoColourTarget);
-    }
-    if kind == 1 && f.indices == 0 {
-        return Err(Refusal::NoIndices);
-    }
-    let (primitive, primitives, start, base_vertex, vertex_count) = draw_params(m, record, kind, f.extent)?;
-    // the objects behind the handles
-    let (vs, ps, declaration, index_format) = objects(|o| {
-        let shader = |h: u32| match o.live.get(&h).map(|x| &x.kind) {
-            Some(Kind::Shader { tokens, float_constants, .. }) => Some((tokens.clone(), *float_constants)),
-            _ => None,
-        };
-        let declaration = match o.live.get(&f.declaration).map(|x| &x.kind) {
-            Some(Kind::Declaration { elements, .. }) => Some(elements.clone()),
-            _ => None,
-        };
-        let index_format = match o.live.get(&f.indices).map(|x| &x.kind) {
-            Some(Kind::Buffer { data, .. }) => Some(data.format),
-            _ => None,
-        };
-        (shader(f.vertex_shader), shader(f.pixel_shader), declaration, index_format)
-    });
-    let ((vs, vs_floats), (ps, ps_floats)) = (vs.ok_or(Refusal::Missing)?, ps.ok_or(Refusal::Missing)?);
-    let declaration = declaration.ok_or(Refusal::Missing)?;
-    // every register and sampler the shaders read comes from this binding
-    let shader_reads = [caches.reads(&vs)?, caches.reads(&ps)?];
-    for stage in 0..2 {
-        let r = &shader_reads[stage];
-        let mut floats = [0u64; 4];
-        for &(n, _) in &f.floats[stage] {
-            if n < 256 {
-                floats[n as usize / 64] |= 1 << (n % 64);
-            }
-        }
-        if (0..4).any(|k| r.floats[k] & !floats[k] != 0) {
-            return Err(Refusal::FloatsUncovered);
-        }
-        let ints = f.ints[stage].iter().fold(0u16, |b, &(n, _)| b | 1u16.checked_shl(n).unwrap_or(0));
-        if r.ints & !ints != 0 {
-            return Err(Refusal::IntsUncovered);
-        }
-        let bools = f.bools[stage].iter().fold(0u16, |b, &(n, _)| b | 1u16.checked_shl(n).unwrap_or(0));
-        if r.bools & !bools != 0 {
-            return Err(Refusal::BoolsUncovered);
-        }
-        let base = if stage == 0 { 257 } else { 0 };
-        for s in 0..16 {
-            if r.samplers >> s & 1 != 0 && !f.textures.iter().any(|&(t, h)| t == base + s && h != 0) {
-                return Err(Refusal::SamplersUncovered);
-            }
-        }
-    }
-    // render states: the applies' values, then the device's own
-    let key = &mut caches.key;
-    key.clear();
-    for &(s, v) in &f.states {
-        match key.iter_mut().find(|e| e.0 == s) {
-            Some(e) => e.1 = v,
-            None => key.push((s, v)),
-        }
-    }
-    let state = |key: &Vec<(u32, u32)>, s: u32| key.iter().find(|e| e.0 == s).map(|e| e.1);
-    // blend-factor blending (D3DBLEND_BLENDFACTOR / INVBLENDFACTOR): the
-    // factor on the device depends on the command history
-    if state(key, 27) == Some(1) && [19, 20, 207, 208].iter().any(|&s| matches!(state(key, s), Some(14 | 15))) {
-        return Err(Refusal::BlendFactor);
-    }
-    let stages: Vec<u32> = {
-        let mut v: Vec<u32> = f.textures.iter().map(|t| t.0).chain(f.sampler_states.iter().map(|s| s.0)).collect();
-        v.sort_unstable();
-        v.dedup();
-        v
-    };
-    let (device_ok, device_states, freq, fvf, rows) = with_device(info.device, |d| {
-        let s = &d.state;
-        let ok = s.in_scene && s.streams[4..].iter().all(|x| x.0 == 0);
-        let states: Vec<(u32, u32)> = BACKEND_STATES.iter().chain(&BACKEND_STATES_MORE).filter_map(|&k| s.render.get(&k).map(|&v| (k, v))).collect();
-        let rows: Vec<[u32; 14]> = stages.iter().map(|&t| s.sampler.row(t)).collect();
-        (ok, states, s.stream_freq, s.fvf, rows)
-    });
-    if !device_ok {
+/// 1), with the D3D lock held and `caches.begin_frame` called for this
+/// frame. The resources it reads are `reads_of` it.
+pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, record: u32, kind: u32) -> Result<DrawCall, Refusal> {
+    if !c.device.usable {
         return Err(Refusal::Device);
     }
-    for (s, v) in device_states {
-        if state(key, s).is_none() {
-            key.push((s, v));
-        }
+    let g = G::new(m);
+    let [targets, fixed, shader, streams] = [4u32, 8, 0xC, 0x10].map(|o| g.u32(record.wrapping_add(o)));
+    if targets == 0 || fixed == 0 || shader == 0 || streams == 0 {
+        return Err(Refusal::NullBinding);
     }
-    key.sort_unstable_by_key(|e| e.0);
-    let render_states = match caches.states.get(key.as_slice()) {
+    let t = {
+        let mut map = std::mem::take(&mut c.target_bindings);
+        let r = part(&mut map, targets, || target_part(&g, c, info, targets));
+        c.target_bindings = map;
+        r?
+    };
+    let s = part(&mut c.streams, streams, || stream_part(&g, streams))?;
+    let b = {
+        let mut map = std::mem::take(&mut c.bindings);
+        let r = part(&mut map, shader, || binding_part(&g, c, info, shader));
+        c.bindings = map;
+        r?
+    };
+    // the fixed state: the objects by identity, the dynamic values
+    let id = identity_of(&g, fixed);
+    if id.blend.address == 0 || id.depth.address == 0 || id.raster.address == 0 {
+        return Err(Refusal::NullBinding);
+    }
+    let fp = match c.fixed.get(&id) {
+        Some(f) => f.clone(),
+        None => {
+            let f = Arc::new(fixed_part(&g, &id));
+            c.fixed.insert(id, f.clone());
+            f
+        }
+    };
+    if fp.blend_factor {
+        return Err(Refusal::BlendFactor);
+    }
+    let rgba = g.u32(fixed);
+    let key = StatesKey {
+        fixed: Arc::as_ptr(&fp) as usize,
+        stencil: g.u8(fixed.wrapping_add(4)),
+        factor: (rgba & 0xFF00_FF00) | (rgba & 255) << 16 | (rgba >> 16 & 255),
+        alpha: b.alpha,
+        device: c.device_generation,
+    };
+    let render_states = match c.states.get(&key) {
         Some(l) => l.clone(),
         None => {
-            if caches.states.len() > 4096 {
-                caches.states.clear();
-                caches.fixed.clear();
+            let mut list = fp.states.clone();
+            list.push((193, key.factor));
+            list.push((57, key.stencil));
+            // the alpha test: context init (0x00DA6DA0) sets 15, 24 and 25
+            // each frame, so the device holds what the last apply set
+            list.push((15, key.alpha.is_some() as u32));
+            if let Some((func, reference)) = key.alpha {
+                list.push((25, func));
+                list.push((24, reference));
             }
-            let l: RenderStateList = key.clone().into();
-            caches.states.insert(key.clone(), l.clone());
+            for &(s, v) in &c.device.states {
+                if !list.iter().any(|e| e.0 == s) {
+                    list.push((s, v));
+                }
+            }
+            // later calls win, then sorted by state
+            let mut sorted: Vec<(u32, u32)> = Vec::with_capacity(list.len());
+            for (s, v) in list {
+                match sorted.iter_mut().find(|e| e.0 == s) {
+                    Some(e) => e.1 = v,
+                    None => sorted.push((s, v)),
+                }
+            }
+            sorted.sort_unstable_by_key(|e| e.0);
+            let l: RenderStateList = sorted.into();
+            c.states.insert(key, l.clone());
             l
         }
     };
-    // textures with their sampler states: the device's row, the binding's
-    // states over it
-    let mut rows = rows;
-    for &(t, ty, v) in &f.sampler_states {
-        let k = stages.iter().position(|&x| x == t).unwrap();
-        rows[k][ty as usize % 14] = v;
+    // the draw
+    if kind == 1 && s.indices == 0 {
+        return Err(Refusal::NoIndices);
     }
-    if (1..=5).contains(&info.filtering) {
-        // 0x00DA7250's non-null branch (see the module notes)
-        for row in rows.iter_mut() {
-            if row[6] == 3 {
-                if info.filtering == 1 {
-                    row[5] = 2;
-                    row[6] = 2;
-                    row[7] = 2;
-                } else {
-                    row[10] = 1 << (info.filtering - 1);
-                }
-            }
-        }
-    }
-    let mut bound: Vec<(u32, u32)> = Vec::with_capacity(f.textures.len());
-    for &(t, h) in &f.textures {
-        match bound.iter_mut().find(|b| b.0 == t) {
-            Some(b) => b.1 = h,
-            None => bound.push((t, h)),
-        }
-    }
-    bound.retain(|b| b.1 != 0);
-    bound.sort_unstable_by_key(|b| b.0);
-    let textures: Option<Vec<TextureBinding>> = objects(|o| {
-        bound.iter().map(|&(t, h)| match o.live.get(&h).map(|x| &x.kind) {
-            Some(Kind::Texture { data, .. }) => Some(TextureBinding {
-                sampler: t, resource: h, states: rows[stages.iter().position(|&x| x == t).unwrap()],
-                kind: data.kind, format: data.format, width: data.width, height: data.height,
-                depth: data.depth, levels: data.levels, usage: data.usage,
-            }),
+    let (primitive, primitives, start, base_vertex, vertex_count) = draw_params_of(&g, record, kind, s.extent)?;
+    let indices = if kind == 1 {
+        let ib = s.indices;
+        let format = *c.index_formats.entry(ib).or_insert_with(|| objects(|o| match o.live.get(&ib).map(|x| &x.kind) {
+            Some(Kind::Buffer { data, .. }) => Some(data.format),
             _ => None,
-        }).collect()
-    });
-    let textures = textures.ok_or(Refusal::Missing)?;
-    // constants: the binding's registers over zeros (nothing else is read)
-    let constants = |stage: usize, count: usize| {
-        let mut c = Constants { f: vec![[0; 4]; count.min(FLOATS[stage])], ..Default::default() };
-        for &(n, v) in &f.floats[stage] {
-            if let Some(r) = c.f.get_mut(n as usize) {
-                *r = v;
-            }
-        }
-        for &(n, v) in &f.ints[stage] {
-            if let Some(r) = c.i.get_mut(n as usize) {
-                *r = v;
-            }
-        }
-        for &(n, v) in &f.bools[stage] {
-            if let Some(r) = c.b.get_mut(n as usize) {
-                *r = v;
-            }
-        }
-        Arc::new(c)
+        }));
+        Indices::Buffer(ib, format.ok_or(Refusal::Missing)?)
+    } else {
+        Indices::None
     };
-    let streams: Vec<(u32, u32, u32, u32, u32)> = (0..4u32)
-        .filter(|&k| f.streams[k as usize].0 != 0)
-        .map(|k| { let (h, off, stride) = f.streams[k as usize]; (k, h, off, stride, freq[k as usize]) })
-        .collect();
-    let indices = if kind == 1 { Indices::Buffer(f.indices, index_format.ok_or(Refusal::Missing)?) } else { Indices::None };
-    let targets: [Option<Target>; 4] = std::array::from_fn(|k| caches.target(f.targets[k]));
-    if targets[0].is_none() {
-        return Err(Refusal::Missing);
-    }
-    let depth = caches.target(f.depth);
-    // what the D3D9 path flushes: textures, streams, indices, targets
-    let mut reads: Vec<u32> = textures.iter().map(|t| t.resource).collect();
-    reads.extend(streams.iter().map(|s| s.1));
-    if kind == 1 {
-        reads.push(f.indices);
-    }
-    reads.extend(f.targets.iter().copied().filter(|&t| t != 0));
-    let d = DrawCall {
+    Ok(DrawCall {
         primitive, primitives, start, base_vertex, min_index: 0, vertex_count,
-        vertices: Vertices::Streams(streams.into()),
+        vertices: Vertices::Streams(s.streams.clone()),
         indices,
-        vertex_shader: Some(vs), pixel_shader: Some(ps),
-        declaration, fvf,
-        vs_constants: constants(0, vs_floats), ps_constants: constants(1, ps_floats),
-        textures: textures.into(),
+        vertex_shader: Some(b.meta.vs.clone()), pixel_shader: Some(b.meta.ps.clone()),
+        declaration: b.meta.declaration.clone(),
+        // the runtime's FVF stays 0 once declarations are used
+        fvf: 0,
+        vs_constants: b.constants[0].clone(), ps_constants: b.constants[1].clone(),
+        textures: b.textures.clone(),
         render_states,
-        viewport,
-        scissor: f.scissor.unwrap_or([0; 4]),
-        targets, depth,
+        viewport: t.viewport,
+        scissor: t.scissor,
+        targets: t.targets.clone(),
+        depth: t.depth.clone(),
+    })
+}
+
+/// The resources a DrawCall reads, as the D3D9 path flushes them:
+/// textures, streams, indices, render targets.
+pub fn reads_of(d: &DrawCall) -> impl Iterator<Item = u32> + '_ {
+    let streams = match &d.vertices {
+        Vertices::Streams(s) => &s[..],
+        Vertices::Inline { .. } => &[][..],
     };
-    Ok((d, reads))
+    let indices = match d.indices {
+        Indices::Buffer(r, _) => Some(r),
+        _ => None,
+    };
+    d.textures.iter().map(|t| t.resource)
+        .chain(streams.iter().map(|s| s.1))
+        .chain(indices)
+        .chain(d.targets.iter().flatten().map(|t| t.surface))
+}
+
+fn identity_of(g: &G, fixed: u32) -> NativeStateIdentity {
+    let id = |o: u32| {
+        let address = g.u32(fixed.wrapping_add(o));
+        NativeObjectIdentity { address, hash: if address == 0 { 0 } else { g.u32(address.wrapping_add(0xC)) } }
+    };
+    NativeStateIdentity { blend: id(8), depth: id(0xC), raster: id(0x10), raster_flip: g.u32(fixed.wrapping_add(4)) >> 8 & 1 != 0 }
+}
+
+fn draw_params_of(g: &G, record: u32, kind: u32, extent: u32) -> Result<(u32, u32, u32, i32, u32), Refusal> {
+    let code = (g.u32(g.u32(record.wrapping_add(0xC))) >> 21) & 0xFF;
+    let count = g.u32(record.wrapping_add(0x14));
+    let (primitive, primitives) = match code.wrapping_sub(1) {
+        0 => (2, count >> 1),
+        1 => (3, count.wrapping_sub(1)),
+        2 => (4, count / 3),
+        3 => (5, count.wrapping_sub(2)),
+        _ => (1, count),
+    };
+    let vertices = crate::d3d9draw::vertex_count(primitive, primitives).ok_or(Refusal::Primitive)?;
+    let start = g.u32(record.wrapping_add(0x18));
+    Ok(match kind {
+        0 => (primitive, primitives, start, 0, vertices),
+        _ => {
+            let base = g.u32(record.wrapping_add(0x1C));
+            (primitive, primitives, start, base as i32, extent.wrapping_sub(base))
+        }
+    })
 }
 
 /// The fixed-state objects of a draw record: address and hash (+0xC), and
 /// the rasterizer variant (fixed binding +4 bit 8).
 pub fn identity(m: &dyn Mem, record: u32) -> NativeStateIdentity {
-    let fixed = m.u32(record.wrapping_add(8));
-    let id = |o: u32| {
-        let address = m.u32(fixed.wrapping_add(o));
-        NativeObjectIdentity { address, hash: if address == 0 { 0 } else { m.u32(address.wrapping_add(0xC)) } }
-    };
-    NativeStateIdentity { blend: id(8), depth: id(0xC), raster: id(0x10), raster_flip: m.u32(fixed.wrapping_add(4)) >> 8 & 1 != 0 }
+    let g = G::new(m);
+    identity_of(&g, g.u32(record.wrapping_add(8)))
 }
 
 /// A taken draw as a native draw: the DrawCall's state; the constants as
@@ -673,7 +1115,7 @@ pub fn native_draw(d: &DrawCall, identity: NativeStateIdentity, caches: &mut Cac
     let (Some(vertex_shader), Some(pixel_shader)) = (d.vertex_shader.clone(), d.pixel_shader.clone()) else {
         return Err(Refusal::Missing);
     };
-    let state = caches.fixed.entry((identity, d.render_states.address())).or_insert_with(|| {
+    let state = caches.native_fixed.entry((identity, d.render_states.address())).or_insert_with(|| {
         Arc::new(NativeFixedState { identity, render_states: d.render_states.iter().copied().collect::<Vec<_>>().into() })
     }).clone();
     let constants = |c: &Constants| NativeConstants {
@@ -823,22 +1265,27 @@ impl Native {
 /// The first colour target's (width, height) of a draw record; (0, 0)
 /// without one.
 fn target_size(m: &dyn Mem, record: u32) -> (u32, u32) {
-    let binding = m.u32(record.wrapping_add(4));
+    let g = G::new(m);
+    let binding = g.u32(record.wrapping_add(4));
     if binding == 0 {
         return (0, 0);
     }
-    let view = m.u32(binding);
+    let view = g.u32(binding);
     if view == 0 {
         return (0, 0);
     }
-    (m.u16(view.wrapping_add(0x18)) as u32, m.u16(view.wrapping_add(0x1A)) as u32 & 0x7FFF)
+    (g.u16(view.wrapping_add(0x18)), g.u16(view.wrapping_add(0x1A)) & 0x7FFF)
 }
 
 impl CommandSink for Native {
     fn frame_begin(&self, m: &mut dyn Mem, render: u32, _context: u32) {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let g = &mut *g;
         g.info = FrameInfo::read(m, render);
-        g.caches.targets.clear();
+        if self.mode != Mode::Off {
+            let _lock = crate::d3d9dev::device_lock();
+            g.caches.begin_frame(&g.info);
+        }
     }
 
     fn command(&self, m: &mut dyn Mem, _context: u32, record: u32, kind: u32) -> Taken {
@@ -882,10 +1329,12 @@ impl Native {
         }
         let size = target_size(m, record);
         *f.draws_by_size.entry(size).or_default() += 1;
-        f.targets.insert(m.u32(record.wrapping_add(4)));
-        f.states.insert(m.u32(record.wrapping_add(8)));
-        f.shaders.insert(m.u32(record.wrapping_add(0xC)));
-        f.streams.insert(m.u32(record.wrapping_add(0x10)));
+        if self.mode == Mode::Census {
+            f.targets.insert(m.u32(record.wrapping_add(4)));
+            f.states.insert(m.u32(record.wrapping_add(8)));
+            f.shaders.insert(m.u32(record.wrapping_add(0xC)));
+            f.streams.insert(m.u32(record.wrapping_add(0x10)));
+        }
         if size != g.scene || size == (0, 0) {
             return Taken::Default;
         }
@@ -906,19 +1355,19 @@ impl Native {
                 t.taken += 1;
                 Taken::Default
             }
-            Ok((d, reads)) if self.mode == Mode::DrawCall => {
-                crate::d3d9draw::flush_reads(m, reads);
+            Ok(d) if self.mode == Mode::DrawCall => {
+                crate::d3d9draw::flush_reads(m, reads_of(&d));
                 crate::d3d9draw::backend_unlocked(|b| b.draw(&d));
                 t.taken += 1;
                 Taken::Handled
             }
-            Ok((d, reads)) => match native_draw(&d, identity(m, record), &mut g.caches) {
+            Ok(d) => match native_draw(&d, identity(m, record), &mut g.caches) {
                 Err(r) => {
                     *t.refused.entry(r).or_default() += 1;
                     Taken::Default
                 }
                 Ok(native) => {
-                    crate::d3d9draw::flush_reads(m, reads);
+                    crate::d3d9draw::flush_reads(m, reads_of(&d));
                     g.pending.push(native, d);
                     t.taken += 1;
                     Taken::Handled
