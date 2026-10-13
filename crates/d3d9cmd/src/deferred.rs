@@ -7,7 +7,12 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-type Work = Box<dyn FnOnce(&mut dyn GraphicsBackend) + Send>;
+/// A command: a draw by value (the commonest, L144: without a heap box per
+/// draw; the channel's slots are preallocated), or any other work.
+enum Work {
+    Draw(DrawCall),
+    Run(Box<dyn FnOnce(&mut dyn GraphicsBackend) + Send>),
+}
 
 /// Moves a backend (including its presentation sink) onto one host thread.
 /// Commands own their data; mutable resource IDs are interpreted in FIFO order.
@@ -45,7 +50,10 @@ impl DeferredBackend {
         let counter = executed.clone();
         let worker = thread::Builder::new().name("d3d9-backend".into()).spawn(move || {
             while let Ok(work) = receiver.recv() {
-                work(backend.as_mut());
+                match work {
+                    Work::Draw(draw) => backend.draw(&draw),
+                    Work::Run(work) => work(backend.as_mut()),
+                }
                 counter.fetch_add(1, Ordering::Release);
             }
         }).expect("start D3D9 backend worker");
@@ -56,13 +64,17 @@ impl DeferredBackend {
     }
 
     fn enqueue(&mut self, work: impl FnOnce(&mut dyn GraphicsBackend) + Send + 'static) {
+        self.send(Work::Run(Box::new(work)));
+    }
+
+    fn send(&mut self, work: Work) {
         // Before recording any part of a third frame, retire the oldest
         // Present. Waiting only at the third Present would allow its entire
         // frame's draws to get three frames ahead of the display.
         if self.presents.len() == 2 {
             self.presents.pop_front().unwrap().recv().expect("D3D9 backend worker stopped before Present");
         }
-        if self.sender.as_ref().unwrap().send(Box::new(work)).is_err() {
+        if self.sender.as_ref().unwrap().send(work).is_err() {
             panic!("D3D9 backend worker stopped");
         }
         self.recorded += 1;
@@ -132,13 +144,8 @@ impl GraphicsBackend for DeferredBackend {
         self.result(move |b| b.native_compare_end(id, job))
     }
     fn upload(&mut self, upload: Upload) { self.enqueue(move |b| b.upload(upload)); }
-    fn draw(&mut self, draw: &DrawCall) {
-        let draw = draw.clone();
-        self.enqueue(move |b| b.draw(&draw));
-    }
-    fn draw_owned(&mut self, draw: DrawCall) {
-        self.enqueue(move |b| b.draw(&draw));
-    }
+    fn draw(&mut self, draw: &DrawCall) { self.send(Work::Draw(draw.clone())); }
+    fn draw_owned(&mut self, draw: DrawCall) { self.send(Work::Draw(draw)); }
     fn draws(&mut self, draws: Vec<DrawCall>) {
         self.enqueue(move |b| b.draws(draws));
     }
