@@ -89,6 +89,14 @@ class DeadFlags(unittest.TestCase):
 
 
 class Idioms(unittest.TestCase):
+    def test_predicates_match_flags_cond(self):
+        self.assertEqual(le.predicates('pc = if cpu.fl.cond("e") { 0x1 } else { 0x2 };'), "pc = if cpu.fl.zf() { 0x1 } else { 0x2 };")
+        self.assertEqual(le.predicates('cpu.ebx = cpu.fl.cond("be") as u32;'), "cpu.ebx = (cpu.fl.cf() || cpu.fl.zf()) as u32;")
+        self.assertEqual(le.predicates('x = cpu.fl.cond("nle");'), "x = (!cpu.fl.zf() && cpu.fl.sf() == cpu.fl.of());")
+        self.assertEqual(le.predicates('x = cpu.fl.cond("zz"); y = "cpu.fl.cond(";'), 'x = cpu.fl.cond("zz"); y = "cpu.fl.cond(";')
+        # all 30 codes of Flags::cond
+        self.assertEqual(len(le.PREDICATE), 30)
+
     def test_sse_lane_loop_needs_its_destination_as_first_operand(self):
         arm = "for k in 0..4 { cpu.xmm[1][k] = x86::mulss(cpu.xmm[2][k], cpu.xmm[3][k]); }"
         self.assertEqual(le.idioms(arm), arm)
@@ -206,6 +214,11 @@ SSE = ["{ let a = esp.wrapping_add(0x10); xmm1 = [m.u32(a), m.u32(a.wrapping_add
        "edx = m.u32(0u32.wrapping_add(0x2468));"]
 
 
+# every condition code, read after a SUB-kind compare
+CONDS = "esi = esi" + "".join(f' ^ ((fl.cond("{cc}") as u32) << {k})' for k, cc in enumerate(
+    ["e", "ne", "b", "ae", "be", "a", "s", "ns", "l", "ge", "le", "g", "o", "no", "p", "np"])) + ";"
+
+
 class Differential(unittest.TestCase):
     def test_lean_and_literal_templates_agree(self):
         S, L = lift.SAVE, lift.LOAD
@@ -218,7 +231,8 @@ class Differential(unittest.TestCase):
             "0x1010 => { " + " ".join([
                 alu("or", "eax", "0x10u32"),
                 "{ let (a, b) = (edx, 0x0u32); let r = fl.alu_carry(a, b, 32, false); edx = r; }",
-                alu("add", "ecx", "0x3u32"), inc("ecx"), alu("test", "eax", "eax"), 'ebx = fl.cond("ne") as u32;',
+                alu("add", "ecx", "0x3u32"), inc("ecx"), alu("cmp", "ecx", "edx"), CONDS,
+                alu("test", "eax", "eax"), 'ebx = fl.cond("ne") as u32;',
                 alu("add", "esi", "ebx"), pop("ebp"), f"esp = esp.wrapping_add(4 + 0); {S} return; }}"]),
             "0x1020 => { " + " ".join([
                 alu("add", "eax", "ecx"), push("eax"),
@@ -249,7 +263,8 @@ class Differential(unittest.TestCase):
                        "let n = 0x3u32; let r = (a << n) & u32::MAX; cpu.fl = Flags::new(x86::SHL", "cpu.xmm[1] = x86::mulps(cpu.xmm[1], cpu.xmm[2]);",
                        "cpu.xmm[3] = x86::addps(cpu.xmm[3], cpu.xmm[3]);",
                        "cpu.xmm[2] = emit::andnps(cpu.xmm[2], cpu.xmm[1]);",
-                       "cpu.xmm[3] = emit::xorps(cpu.xmm[3], emit::load128(m, pt, cpu.ebx & 0xFF0u32));", "m.fast_u32(pt, 0x2468u32)"):
+                       "cpu.xmm[3] = emit::xorps(cpu.xmm[3], emit::load128(m, pt, cpu.ebx & 0xFF0u32));",
+                       "pc = if cpu.fl.zf() { 0x1020 } else { 0x1010 }; continue;", "(cpu.fl.sf() != cpu.fl.of())", "m.fast_u32(pt, 0x2468u32)"):
             self.assertIn(wanted, lean)
         self.assertNotIn("_p0(", lean)
         for wanted in ("0x1000..=0x1000 => match g_00001000_p0(m, cpu, pt, pc) { Some(next) => next, None => return },",
