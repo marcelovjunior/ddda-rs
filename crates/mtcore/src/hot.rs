@@ -25,7 +25,112 @@ pub const PORTS: &[(u32, x86::LiftFn, u8)] = &[
     (0x00fe_dc00, restore_draw_recording_state, 0xff),
     (0x00fe_d200, initialize_draw_recording_lanes, 0xff),
     (0x00e1_0fc0, intern_dependency_keys, 0xff),
+    (0x0058_28e0, forward_three_records, 0xff),
+    (0x0058_2900, forward_five_primary_records, 0xff),
+    (0x0058_2920, forward_five_secondary_records, 0xff),
+    (0x005a_bdc0, object_flag_16, 0xff),
+    (0x0058_29a0, track_identifier_transition, 0xff),
 ];
+
+// Translated from 0x005828e0, 0x00582900, 0x00582920
+// (DDDA.exe 2017-12-13 Steam). Their count/table operands are code constants;
+// the table contents remain in the installed image, read by 0x00582a10.
+fn forward_record_table(m: &mut dyn Mem, c: &mut Cpu, count: u32, table: u32, resume: u32) {
+    use ddnative_base::emit;
+    let pt = m.page_table();
+    c.eax = m.fast_u32(pt, c.esp.wrapping_add(8));
+    c.edx = m.fast_u32(pt, c.esp.wrapping_add(4));
+    emit::push(count, m, pt, c);
+    emit::push(table, m, pt, c);
+    emit::push(c.eax, m, pt, c);
+    c.eax = m.fast_u32(pt, c.esp.wrapping_add(0x18));
+    emit::push(c.edx, m, pt, c);
+    emit::push(c.ecx, m, pt, c);
+    emit::push(resume, m, pt, c);
+    x86::call_ext(m, c, 0x582a10);
+    ret(c, 12);
+}
+
+// Translated from 0x005828e0 (DDDA.exe 2017-12-13 Steam).
+pub fn forward_three_records(m: &mut dyn Mem, c: &mut Cpu) {
+    forward_record_table(m, c, 3, 0x1578008, 0x5828fb);
+}
+
+// Translated from 0x00582900 (DDDA.exe 2017-12-13 Steam).
+pub fn forward_five_primary_records(m: &mut dyn Mem, c: &mut Cpu) {
+    forward_record_table(m, c, 5, 0x1578020, 0x58291b);
+}
+
+// Translated from 0x00582920 (DDDA.exe 2017-12-13 Steam).
+pub fn forward_five_secondary_records(m: &mut dyn Mem, c: &mut Cpu) {
+    forward_record_table(m, c, 5, 0x1578048, 0x58293b);
+}
+
+// Translated from 0x005abdc0 (DDDA.exe 2017-12-13 Steam).
+/// Test bit 16 at object+0x2364, retaining the original partial-AL result.
+pub fn object_flag_16(m: &mut dyn Mem, c: &mut Cpu) {
+    let pt = m.page_table();
+    c.eax = m.fast_u32(pt, c.esp.wrapping_add(4));
+    c.ecx = m.fast_u32(pt, c.eax.wrapping_add(0x2364)) & 0x10000;
+    c.eax = c.fl.alu_or(0, c.ecx, 32);
+    if c.eax == 0 {
+        c.fl.alu_xor(0, 0, 8);
+    } else {
+        c.eax |= 1;
+    }
+    ret(c, 4);
+}
+
+// Translated from 0x005829a0 (DDDA.exe 2017-12-13 Steam).
+/// Latch a matching identifier; report when the latched identifier changes.
+pub fn track_identifier_transition(m: &mut dyn Mem, c: &mut Cpu) {
+    use ddnative_base::emit;
+    let pt = m.page_table();
+    c.eax = m.fast_u32(pt, c.esp.wrapping_add(12));
+    c.edx = m.fast_u32(pt, c.esp.wrapping_add(8));
+    emit::push(c.ebx, m, pt, c);
+    c.ebx = m.fast_u32(pt, c.esp.wrapping_add(8));
+    c.ecx = c.edx.wrapping_add(c.eax.wrapping_mul(8)).wrapping_add(8);
+    c.eax = m.fast_u32(pt, c.ecx);
+    emit::push(c.esi, m, pt, c);
+    c.esi = 0;
+    emit::push(c.edi, m, pt, c);
+    c.edi = m.fast_u32(pt, c.esp.wrapping_add(0x1c));
+    let mut changed = false;
+    let mut edi_restored = false;
+    if c.eax == 0 {
+        if c.edi != m.fast_u32(pt, c.ebx.wrapping_add(0x2dd4)) {
+            c.edi = emit::pop(m, pt, c);
+            edi_restored = true;
+            for offset in [8, 16, 24, 32] {
+                m.fast_set_u32(pt, c.edx.wrapping_add(offset), c.esi);
+            }
+        } else {
+            m.fast_set_u32(pt, c.ecx, 1);
+            // Reload: the state word may alias the owner's identifier.
+            c.fl.alu_sub(c.edi, m.fast_u32(pt, c.ebx.wrapping_add(0x2dd4)), 32);
+            changed = !c.fl.zf();
+        }
+    } else {
+        c.eax = c.eax.wrapping_sub(1);
+        if c.eax == 0 {
+            c.fl.alu_sub(c.edi, m.fast_u32(pt, c.ebx.wrapping_add(0x2dd4)), 32);
+            changed = !c.fl.zf();
+        }
+    }
+    if !edi_restored {
+        c.edi = emit::pop(m, pt, c);
+    }
+    c.esi = emit::pop(m, pt, c);
+    if changed {
+        c.eax = (c.eax & !255) | 1;
+    } else {
+        c.eax &= !255;
+        c.fl.alu_xor(0, 0, 8);
+    }
+    c.ebx = emit::pop(m, pt, c);
+    ret(c, 16);
+}
 
 // Translated from 0x00fedb80 (DDDA.exe 2017-12-13 Steam).
 /// Save the recording state's variable-length descriptor and sort cursor,

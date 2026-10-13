@@ -436,3 +436,66 @@ Private corpus `keys.json`; record `--keys`, replay `--keys`, benchmark
 `keys-small-{clippy,registry}.log` in the L130 target directory.
 The checker now supports focused replay when a family switch is supplied;
 no switch still runs every suite. Next: five observed emulator entries.
+
+### Five additional emulator replacements
+
+Head/L136's run-log audit (board #11879/#11883) found nine remaining
+addresses after the duration family. Ported **5828E0, 582900, 582920,
+5ABDC0 and 5829A0** and registered all five through mtcore/ddports.
+The first three forward stack/register arguments and installed-image
+table pointers to 582A10. The predicate retains EAX=10001 when bit16 is
+set. The transition leaf preserves its zero/latched/invalid state paths,
+four-slot clearing and partial AL result. No table contents are copied.
+
+**640 original Unicorn + isolated lifted cases / 768 call-return
+boundaries pass**. Covers every conditional edge in the two branching
+leaves, randomized GPR/XMM/flags, all rounding modes, rotated x87 TOP,
+untouched x87 payloads, owner/state overlap and a clear overlapping saved
+EDI (which must be restored before the writes). Each forwarding entry is
+tested separately. Isolated lifter bodies are generated in private scratch
+for these missing-inventory entries; inventory and shards remain unchanged.
+
+Five alternating rounds, 20 warmups + 1,000 measured calls, actual runtime
+Unicorn fallback on GuestMemory versus the port. Forwarding calls use the
+same explicitly recorded synthetic 582A10 effects through a Registry binding
+on the fallback side. Fresh Cpu x87 identities are released to avoid a
+benchmark-induced spill leak. Full-state gates run before measurements.
+Hardware FNSAVE in the runtime bridge writes FFFF into its three reserved
+words; those are checked against the hardware contract, while architectural
+x87 control/status/tags and all register payloads retain the original oracle.
+
+| Entry / path | Fallback ns | Port ns | Ratio |
+|---|---:|---:|---:|
+| 5828E0 forwarding | 15,272.9 | 148.2 | 103.1x |
+| 582900 forwarding | 14,174.8 | 148.5 | 95.5x |
+| 582920 forwarding | 19,413.1 | 189.9 | 102.2x |
+| 5ABDC0 clear / set | 6,499.1 / 7,535.2 | 48.1 / 49.6 | 135.1 / 151.9x |
+| 5829A0 latched / latch | 11,016.6 / 9,032.3 | 85.6 / 91.6 | 128.7 / 98.6x |
+| 5829A0 clear / changed | 10,695.8 / 9,790.6 | 140.7 / 89.3 | 76.0 / 109.6x |
+| 5829A0 saved-EDI overlap | 10,504.2 | 93.2 | 112.7x |
+
+Isolated opt1-lifted versus opt3 ports are much closer: forwarding
+**138..149 / 144..180 ns**, predicate **47.7 / 42.1 ns**, invalid transition
+**90.9 / 70.4 ns**. The improvement is emulator removal. Counts in the run
+logs are first-seen diagnostics, all before their gameplay marker: they
+do not establish invocation frequency or the removable gameplay share.
+**No FPS/loading-time/memory improvement is claimed. Runtime activation
+requires L136 and head's integrated run.**
+
+Strict mtcore clippy and ddports registry pass. Corpus/body: private
+`small.json/.rs`. Record `--small`, replay `--small`, benchmark
+`--bench --small` or actual fallback `--bench --emu --small`, via heavy.py.
+Logs: `small-{differential,bench,runtime-bench2}.log` and
+`keys-small-{clippy,registry}.log` under `C:/ddda-targets/L130`.
+
+This continuation adds **nine ports / 1,612 original cases / 5,744
+callee boundaries**. Remaining assigned c17 candidates include 10A0310,
+10A3C00, FEE320, FEDD60, DD42C0, DAED10, 112D970 and 431F10, plus the
+worker helpers FEFB90/FF1920. These require larger whole-function fixtures;
+none is claimed implemented in this batch. DBDC90 is the job scheduler,
+so its nearest-lifted share includes waits and dispatch, not removable
+body work. Four first-seen emulated entries remain: 4A0C00, 815C60,
+C1D790 and the CRT interior entry 1300534 (platform-owner review needed).
+Next action: head integrates with L136, checks the eleven newly covered
+fallback addresses disappear, then selects the largest remaining exclusive
+cost from the refreshed profile. Milestone evidence handed to codex-7/head.

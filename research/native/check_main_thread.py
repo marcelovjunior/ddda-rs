@@ -53,6 +53,72 @@ fn durations_runtime_cost() {
 '''
 
 
+EMU_SMALL_TEST = r'''
+#[test]
+#[ignore = "bounded runtime emulator versus native small ports"]
+fn small_runtime_cost() {
+    use ddruntime::{dispatch::{Registry,Binding},memory::GuestMemory};
+    ddnative_host::install();
+    ddnative_base::mem::ATOMIC_ACCESSES.store(true,std::sync::atomic::Ordering::Relaxed);
+    let data=small_vectors().unwrap();
+    let mut registry=Registry::new();
+    fn callback(m:&mut dyn Mem,c:&mut Cpu) { x86::call_ext(m,c,0x582a10); }
+    registry.insert(0x582a10,Binding::Lifted(callback)).unwrap();
+    let mut m=GuestMemory::new();
+    for base in [0x582000,0x5ab000,0xe000000,0xe001000,0xe002000,0xf007000,0xf008000] {
+        m.map(base,0x1000,ddnative_base::mem::READ|ddnative_base::mem::WRITE).unwrap();
+    }
+    for (address,bytes) in data["code"].as_object().unwrap() {
+        let address:u32=address.parse().unwrap();
+        for (i,b) in bytes.as_str().unwrap().as_bytes().chunks(2).enumerate() {
+            m.set_u8(address+i as u32,u8::from_str_radix(std::str::from_utf8(b).unwrap(),16).unwrap());
+        }
+    }
+    for case in data["cases"].as_array().unwrap().iter().filter(|c| match n(&c["entry"]) { 0x5829a0 => [1,3,6,10,11].contains(&n(&c["seed"])),0x5abdc0 => [1,4].contains(&n(&c["seed"])),_ => n(&c["seed"])==4 }) {
+        let entry=n(&case["entry"]);
+        let initial=pairs(&case["initial"]);
+        let initial_cpu=cpu(&case["before"]);
+        let event=case["events"].as_array().unwrap().get(1).map(|v| (cpu(v),pairs(&v["effects"])));
+        x86::set_ext_calls(Some(Box::new(move |m,c,target| {
+            assert_eq!(target,0x582a10);
+            release_x87(c);
+            let (state,writes)=event.as_ref().unwrap();
+            for (&a,&b) in writes {m.set_u8(a,b);}
+            *c=state.clone();
+        })));
+        for round in 0..5 {
+            for offset in 0..2 {
+                let emulated=(round+offset)%2==0;
+                let mut elapsed=std::time::Duration::ZERO;
+                for iteration in 0..1020 {
+                    for (&a,&b) in &initial {m.set_u8(a,b);}
+                    let mut c=initial_cpu.clone();
+                    let start=std::time::Instant::now();
+                    if emulated { ddruntime::emu::run(&registry,&mut m,&mut c,entry); }
+                    else { small_port(entry)(&mut m,&mut c); }
+                    let time=start.elapsed();
+                    if iteration>=20 {elapsed+=time;}
+                    if iteration==0 {
+                        // The runtime bridge executes hardware FNSAVE even
+                        // when this leaf has no x87 instruction. Its three
+                        // reserved words are FFFF; all architectural state
+                        // and every payload byte still use the same oracle.
+                        let mut expected=case["after"].clone();
+                        expected["x87_executed"]=serde_json::Value::Bool(emulated);
+                        check(&m,&c,&expected,"runtime small bench gate");
+                    }
+                    release_x87(&mut c);
+                }
+                let name=if emulated {"runtime-emu"} else {"port"};
+                eprintln!("runtime small entry={entry:x} seed={} round={round} {name} ns/call={:.1}",case["seed"],elapsed.as_nanos() as f64/1000.0);
+            }
+        }
+        x86::set_ext_calls(None);
+    }
+}
+'''
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out',default='E:/ddda-re/notes/native-L130/check')
@@ -60,6 +126,7 @@ def main():
     p.add_argument('--geometry',action='store_true')
     p.add_argument('--identifiers',action='store_true')
     p.add_argument('--durations',action='store_true')
+    p.add_argument('--small',action='store_true')
     p.add_argument('--keys',action='store_true')
     p.add_argument('--lanes',action='store_true')
     p.add_argument('--restore',action='store_true')
@@ -98,7 +165,9 @@ def main():
     keys_match=re.search(r'pub fn f_00e10fc0\(.*?\n\}',keys,re.S)
     assert keys_match
     keys_source=re.sub(r'x86::call_local\(m, cpu, (0x[0-9A-F]+), super::lifted::f_[0-9a-f]+\)', r'x86::call_ext(m, cpu, \1)', keys_match.group())
-    (out/'src/lib.rs').write_text(prelude+keys_source+'\n'+lanes_source+'\n'+restore_source+'\n'+recording_source+'\n'+match.group()+'\n'+geometry_match.group()+'\n'+identifier_match.group()+'\n'+duration_source)
+    small_path=Path('E:/ddda-re/notes/native-L130/small.rs')
+    small_source=small_path.read_text() if small_path.exists() else ''
+    (out/'src/lib.rs').write_text(prelude+small_source+'\n'+keys_source+'\n'+lanes_source+'\n'+restore_source+'\n'+recording_source+'\n'+match.group()+'\n'+geometry_match.group()+'\n'+identifier_match.group()+'\n'+duration_source)
     deps='\n'.join(f'{n}={{path="{(repo/"crates"/n).as_posix()}"}}' for n in ('mtcore','ddnative-base','ddnative-host'))
     if a.emu:
         deps+='\nddruntime={path="'+(repo/'crates/ddruntime').as_posix()+'",default-features=false,features=["emu"]}'
@@ -136,16 +205,25 @@ def main():
     test=test.replace('// L130_KEYS_REFERENCE','run_with_callees(main_thread_check::f_00e10fc0,case);')
     test,count=re.subn(r'vec!\[\("port",\s*mtcore::hot::intern_dependency_keys\)\]; // L130_KEYS_COST', 'vec![("lifted",main_thread_check::f_00e10fc0),("port",mtcore::hot::intern_dependency_keys)];',test)
     assert count==1,'keys cost marker missing'
-    if a.emu: test+=EMU_TEST
+    if small_source:
+        entries=(0x5828e0,0x582900,0x582920,0x5abdc0,0x5829a0)
+        arms='\n'.join(f'0x{entry:x} => main_thread_check::f_{entry:08x},' for entry in entries)
+        test+='\nfn small_lifted(entry:u32)->LiftFn { match entry {\n'+arms+'\n_ => panic!("unknown small") } }\n'
+        test=test.replace('// L130_SMALL_REFERENCE','run_with_callees(small_lifted(n(&case["entry"])),case);')
+        test,count=re.subn(r'vec!\[\("port",\s*small_port\(entry\)\)\]; // L130_SMALL_COST', 'vec![("lifted",small_lifted(entry)),("port",small_port(entry))];',test)
+        assert count==1,'small cost marker missing'
+    elif a.small:
+        raise SystemExit('record --small first: isolated lifted bodies required')
+    if a.emu: test+=EMU_SMALL_TEST if a.small else EMU_TEST
     (out/'tests/hot.rs').write_text(test)
     env=dict(os.environ,CARGO_TARGET_DIR='C:/ddda-targets/L130',CARGO_BUILD_JOBS='4',CARGO_INCREMENTAL='0',DDNATIVE_REQUIRE_VECTORS='1')
     command=['cargo','test','--manifest-path',str(out/'Cargo.toml'),'--test','hot']
-    benchmark='keys_cost' if a.keys else 'lanes_cost' if a.lanes else 'restore_cost' if a.restore else 'recording_cost' if a.recording else 'durations_cost' if a.durations else 'identifiers_cost' if a.identifiers else 'geometry_cost' if a.geometry else 'dependencies_cost'
-    if a.emu: benchmark='durations_runtime_cost'
+    benchmark='small_cost' if a.small else 'keys_cost' if a.keys else 'lanes_cost' if a.lanes else 'restore_cost' if a.restore else 'recording_cost' if a.recording else 'durations_cost' if a.durations else 'identifiers_cost' if a.identifiers else 'geometry_cost' if a.geometry else 'dependencies_cost'
+    if a.emu: benchmark='small_runtime_cost' if a.small else 'durations_runtime_cost'
     if a.bench:
         command+=['--release',benchmark,'--','--ignored','--nocapture']
     else:
-        selected=next((name for enabled,name in ((a.keys,'keys_match'),(a.lanes,'lanes_match'),(a.restore,'restore_match'),(a.recording,'recording_match'),(a.durations,'durations_match'),(a.identifiers,'identifiers_match'),(a.geometry,'geometry_matches')) if enabled),None)
+        selected=next((name for enabled,name in ((a.small,'small_match'),(a.keys,'keys_match'),(a.lanes,'lanes_match'),(a.restore,'restore_match'),(a.recording,'recording_match'),(a.durations,'durations_match'),(a.identifiers,'identifiers_match'),(a.geometry,'geometry_matches')) if enabled),None)
         if selected: command.append(selected)
         command+=['--','--nocapture']
     raise SystemExit(subprocess.call(command,env=env))
