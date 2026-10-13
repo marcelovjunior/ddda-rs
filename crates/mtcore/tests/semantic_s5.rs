@@ -135,6 +135,7 @@ fn input_registers(target: u32) -> &'static [usize] {
     match target {
         0x00fe_d890 => &[0, 1, 5, 6, 7],   // frame allocator: EAX = description, ECX = state, EBP = byte, ESI = state, EDI = size
         0x0113_4a90 | 0x0113_4ca0 | 0x0113_4bd0 | 0x0113_4e40 | 0x00fb_4bf0 | 0x0113_1290 => &[1], // release functions: ECX (EBX, EBP, ESI, EDI are the original's loop state)
+        0x3000_0010 => &[0, 1, 2],         // the controller's virtual +0x10: EAX = vtable, ECX = controller, EDX = method
         0x00cf_dc80 => &[0, 1],            // blend: EAX = &identity, ECX = &matrix
         0x0086_4660..=0x0086_d180 => &[0, 1, 6, 7], // matrix providers: EAX, ECX, ESI, EDI
         _ => &[0, 1],                       // the parent accessor (ECX = model)
@@ -293,4 +294,12 @@ fn semantic_release_pending_matches_original() {
     ddnative_host::install();
     let count = cases("E:/ddda-re/notes/native-L184/release_pending.json", mtcore::semantic_s5_render::release_pending, input_registers, false);
     eprintln!("{count} ABI-level 0x00defa60 cases passed");
+}
+
+// verifies 0x0076f570 (ABI level; void)
+#[test]
+fn semantic_copy_input_bindings_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/input_bindings.json", mtcore::semantic_s5_render::copy_input_bindings, input_registers, false);
+    eprintln!("{count} ABI-level 0x0076f570 cases passed");
 }

@@ -166,3 +166,70 @@ pub fn release_pending(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4);
 }
+
+// ---------------------------------------------------------------------
+// 0x0076F570: copy the controller's pad bindings
+
+/// 0x0076F570 `unit->copy_input_bindings()` (stdcall: stack argument `unit`,
+/// `ret 4`): when the unit has a controller object (`unit + 0xCD0`) whose
+/// class chain (virtual method +0x10, then the `+0x10` base links) reaches
+/// the class id kept at 0x018D2D10, and the byte `unit + 0xD99` is set, copy
+/// its eight 16-slot binding tables: for each slot whose bit is set in the
+/// table's mask (dword `+0x10`) the unit gets a 1 byte in its flag array
+/// (`unit + 0x72`, 4 bytes per slot, 0x40 per table) and the slot's 16-bit
+/// binding (0 when the table has no array) in its binding array (`unit +
+/// 4 * (0x1C + 16 * table + slot)`); a clear bit leaves a 0 flag byte and the
+/// binding untouched. Tables are 0x140 bytes apart from controller + 0x480.
+// Translated from 0x0076F570 (DDDA.exe 2017-12-13 Steam)
+pub fn copy_input_bindings(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let unit = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let controller = pg.u32(m, unit + 0xcd0);
+    if controller != 0 {
+        // controller->virtual +0x10() returns its class descriptor (frame: two locals words, EBP, EDI saved)
+        let vtable = pg.u32(m, controller);
+        let method = pg.u32(m, vtable + 0x10);
+        let frame = entry.wrapping_sub(8 + 4 + 4);
+        let descriptor = call_from(m, c, pg, frame, controller, &[], 0x0076_f590, |m, c| {
+            c.edx = method;
+            c.eax = vtable;
+            ddnative_base::x86::call_ext(m, c, method)
+        });
+        let wanted = pg.u32(m, 0x018d_2d10);
+        let mut class = descriptor;
+        let mut found = pg.u32(m, class + 4) == wanted;
+        while !found {
+            class = pg.u32(m, class + 0x10);
+            if class == 0 {
+                (c.ebx, c.ebp, c.esi, c.edi) = saved;
+                c.esp = entry.wrapping_add(4 + 4);
+                return;
+            }
+            found = pg.u32(m, class + 4) == wanted;
+        }
+        if pg.u8(m, unit + 0xd99) != 0 {
+            let mut table = controller.wrapping_add(0x480);
+            for group in 0..8u32 {
+                let first = 0x1c + 0x10 * group;
+                if table.wrapping_sub(0x100) != 0 {
+                    let mask = pg.u32(m, table + 0x10);
+                    for slot in 0..16u32 {
+                        let flag = unit + 0x72 + 0x40 * group + 4 * slot;
+                        pg.set_u8(m, flag, 0);
+                        if mask & (1 << slot) != 0 {
+                            pg.set_u8(m, flag, 1);
+                            let bindings = pg.u32(m, table);
+                            let value = if bindings != 0 { pg.u16(m, bindings + 2 * slot) } else { 0 };
+                            pg.set_u16(m, unit + (first + slot) * 4, value);
+                        }
+                    }
+                }
+                table = table.wrapping_add(0x140);
+            }
+        }
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 4);
+}
