@@ -1,27 +1,30 @@
 # Milestones
 
-### L119 native sink, step 2b (2026-10-13)
+### L119 native sink, steps 2b-2d (2026-10-13)
 
-- `DDDRAW_NATIVE=drawcall|1|census` (crates/ddruntime/src/ndraw_native.rs):
-  scene-pass draw records decoded through mtstate into the D3D9 path's
-  DrawCall (drawcall) or a d3d9cmd::NativeJob (1, rejected jobs go out as
-  their DrawCalls); refusals counted by reason.
+- `DDDRAW_NATIVE=drawcall|1|verify|census` (crates/ddruntime/src/ndraw_native.rs):
+  scene-pass draw records decoded (mtstate on cache misses, identity and
+  per-frame binding caches) into the D3D9 path's DrawCall (drawcall) or a
+  d3d9cmd::NativeJob (1, when the backend supports native jobs; otherwise
+  DrawCalls); refusals counted by reason.
 - Tested: the sink's DrawCall equals the runtime D3D9 path's for the same
   record (tests/ndraw_native.rs, real D3D9 objects); decode unit tests.
-- combo13 (`drawcall`): 3,425 scene draws taken/frame, images normal, but
-  22-28 us per draw from per-draw decoding and allocation (7.9 vs 14.7
-  fps). Step 2c caches the decode by object identity and per-frame
-  binding; 2.5 us per draw in a debug build.
-- Blockers: the L126 worker; `native()` waits for the worker per job
-  (board #11174). Next: a head run of step 2c. Details:
-  docs/tasks/L119-native-executor.md.
+- combo13 (step 2b): 22-28 us per draw (per-draw decode, allocation).
+  combo15 (step 2c, `drawcall`): 14.2 fps avg / 15.3-16.0 at the end, equal
+  to the default path; the render thread is no longer the bound (the main
+  thread is: lifted game code and sMain's job join 0x00DBE560).
+- `verify` compares every taken-able scene draw's decoded DrawCall with
+  the one the D3D9 path makes in game: the evidence for making `drawcall`
+  the default. Next: a head run with `DDDRAW_NATIVE=verify`. Details,
+  and the frame-thread reading: docs/tasks/L119-native-executor.md.
 
 ### L126 native job transport checkpoint (2026-10-13)
 
 - Owned NativeJob/Pass/Draw transport with effective D3D9 values, identity
   keys, resource IDs and register ranges; same DeferredBackend FIFO.
-  Rejection returns the intact job before native target writes.
-- **7 transport tests pass**, including upload/native/query ordering and
+  One-time capability check; supported jobs enqueue without a round trip.
+  Unexpected worker rejection is logged loudly (head-approved contract).
+- **8 transport tests pass**, including upload/native/query ordering and
   unsupported-job ownership. Worker and game comparison pending.
 - Next: ddgpu native worker adapter; `docs/tasks/L126-native-worker.md`.
 

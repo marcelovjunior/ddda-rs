@@ -15,6 +15,12 @@
 //!   `DrawCall` the D3D9 path would have sent for them, decoded straight
 //!   from the nDraw objects. The applies, the D3D9 state setters and the
 //!   snapshot are skipped; the backend draws them exactly as before.
+//! - `verify`: takes nothing; for every scene draw it could take, the
+//!   DrawCall the D3D9 path then makes is compared with the one it would
+//!   have sent (every field the backend reads: render states, the
+//!   registers and samplers the shaders read, targets, streams, ...);
+//!   the report counts the comparisons and the mismatches by field and
+//!   prints the first ones.
 //! - `1`: takes the same draws as native jobs (d3d9cmd::NativeJob, L126):
 //!   consecutive taken draws into the same targets form a pass, and the
 //!   passes since the last command left to the default path form a job,
@@ -75,12 +81,15 @@ pub enum Mode {
     DrawCall,
     /// take them as native jobs
     Native,
+    /// take nothing; compare the D3D9 path's DrawCalls with the decoded ones
+    Verify,
 }
 
 pub fn mode() -> Mode {
     match std::env::var("DDDRAW_NATIVE").as_deref() {
         Ok("census") => Mode::Census,
         Ok("drawcall") => Mode::DrawCall,
+        Ok("verify") => Mode::Verify,
         Ok("1") => Mode::Native,
         _ => Mode::Off,
     }
@@ -1242,6 +1251,9 @@ struct Inner {
     scene: (u32, u32),
     caches: Caches,
     pending: Pending,
+    /// the backend takes native jobs (`1`; otherwise those draws go as
+    /// DrawCalls, as `drawcall`)
+    native: bool,
 }
 
 struct Native {
@@ -1256,7 +1268,7 @@ impl Native {
             mode,
             inner: Mutex::new(Inner {
                 frame: Frame::default(), totals: Totals::default(), since: Instant::now(),
-                info: FrameInfo::default(), scene: (0, 0), caches: Caches::default(), pending: Pending::default(),
+                info: FrameInfo::default(), scene: (0, 0), caches: Caches::default(), pending: Pending::default(), native: false,
             }),
             every,
         }
@@ -1286,6 +1298,10 @@ impl CommandSink for Native {
         if self.mode != Mode::Off {
             let _lock = crate::d3d9dev::device_lock();
             g.caches.begin_frame(&g.info);
+        }
+        if self.mode == Mode::Native {
+            // stable for the backend's lifetime, but the backend can be replaced
+            g.native = crate::d3d9draw::backend(|b| b.native_supported());
         }
     }
 
@@ -1352,11 +1368,20 @@ impl Native {
                 *t.refused.entry(r).or_default() += 1;
                 Taken::Default
             }
+            Ok(d) if self.mode == Mode::Verify => {
+                let reads = [&d.vertex_shader, &d.pixel_shader].map(|t| {
+                    let key = t.as_ref().map_or(0, |t| Arc::as_ptr(t) as *const u32 as usize);
+                    g.caches.reads.get(&key).map(|r| r.1).unwrap_or_default()
+                });
+                expect(Expected { call: d, reads });
+                t.taken += 1;
+                Taken::Default
+            }
             Ok(_) if self.mode == Mode::Census => {
                 t.taken += 1;
                 Taken::Default
             }
-            Ok(d) if self.mode == Mode::DrawCall => {
+            Ok(d) if self.mode == Mode::DrawCall || !g.native => {
                 crate::d3d9draw::flush_reads(m, reads_of(&d));
                 crate::d3d9draw::backend_unlocked(|b| b.draw(&d));
                 crate::d3d9draw::count_draws(1);
@@ -1437,6 +1462,9 @@ fn report(mode: Mode, t: &Totals) {
     if mode == Mode::Native {
         out += &format!("  native jobs {:.1}, draws taken by the backend {:.1}, rejected (sent as DrawCalls) {:.1}\n",
                         per(t.jobs), per(t.native), per(t.rejected));
+    }
+    if mode == Mode::Verify {
+        out += &verify_report();
     }
     out += "  refused:";
     for r in Refusal::ALL {
@@ -1622,4 +1650,147 @@ mod tests {
         // indexed: start index 6, base vertex 2, 100 - 2 vertices, 100 triangles
         assert_eq!(draw_params(&m, record, 1, f.extent), Ok((4, 100, 6, 2, 98)));
     }
+}
+
+// --- verify --------------------------------------------------------------------
+
+/// A decoded DrawCall waiting for the D3D9 path's, and what its shaders read.
+struct Expected {
+    call: DrawCall,
+    reads: [Reads; 2],
+}
+
+thread_local! {
+    static EXPECTED: std::cell::RefCell<Option<Expected>> = const { std::cell::RefCell::new(None) };
+}
+static VERIFYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[derive(Default)]
+struct VerifyStats {
+    compared: u64,
+    equal: u64,
+    /// the D3D9 path drew more primitives (a merged draw, sRender+0x30)
+    merged: u64,
+    /// expected draws the D3D9 path did not make
+    missed: u64,
+    fields: FxMap<&'static str, u64>,
+    printed: u32,
+}
+static VERIFY: Mutex<Option<VerifyStats>> = Mutex::new(None);
+
+fn expect(e: Expected) {
+    VERIFYING.store(true, std::sync::atomic::Ordering::Relaxed);
+    EXPECTED.with(|x| {
+        if x.borrow_mut().replace(e).is_some() {
+            VERIFY.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).missed += 1;
+        }
+    });
+}
+
+/// The D3D9 draw services' DrawCall (d3d9draw): compared with the expected
+/// one in `verify` mode.
+pub(crate) fn observe(d: &DrawCall) {
+    if !VERIFYING.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Some(e) = EXPECTED.with(|x| x.borrow_mut().take()) else { return };
+    let mut wrong: Vec<(&'static str, String)> = Vec::new();
+    compare(&e, d, &mut wrong);
+    let mut g = VERIFY.lock().unwrap_or_else(|e| e.into_inner());
+    let v = g.get_or_insert_with(Default::default);
+    v.compared += 1;
+    if d.primitives > e.call.primitives {
+        v.merged += 1;
+    }
+    if wrong.is_empty() {
+        v.equal += 1;
+    }
+    for (field, detail) in &wrong {
+        *v.fields.entry(field).or_default() += 1;
+        if v.printed < 20 {
+            v.printed += 1;
+            eprintln!("ndraw native verify: {field} differs: {detail}");
+        }
+    }
+}
+
+/// The fields the backend reads where `expected` (as `drawcall` would send
+/// it, its shaders reading `reads`) and the D3D9 path's `actual` differ.
+pub fn differences(expected: &DrawCall, reads: [Reads; 2], actual: &DrawCall) -> Vec<(&'static str, String)> {
+    let mut wrong = Vec::new();
+    compare(&Expected { call: expected.clone(), reads }, actual, &mut wrong);
+    wrong
+}
+
+/// Every field the backend reads, as `drawcall` would send it vs the D3D9
+/// path's.
+fn compare(e: &Expected, d: &DrawCall, wrong: &mut Vec<(&'static str, String)>) {
+    let x = &e.call;
+    let mut check = |field: &'static str, ok: bool, detail: &dyn Fn() -> String| {
+        if !ok {
+            wrong.push((field, detail()));
+        }
+    };
+    check("draw", x.primitive == d.primitive && x.start == d.start && x.base_vertex == d.base_vertex
+        && x.min_index == d.min_index && x.vertex_count == d.vertex_count && d.primitives >= x.primitives,
+        &|| format!("({}, {}, {}, {}, {}, {}) vs ({}, {}, {}, {}, {}, {})", x.primitive, x.primitives, x.start, x.base_vertex,
+                    x.min_index, x.vertex_count, d.primitive, d.primitives, d.start, d.base_vertex, d.min_index, d.vertex_count));
+    check("vertices", x.vertices == d.vertices, &|| format!("{:?} vs {:?}", x.vertices, d.vertices));
+    check("indices", x.indices == d.indices, &|| format!("{:?} vs {:?}", x.indices, d.indices));
+    check("shaders", x.vertex_shader == d.vertex_shader && x.pixel_shader == d.pixel_shader, &|| "bytecode".into());
+    check("declaration", x.declaration == d.declaration, &|| format!("{:?} vs {:?}", x.declaration, d.declaration));
+    let alpha_on = x.render_states.iter().any(|&(s, v)| s == 15 && v != 0);
+    for &(s, v) in x.render_states.iter() {
+        // the alpha function and reference only count with the test on
+        if (s == 24 || s == 25) && !alpha_on {
+            continue;
+        }
+        let on_device = d.render_states.binary_search_by_key(&s, |e| e.0).ok().map(|i| d.render_states[i].1);
+        check("render state", on_device == Some(v), &|| format!("{s}: {v:#x} vs {on_device:x?}"));
+    }
+    for stage in 0..2 {
+        let (a, b) = if stage == 0 { (&x.vs_constants, &d.vs_constants) } else { (&x.ps_constants, &d.ps_constants) };
+        let r = &e.reads[stage];
+        for n in 0..256usize {
+            if r.floats[n / 64] >> (n % 64) & 1 != 0 {
+                check("float register", a.f.get(n) == b.f.get(n), &|| format!("{} c{n}: {:x?} vs {:x?}", ["vs", "ps"][stage], a.f.get(n), b.f.get(n)));
+            }
+        }
+        for n in 0..16usize {
+            if r.ints >> n & 1 != 0 {
+                check("int register", a.i[n] == b.i[n], &|| format!("{} i{n}", ["vs", "ps"][stage]));
+            }
+            if r.bools >> n & 1 != 0 {
+                check("bool register", a.b[n] == b.b[n], &|| format!("{} b{n}", ["vs", "ps"][stage]));
+            }
+            if r.samplers >> n & 1 != 0 {
+                let slot = n as u32 + if stage == 0 { 257 } else { 0 };
+                let (ta, tb) = (x.textures.iter().find(|t| t.sampler == slot), d.textures.iter().find(|t| t.sampler == slot));
+                let same = match (ta, tb) {
+                    (Some(p), Some(q)) => {
+                        p.resource == q.resource && p.kind == q.kind && p.format == q.format && p.width == q.width
+                            && p.height == q.height && p.depth == q.depth && p.levels == q.levels && p.usage == q.usage
+                            && p.states[1..] == q.states[1..]
+                    }
+                    _ => false,
+                };
+                check("texture", same, &|| format!("s{slot}: {ta:?} vs {tb:?}"));
+            }
+        }
+    }
+    check("viewport", x.viewport == d.viewport, &|| format!("{:?} vs {:?}", x.viewport, d.viewport));
+    if x.render_states.iter().any(|&(s, v)| s == 174 && v != 0) {
+        check("scissor", x.scissor == d.scissor, &|| format!("{:?} vs {:?}", x.scissor, d.scissor));
+    }
+    check("targets", x.targets == d.targets, &|| format!("{:?} vs {:?}", x.targets, d.targets));
+    check("depth", x.depth == d.depth, &|| format!("{:?} vs {:?}", x.depth, d.depth));
+}
+
+fn verify_report() -> String {
+    let mut g = VERIFY.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(v) = g.take() else { return "  verify: nothing compared\n".into() };
+    let mut fields: Vec<_> = v.fields.iter().collect();
+    fields.sort();
+    format!("  verify: {} compared, {} equal, {} merged by the D3D9 path, {} not drawn by it; mismatches: {:?}\n",
+            v.compared, v.equal, v.merged, v.missed, fields)
 }
