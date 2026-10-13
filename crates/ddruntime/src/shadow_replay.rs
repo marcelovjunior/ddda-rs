@@ -1733,7 +1733,11 @@ fn compare_replays(
             .copied()
             .unwrap_or_else(|| input.u8(*address));
         if a != b {
-            if address.wrapping_sub(context) < LANE_BYTES && b == input.u8(*address) {
+            // (and the free part of the root context's own arena block, from its
+            // input cursor +0x24 to its end +0x28, where the serial branch
+            // records and the parallel one does not)
+            let root_block = input.u32(context + 0x24)..input.u32(context + 0x28);
+            if (address.wrapping_sub(context) < LANE_BYTES || root_block.contains(address)) && b == input.u8(*address) {
                 root_untouched += 1;
                 continue;
             }
