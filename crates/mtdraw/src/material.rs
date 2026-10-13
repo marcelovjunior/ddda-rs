@@ -348,3 +348,79 @@ mod tests {
         }
     }
 }
+
+/// The context's arena refill (thiscall, the size; a guest call).
+const REFILL: u32 = 0x00FE_D890;
+/// The CRT memcpy (cdecl), a platform model.
+const MEMCPY: u32 = 0x012E_FEA0;
+
+// Translated from 0x01062F20 (DDDA.exe 2017-12-13 Steam).
+/// 0x01062F20, `this->update(context)` (thiscall, `ret 4`), the end of
+/// the material apply (0x010655A0): for each of the material's four
+/// parameter slots (signed 16-bit indices at `this + 0x50`, 8 bytes apart;
+/// negative: none) whose group (`[[this + 0x74] + 0x10]`, entry
+/// `index + 1`) lists keys (count in bits 18..31 of its second word), each
+/// key's constants move to a fresh block of the context's arena (the
+/// arena refilled by 0x00FED890 when it runs out, a guest call): the
+/// previous block (`context + 8*key + 0x1F8`) copied in, the slot pointed
+/// at the new one, the context marked (+0x154 bit 0). EAX is what the
+/// original's last step leaves: the last slot's index when negative, its
+/// group when it lists no keys, otherwise the key count.
+pub fn update_material(m: &mut dyn Mem, c: &mut Cpu) {
+    use ddnative_base::x86;
+    let pg = Pages::of(m);
+    let this = c.ecx;
+    let entry = c.esp;
+    let ctx = pg.u32(m, entry.wrapping_add(4));
+    // the original's frame: 0x14 bytes of locals, four saved registers
+    let frame = entry.wrapping_sub(0x24);
+    let mut eax = c.eax;
+    let mut slot = this.wrapping_add(0x50);
+    for _ in 0..4 {
+        let index = pg.u16(m, slot);
+        eax = index as u32;
+        if (index as i16) >= 0 {
+            let table = pg.u32(m, pg.u32(m, this.wrapping_add(0x74)).wrapping_add(0x10));
+            let group = pg.u32(m, table.wrapping_add((index as i16 as i32 as u32).wrapping_mul(4)).wrapping_add(4));
+            eax = group;
+            if pg.u32(m, group.wrapping_add(4)) & 0xfffc_0000 != 0 {
+                let mut k = 0u32;
+                loop {
+                    let keys = pg.u32(m, group.wrapping_add(8));
+                    let key = pg.u32(m, keys.wrapping_add(k.wrapping_mul(4))) & 0xfff;
+                    let pass = pg.u32(m, pg.u32(m, ctx.wrapping_add(0x18)).wrapping_add(key.wrapping_mul(4)));
+                    let size = (pg.u16(m, pass.wrapping_add(0x18)) as u32).wrapping_mul(4).wrapping_add(0xf) & !0xf;
+                    if pg.u32(m, ctx.wrapping_add(0x24)).wrapping_add(size) > pg.u32(m, ctx.wrapping_add(0x28)) {
+                        c.esp = frame;
+                        push(m, pg, c, size);
+                        push(m, pg, c, 0x0106_2FBE);
+                        c.ecx = ctx;
+                        x86::call_ext(m, c, REFILL);
+                    }
+                    let block = pg.u32(m, ctx.wrapping_add(0x24));
+                    pg.set_u32(m, ctx.wrapping_add(0x24), size.wrapping_add(block));
+                    let n = (pg.u16(m, pass.wrapping_add(0x18)) as u32).wrapping_mul(4);
+                    let at = ctx.wrapping_add(key.wrapping_mul(8)).wrapping_add(0x1f8);
+                    let previous = pg.u32(m, at);
+                    c.esp = frame;
+                    for v in [n, previous, block, 0x0106_2FE2] {
+                        push(m, pg, c, v);
+                    }
+                    x86::call_local(m, c, MEMCPY, ddnative_base::platform::memcpy);
+                    c.esp = frame;
+                    pg.set_u32(m, at, block);
+                    let f = pg.u32(m, ctx.wrapping_add(0x154));
+                    pg.set_u32(m, ctx.wrapping_add(0x154), f | 1);
+                    k = k.wrapping_add(1);
+                    eax = k;
+                    if k >= pg.u32(m, group.wrapping_add(4)) >> 18 {
+                        break;
+                    }
+                }
+            }
+        }
+        slot = slot.wrapping_add(8);
+    }
+    c.eax = eax;
+    c.esp = entry.wrapping_add(8);
+}

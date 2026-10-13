@@ -182,5 +182,22 @@ Unowned leaves under uBaseModel::vf11 (0x00EA3130) in stacks_c26vk/def
 - Opt-in `DDRUNTIME_CULL=1` (the three tests); the colour with
   `DDRUNTIME_MATERIAL=1`.
 
+### 0x00FF0E60 and 0x01062F20
+
+- 0x00FF0E60 `context->cull_box_all(box)` (`ret 4`): `cull_box` over all
+  six planes, the mask starting empty. Shares `cull_box`'s code; 500 more
+  cases in `cull.json`; 226 -> 33 ns (7.0x). `DDRUNTIME_CULL=1`.
+- 0x01062F20 `this->update(context)` (`ret 4`), the material apply's last
+  step: for each of four parameter slots (signed 16-bit indices; negative:
+  none) whose group lists keys, each key's constants move to a fresh block
+  of the context's arena (refilled by 0x00FED890, a guest call): the
+  previous block copied in, the slot re-pointed, the context marked. EAX
+  is the original's last value (the slot index, the group, or the key
+  count). `record_material.py --update`: 1409 cases (91 runs whose failed
+  refill led the original's memcpy to address 0 skipped), every branch;
+  the refill stub's writes to the context's arena recorded as the call's
+  effects and replayed by the test. Mutation check 5/5. 694 -> 517 ns
+  (1.3x; the copies dominate). `DDRUNTIME_MATERIAL=1`.
+
 Not yet measured in game. Skipped: 0x01066C60 nDraw::Material::vf12 (11
 self samples, ~0x600 bytes, six guest calls: little to gain).

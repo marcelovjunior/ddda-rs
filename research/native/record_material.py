@@ -547,8 +547,8 @@ def record_sort(out):
     print(f'{len(cases)} sort cases -> {out}')
 
 
-CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR = 0xFF0780, 0xFF0AD0, 0xFF0D20, 0x1067790
-LENGTHS.update({CULL_SPHERE: 0x7F, CULL_ORIENTED: 0x23F, CULL_BOX: 0x131, COLOUR: 0x93})
+CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR, CULL_BOX_ALL = 0xFF0780, 0xFF0AD0, 0xFF0D20, 0x1067790, 0xFF0E60
+LENGTHS.update({CULL_SPHERE: 0x7F, CULL_ORIENTED: 0x23F, CULL_BOX: 0x131, COLOUR: 0x93, CULL_BOX_ALL: 0x129})
 PLANES, SHAPE, COLOUR_ENTRIES = BASE + 0x2000, BASE + 0x3000, BASE + 0x5000
 
 
@@ -616,7 +616,7 @@ class CullOracle(TargetOracle):
             for k in range(4):
                 word(SHAPE + 4 * k, f32(float(rng.randrange(-6, 7) if k < 3 else rng.randrange(0, 8))))
             args = [SHAPE]
-        elif entry == CULL_BOX and exact:
+        elif entry in (CULL_BOX, CULL_BOX_ALL) and exact:
             for k in range(3):
                 lo = rng.randrange(-8, 8)
                 word(SHAPE + 4 * k, f32(float(lo)))
@@ -633,7 +633,7 @@ class CullOracle(TargetOracle):
             if rng.randrange(3) == 0:
                 word(SHAPE + 12, f32(rng.uniform(0, 200)))  # a large radius: wholly in front
             args = [SHAPE]
-        elif entry == CULL_BOX:
+        elif entry in (CULL_BOX, CULL_BOX_ALL):
             for k in range(3):
                 lo = rng.uniform(-30, 30)
                 word(SHAPE + 4 * k, f32(lo) if rng.randrange(8) else any_float(rng))
@@ -689,8 +689,8 @@ class CullOracle(TargetOracle):
 def record_cull(out):
     oracle = CullOracle()
     cases = [oracle.run(entry, i + 1) for i, entry in enumerate(
-        e for e in (CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR) for _ in range(500))]
-    for entry in (CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR):
+        e for e in (CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR, CULL_BOX_ALL) for _ in range(500))]
+    for entry in (CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR, CULL_BOX_ALL):
         edges = {tuple(e) for c in cases if c['entry'] == entry for e in c['edges']}
         missing = [(hex(i.address), hex(t)) for i in branches(entry)
                    for t in (i.address + i.size, int(i.op_str, 16)) if (i.address, t) not in edges]
@@ -701,6 +701,129 @@ def record_cull(out):
         exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
         cases=cases), separators=(',', ':')))
     print(f'{len(cases)} cull/colour cases -> {out}')
+
+
+UPDATE, UPDATE_END, REFILL = 0x1062F20, 0x106302B, 0xFED890
+LENGTHS[UPDATE] = UPDATE_END - UPDATE
+GROUP_TABLE, KEYS, PASSES, BLOCKS = (BASE + v for v in (0x500, 0x800, 0x9000, 0x20000))
+
+
+class UpdateOracle(TargetOracle):
+    """0x01062F20 `this->update(context)` (thiscall, `ret 4`). The arena
+    refill 0x00FED890 is a recorded guest call whose stub sets the new
+    arena (its writes recorded as the call's effects); memcpy is done by
+    the stub."""
+
+    def __init__(self):
+        uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
+        uc.ctl_set_tcg_buffer_size(16 * 1024 * 1024)
+        for address, size in ((0x1062000, 0x2000), (REFILL & ~0xFFF, 0x1000), (MEMCPY & ~0xFFF, 0x1000),
+                              (BASE, SIZE), (STACK, STACK_SIZE), (h.RET, 0x1000)):
+            uc.mem_map(address, size)
+        uc.mem_write(UPDATE, h.code(UPDATE, UPDATE_END - UPDATE))
+        uc.mem_write(REFILL, bytes.fromhex('c20400'))
+        uc.mem_write(MEMCPY, bytes.fromhex('c3'))
+        self.active = False
+        uc.hook_add(UC_HOOK_MEM_READ, self.read)
+        uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
+        uc.hook_add(UC_HOOK_CODE, self.code)
+
+    def code(self, uc, address, size, data):
+        if address == h.RET:
+            uc.emu_stop()
+            return
+        if address == MEMCPY:
+            return super().code(uc, address, size, data)
+        if address == REFILL:
+            sp = uc.reg_read(x.UC_X86_REG_ESP)
+            self.remember(sp, 8)
+            self.events.append(dict(kind='call', target=address, **self.snapshot()))
+            resume, need = struct.unpack('<II', uc.mem_read(sp, 8))
+            ctx = uc.reg_read(x.UC_X86_REG_ECX)
+            arena = self.rng.choice([BLOCKS + 0x8000 * len(self.events), BLOCKS + 0x8000 * len(self.events), 0])
+            limit = (arena + ((need + 0xFFF) & ~0xFFF)) if arena else 0
+            effects = []
+            for a, v in ((ctx + 0x24, arena), (ctx + 0x28, limit)):
+                b = struct.pack('<I', v)
+                self.remember(a, 4)
+                uc.mem_write(a, b)
+                self.written.update(range(a, a + 4))
+                effects += [(a + i, b[i]) for i in range(4)]
+            for reg in REGS[:3]:
+                uc.reg_write(reg, self.rng.getrandbits(32))
+            uc.reg_write(x.UC_X86_REG_ESP, sp + 8)
+            self.events.append(dict(kind='return', effects=effects, **self.snapshot()))
+            uc.reg_write(x.UC_X86_REG_EIP, resume)
+            return
+        assert UPDATE <= address < UPDATE_END, hex(address)
+        if self.last is not None:
+            self.edges.add((self.last, address))
+        self.last = address
+
+    def run(self, seed):
+        uc = self.uc
+        rng = self.rng = random.Random(seed)
+        uc.mem_write(BASE, rng.randbytes(SIZE))
+        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
+        this, ctx = MATERIAL, CONTEXT
+
+        def word(a, v):
+            uc.mem_write(a, struct.pack('<I', v & 0xFFFFFFFF))
+
+        word(this + 0x74, BASE + 0x400)
+        word(BASE + 0x410, GROUP_TABLE)
+        for s in range(4):
+            uc.mem_write(this + 0x50 + 8 * s, struct.pack('<H', rng.choice([rng.randrange(4), 0xFFFF, 0x8000, rng.randrange(4)])))
+        for g in range(4):
+            group = BASE + 0x600 + 0x40 * g
+            word(GROUP_TABLE + 4 * g + 4, group)
+            count = rng.choice([0, 1, 2, 5])
+            word(group + 4, count << 18 | rng.getrandbits(18))
+            word(group + 8, KEYS + 0x40 * g)
+            for k in range(count):
+                word(KEYS + 0x40 * g + 4 * k, rng.getrandbits(20) << 12 | rng.randrange(0x40))
+        word(ctx + 0x18, PASSES)
+        for key in range(0x40):
+            word(PASSES + 4 * key, PASSES + 0x400 + 0x20 * key)
+            uc.mem_write(PASSES + 0x400 + 0x20 * key + 0x18, struct.pack('<H', rng.choice([0, 1, 4, 16])))
+            word(ctx + 0x1F8 + 8 * key, BASE + 0x50000 + 0x100 * key)
+        roomy = rng.randrange(3)
+        word(ctx + 0x24, BLOCKS)
+        word(ctx + 0x28, BLOCKS + (0x10000 if roomy else rng.randrange(0x80)))
+        for i, v in enumerate((h.RET, ctx)):
+            word(SP + 4 * i, v)
+        regs = [rng.getrandbits(32), this, rng.getrandbits(32), rng.getrandbits(32), SP,
+                rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(32)]
+        for reg, v in zip(REGS, regs):
+            uc.reg_write(reg, v)
+        uc.reg_write(x.UC_X86_REG_EFLAGS, 0x202 | (rng.getrandbits(12) & 0xCD5))
+        self.initial, self.written, self.events, self.edges, self.last = {}, set(), [], set(), None
+        before = self.snapshot(False)
+        self.active = True
+        try:
+            uc.emu_start(UPDATE, h.RET, count=200000)
+        except UcError:
+            self.active = False
+            return None  # a failed refill (null arena) and a copy into address 0
+        self.active = False
+        assert uc.reg_read(x.UC_X86_REG_EIP) == h.RET
+        return dict(entry=UPDATE, seed=seed, before=before, initial=sorted(self.initial.items()),
+                    events=self.events, after=self.snapshot(), edges=sorted(self.edges))
+
+
+def record_update(out):
+    oracle = UpdateOracle()
+    cases = [c for c in (oracle.run(i + 1) for i in range(1500)) if c is not None]
+    edges = {tuple(e) for c in cases for e in c['edges']}
+    missing = [(hex(i.address), hex(t)) for i in branches(UPDATE)
+               for t in (i.address + i.size, int(i.op_str, 16)) if (i.address, t) not in edges]
+    assert not missing, missing
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(dict(
+        source='DDDA.exe 2017-12-13 Steam',
+        exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+        cases=cases), separators=(',', ':')))
+    print(f'{len(cases)} update cases, {sum(len(c["events"]) for c in cases)} call boundaries -> {out}')
 
 
 def record_target(out):
@@ -752,6 +875,7 @@ def main():
     p.add_argument('--target', action='store_true', help='record 0x00FEFB90 (set_target.json beside --out)')
     p.add_argument('--sort', action='store_true', help='record 0x00FEDD60 (record_sort.json beside --out)')
     p.add_argument('--cull', action='store_true', help='record the frustum tests and the colour (cull.json beside --out)')
+    p.add_argument('--update', action='store_true', help='record 0x01062F20 (material_update.json beside --out)')
     a = p.parse_args()
     if a.state:
         record_state(Path(a.out).with_name('material_state.json'))
@@ -764,6 +888,9 @@ def main():
         return
     if a.cull:
         record_cull(Path(a.out).with_name('cull.json'))
+        return
+    if a.update:
+        record_update(Path(a.out).with_name('material_update.json'))
         return
     oracle = Oracle()
     cases, skipped, seed = [], 0, 0

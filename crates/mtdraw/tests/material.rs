@@ -137,6 +137,12 @@ fn abi_cases_with_call(data: &Value, entry: u32, body: LiftFn) -> usize {
                     assert_eq!(m.u8(a), b, "case {i}: memory {a:x} at the call");
                 }
             }
+            // the callee's recorded memory writes, then its registers
+            if let Some(effects) = back.get("effects") {
+                for (a, b) in pairs(effects) {
+                    m.set_u8(a, b);
+                }
+            }
             let r = regs(back);
             [c.eax, c.ecx, c.edx] = [r[0], r[1], r[2]];
             c.esp = r[4];
@@ -225,10 +231,27 @@ fn frustum_tests_and_colour_match_original() {
         (0x00FF_0780u32, mtdraw::cull::cull_sphere as LiftFn),
         (0x00FF_0AD0, mtdraw::cull::cull_oriented),
         (0x00FF_0D20, mtdraw::cull::cull_box),
+        (0x00FF_0E60, mtdraw::cull::cull_box_all),
         (0x0106_7790, mtdraw::material::material_colour),
     ] {
         let n = abi_cases(&data, entry, body);
         assert!(n >= 500, "{entry:#x}: {n} cases");
         eprintln!("{entry:#010x}: {n} ABI-level cases passed");
     }
+}
+
+// verifies 0x01062F20 (ABI level; its arena refill 0x00FED890 is a checked
+// guest call whose recorded writes are replayed, its memcpy the platform model)
+#[test]
+fn update_material_matches_original() {
+    let path = std::env::var("L176_UPDATE_VECTORS")
+        .unwrap_or_else(|_| "E:/ddda-re/notes/native-L176/material_update.json".into());
+    let data: Value = match std::fs::read_to_string(&path) {
+        Ok(t) => serde_json::from_str(&t).unwrap(),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let n = abi_cases_with_call(&data, 0x0106_2F20, mtdraw::material::update_material);
+    assert!(n > 1000, "{n} cases");
+    eprintln!("0x01062F20: {n} ABI-level cases passed");
 }

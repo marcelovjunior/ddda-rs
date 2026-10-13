@@ -68,6 +68,18 @@ pub fn cull_sphere(m: &mut dyn Mem, c: &mut Cpu) {
 /// the box lies wholly behind a plane; otherwise `known` with the bits of
 /// the planes it lies wholly in front of.
 pub fn cull_box(m: &mut dyn Mem, c: &mut Cpu) {
+    box_planes(m, c, true);
+}
+
+// Translated from 0x00FF0E60 (DDDA.exe 2017-12-13 Steam).
+/// 0x00FF0E60, `context->cull_box_all(box) -> planes` (thiscall, `ret
+/// 4`): `cull_box` over all six planes (no `known` argument; the mask
+/// starts empty).
+pub fn cull_box_all(m: &mut dyn Mem, c: &mut Cpu) {
+    box_planes(m, c, false);
+}
+
+fn box_planes(m: &mut dyn Mem, c: &mut Cpu, with_known: bool) {
     let pg = Pages::of(m);
     let b = pg.u32(m, c.esp.wrapping_add(4));
     let (max_x, max_y, max_z) = (f(pg, m, b.wrapping_add(0x10)), f(pg, m, b.wrapping_add(0x14)), f(pg, m, b.wrapping_add(0x18)));
@@ -78,7 +90,7 @@ pub fn cull_box(m: &mut dyn Mem, c: &mut Cpu) {
     let cz = (min_z + max_z) * half;
     let abs = pg.u32(m, ABS);
     let mut p = planes(pg, m, c.ecx);
-    let known = pg.u32(m, c.esp.wrapping_add(8));
+    let known = if with_known { pg.u32(m, c.esp.wrapping_add(8)) } else { 0 };
     let (ex, ey, ez) = (max_x - cx, max_y - cy, max_z - cz);
     let a_ = |v: f32| f32::from_bits(v.to_bits() & abs);
     let mut mask = known;
@@ -103,7 +115,7 @@ pub fn cull_box(m: &mut dyn Mem, c: &mut Cpu) {
         }
         mask
     };
-    c.esp = c.esp.wrapping_add(12);
+    c.esp = c.esp.wrapping_add(if with_known { 12 } else { 8 });
 }
 
 // Translated from 0x00FF0AD0 (DDDA.exe 2017-12-13 Steam).

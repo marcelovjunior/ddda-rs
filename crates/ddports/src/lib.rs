@@ -40,6 +40,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         ports.push((0x0106_6b10, mtdraw::material::bind_parameter));
         ports.push((0x0106_55a0, mtdraw::material::apply_material_state));
         ports.push((0x0106_7790, mtdraw::material::material_colour));
+        ports.push((0x0106_2f20, mtdraw::material::update_material));
     }
     // L176: the draw context's render-target setter (semantic port,
     // crates/mtdraw/tests/material.rs).
@@ -57,6 +58,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         ports.push((0x00ff_0780, mtdraw::cull::cull_sphere));
         ports.push((0x00ff_0ad0, mtdraw::cull::cull_oriented));
         ports.push((0x00ff_0d20, mtdraw::cull::cull_box));
+        ports.push((0x00ff_0e60, mtdraw::cull::cull_box_all));
     }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
