@@ -119,3 +119,53 @@ Next: head's same-scene native VK=1 A/B and native compare run (zero
 mismatches), with backend/finisher CPU profiles. Requested on board #13181
 and #13318. No game run, installation write, original-image acceptance,
 default flip or measured gameplay gain by this agent.
+
+## L159 shadow failure follow-up (head board #13287)
+
+Head's combo30 default-drawcall `DDGPU_VK_SHADOW=997` run completes 1,652
+aspect checks with no mismatches, then stops drawing around t=91 seconds:
+`DDGPU_VK encode fallback: not Vulkan`, followed by the backend worker's
+Present channel disconnect. This run is **not** an acceptance for the default
+flip. Non-shadow runs completed, according to head.
+
+Read-only investigation:
+
+- The `not Vulkan` string originates in `vk/pass.rs::raw_batch`, on an empty
+  `CommandEncoder::as_hal_mut` callback. Local wgpu-core 29.0.4 source
+  (`as_hal.rs::command_encoder_as_hal_mut`, `command/mod.rs::record_as_hal_mut`)
+  also produces None for invalid encoders or failure to open the HAL encoder;
+  it discards the latter error with `.ok()`. The message does not establish
+  a backend mismatch or identify device-loss versus allocation failure.
+- Windows System record **2788921**, provider `nvlddmkm`, event **153**, at
+  **2026-10-13 11:34:21.022 local / 14:34:21.022 UTC**, records
+  `\Device\Video3`, `Error occurred on GPUID: a00`. This supports a driver
+  error during the run window, but does not by itself prove TDR, a shadow
+  readback fault or the exact trigger. Original run wall-clock correlation
+  was requested from head (the copied log's file times are not run times).
+- `ddruntime::session::install_fault_hook` suppresses all process panic
+  payloads, including host GPU workers. The finisher additionally catches
+  the payload and discards it. Therefore absence of panic text is expected
+  and does not demonstrate graceful device loss.
+
+Separate diagnostic follow-up: `DDGPU_DIAGNOSTICS=1` installs explicit
+device-loss and uncaptured-error stderr callbacks on backend construction.
+It keeps uncaptured errors fatal, as wgpu's default handler does; hosts'
+existing callbacks remain untouched when the flag is absent. The finisher
+prints its caught panic payload before retaining the existing failed-fence
+notification. No recovery, error suppression, shader change, default flip
+or diagnosis of the exact driver fault is claimed.
+
+Validation: **four encoder-pool CPU tests and two bounded GPU tests pass**,
+zero failures/timeouts. The internal ignored diagnostic test deliberately
+disables the panic hook, triggers an invalid buffer descriptor, verifies a
+fatal panic, then destroys the device. Its stderr retains `Invalid usage
+flags BufferUsages(0x0)` and `device lost: reason=Destroyed`. The raw/query
+fallback ordering regression also passes. Receipts: `diagnostic-*.log` in
+the same private receipt directory. The initial integration-test placement
+could not access the private device; the final test is internal, with no
+API exposure or production behavior change to accommodate testing.
+
+Next: head repeats the shadow run with **DDGPU_VK=1 DDGPU_VK_SHADOW=997
+DDGPU_DIAGNOSTICS=1** and correlates the first device/worker error with
+Windows events. The actual shadow-run driver failure remains unresolved;
+the default flip must remain pending that diagnosis and acceptance.

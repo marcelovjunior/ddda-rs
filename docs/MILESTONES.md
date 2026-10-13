@@ -87,6 +87,18 @@
   not wake delays. No runtime behavior change or game/shard run.
 - Next: head L158 trace capture, cache/futex 0/0 versus 1/1, with exact
   binary/env hashes. Details: `docs/tasks/L160-job-threads.md`.
+### L159 shadow failure diagnostics (2026-10-13)
+
+- Head combo30: 1,652 shadow aspect checks / zero mismatches, then backend
+  disconnect around t=91 s. `not Vulkan` can mean invalid encoder or HAL-open
+  failure; Windows records NVIDIA event 153 during the run window. Exact
+  trigger remains unresolved; this is not default-flip acceptance.
+- Opt-in `DDGPU_DIAGNOSTICS=1` prints device-loss and fatal validation
+  errors despite the runtime's silent panic hook; finisher preserves its
+  panic cause. **Four CPU + two bounded GPU checks pass**; validation stays
+  fatal. Next: head repeats shadow997 with diagnostics and event correlation.
+  Details: `docs/tasks/L164-native-backend.md` (L159 follow-up).
+
 ### L164 native backend constant processing (2026-10-13)
 
 - c29nat1 backend: 18.5 CPU seconds/30 seconds, 386 busy samples;
