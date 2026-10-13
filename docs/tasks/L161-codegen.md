@@ -204,3 +204,112 @@ Next action: head's combined regeneration with `LIFT_FLAG_FIXED_POINT=1`,
 opt1 native gate, then same-route image/FPS comparison. The checked-in
 full-gate script records historical reproduction and is head-owned under
 the new train rule. No further shard build was launched.
+
+## L161b: adjacent-result zero predicates (2026-10-13)
+
+User continuation: generator-wide game-code speed, isolated opt0/opt1
+proofs only, one independent switch and a generator-only train commit.
+Head board #13696 subsequently groups this lane with the codegen redesign
+and codex-6's forthcoming 50-function benchmark corpus.
+
+### Selection and rejected experiments
+
+The retained profile above attributes FEDD60 29 nearest job-worker samples,
+11 self samples and 16 scalar-memory helper leaves. FEE320 has 70 pooled
+nearest samples, FEFB90 35. These counts motivate inspecting their loops;
+they do **not** establish the dynamic share of the specific predicates below.
+Memory calls remain the larger measured cost and belong to the broader
+redesign. Existing same-shard lifted calls already use `call_local`;
+`call_ext` boundaries also carry services, steps and fixture mocks, so a
+blanket static redirection is not a contract-preserving local change.
+
+Three experiments were rejected; none remains in the production emitter:
+
+- Adjacent push pairs: 31 original cases and 1,584 ordered fault/access
+  cases pass at both optimization levels, but opt1 long-sequence medians
+  include substantial regressions (0.686..1.488x). Opt0 improves
+  1.012..1.692x. Not retained.
+- Sole-predecessor block chaining: synthetic opt0 gains ~2.1x, but no
+  actual qualifying merge in the selected hot bodies. An initial report
+  of four changed bodies was only formatting and was corrected on board.
+- Inner Rust loops for self edges: synthetic state/call/fault tests and
+  original replay pass, but hot fixture timings remain near parity.
+  Hash-loop opt1 0.990..1.087x is not sufficient and is not additive to
+  `JOB_HASH=1`. Not retained.
+
+### Implemented candidate
+
+`LIFT_RESULT_ZF=1` specializes an immediately adjacent JZ/JNZ predicate
+after an explicit 32-bit full-register ADD/SUB/AND/OR/XOR or INC/DEC
+result. The register already contains the masked result tested by
+`Flags::zf_value`; compare it directly with zero instead of calling the
+generic helper. **Every flag write stays**, including INC/DEC's defined
+or undefined incoming carry. Memory, arithmetic, register stores, calls,
+preemption, control-flow edges and function entries stay unchanged.
+No extra pass across a call, partial-register operation, or unknown
+producer is inferred. Strings are masked before matching. Restartable
+step bodies do not run this pass. Default is off and the switch is
+independent of `LIFT_FLAG_FIXED_POINT`.
+
+For the selected fourteen bodies, the exact predicate-only source audit
+removes **11 ZF calls**: FEE320 3, FEDD60 2, FEFB90 4, and supporting
+D1B540 2. The other ten bodies are byte-identical. The concrete FEDD60
+loop branches are at blocks `00FEDF26` and `00FEDF44`; FEFB90 also has
+the masked-result loop branches at `00FEFCB0` and `00FEFCF0`.
+There is no whole-corpus regeneration/count or per-agent shard build.
+
+### Tested and measured
+
+- **47 focused Python/generator tests pass**, including **13,608** paired
+  CPU/flags/access/fault cases at each of opt0 and opt1. Tests cover all
+  seven producer kinds, zero/nonzero branch forms, overflow/extreme
+  operands, preserved and undefined carry, faults, barriers, narrow-width
+  rejection, switch-off compatibility and fixed-point independence.
+- **31 original cases pass** for baseline and candidate at both opt0 and
+  opt1. Both use fixed-point flags on and base/host opt3. The harness
+  checks the candidate text equals only `result_zf(baseline)` before
+  compilation; no call or memory lowering difference is hidden in the pair.
+- Two recorded FEDD60 loop arms are emitted privately with an exit stub
+  and synthetic buffers/counts. Lengths 16/256/4096, offsets 0/1, seven
+  alternating pairs per scenario, pinned logical CPU 5. Each pair checks
+  full exit registers, flags and output bytes; both copies also match the
+  input bytes. These are extracted-loop timings, **not additional original
+  game vectors or whole-function/gameplay gains**.
+
+| Loop | Opt0 median paired thread-cycle ratios | Opt1 median paired thread-cycle ratios |
+|---|---:|---:|
+| FEDF26, six count/alignment scenarios | 1.074..1.213x | 1.005..1.151x |
+| FEDF44, six count/alignment scenarios | 1.054..1.134x | 1.098..1.155x |
+
+74/84 opt0 and 75/84 opt1 alternating pairs improve. Windows thread cycles
+exclude descheduled time; frequency, code layout and shared-machine
+interference still limit these measurements. Wall time is retained too.
+Short whole-fixture timings remain mixed, including unchanged controls;
+do not extrapolate these loop ratios to frame time. Unlike the previous
+hash-only result, these measured loops are outside E0E5E0. Whole-function
+ports can still supersede individual affected sites.
+Specifically, codex-6 reported a FEDD60 port in progress on board #13712:
+the measured loop gain is **not additive** when that port is enabled.
+
+Reproduce with `scripts/l161_check.py --variant result-zf --opt 0 --bench
+--cpu 5` (then opt 1), `CARGO_TARGET_DIR=C:/ddda-targets/L161`,
+`CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`. `scripts/l161_summary.py`
+requires complete alternating samples, original replay and benchmark
+completion; it reports thread-cycle ratios for the extracted loops.
+Private logs: `result-zf-cycles-opt0.log` / `result-zf-cycles-opt1.log`.
+SHA-256 respectively:
+`bb3bdbeacb19b7478d3a2ddcc7aea21fc56188747cfef2b0369343200ac2b32a`,
+`5d3f051f4dd30bcb84ce4a82fdf99d5548d7128038a996a66232e01b7ac7f399`.
+
+During this batch the light runtime suite passed **234 / zero failures /
+seven ignored**, and base passed **39 / zero failures**. These ran during
+the rejected push experiment with an unused additive helper; that helper
+was removed and final runtime/base sources are unchanged from the starting
+branch. The final generator-specific checks are those above.
+
+**Not tested:** full generated corpus, head's combined native gate, game
+image, FPS or loading. No game/GPU execution, generated shard build, game
+data commit or push. Next: head cherry-picks this generator/evidence
+commit only (not historical regenerated snapshot `f32bf0ca`), regenerates
+the shared train with `LIFT_RESULT_ZF=1`, and gates/compares it. The wider
+redesign should use codex-6's new corpus before further codegen changes.

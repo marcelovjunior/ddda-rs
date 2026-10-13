@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'research/native'))
 import lift
 import register_cache
+import lean_emission
 
 
 def records(path):
@@ -46,7 +47,7 @@ def main():
     p.add_argument('--opt', type=int, choices=(0, 1), required=True)
     p.add_argument('--prepare-only', action='store_true')
     p.add_argument('--bench', action='store_true')
-    p.add_argument('--variant', choices=('registers', 'flags'), default='flags')
+    p.add_argument('--variant', choices=('registers', 'flags', 'result-zf'), default='flags')
     p.add_argument('--baseline-ref', default='3e72b984', help='git pin for baseline generated bodies')
     p.add_argument('--cpu', type=int, help='pin this process and child benchmark to one Windows logical CPU')
     p.add_argument('--census', type=Path, default=Path('E:/ddda-re/notes/L161/c26-audit/census.json'))
@@ -85,16 +86,34 @@ def main():
             bodies[address] = body
     assert len(bodies) == len(addresses + support)
     candidates = {}
-    if a.variant == 'flags':
+    loop_arms = {}
+    if a.variant in ('flags', 'result-zf'):
         os.environ['LIFT_FLAG_FIXED_POINT'] = '1'
         for record in records(Path(lift.N) / 'patterns/lift.json'):
             address = f"0x{record['addr']:08x}"
             if address in bodies:
+                if address == '0x00fedd60' and a.variant == 'result-zf':
+                    for loop_entry, loop_exit in ((0xFEDF26,0xFEDF39),(0xFEDF44,0xFEDF57)):
+                        arm = next(arm for arm in record['arms']
+                                   if int(re.match(r'\s*0x([0-9A-Fa-f]+)',arm)[1],16) == loop_entry)
+                        loop_arms[loop_entry] = [arm, f'0x{loop_exit:X} => {{ return; }}']
+                os.environ['LIFT_RESULT_ZF'] = '0'
+                baseline = lift.shard_fn(record) if a.variant == 'result-zf' else None
+                os.environ['LIFT_RESULT_ZF'] = '1' if a.variant == 'result-zf' else '0'
                 body = lift.shard_fn(record)
                 body = re.sub(r'x86::call_local\(m, cpu, (0x[0-9A-F]+), (?:super::lifted::f_[0-9a-f]+|crate::platform::\w+)\)',
                               r'x86::call_ext(m, cpu, \1)', body)
                 candidates[address] = body.replace('x86::call_lifted(', 'x86::call_ext(')
+                if baseline is not None:
+                    baseline = re.sub(r'x86::call_local\(m, cpu, (0x[0-9A-F]+), (?:super::lifted::f_[0-9a-f]+|crate::platform::\w+)\)',
+                                      r'x86::call_ext(m, cpu, \1)', baseline)
+                    bodies[address] = baseline.replace('x86::call_lifted(', 'x86::call_ext(')
+                    assert candidates[address] == lean_emission.result_zf(bodies[address]), address
         assert candidates.keys() == bodies.keys()
+        if a.variant == 'result-zf':
+            removed = {address: body.count('cpu.fl.zf()') - candidates[address].count('cpu.fl.zf()')
+                       for address,body in bodies.items() if body != candidates[address]}
+            print('exact predicate-only source audit:', removed, flush=True)
     vector_dir = out / 'vectors'
     vector_dir.mkdir(exist_ok=True)
     selected = [record for record in records(Path(lift.N) / 'vectors/lift.json')
@@ -112,15 +131,22 @@ def main():
         changed = 0
         parts = []
         for address, body in bodies.items():
-            cached = (candidates[address] if a.variant == 'flags' else register_cache.cache_functions(body)) if variant == 'candidate' else body
+            cached = (candidates[address] if a.variant in ('flags', 'result-zf') else register_cache.cache_functions(body)) if variant == 'candidate' else body
             normalized = lambda s: re.sub(r'\s+', '', re.sub(r'(?m)^//.*$', '', s))
             changed += normalized(cached) != normalized(body)
             parts.append(cached)
         source += f'mod {variant} {{\n' + prelude + '\n'.join(parts) + all_functions + '}\n'
+        if a.variant == 'result-zf':
+            os.environ['LIFT_RESULT_ZF'] = '1' if variant == 'candidate' else '0'
+            loops = '\n'.join(lift.rust_fn(address,'isolated recorded loop',arms)
+                              for address,arms in loop_arms.items())
+            source += f'mod loop_{variant} {{\n' + prelude + loops + '}\n'
         test = lift.lifted_test_source('').replace('//!', '//').replace('use ddnative::generated::lifted;', f'use crate::{variant} as lifted;')
         test = test.replace('ddnative::', 'ddnative_base::')
         if variant == 'baseline':
             test += (ROOT / 'scripts/l161_bench.rs').read_text()
+            if a.variant == 'result-zf':
+                test += (ROOT / 'scripts/l161_result_bench.rs').read_text()
         source += f'mod test_{variant} {{\n' + test + '}\n'
         print(variant, 'changed bodies', changed, 'vectors', len(selected), flush=True)
     (out / 'isolated.rs').write_text(source)

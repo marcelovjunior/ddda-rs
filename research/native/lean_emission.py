@@ -508,8 +508,46 @@ def function_flags(arms):
             prefix = dead_flags(arm[:end] + KILL_SENTINEL)
             assert prefix.endswith(KILL_SENTINEL)
             arm = prefix[:-len(KILL_SENTINEL)] + arm[end:]
-        result.append(arm)
+        result.append(result_zf(arm))
     return result
+
+
+# An immediately preceding 32-bit ALU destination already holds the masked
+# result used by Flags::zf_value. Keep the complete flag state (including
+# INC/DEC's preserved/undefined carry); only specialize the predicate call.
+RESULT_ALU = re.compile(r'cpu\.(eax|ecx|edx|ebx|esp|ebp|esi|edi) = cpu\.fl\.alu_(?:add|sub|and|or|xor)\([^;{}]+, 32\);\s*')
+RESULT_INC_DEC = re.compile(r'\{ let a = cpu\.(eax|ecx|edx|ebx|esp|ebp|esi|edi) & u32::MAX; '
+                            r'let r = a\.wrapping_(?:add|sub)\(1\) & u32::MAX; '
+                            r'cpu\.fl\.inc_dec\(x86::(?:INC|DEC), a, r, 32\); cpu\.\1 = r; \}\s*')
+ZERO_BRANCH = re.compile(r'pc = if (\(!|!)?cpu\.fl\.zf\(\)(\))? \{')
+
+
+def result_zf(arm):
+    """Opt-in ZF branch specialization with an exact adjacent producer.
+
+    Only 32-bit full-register writes and the existing direct zf forms are
+    recognized. No intervening operation, partial register, carry ALU,
+    undefined flag, or CMP/TEST representation is inferred.
+    """
+    if os.environ.get('LIFT_RESULT_ZF') != '1' or 'cpu.fl.zf()' not in arm:
+        return arm
+    # Mask string contents without changing offsets, so diagnostics cannot
+    # accidentally be interpreted as executable emitter templates.
+    masked = re.sub(STRING, lambda m: ' ' * len(m[0]), arm)
+    edits = []
+    for pattern in (RESULT_ALU, RESULT_INC_DEC):
+        for producer in pattern.finditer(masked):
+            branch = ZERO_BRANCH.match(masked, producer.end())
+            if branch is None:
+                continue
+            before, after = branch[1] or '', branch[2] or ''
+            if (before, after) not in (('', ''), ('!', ''), ('(!', ')')):
+                continue
+            relation = '!=' if before else '=='
+            edits.append((branch.start(), branch.end(), f'pc = if cpu.{producer[1]} {relation} 0 {{'))
+    for start, end, replacement in sorted(edits, reverse=True):
+        arm = arm[:start] + replacement + arm[end:]
+    return arm
 
 
 # Whole functions whose arms exceed this many bytes are split into part

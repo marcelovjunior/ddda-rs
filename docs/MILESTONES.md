@@ -1,5 +1,21 @@
 # Milestones
 
+### L161b adjacent-result zero predicates (2026-10-13)
+
+- Default-off `LIFT_RESULT_ZF=1` replaces adjacent 32-bit result ZF
+  helper calls with direct zero tests; preserves all flag writes, memory,
+  calls and restartable steps. Selected fourteen-body audit removes eleven
+  ZF calls across four bodies, with no other source changes.
+- **47 focused tests pass**, including 13,608 synthetic state/access/fault
+  cases at each opt0/opt1; **31 original cases** pass for each variant at
+  both levels. Recorded FEDD60 loops with synthetic inputs improve median
+  thread cycles **1.054..1.213x opt0 / 1.005..1.155x opt1**. No game gain
+  claimed; not additive when codex-6's pending FEDD60 port is enabled.
+- Push fusion and CFG experiments rejected. No shard generation/build or
+  game/GPU run. Full corpus and gameplay acceptance remain with the head.
+  Next: shared train with the switch enabled; broader redesign measured on
+  codex-6's forthcoming corpus. Details: `docs/tasks/L161-codegen.md`.
+
 ### L161 generator flag fixed point (2026-10-13)
 
 - Audited ten hot main/job lifted routines against raw stacks and opt1
