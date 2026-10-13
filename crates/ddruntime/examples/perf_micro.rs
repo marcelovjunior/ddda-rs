@@ -67,6 +67,7 @@ fn main() {
 
     let mut registry = Registry::new();
     registry.insert(0x0100_0000, Binding::Service(just_return)).unwrap();
+    registry.insert(0x0100_0010, Binding::Lifted(just_return)).unwrap();
     let registry = std::sync::Arc::new(registry);
     registry.install();
     let mut cpu = Cpu { esp: 0x1008_0000, ..Cpu::default() };
@@ -77,6 +78,24 @@ fn main() {
         x86::call_ext(&mut mem, &mut cpu, 0x0100_0000);
     }
     println!("call_ext -> Registry -> service (push, ret): {:.2} ns per call", ns(t, N));
+    // a lifted function reached through call_ext (a call between lifted
+    // functions the generated code does not link directly)
+    let t = Instant::now();
+    for _ in 0..N {
+        cpu.esp -= 4;
+        mem.set_u32(cpu.esp, 0x1234_5678);
+        x86::call_ext(&mut mem, &mut cpu, 0x0100_0010);
+    }
+    println!("call_ext -> Registry -> lifted (push, ret): {:.2} ns per call", ns(t, N));
+    // the same loop calling the function directly: what call_ext adds
+    let direct: fn(&mut dyn Mem, &mut Cpu) = std::hint::black_box(just_return);
+    let t = Instant::now();
+    for _ in 0..N {
+        cpu.esp -= 4;
+        mem.set_u32(cpu.esp, 0x1234_5678);
+        direct(&mut mem, &mut cpu);
+    }
+    println!("direct call (push, ret): {:.2} ns per call", ns(t, N));
     x86::set_ext_calls(None);
 
     for round in 0..2 {
