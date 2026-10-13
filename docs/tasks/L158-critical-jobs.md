@@ -5,6 +5,133 @@ Scope: measured job ranking, correlated diagnostics, exact hot inner ports.
 No agent game runs. Ghidra unavailable; source is the verified lifted code
 and private original-instruction oracles.
 
+## Results (combo31 follow-up)
+
+Merged `task/fps-line` `01c7f74d` before this batch. The two complete head
+captures establish a critical-path ranking, but **no port has a cleanly
+isolated causal join-wait improvement yet**. Head reports shared-machine
+load and treats changes below 8% as noise; NPC counts also differ.
+
+Primary windows, agreed with L162: hash=0 frames **6600–6749**, hash=1
+**6819–6968**. Each has 150 frames, **10,350 valid joins**, 69 joins/frame,
+and 2,250 serial/empty batches excluded. No joined batch was rejected.
+The stream parser checks the entire source's line structure and hashes it;
+only the unterminated final 43/70 bytes are excluded. Worker callback work
+is inclusive and overlaps; it must not be added to join time.
+
+| Metric, ms/frame | JOB_HASH=0 | JOB_HASH=1 |
+|---|---:|---:|
+| Main join waits | 14.818612 | 13.526252 |
+| Last callback solo tail overlapping join | 7.085813 | 6.887015 |
+| Join time after all callbacks finish | 1.633497 | 1.223178 |
+
+The last two intervals are clipped to the actual join and callback start.
+The older `critical_jobs.py` tail formula could include a gap before the
+last callback started; this batch corrects it and adds a regression case.
+Per-frame rankings and all callback family totals remain in private
+`native-L158/c31-h0-ab.json`, `c31-h1-ab.json`, and `c31-comparison.json`.
+
+| Callback / candidate virtual (class) | Calls/frame 0→1 | Work us/call 0→1 | Last-family join ms/frame 0→1 | Solo tail ms/frame 0→1 |
+|---|---:|---:|---:|---:|
+| DB7620 / EE2C90 (uSkyStableShadow) | 1→1 | 13420.1→11819.1 | 4.2679→3.9584 | 3.9046→3.6513 |
+| 4B9FF0 / C70790 (uSoundGenerator) | 1→1 | 555.2→490.9 | 0.5551→0.4969 | 0.4662→0.4176 |
+| 4B9FF0 / BAF4F0 (uNpc) | 8→7 | 1524.0→1381.0 | 1.2447→1.0501 | 0.4603→0.7998 |
+| FED7E0 (cDraw) | 54.52→54.04 | 7.85→6.85 | 0.2710→0.2403 | 0.2475→0.2174 |
+| 4B9FF0 / B53650 (uCmc) | 3→3 | 1500.0→1248.4 | 0.7546→0.4806 | 0.2402→0.0983 |
+| 1090F70 / BB2890 (uNpc) | 8→7 | 1054.2→973.1 | 0.4635→0.7521 | 0.1416→0.2762 |
+
+The shadow family ranks first by total solo tail in **123/150** hash=0
+frames and **121/150** hash=1 frames. Its observed join change is -7.25%,
+inside head's noise threshold. NPC work per call improves while its solo
+tails grow: faster callbacks do not automatically shorten the last wait.
+The candidate virtual field and exact vtable class do not identify all
+nested callees. E0CE50/5EE640 do not occur as direct/candidate targets in
+these admitted parallel batches; that does not prove their nested absence.
+
+Sensitivity window: hash=0 6400–6699 vs hash=1 6600–6899, 300 frames each,
+20,700 joins each. Join **15.685949→13.369194**, solo tail
+**7.658606→6.374987**, post-callback **1.871323→1.220800 ms/frame**.
+The window-sensitive size of the apparent gain reinforces the causal limit.
+Head's whole runs: instrumented hash 0/1 **17.8/19.9 average FPS**;
+default **19.8**, participants=8 **21.1**. These are separate, noisy runs.
+L162 found the extra worker still idle; p8 is not verified eight-way work.
+
+Reproduce the retained frame/family data without expanding the gzip:
+
+```
+python scripts/critical_ab.py E:/ddda-re/notes/runs/L158_h0.trace.gz --first 6400 --last 6749 --out E:/ddda-re/notes/native-L158/c31-h0-ab.json
+python scripts/critical_ab.py E:/ddda-re/notes/runs/L158_h1.trace.gz --first 6600 --last 6968 --out E:/ddda-re/notes/native-L158/c31-h1-ab.json
+```
+
+Head authorized compression (#13390); L162 finished reading (#13432).
+Both gzip streams were independently decompressed and checked against the
+original SHA-256 and length, then each raw file was rehashed before removal.
+**3,121,002,352 bytes recovered**, retaining 191,142,074 / 204,890,226-byte
+gzip files and `native-L158/trace-compression.json` receipts.
+
+## Next exact leaves: shader dependency lookups
+
+`mtcore::job_lookup` translates **01008200/01008260** completely and
+registers them only with **DDRUNTIME_JOB_LOOKUP=1**. Source chain:
+FF1920/FEE320 → E132B0 → E12A20 → E0F3C0/E0F4B0 → these leaves.
+They traverse the original bucket/link layout; single-key lookup rejects
+the sign-bit index while pair-key lookup masks it. Guest spills, access
+order, arithmetic wrap, registers and defined flags are preserved.
+No borrowed guest slices, caching, table copies, or algorithm replacement.
+Live call frequency and critical-path benefit of these branches remain
+unmeasured; the trace does not resolve nested leaves.
+
+**Verified:** 1,380 original-instruction vectors (690 per leaf), empty and
+colliding buckets, head/middle/tail hits, misses, sign-bit indices, paired
+key mismatches, unaligned/page-edge records and link-address wrap to zero.
+Randomized CPU/memory state includes four MXCSR modes. Isolated lifted
+and port replay agree; **11,520 paired access/fault positions** also agree.
+All vectors additionally replay through Pages in serial and atomic modes.
+The isolated gate has **four passing tests**, and builds no shards.
+
+Synthetic atomic-page lookup benchmark: opt1 lifted body vs opt3 readable
+port, seven alternating pairs at chain lengths 0/1/2/3/8/32/64. **98/98
+pairs improve**, median speedup **1.43–2.68x**. For 64-node misses,
+single-key medians **1114.69→484.58 ns**, pair-key **1395.01→643.01 ns**.
+These timings include shared-machine noise and are not whole-job gains.
+
+Required-vector mtcore/ddports suite with lookup enabled: **19 passed,
+zero failed, nine ignored**. Python critical-analysis tests: **nine pass**.
+Runtime light suite: **242 reported passes, zero failures, seven ignored**.
+Final focused registration checks pass with lookup both disabled and enabled;
+the updated 690-cases-per-leaf corpus requirement also passes.
+The head's combined native gate must include these opt-ins; L161's already
+pinned generator gate intentionally excludes them (#13424). No agent game,
+GPU or shard execution. Next: combined gate, then head's matched hash/lookup
+A/B with fixed scene counts and all unrelated settings held constant.
+
+Reproduce the original oracle via heavy.py and isolated gate:
+
+```
+python E:/ddda-re/tools/heavy.py codex-7 -- E:/ddda-re/tools/pyenv/Scripts/python.exe research/native/record_job_lookup.py
+python scripts/check_job_lookup.py --bench
+```
+
+SHA-256 receipts (all raw material stays private):
+
+| Artifact | SHA-256 |
+|---|---|
+| h0 original trace | `6804199b37027679b142ade4ef6d70f0d330379046cee60c595f241fdb1eecfa` |
+| h1 original trace | `c515d899df51c41497d05e4f832cfef71c8d8931f48e2be53d76531c132a9f65` |
+| lookup original vectors | `f067c47144e1a470e62db339b27bc7e785fc47138241aee2ee0a8747d3c0e5e9` |
+| 01008200 code range | `047be61631b6956b159fb5f412d5733fbeb8fb26f610de5062cc1804c4f1de99` |
+| 01008260 code range | `0f4dfdb1bfa76ddc10602193c41e16b4df8400cebd21b90b8a6ae55aa4f4c3c2` |
+| isolated benchmark log | `51231442d5f09faf9232103dca52ab8c4cbff2ec28274c52b9d47098545f8043` |
+| final isolated gate log | `9e77aedb79f5cdd464a0e4a93b0bf12c0eb1c7264e80bd0f8675ba7369f6ec67` |
+| light runtime log | `0b607308d44e84809bc4855916c212e17623edf6ea7f70a8c3710c8c162dad4d` |
+| mtcore/ddports gate log | `680fa736b37631c78560da2d9c85dc6923fcb5e4d31f9120c1897db84a12f501` |
+| c31-h0-ab.json | `0d14312ee3f28293629229c1edeeb0b1fa7af25b928b004c031d4ab948de8c58` |
+| c31-h1-ab.json | `63e32ba017ccb1ebe7e7b1daa8abf1bd9d136a041483262a09e5fdb267cf2b24` |
+| run_c31t0.log | `a359efd0d6fcaa24ee9683ab168bb46abc8690f78fad7b0194f1bf923eed3b1f` |
+| run_c31t1.log | `7b966f6816e3062def3414c7a2c9c1f52c66ee4aa81ceb3cf3de793470fa7abc` |
+| run_c31def.log | `3df851123feed6c29d40c2e3ce05790884d4232b27ad92f5eaff7d999eb7d785` |
+| run_c31p8.log | `ce80693d3aa24b64b28de833d62ecb78c3c5cbb6839feda90c041c0760acee6d` |
+
 ## Results (first batch)
 
 The existing capture cannot identify the last callback at each join:

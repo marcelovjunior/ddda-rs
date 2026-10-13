@@ -27,6 +27,7 @@ pub mod dti;
 pub mod hash;
 pub mod hot;
 pub mod job_hash;
+pub mod job_lookup;
 pub mod machine;
 pub mod object;
 pub mod property;

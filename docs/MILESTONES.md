@@ -1,5 +1,21 @@
 # Milestones
 
+### L158 combo31 critical paths and next lookup leaves (2026-10-13)
+
+- Late hash=0/1 captures: 150 frames / 10,350 joins each; main joins
+  **14.819→13.526 ms/frame**, solo callback tails **7.086→6.887**.
+  uSkyStableShadow leads 123/150 and 121/150 frames. Its join reduction
+  is **7.25%**, inside head's noise threshold; NPC counts change 8→7.
+  No clean causal port/frame improvement established.
+- Exact opt-in `JOB_LOOKUP` leaves 01008200/01008260: **1,380 original
+  vectors**, **11,520 paired fault/access cases**, serial/atomic replay.
+  Four isolated tests pass; synthetic **98/98 pairs improve**, medians
+  **1.43–2.68x**. Crate gate **19 pass / nine ignored**, Python **nine pass**.
+  Runtime light: **242 reported passes / zero failures / seven ignored**.
+- Verified trace compression recovers **3.12 GB**. Evidence and hashes:
+  `docs/tasks/L158-critical-jobs.md`. Combined native gate and live lookup
+  benefit remain pending; next: head integration gate and controlled A/B.
+
 ### L159 Vulkan default image gate (2026-10-13)
 
 - Same-run selected raw pass oracle copies attachment load state, replays
@@ -64,14 +80,21 @@
   after construction; original CPU/eight clamp and frame activation remain.
   No cap patch. Intended head A/B: seven vs eight participants, main included.
 - Wake analyzer reports per-batch jobs/participants, callback gaps,
-  final-job solo tails and join overlaps; **13 parser tests pass**.
+  final-job solo tails and join overlaps; **17 parser tests pass**.
   Signaled lanes are distinct from active participation (one-job bypass).
 - Full light gate **234 reported passes / two inherited failures / seven
   ignored**; Present timing passes its isolated retry, gamma remains.
-  Both new ABI/configuration tests pass. Actual wake latency and
-  performance/image acceptance pending. No speculative sync fix.
-- Next: head capture with L158 and this setter, exact env in
-  `docs/tasks/L162-job-wake.md`; analyze matched 7/8 joins and hashes.
+  First-frame follow-up: **242 reported passes / inherited Present timing
+  failure / seven ignored**, three focused ABI/configuration tests pass.
+- c31 h0/h1: 150 frames each, 62,100 paired wakes each, no selected-batch
+  rejects. Signal-to-wait p50/p95 **11.5/52.2 -> 10.6/25.0 us**;
+  final-callback solo overlap **7.086 -> 6.887 ms/frame** dominates wakes.
+  40 of 69 parallel batches/frame have >=8 jobs (h0).
+- Ctor-only p8 configured eight but seventh worker remains idle in profile.
+  First-frame original-setter reapplication candidate logs actual activation;
+  head acceptance remains pending. No speculative sync primitive change.
+- Next: instrumented p8 activation check and matched cache/futex A/B;
+  exact measurements, hashes and limitations: `docs/tasks/L162-job-wake.md`.
 
 ### L160 job worker sizing and wake analysis (2026-10-13)
 
