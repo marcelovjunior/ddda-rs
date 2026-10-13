@@ -5,7 +5,7 @@
 - Opt-in EA23F0/FED190/E0F3C0/01008200 native semantic ports: **2,226
   original returns** pass ABI replay; EA23F0 reaches **712/712 decoded
   instructions**, both growth sites, NaNs and unaligned/aliased inputs.
-- Six isolated tests pass, including opt2 lifted bodies and serial/atomic
+- Seven isolated tests pass, including heap-corruption rejection, opt2 lifted bodies and serial/atomic
   Pages. Runtime light **255 pass / zero failures / seven ignored**.
 - Median paired synthetic gains EA23F0 **1.512x**, E0F3C0 **2.734x**,
   01008200 **1.141x**; some individual samples regress, FED190 mixed

@@ -62,13 +62,16 @@ synthetic object graphs, not recorded gameplay inputs:
   both isolated lifted and semantic implementations quiet them on hardware.
   Signaling cases remain included, with oracle provenance recorded.
   Four x87 rounding modes and SSE rounding/DAZ/FTZ combinations are replayed.
-- **Six isolated tests pass:** four semantic vector tests, original lifted
+- **Seven isolated tests pass:** four semantic vector tests, original lifted
   replay, and serial/atomic production `PageTable` replay. Extracts only
   these four lifted bodies, including EA23F0's four split parts; no shards.
+  The seventh test deliberately corrupts a heap output below ESP while
+  preserving the correct return/registers and verifies that the oracle
+  rejects that byte (board #14051 warning independently confirmed covered).
 - Runtime light suite: **255 passed, zero failed, seven ignored**.
   Opt-in registration uniqueness/precedence test passes with
   SEMANTIC=1 and JOB_LOOKUP=1. Full mtcore/ddports: **26 passed, zero
-  failed, nine ignored**. Final post-review focused suite: four passed.
+  failed, nine ignored**. Final post-review focused suite: five passed.
 
 Synthetic paired CPU costs: extracted lifted bodies at **opt2**, native
 mtcore and host/base at **opt3**, atomic pages; eleven selected inputs per

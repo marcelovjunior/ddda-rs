@@ -172,3 +172,30 @@ fn original_primitive_material() {
         mtcore::semantic_draw_c::primitive_material,
     );
 }
+
+#[test]
+fn abi_oracle_rejects_corrupt_heap_below_stack() {
+    let path = "E:/ddda-re/notes/native-L175/00fed190.json";
+    if !std::path::Path::new(path).exists() {
+        assert!(
+            std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(),
+            "missing {path}"
+        );
+        return;
+    }
+    let result = std::panic::catch_unwind(|| {
+        verify(path, 0xfed190, |m, c| {
+            let context = c.ecx;
+            mtcore::semantic_draw_c::begin_material(m, c);
+            // Leave the correct return/registers intact; corrupt only guest heap.
+            m.set_u32(context.wrapping_add(0x68), c.eax ^ 1);
+        });
+    });
+    let error = result.expect_err("corrupt heap output must fail ABI comparison");
+    let text = error
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| error.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert!(text.contains("memory e000068"), "unexpected failure: {text}");
+}
