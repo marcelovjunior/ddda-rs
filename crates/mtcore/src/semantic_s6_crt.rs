@@ -168,9 +168,12 @@ fn asin_out_of_range(t: &Tables, x: f32, magnitude: u32) -> f32 {
         return f32::from_bits(sign | half_pi.to_bits());
     }
     if magnitude > 0x7f80_0000 {
-        return x + 0.0;
+        // x + 0.0 of a NaN: the same NaN, quieted
+        return f32::from_bits(x.to_bits() | 0x0040_0000);
     }
-    0.0f32 * f32::from_bits(0x7f80_0000)
+    // 0 * infinity: the hardware's default NaN (written out: the compiler
+    // folds the product to a positive NaN)
+    f32::from_bits(0xffc0_0000)
 }
 
 /// `0x3f7f0000 <= |x| < 1` (0x012F0F95).
