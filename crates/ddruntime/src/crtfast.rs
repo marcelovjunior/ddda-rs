@@ -18,7 +18,8 @@
 //! strchr body (0x012EF426), which runs lifted from the state the
 //! original's `jmp` leaves.
 //!
-//! All of them touch only guest memory: dispatch::Binding::LockFree.
+//! All of them touch only guest memory with integer code:
+//! dispatch::Binding::Integer (L170; session.rs).
 use ddnative_base::mem::{Mem, PAGE};
 use ddnative_base::x86::Cpu;
 

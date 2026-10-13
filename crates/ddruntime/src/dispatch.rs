@@ -202,7 +202,7 @@ impl Registry {
             crate::archive_inflate::install(ports);
             crate::procedural_geometry::install(ports);
             // L171: semantic 0x00E12A20 keeps the original body for its rare branch
-            if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
+            if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") && ddports::semantic_selected(0x00e1_2a20) {
                 let bodies = ddnative::generated::lifted::bodies();
                 if let Some(&(_, original)) = bodies.iter().find(|(a, _)| *a == 0x00e1_2a20) {
                     let _ = ddports::mtcore::semantic::E12A20_ORIGINAL.set(original);
@@ -378,6 +378,29 @@ impl Registry {
 
     #[inline]
     pub(crate) fn run_binding(&self, binding: Binding, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        if let Binding::Lifted(f) = binding {
+            let sample = if crate::threads::sync_profile::enabled() {
+                crate::threads::sync_profile::begin_job(target, m, cpu)
+            } else { None };
+            let critical = if crate::critical_jobs::enabled() {
+                crate::critical_jobs::begin_job(target, m, cpu)
+            } else { None };
+            f(m, cpu);
+            drop(critical);
+            if let Some(sample) = sample { crate::threads::sync_profile::finish_job(sample); }
+            return;
+        }
+        // L170: DDRUNTIME_SERVICE_CENSUS
+        if crate::service_census::on() {
+            let return_to = m.u32(cpu.esp);
+            return crate::service_census::service(target, return_to, || self.run_service_binding(binding, m, cpu, target));
+        }
+        self.run_service_binding(binding, m, cpu, target)
+    }
+
+    /// A service binding (a lifted one runs in run_binding).
+    #[inline]
+    fn run_service_binding(&self, binding: Binding, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         match binding {
             Binding::Service(f) => self.run_service(f, m, cpu, target, true, false),
             Binding::ServiceTail(f) => self.run_service(f, m, cpu, target, true, true),
@@ -385,17 +408,7 @@ impl Registry {
             Binding::Integer(f) => self.run_integer(f, m, cpu, target),
             Binding::Device(f, guest) => self.run_service_as(f, m, cpu, target, guest, false, true),
             Binding::DeviceState(f) => self.run_device_state(f, m, cpu, target),
-            Binding::Lifted(f) => {
-                let sample = if crate::threads::sync_profile::enabled() {
-                    crate::threads::sync_profile::begin_job(target, m, cpu)
-                } else { None };
-                let critical = if crate::critical_jobs::enabled() {
-                    crate::critical_jobs::begin_job(target, m, cpu)
-                } else { None };
-                f(m, cpu);
-                drop(critical);
-                if let Some(sample) = sample { crate::threads::sync_profile::finish_job(sample); }
-            },
+            Binding::Lifted(_) => unreachable!("run_binding runs lifted bindings"),
         }
     }
 
@@ -486,7 +499,10 @@ impl Registry {
         let sync_sample = if crate::threads::sync_profile::enabled() {
             crate::threads::sync_profile::begin(self.names.get(&target).map(String::as_str), target, m, cpu)
         } else { None };
-        let critical = crate::critical_jobs::begin_join(self.names.get(&target).map(String::as_str), m, cpu);
+        // (the name's map lookup only when a diagnostic wants it: L170)
+        let critical = if crate::critical_jobs::enabled() {
+            crate::critical_jobs::begin_join(self.names.get(&target).map(String::as_str), m, cpu)
+        } else { None };
         let stats = crate::threads::stats::on().then(|| {
             let name = self.names.get(&target).cloned().unwrap_or_else(|| format!("{target:#010x}"));
             crate::threads::stats::start(name)
@@ -504,7 +520,9 @@ impl Registry {
         drop(lock);
         drop(stats);
         if let Some(sample) = critical { sample.finish(cpu.eax); }
-        crate::critical_jobs::presented(self.names.get(&target).map(String::as_str), cpu.eax);
+        if crate::critical_jobs::enabled() {
+            crate::critical_jobs::presented(self.names.get(&target).map(String::as_str), cpu.eax);
+        }
         if let Some(sample) = sync_sample { sample.finish(cpu.eax); }
         if crate::threads::sync_profile::enabled() {
             crate::threads::sync_profile::presented(self.names.get(&target).map(String::as_str), cpu.eax);
@@ -534,6 +552,7 @@ impl Registry {
         // lifted calls are preemption points in serial mode (crate::threads)
         ddnative_host::install();
         ddnative_host::set_preempt_hook(crate::threads::preempt);
+        crate::service_census::set_names(&self.names);
         let me = Arc::clone(self);
         // L101: the bindings this thread called, direct-mapped by address
         // (the registry no longer changes once shared, so they never go
@@ -546,6 +565,9 @@ impl Registry {
                 if t == target {
                     return me.run_binding(b, m, cpu, target);
                 }
+            }
+            if crate::service_census::on() {
+                crate::service_census::miss();
             }
             if let Some(b) = me.direct(target) {
                 slot.set(Some((target, b)));

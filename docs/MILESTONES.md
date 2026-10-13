@@ -44,6 +44,28 @@
   variants are rejected, including corrupted and extra heap writes below ESP.
 - Next: head merges registrations and validates the combined semantic train
   against the native gate and matched image/critical-job capture.
+### L178 semantic instanced-model draw (2026-10-13)
+
+- C24640 `uOmSwingBaseInstancing::vf26` registered under SEMANTIC:
+  **256 original returns**, **337/337 body instructions**, including
+  callback buffers and nonstandard register arguments.
+- Five combined isolated tests pass, opt2 and serial/atomic Pages;
+  synthetic paired median **1.076x**, 58/77 improving pairs. No game run.
+- Next: head combined train; D7CF70 collision/simplex proof remains open.
+  Detailed evidence and runtime timing-test failures: L178 brief.
+
+### L178 semantic job bounds traversal (2026-10-13)
+
+- Opt-in `DDRUNTIME_SEMANTIC=1` replaces 010A35D0 with a semantic
+  four-way bounds traversal preserving guest work records and callbacks.
+- **192 original returns**, **369/369 body instructions**; ABI and
+  serial/atomic Pages replay pass. Four isolated tests include an opt2
+  lifted baseline and deliberate heap-corruption rejection.
+- Synthetic paired median **1.243x**, 63/77 improving pairs; individual
+  regressions remain. No gameplay/FPS or shard-build claim.
+- Next: head accumulated train; complete D7CF70/C24640 gates. Evidence,
+  private corpus hash and light-suite results: `docs/tasks/L178-semantic-jobs.md`.
+
 ### L169 exact shadow traversal and setup (2026-10-13)
 
 - Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
@@ -187,6 +209,18 @@
 - Next: head combined native gate and independent same-route port A/B;
   retain opt-ins until image/job-time acceptance. Evidence and divisibility
   limits: `docs/tasks/L169-shadow.md`.
+### L170 game-thread service-call overhead (2026-10-13)
+
+- Sizing (c31def, game threads): out-of-line guest memory accessors ~40%
+  of busy samples (Team A), `call_ext` dispatch ~6%, real service work ~4%
+  (`run_service_as` 11.2%, of which waits 7.1%).
+- Implemented and tested, not yet run in game: `call_ext` without an Rc
+  clone per call; an opt-in service census (`DDRUNTIME_SERVICE_CENSUS=1`);
+  memcpy/memset without a heap buffer up to 256 bytes; the CRT memory and
+  string routines and TLS/last-error imports on the Integer service path.
+  memcpy 32 B through the dispatch: 100.8 -> 48.1 ns.
+- Next: a census run in game to rank the remaining services and call sites.
+  Details: docs/tasks/L170-service-calls.md.
 
 ### L162c job distribution and host scheduling (2026-10-13)
 
@@ -767,6 +801,26 @@
   generated source **+0.2194%**. No comparative compile-speed/FPS claim.
 - Next: head's same-scene loading/image/FPS measurement. Details and
   timing/profile limits: `docs/tasks/L129-dead-flags.md`.
+
+### L141 native jobs (`DDDRAW_NATIVE=1`) viable (2026-10-13)
+
+- Implemented (task/L141-native-viable, merged up to 32f6792f in combo29):
+  one native worker kept across releases (only what the guest released is
+  forgotten), render-target channel fill and D3D9 depth bias in the pixel
+  shader as the D3D9 path does, strips by the D3D9 path's rule, draws that
+  sample their own target through a snapshot copy, draws inside a query
+  span left to the D3D9 path, and no per-job finisher wait (a ring of
+  scatter sources with submission tickets).
+- **Compared with the D3D9 path in game**: combo29 `compare` with
+  DDGPU_VK=1, 143,744 passes matched, 0 mismatched. combo29 native VK1:
+  20.6 fps (combo28 17.0), worker_instances 1, 6 jobs refused (indexed
+  line strips); sink refusals per frame: Instanced 90, FloatsUncovered 44,
+  Query 6.
+- After combo29, tested but not yet run in game: 58093ee0 (codex-11's L154
+  sink allocation fixes, reviewed), ef80de30 (NativeDraw constants as
+  Arc<NativeConstants>, made once per bank: c29nat1's render thread spent
+  15% in native_draw's per-draw constants), c49461f6 (a test race).
+- Next: the head's native VK1, compare VK1 and default runs of ef80de30.
 
 ### L119 native sink: drawcall is the default (2026-10-13)
 
