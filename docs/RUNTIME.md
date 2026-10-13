@@ -938,7 +938,7 @@ merge notes.
 
 ### L127 native backend comparison
 
-DDDRAW_NATIVE=compare keeps decoded D3D9 DrawCalls as the visible oracle and submits matching NativeJobs to L126 shadow attachments. FIFO begin markers precede oracle writes; end markers precede target changes, fallback commands, dirty uploads and frame end. Rejections retain the oracle exactly once. The shared nDraw decoder is covered separately by L119's runtime call oracle. GPU summaries are asynchronous and report pass, target, aspect, compared/differing pixels and maximum channel difference; submitted jobs are not yet verified. See docs/tasks/L127-native-compare.md for coverage, test results and remaining worker/game verification.
+DDDRAW_NATIVE=compare keeps decoded D3D9 DrawCalls as the visible oracle and submits matching NativeJobs to L126 shadow attachments. FIFO begin markers precede oracle writes; end markers precede target changes, fallback commands, dirty uploads and frame end. Rejections retain the oracle exactly once. The shared nDraw decoder is covered separately by L119's runtime call oracle. GPU summaries are asynchronous and report pass, target, aspect, compared/differing pixels and maximum channel difference; submitted jobs are not yet verified. Nine GPU tests pass (four reducer, five end-to-end shadow), plus three producer FIFO tests. Synthetic mismatch/rejection checks preserve real color/depth/stencil; in-game verification remains with the head. See docs/tasks/L127-native-compare.md for coverage and test results.
 
 
 ## L123 native resident constants and bundles (2026-10-13)

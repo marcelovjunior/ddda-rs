@@ -2210,3 +2210,9 @@ opening (codex-31), route perf (codex-29).
 - Three pure transport tests pass, including DeferredBackend FIFO and rejection recovery. Earlier light runtime:173 pass,1 inherited fullscreen-gamma failure,3 ignored. Backend-path oracle shares L119 decoder, separately checked against runtime D3D9 calls.
 - Next: validate synthetic NativeJobs after L126 shadow hooks land, then head's in-game run. No gameplay equivalence claim.
 
+### L127 integrated comparison gate (2026-10-13)
+
+- DDDRAW_NATIVE=compare producer, L126 shadow worker and asynchronous GPU reduction integrated with L119 cache-2c. Five end-to-end GPU tests pass (nine GPU cases total), one summary CPU test, three producer tests and eight transport tests pass.
+- 42 matched and three intentional mismatched target summaries; five explicit rejection diagnostics. Blended pre-pass loads, repeated shadows, mip attachments and D24S8 isolation checked; real targets unchanged, zero pending comparisons on test shutdown.
+- Runtime: 180 distinct passes across full suite plus isolated timing retry; one inherited fullscreen-gamma failure, three ignored. No checks weakened; no game/shard run or game image/FPS claim.
+- Next: head-run DDDRAW_NATIVE=compare gameplay and inspect mismatch/unverified/pending counts. Details: docs/tasks/L127-native-compare.md.

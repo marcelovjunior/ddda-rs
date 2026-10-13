@@ -35,7 +35,8 @@ pub struct CompareResult {
     pub pixels: u32,
     pub differing_pixels: u32,
     /// Absolute channel difference, in normalized units for UNORM targets.
-    /// Infinity means a differing non-finite channel was encountered.
+    /// Infinity means a differing non-finite channel or an overflowing finite
+    /// difference was encountered; nonfinite_pixels distinguishes those cases.
     pub max_channel_diff: f32,
     pub nonfinite_pixels: u32,
 }
