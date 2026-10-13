@@ -13,6 +13,10 @@
   Combined native gate and head image/per-job A/B pending.
 - Next: head train with this independent switch, then matched shadow-save
   0/1 capture. Full evidence: `docs/tasks/L167-critical-callbacks.md`.
+- EA5B50 follow-up: 576 original caller fixtures cover 112/112 block
+  starts; 28,800 fault/access pairs and both memory modes pass. Split/flat
+  Pages specializations regress on some paths; neither is registered.
+  Oracle/replay retained for codegen work, not a gameplay-input corpus.
 
 ### L158 combo31 critical paths and next lookup leaves (2026-10-13)
 

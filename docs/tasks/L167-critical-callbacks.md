@@ -141,3 +141,62 @@ same route, hash/lookup/participants/sync switches and binary, recording
 per-join shadow duration/solo overlap plus counts. Separately use profile
 off for FPS/image acceptance. No measured callback speedup, image parity
 or safe callback splitting is established by this isolated leaf proof.
+
+## EA5B50 follow-up: complete caller oracle, rejected specializations
+
+Head/codex-11 assigned EA5B50 to this lane in board #13641. FED480's
+production checkpoint is `2bede57a`; this follow-up adds **no material
+override**. The existing EA5B50 implementation remains selected.
+
+`research/native/record_shadow_material.py` records **576 original returns**,
+reaching **112/112 lifted basic-block starts / 713 original instructions**.
+Cases vary model flags, cached state, recording enabled/disabled, resource
+nulls, allocation refill, context/output aliasing, input keys and SIMD bits.
+All branches remain in the candidate; block-start coverage is not a claim
+to exhaust every possible edge combination. The external allocator,
+memcpy, lighting and virtual calls have explicit synthetic ABI effects;
+their targets, entry registers and SIMD state are checked. These are
+synthetic caller fixtures, **not recorded gameplay inputs or proofs of
+the external callees**. Ghidra includes the lighting calls; an early board
+claim to the contrary was a tool-output truncation error, corrected #13708.
+
+`scripts/check_shadow_material.py` builds the existing lifted body at opt1
+and a private Pages specialization at opt3. `--flatten` additionally removes
+only the four generated part-dispatch boundaries. Candidate source and
+all copied/generated bodies stay in private `native-L167/material-isolated`.
+No game/shard build, runtime registration or repository copy of that large
+specialized body is involved. It reuses the L167 test support and compiles
+the same production GuestMemory implementation as the FED480 gate.
+
+Both variants pass **four isolated tests**: baseline and candidate original
+returns, **28,800 paired fault/access positions**, and serial/atomic page
+replay. This fault sample tests the first 1,800 byte-access positions of
+16 selected fixtures, not every access in the largest memcpy fixtures.
+
+The final benchmark disables call-trace collection during timing and uses
+the same synthetic external-call dispatch seam for both bodies. It resets
+fixture memory and CPU outside timing, measures 2,000 calls per sample,
+alternates order for seven pairs across 17 flag/cache cases, and uses atomic
+production memory. Split variant: **72/119 faster**, per-case median ratios
+**0.731–1.221x**. Flat variant: **49/119 faster**, **0.893–1.098x**. Shared-host
+noise remains material; neither shows a reliable broad gain, so both were
+rejected. Earlier exploratory timing logs included diagnostic collection
+and are superseded by these bounded final measurements. No game speedup
+is inferred from either run.
+
+Private corpus `native-L167/shadow_material.json` SHA-256:
+`5b643fd675cbcab0c14dea16379636f1dd54e060379cc7f38065947a37e308eb`.
+Final logs under `E:/ddda-re/notes/`:
+
+- `L167-material-split-bounded.log`:
+  `00eedab081cfa834e20de8e8b314d9cb4bba6f009b29c3576926d50cd35356c9`.
+- `L167-material-flat-bounded.log`:
+  `3fc173ce4b41de68b92c247261536f4308e6dcb377de1511f845154258221f2b`.
+
+Reproduce with research Python `research/native/record_shadow_material.py`,
+then `python scripts/check_shadow_material.py --bench` (optionally
+`--flatten`). All build output stays in target L167 with four jobs.
+This caller oracle is available to Team A's codegen redesign; it supplements
+but cannot replace codex-6's requested **real gameplay** input corpus.
+Next: use that real corpus to assess register-local codegen or a smaller
+semantic rewrite before attempting another EA5B50 production candidate.
