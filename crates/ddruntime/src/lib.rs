@@ -13,6 +13,7 @@
 //! faults, and a call to code that is neither translated nor modelled stops
 //! with its address instead of returning something made up.
 pub mod audio;
+pub mod archive_inflate;
 pub mod input;
 pub mod d3d9;
 pub mod d3d9copy;
@@ -29,6 +30,7 @@ pub mod fasthash;
 pub mod crtfast;
 pub mod fastmem;
 pub mod files;
+mod file_cache;
 pub mod load_log;
 pub mod image;
 pub mod interfaces;

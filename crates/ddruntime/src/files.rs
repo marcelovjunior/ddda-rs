@@ -63,6 +63,8 @@ pub struct Files {
     /// The guest's current directory, relative to the install root.
     cwd: PathBuf,
     handles: HashMap<u32, Open>,
+    archive_reads: std::collections::HashSet<u32>,
+    read_cache: crate::file_cache::Shared,
     next: u32,
 }
 
@@ -189,6 +191,11 @@ fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
     let result = with_files(|f| -> Result<u32, u32> {
         let pl = place_in(f, &name).ok_or(ERROR_ACCESS_DENIED)?;
         let write = access & GENERIC_WRITE != 0 || matches!(disposition, 1 | 2 | 5);
+        // Opt-in until head's paired loading runs establish the I/O benefit.
+        // Overlay/home files never enter a content cache.
+        let cache_archive = !write && pl.install.as_ref() == Some(&pl.read)
+            && pl.read.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("arc"))
+            && std::env::var("DDRUNTIME_FILE_READ_AHEAD").is_ok_and(|v| v == "1");
         let file = if write {
             // writes go to the overlay; existing install contents are copied first
             let over = pl.write.clone();
@@ -229,7 +236,9 @@ fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
                 ERROR_PATH_NOT_FOUND
             })?
         };
-        Ok(new_handle(f, Open::File(file)))
+        let h = new_handle(f, Open::File(file));
+        if cache_archive { f.archive_reads.insert(h); }
+        Ok(h)
     });
     crate::load_log::open_done(load_started, &name, result.is_ok());
     cpu.eax = match result {
@@ -352,19 +361,25 @@ pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
     let load_started = crate::load_log::begin();
     let (h, buf, count, ov, routine) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     let offset = m.u32(ov + 8) as u64 | (m.u32(ov + 12) as u64) << 32;
-    let file = with_files(|f| match f.handles.get_mut(&h) {
-        Some(Open::File(file)) => file.try_clone().map_err(|_| ERROR_INVALID_HANDLE),
+    let file = with_files(|f| match f.handles.get(&h) {
+        Some(Open::File(file)) => file.try_clone()
+            .map(|file| (file, f.archive_reads.contains(&h).then(|| f.read_cache.clone())))
+            .map_err(|_| ERROR_INVALID_HANDLE),
         _ => Err(ERROR_INVALID_HANDLE),
     });
     // L64: the host read and the copy without the guest lock (parallel mode)
-    let data = file.and_then(|mut file| {
+    let data = file.and_then(|(mut file, cache)| {
         crate::threads::unlocked(|| {
             let size = file.metadata().map(|md| md.len()).unwrap_or(0);
             if offset >= size {
                 return Err(ERROR_HANDLE_EOF);
             }
-            with_read_scratch(count.min((size - offset) as u32) as usize, |v| {
-                file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(v)).map_err(|_| ERROR_HANDLE_EOF)?;
+            with_read_scratch((count as u64).min(size - offset) as usize, |v| {
+                if let Some(cache) = &cache {
+                    crate::file_cache::read(cache, &mut file, h, offset, size, v)
+                } else {
+                    file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(v))
+                }.map_err(|_| ERROR_HANDLE_EOF)?;
                 put_bytes(m, buf, v);
                 Ok(v.len() as u32)
             })
@@ -459,7 +474,10 @@ pub fn get_file_size(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// CloseHandle(handle): files and find handles; unknown handles fail.
 pub fn close_handle(m: &mut dyn Mem, cpu: &mut Cpu) {
     let h = arg(m, cpu, 0);
-    cpu.eax = (crate::threads::close(h) || with_files(|f| f.handles.remove(&h).is_some())) as u32;
+    cpu.eax = (crate::threads::close(h) || with_files(|f| {
+        if f.archive_reads.remove(&h) { f.read_cache.lock().unwrap().remove(h); }
+        f.handles.remove(&h).is_some()
+    })) as u32;
     if cpu.eax == 0 {
         set_error(ERROR_INVALID_HANDLE);
     }
