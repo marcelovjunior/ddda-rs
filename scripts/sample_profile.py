@@ -195,6 +195,9 @@ def main():
     ap.add_argument("--depth", type=int, default=64)
     ap.add_argument("--top", type=int, default=25)
     ap.add_argument("--symbols", help="directories with the PDBs (the exe names only its PDB's file name)")
+    ap.add_argument("--callers", type=int, default=0,
+                    help="for the N hottest self functions of each thread, the nearest frames above them that are "
+                         "not runtime-library helpers (who calls an unnamed memset in vcruntime140, say)")
     a = ap.parse_args()
     pid = a.pid or find_pid(a.name)
     hproc = k32.OpenProcess(PROCESS_ACCESS, False, pid)
@@ -259,8 +262,9 @@ def main():
         c = cpu.get(tid)
         if not busy or (c is not None and c < 0.02 * wall):
             continue
-        print(f"\n== thread {tid} {names.get(tid, '')!r}: cpu {c:.1f} s of {wall:.1f} s "
-              f"({100 * c / wall:.0f}%), busy {len(busy)}/{len(named)} samples")
+        # (a thread that ended during sampling has no CPU time)
+        cpu_text = f"cpu {c:.1f} s of {wall:.1f} s ({100 * c / wall:.0f}%)" if c is not None else "cpu unknown (thread ended)"
+        print(f"\n== thread {tid} {names.get(tid, '')!r}: {cpu_text}, busy {len(busy)}/{len(named)} samples")
         leaf = collections.Counter(s[0] for s in busy)
         guest = collections.Counter(next((f for f in s if "::f_" in f), "(no lifted frame)") for s in busy)
         incl = collections.Counter(f for s in busy for f in set(s))
@@ -268,6 +272,15 @@ def main():
             print(f"  -- {title}")
             for name, n in counter.most_common(a.top):
                 print(f"  {100 * n / len(busy):5.1f}%  {name}")
+        # L144: who calls the hottest leaves (the first caller frame that is
+        # not the leaf itself or a C runtime / heap helper)
+        helper = ("_NLG_", "memset", "memcpy", "memmove", "Rtl", "malloc", "free", "__rust_", "alloc::", "core::ptr::", "?")
+        for name, n in leaf.most_common(a.callers):
+            callers = collections.Counter(
+                next((f for f in s[1:] if f != name and not f.startswith(helper)), "(none)") for s in busy if s[0] == name)
+            print(f"  -- callers of {name} ({100 * n / len(busy):.1f}%)")
+            for c2, m in callers.most_common(8):
+                print(f"  {100 * m / n:5.1f}%  {c2}")
     for h in handles.values():
         k32.CloseHandle(h)
 

@@ -136,6 +136,9 @@ impl GraphicsBackend for DeferredBackend {
         let draw = draw.clone();
         self.enqueue(move |b| b.draw(&draw));
     }
+    fn draw_owned(&mut self, draw: DrawCall) {
+        self.enqueue(move |b| b.draw(&draw));
+    }
     fn draws(&mut self, draws: Vec<DrawCall>) {
         self.enqueue(move |b| b.draws(draws));
     }

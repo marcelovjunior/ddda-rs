@@ -30,7 +30,10 @@ pub(super) fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32,
     // The resource dirty index is checked independently of state dirtiness.
     let mut reads = [0u32; 42];
     let mut read_count = 0;
-    let mut textures = [(0u32, 0u32, [0u32; 14]); 21];
+    // (slot, texture, sampler states) of the bound textures, filled only
+    // when the textures changed: uninitialised storage, not 1.3 KB zeroed
+    // on every draw (L144)
+    let mut textures: [std::mem::MaybeUninit<(u32, u32, [u32; 14])>; 21] = [const { std::mem::MaybeUninit::uninit() }; 21];
     let mut texture_count = 0;
     let (state, uploads) = objects(|o| {
         let flush = super::needs_flush(o);
@@ -68,8 +71,7 @@ pub(super) fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32,
             let mut groups = cached.unwrap_or_default();
             if dirty & TEXTURES != 0 {
                 for (&slot, &id) in &s.textures {
-                    textures[texture_count] = (slot, id,
-                        s.sampler.row(slot));
+                    textures[texture_count].write((slot, id, s.sampler.row(slot)));
                     texture_count += 1;
                 }
             }
@@ -111,21 +113,27 @@ pub(super) fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32,
         Err(state) => state,
     };
     if dirty & TEXTURES != 0 {
-        textures[..texture_count].sort_unstable_by_key(|t| t.0);
+        // SAFETY: the first texture_count entries were written above
+        let textures: &mut [(u32, u32, [u32; 14])] =
+            unsafe { &mut *(&mut textures[..texture_count] as *mut [std::mem::MaybeUninit<(u32, u32, [u32; 14])>] as *mut [(u32, u32, [u32; 14])]) };
+        textures.sort_unstable_by_key(|t| t.0);
         groups.textures = objects(|o| {
-            // Build in stack storage, then collect an exact-length iterator
-            // directly into Arc. A filter_map collector first grows a Vec.
-            let mut bindings: [Option<TextureBinding>; 21] = std::array::from_fn(|_| None);
+            // Build in uninitialised stack storage (L144: the zeroed array
+            // of options was 2 KB a draw), then collect the exact-length
+            // iterator directly into the Arc (one allocation).
+            let mut bindings: [std::mem::MaybeUninit<TextureBinding>; 21] = [const { std::mem::MaybeUninit::uninit() }; 21];
             let mut count = 0;
-            for &(sampler, resource, states) in &textures[..texture_count] {
+            for &(sampler, resource, states) in textures.iter() {
                 if let Some(Kind::Texture { data, .. }) = o.live.get(&resource).map(|o| &o.kind) {
-                    bindings[count] = Some(TextureBinding { sampler, resource, states,
+                    bindings[count].write(TextureBinding { sampler, resource, states,
                         kind: data.kind, format: data.format, width: data.width, height: data.height,
                         depth: data.depth, levels: data.levels, usage: data.usage });
                     count += 1;
                 }
             }
-            bindings.into_iter().take(count).map(|binding| binding.unwrap()).collect()
+            // SAFETY: the first `count` entries were written above; each is
+            // read once (TextureBinding owns no heap memory)
+            bindings[..count].iter().map(|b| unsafe { b.assume_init_read() }).collect()
         });
     }
     if dirty & SHADERS != 0 { groups.shaders = shaders.map(shader_tokens); }

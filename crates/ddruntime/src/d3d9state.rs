@@ -12,6 +12,7 @@
 //! the one they replace, as D3D9 does.
 use crate::d3d9::{profile, D3DERR_INVALIDCALL, D3D_OK};
 use crate::d3d9dev::{add_ref_to, counted_in, hand_out, new_object, objects, release_of, with_device, Kind, Object};
+use crate::guest::View;
 use crate::services::{arg, args, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -146,7 +147,7 @@ pub struct DeviceState {
     /// (stage, type) -> value
     pub stage: DenseStates<8, 33>,
     /// stage or vertex sampler -> texture object
-    pub textures: HashMap<u32, u32>,
+    pub textures: StageTextures,
     /// X, Y, Width, Height, MinZ, MaxZ (the floats as bits)
     pub viewport: [u32; 6],
     pub scissor: [i32; 4],
@@ -162,6 +163,67 @@ pub struct DeviceState {
     pub stream_freq: [u32; 16],
     pub indices: u32,
     pub in_scene: bool,
+}
+
+/// The texture bound at each sampler stage: pixel samplers 0..15 and
+/// D3DDMAPSAMPLER plus the vertex samplers 256..260 (L144: an array, not a
+/// hash map updated by every SetTexture). Iterates (stage, texture) in stage
+/// order, bound stages only.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StageTextures([u32; 21]);
+
+/// The stage numbers of StageTextures' entries.
+const STAGES: [u32; 21] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 256, 257, 258, 259, 260];
+
+impl StageTextures {
+    fn index(stage: u32) -> Option<usize> {
+        match stage {
+            0..16 => Some(stage as usize),
+            256..261 => Some(stage as usize - 240),
+            _ => None,
+        }
+    }
+
+    pub fn get(&self, stage: &u32) -> Option<&u32> {
+        Self::index(*stage).map(|i| &self.0[i]).filter(|&&t| t != 0)
+    }
+
+    /// Bind `texture` (not 0) at `stage` (a valid one); the texture it had.
+    pub fn insert(&mut self, stage: u32, texture: u32) -> Option<u32> {
+        let i = Self::index(stage).unwrap_or_else(|| panic!("sampler stage {stage}"));
+        Some(std::mem::replace(&mut self.0[i], texture)).filter(|&t| t != 0)
+    }
+
+    pub fn remove(&mut self, stage: &u32) -> Option<u32> {
+        Self::index(*stage).and_then(|i| Some(std::mem::take(&mut self.0[i])).filter(|&t| t != 0))
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &u32> {
+        self.0.iter().filter(|&&t| t != 0)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&u32, &u32)> {
+        STAGES.iter().zip(self.0.iter()).filter(|(_, &t)| t != 0)
+    }
+
+    pub fn len(&self) -> usize {
+        self.values().count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<'a> IntoIterator for &'a StageTextures {
+    type Item = (&'a u32, &'a u32);
+    type IntoIter = std::iter::Filter<std::iter::Zip<std::slice::Iter<'a, u32>, std::slice::Iter<'a, u32>>, fn(&(&'a u32, &'a u32)) -> bool>;
+    fn into_iter(self) -> Self::IntoIter {
+        fn bound(e: &(&u32, &u32)) -> bool {
+            *e.1 != 0
+        }
+        STAGES.iter().zip(self.0.iter()).filter(bound as fn(&(&'a u32, &'a u32)) -> bool)
+    }
 }
 
 /// The render states by number, kept sorted: a draw carries them in order
@@ -284,7 +346,7 @@ impl DeviceState {
             render,
             sampler,
             stage,
-            textures: HashMap::default(),
+            textures: StageTextures::default(),
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],
             scissor: [0, 0, w as i32, h as i32],
             transforms: HashMap::default(),
@@ -478,7 +540,7 @@ pub fn get_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetViewport(this, D3DVIEWPORT9*).
 pub fn set_viewport(m: &mut dyn Mem, cpu: &mut Cpu) {
     let [dev, p] = args(m, cpu);
-    let v: [u32; 6] = std::array::from_fn(|k| m.u32(p + 4 * k as u32));
+    let v: [u32; 6] = View::new(m).words(p);
     state(dev, |s| s.viewport = v);
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
@@ -496,7 +558,7 @@ pub fn get_viewport(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetScissorRect(this, RECT*).
 pub fn set_scissor_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
     let [dev, p] = args(m, cpu);
-    let r: [i32; 4] = std::array::from_fn(|k| m.u32(p + 4 * k as u32) as i32);
+    let r: [i32; 4] = View::new(m).words::<4>(p).map(|x| x as i32);
     state(dev, |s| s.scissor = r);
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
@@ -515,7 +577,7 @@ pub fn get_scissor_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// shaders do the transforms; fixed-function vertex processing is unused).
 pub fn set_transform(m: &mut dyn Mem, cpu: &mut Cpu) {
     let [dev, t, p] = args(m, cpu);
-    let v: [u32; 16] = std::array::from_fn(|k| m.u32(p + 4 * k as u32));
+    let v: [u32; 16] = View::new(m).words(p);
     state(dev, |s| s.transforms.insert(t, v));
     cpu.eax = D3D_OK;
     ret(m, cpu, 12);
@@ -705,10 +767,11 @@ fn set_constants(m: &mut dyn Mem, cpu: &mut Cpu, vertex: bool, kind: char) {
     cpu.eax = if start.checked_add(count).is_none_or(|end| end > limit) {
         D3DERR_INVALIDCALL
     } else {
+        let g = View::new(m);
         state(dev, |s| {
             let words = &mut s.constant_words;
             words.clear();
-            words.extend((0..count * if kind == 'b' { 1 } else { 4 }).map(|k| m.u32(p + 4 * k)));
+            g.extend_words(p, count * if kind == 'b' { 1 } else { 4 }, words);
             let c = if vertex { &mut s.vs } else { &mut s.ps };
             // A queued or recorded draw owns the old block. Only detach it
             // when an update changes bits; repeated setters keep sharing.
