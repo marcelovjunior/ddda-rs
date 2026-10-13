@@ -117,6 +117,7 @@ draw graph) are:
 | sPrimitive `+0x30+4*i` | cPrim `0x280` bytes | E60DE0 allocation, 1124D20 ctor |
 | cPrim `+4` | cPrimTagList `0x84` bytes | 1124D20 / 11921F0 |
 | cPrim `+8` | cPrimBuffer `0x18` bytes | 1124D20 / 107FBF0 |
+| sPrimitive `+0xd4` | cPrimTexHandleManager `0x10`; arena at `manager+4` size `capacity*0x14`, capacity=`manager+8`, used count=`manager+0xc` | E60DE0 / 11929A0 |
 | sPrimitive `+0xd8` | cPrimBufferManager `0x14`; arena `[manager+4, +capacity)` where capacity=`manager+0xc` | 11927F0 |
 | sPrimitive `+0xdc` | cPrimTagManager `0x14`; descriptor arena at `manager+4` size `n*0x28`, entry arena at `manager+8` size `n*8`, n=`manager+0x10` | 11925E0 |
 
@@ -128,8 +129,11 @@ at `+4+depth*16`, zeroes frame `+8` and byte `+0xc`, then increments depth.
 End 1192290 restores those two cursors and subtracts saved count from
 `+0x80`. Frame reads/writes fit the `0x84` tag-list allocation.
 
-Full drawing additionally consumes the shared arenas above and the texture
-handle manager at sPrimitive `+0xd4` (layout not yet audited here). Arena
+Full drawing additionally consumes the shared arenas above. `0107FB40`
+allocates primitive byte ranges under the critical section at sPrimitive
+`+4` whenever sPrimitive `+0x1c` or guard `018d0bb0` is nonzero; it updates
+the shared byte manager's cursor `+8` and used-byte count `+0x10`. Private
+cPrimBuffer headers do not make that allocator lane-private. Arena
 copies are input capture, **not** proof they can be excluded from output
 memory comparison: shared allocations require an ordered source-specific
 merge or rejection. Likewise pool-private descriptors may refer to shared
