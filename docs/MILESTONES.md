@@ -7,6 +7,9 @@
   Confirmed DA7D80 InterlockedExchangeAdd dependency now uses tracked private
   memory;33 focused tests pass. Offline-example rebuild/replay next.
   Existing sample has one job at t23s; AFTER_MS=60000 selects later work.
+- Private scheduler now preserves outer queue storage; scope balance and
+  output-pointer escape checks cover its temporary arena.33 focused pass;
+  latest complete default light288 pass/0 fail/7 ignored.
 - Earlier capture identified null nested secondary sort storage.
   FED200 gives child contexts a null secondary sort arena. Replay now
   provides bounded private storage; FED3B0 output must not retain any

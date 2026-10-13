@@ -286,3 +286,16 @@ Capture was t23s/169 draws with one queued job. Added diagnostic selection
 DDRUNTIME_PARALLEL_SHADOW_AFTER_MS=60000 FIRST=0 COUNT=1 for a later sample
 (FIRST counts scoped calls after the delay). Next: head rebuild offline
 example, replay existing input, then obtain a representative multi-job capture.
+
+2026-10-13 private scheduler follow-up: DB63E0/DBE560/DBD8D0 queue
+storage is now copied to a bounded private arena and018D0B28 redirected
+only inside replay. The existing outer scheduler bytes remain unchanged.
+Nesting guards and global pointer must balance before restoring their
+captured values; consumed commands may not refer to private scheduler
+storage. Synthetic serial now invokes jobs directly while synthetic
+parallel uses the private queue. Serialized regression additionally rejects
+unbalanced guard, changed scheduler pointer, and scheduler-pointer escape.
+Shared allocation dependency regression now invokes the actual tracked
+InterlockedExchangeAdd service. Focused shadow:33 passed/0 failed.
+The complete default light suite at661bdb1a:288 passed/0 failed/7 ignored.
+Original parallel equality remains OPEN; head offline example rebuild next.
