@@ -199,7 +199,8 @@ impl Context {
             return Ok(());
         }
         let translation_started = std::time::Instant::now();
-        let module = naga::front::wgsl::parse_str(wgsl).map_err(|e| e.emit_to_string(wgsl))?;
+        // the module cache shared with the wgpu path (L179)
+        let module = crate::shader_cache::module(wgsl)?;
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
