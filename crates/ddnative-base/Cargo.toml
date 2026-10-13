@@ -12,6 +12,7 @@ test = false
 # L114: the shards inline the memory accessors and flag helpers (for
 # opt-level-1 shards; at opt-level 0 the out-of-line copies compile faster)
 inline-access = []
+private-replay = []
 
 # The tests run x87 code and lifted calls: the runtime policy behind them (L74).
 [dev-dependencies]

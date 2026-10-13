@@ -219,6 +219,9 @@ impl Registry {
             if crate::shadow_fee320::enabled() {
                 crate::shadow_fee320::install(ports, &ddnative::generated::lifted::bodies());
             }
+            if crate::shadow_replay::enabled() {
+                crate::shadow_replay::install(ports, &ddnative::generated::lifted::bodies());
+            }
             if crate::ndraw_stats::enabled() {
                 crate::ndraw_stats::wrap_executor(ports, &ddnative::generated::lifted::bodies());
             }

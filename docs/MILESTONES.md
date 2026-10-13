@@ -59,6 +59,29 @@
 - Next: head combined native gate and independent same-route port A/B;
   retain opt-ins until image/job-time acceptance. Evidence and divisibility
   limits: `docs/tasks/L169-shadow.md`.
+### L172 isolated parallel-shadow proof runner (2026-10-13)
+
+- Continuation: capture v2 preserves live outgoing MXCSR; replay compares
+  x87 and thread control state. Five focused replay tests pass; real
+  capture and production publication remain pending.
+
+- Private contiguous helper lanes, dependency-checked ordered merge, and
+  strict command/resource-byte comparison are implemented. Opt-in proof
+  runner captures the real serial traversal and replays raw serial/queued
+  bodies privately; unknown host services and incomplete inputs refuse.
+  Live output remains serial. No real-stream acceptance or speedup claimed.
+- TLS routing precedes global overrides and warmed caches only in the
+  `parallel-shadow` Cargo feature. The unconditional check measured slower
+  in 9/9 isolated pairs, so ordinary builds retain the old call path.
+- 17 focused runtime checks and two routing tests pass. Lane oracle:
+  12 tests, eight original FED3B0 returns and 227 shader fixtures reproducing
+  1,704 original uploads (29 conservative refusals). Default light: 271
+  passed / zero failures / seven ignored before final capture-file addition.
+  Final feature-enabled light: 272 passed / zero failures / seven ignored.
+- Next: head proof build and one nonempty private `.ddshadow` capture;
+  offline replay closes unsupported services/dependencies before candidate
+  publication and TRAIN READY. `docs/tasks/L172-parallel-shadow.md`.
+
 ### L162e whole FEE320 capture prerequisite (2026-10-13)
 
 - Opt-in exact sky-shadow wrapper records FEE320 inclusive/external-call
@@ -128,6 +151,22 @@
   rejects three deliberate below-stack heap corruptions.
 - Next: head combined train/image acceptance. Evidence and reproduction:
   `docs/tasks/L173-semantic-draw-a.md`.
+
+### L169 exact shadow traversal and setup (2026-10-13)
+
+- Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
+  `DDRUNTIME_SHADOW_PASS=1` (EFD240) preserve the original queue/serial
+  choice, callback order, guest state and x87 operations. Defaults off.
+- **420 original returns**, all **63 lifted basic blocks**, **15,660 paired
+  fault/access cases**, production GuestMemory serial/atomic replay pass.
+  Eight isolated tests pass; mtcore/ddports **20 pass / nine ignored**;
+  runtime light **255 pass / zero failures / seven ignored**.
+- Synthetic paired median gains: traversal **1.22–1.89x**, setup
+  **1.07–1.28x**. No gameplay/FPS claim. Shared nesting guard, lane-ordered
+  merge and callback mutations block a simple parallel traversal toggle.
+- Next: head combined native gate and independent same-route port A/B;
+  retain opt-ins until image/job-time acceptance. Evidence and divisibility
+  limits: `docs/tasks/L169-shadow.md`.
 
 ### L162c job distribution and host scheduling (2026-10-13)
 
