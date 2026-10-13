@@ -427,7 +427,7 @@ fn write_pp(m: &mut dyn Mem, p: u32, pp: &PresentParameters) {
 /// D3DPRESENT_PARAMETERS*, IDirect3DDevice9**). The completed parameters
 /// are written back, as D3D9 does.
 pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let a: Vec<u32> = (0..7).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     let (adapter, devtype, focus, flags, pp_ptr, out) = (a[1], a[2], a[3], a[4], a[5], a[6]);
     let pp = if adapter == 0 && devtype == 1 { complete(read_pp(m, pp_ptr), focus) } else { None };
     cpu.eax = match pp {

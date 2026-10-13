@@ -388,7 +388,7 @@ pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// count, start index, primitive count).
 pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let a: Vec<u32> = (0..7).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     let (dev, ty) = (a[0], a[1]);
     cpu.eax = match vertex_count(ty, a[6]) {
         Some(_) if in_scene(dev) && with_device(dev, |d| d.state.indices != 0) => {
@@ -437,7 +437,7 @@ pub fn draw_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// count, index data*, index format, vertex data*, stride).
 pub fn draw_indexed_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let a: Vec<u32> = (0..9).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 9] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     let (dev, ty, min, nverts, count, idata, ifmt, vdata, stride) = (a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) && idata != 0 && vdata != 0 && matches!(ifmt, 101 | 102) => {
@@ -457,7 +457,7 @@ pub fn draw_indexed_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// Clear(this, rect count, D3DRECT*, flags, colour, z, stencil).
 pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let a: Vec<u32> = (0..7).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     let dev = a[0];
     let rects: Vec<[i32; 4]> = (0..if a[2] != 0 { a[1] } else { 0 })
         .map(|k| std::array::from_fn(|c| m.u32(a[2] + 16 * k + 4 * c as u32) as i32)).collect();

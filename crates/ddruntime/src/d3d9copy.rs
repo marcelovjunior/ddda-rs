@@ -20,7 +20,7 @@ fn rect(m: &dyn Mem, p: u32) -> [i32; 4] {
 
 /// StretchRect(this, src surface, src RECT*, dst surface, dst RECT*, filter).
 pub fn stretch_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let a: Vec<u32> = (0..6).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 6] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     cpu.eax = match (target(a[1]), target(a[3])) {
         (Some(src), Some(dst)) => {
             flush(m, a[1]);
