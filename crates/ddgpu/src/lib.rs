@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod cache;
+mod compute_quads;
 mod pipelines;
 mod shader_cache;
 pub mod present;
@@ -383,6 +384,13 @@ pub struct WgpuBackend {
     /// the render pass of the open encoder that draws are recorded into,
     /// kept open while consecutive draws use the same attachments (L72)
     pass: RefCell<Option<OpenPass>>,
+    /// L113: the open compute pass of quad dispatches (compute_quads)
+    cpass: RefCell<Option<wgpu::ComputePass<'static>>>,
+    /// DDGPU_NATIVE_SIM=1: eligible full-target quad draws run as dispatches
+    native_sim: bool,
+    quads: compute_quads::QuadCache,
+    /// CPU copies of small vertex buffers (a quad's vertices, compute_quads)
+    small_buffers: cache::FxMap<u32, Vec<u8>>,
     /// draws recorded, and render passes begun for them (L72)
     draws_recorded: Cell<u64>,
     passes_begun: Cell<u64>,
@@ -574,6 +582,10 @@ impl WgpuBackend {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, adapter: wgpu::AdapterInfo) -> WgpuBackend {
         let uniforms = Ring::new(&device, UNIFORM_RING, wgpu::BufferUsages::UNIFORM, "constants");
         let inline = Ring::new(&device, INLINE_RING, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX, "inline data");
+        // L113: with DDGPU_NATIVE_SIM the pixel stage's bindings are also
+        // the quad dispatches' (compute_quads)
+        let native_sim = compute_quads::enabled();
+        let ps_visibility = if native_sim { wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE } else { wgpu::ShaderStages::FRAGMENT };
         let uniform = |binding, visibility| wgpu::BindGroupLayoutEntry {
             binding, visibility,
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: None },
@@ -581,7 +593,7 @@ impl WgpuBackend {
         };
         let layout0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[uniform(0, wgpu::ShaderStages::FRAGMENT), uniform(2, wgpu::ShaderStages::VERTEX)],
+            entries: &[uniform(0, ps_visibility), uniform(2, wgpu::ShaderStages::VERTEX)],
         });
         let block = |size| wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &uniforms.buffer, offset: 0, size: std::num::NonZeroU64::new(size) });
         let group0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -614,6 +626,10 @@ impl WgpuBackend {
             gamma: None,
             adapter,
             pass: RefCell::new(None),
+            cpass: RefCell::new(None),
+            native_sim,
+            quads: Default::default(),
+            small_buffers: Default::default(),
             draws_recorded: Cell::new(0),
             passes_begun: Cell::new(0),
             open: RefCell::new(None),
@@ -666,6 +682,19 @@ impl WgpuBackend {
     /// (a copy) or be finished.
     fn end_pass(&self) {
         self.pass.borrow_mut().take();
+        self.cpass.borrow_mut().take();
+    }
+
+    /// Submit what is recorded and wait until the GPU has run it (a replay
+    /// without Presents frees finished submissions this way).
+    pub fn wait_idle(&self) {
+        self.flush();
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Draws run as compute dispatches so far (DDGPU_NATIVE_SIM, L113).
+    pub fn quad_dispatches(&self) -> u64 {
+        self.quads.dispatches
     }
 
     /// Draws recorded and render passes begun for them so far.
@@ -836,8 +865,11 @@ impl WgpuBackend {
         }
         let target = t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0;
         let (format, block, usage) = if target {
-            (target_format(d3d_format, false)?, 1,
-             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST)
+            let format = target_format(d3d_format, false)?;
+            // L113: float targets the quad dispatches write (compute_quads)
+            let storage = if self.native_sim && format == wgpu::TextureFormat::Rgba32Float { wgpu::TextureUsages::STORAGE_BINDING } else { wgpu::TextureUsages::empty() };
+            (format, 1,
+             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | storage)
         } else {
             let (format, _, _, block) = sampled_format(d3d_format)?;
             (format, block, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC)
@@ -2132,7 +2164,11 @@ impl WgpuBackend {
         if let Some(l) = self.tex_layouts.get(&key) {
             return l.clone();
         }
-        let visibility = if vs { wgpu::ShaderStages::VERTEX } else { wgpu::ShaderStages::FRAGMENT };
+        let visibility = if vs { wgpu::ShaderStages::VERTEX } else if self.native_sim {
+            wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE
+        } else {
+            wgpu::ShaderStages::FRAGMENT
+        };
         let mut entries = Vec::new();
         for &(n, kind) in kinds {
             let view_dimension = match kind {
@@ -2467,6 +2503,13 @@ impl GraphicsBackend for WgpuBackend {
         }
         match &upload {
             Upload::Buffer { resource, bytes } => {
+                if self.native_sim {
+                    if bytes.len() <= 512 {
+                        self.small_buffers.insert(*resource, bytes.clone());
+                    } else {
+                        self.small_buffers.remove(resource);
+                    }
+                }
                 // a buffer of the same size is written in place
                 let size = (bytes.len() as u64).next_multiple_of(4).max(4);
                 match self.buffers.get(resource) {
@@ -2495,6 +2538,9 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn draw(&mut self, draw: &DrawCall) {
+        if self.native_sim && self.try_quad(draw) {
+            return;
+        }
         if let Err(e) = self.try_draw(draw) {
             if self.errors.len() < 1000 {
                 self.errors.push(e);
@@ -2589,6 +2635,8 @@ impl GraphicsBackend for WgpuBackend {
 
     fn release(&mut self, resource: u32) {
         self.flush();
+        self.small_buffers.remove(&resource);
+        self.quads.forget(resource);
         // cached views and bind groups may hold the resource
         self.tex_groups.clear();
         self.last_group = Default::default();

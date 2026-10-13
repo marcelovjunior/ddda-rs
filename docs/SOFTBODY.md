@@ -3,8 +3,8 @@
 About 900 of a gameplay frame's ~977 render passes are MT Framework's GPU
 soft-body simulation (`uSimSoftBody`): cloth and hair solved by
 position-based dynamics in tiny float render targets. This page is the
-evidence for its replacement by a native implementation
-(`DDGPU_NATIVE_SIM=1`, not implemented yet).
+evidence for its replacement, and the first step of it: the passes run
+as compute dispatches in the GPU backend (`DDGPU_NATIVE_SIM=1`, below).
 
 Sources: capture `E:/ddda-re/captures/cap1.ddframe` (gameplay frames
 7,340 to 7,558, analysed at frame 7,550 with
@@ -83,3 +83,48 @@ Since L124 the render thread bounds the frame. It translates each of the
 ~900 passes as about 15 D3D9 calls (targets, up to 7 textures, shaders,
 constants, viewport, the draw). The replacement therefore has to sit where
 the commands are replayed (the executor), not only in the GPU backend.
+
+## Step 1: the passes as compute dispatches (`DDGPU_NATIVE_SIM=1`)
+
+`crates/ddgpu/src/compute_quads.rs`. A draw runs as a dispatch in one
+compute pass, instead of a render pass of its own, when a general rule
+proves the results cannot differ (no game shader is named):
+
+- `d3d9shader::flow`: the pixel shader's interpolated inputs reach nothing
+  but the coordinates of texture fetches (taint analysis with branch joins
+  and loop fixpoints); the fetches they address sample one texel (point
+  filters, one level) and none has an implicit level. All six soft-body
+  pixel shaders qualify.
+- The vertex shader, evaluated on the CPU for the 4 vertices, draws an
+  axis-aligned rectangle with w = 1 over every pixel centre of a viewport
+  that is the whole target; culling is off.
+- Float32 render-target textures of one size, no depth, blending, alpha
+  test, scissor or sRGB write, all channels written, no target sampled,
+  no occlusion query counting.
+
+The dispatch runs the draw path's translation of the same pixel shader
+(d3d9wgsl, same options except the alpha test, which is off), with the
+interpolants evaluated at each pixel centre, writing storage textures.
+
+Verified:
+- `cargo test -p ddgpu --test quads`: a synthetic two-pass ping-pong with
+  dependent fetches and MRT, both paths read back bit for bit; a blended
+  draw stays a render pass.
+- `cargo run --release -p ddgpu --example sim_oracle -- cap1.ddframe 7540 7550`:
+  the capture replayed into both paths (uploads, clears, releases and the
+  small float draws), every soft-body target compared at each frame's
+  end: 11 gameplay frames, ~126 targets each, **0 differences**; every
+  soft-body draw ran as a dispatch (904 per frame). Peak memory 1.75 GB
+  (the reader keeps blobs in the file; a watchdog stops it above 4 GB).
+
+Measured (`sim_oracle ... --bench 50`, frame 7,550's 904 draws replayed
+into a warm backend, RTX machine, Vulkan):
+
+| Path | Record (CPU) | Submit and run | Total |
+|---|---|---|---|
+| render passes | 5.30 ms | 29.81 ms | 35.1 ms |
+| compute dispatches | 3.47 ms | 12.83 ms | 16.3 ms |
+
+Not yet: the render thread still translates every pass as ~15 D3D9
+calls (step 2, the executor route, L112/L123), and the game has not been
+run with the switch (the head runs it).
