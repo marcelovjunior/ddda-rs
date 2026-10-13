@@ -147,6 +147,6 @@ the combo15 profile (E:/ddda-re/notes/runs/profile_c15b.txt):
   check (DDDA.exe analysis copy): the only code with an instancing
   immediate (0x80000001, or OR 0x40000000) within 256 bytes of a vtable
   +0x198 (SetStreamSourceFreq) load is 0x00DAB875..0x00DABAB0, the
-  executor's own; 21 other sites have one without the other. A heuristic,
+  executor's own; 19 other sites have one without the other. A heuristic,
   not a proof.
 - Not yet compared in game: needs `DDDRAW_NATIVE=verify` (0 mismatches).
