@@ -1,5 +1,18 @@
 # Milestones
 
+### L148 Vulkan frontend checkpoint (2026-10-13)
+
+- L143 merged with L138 preserved. Opt-in raw draws retain cached binding
+  records; one-stream recording and per-pass resource ownership avoid repeated
+  allocations/clones. Constants use cached coherent mapped Vulkan memory,
+  with a GPU completion fence at wrap and staged fallback on other devices.
+- Final candidate plain + 144,000 changing-constant draws / two ring wraps
+  match wgpu byte-exactly. Earlier 13 GPU cases pass; final full sweep and
+  repeated timings await head combo24 pause. 24 CPU tests pass; runtime
+  light 205 pass / inherited gamma failure / 5 ignored. No game/FPS claim.
+- Next: bounded final GPU/timing gate after pause; details and provisional
+  timings in `docs/tasks/L148-vk-frontend.md`.
+
 ### L134 x87 helper follow-up, next batch (2026-10-13)
 
 - Discarding x87 callers omit unused PUSHFQ/POP capture; public flag-returning

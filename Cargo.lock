@@ -2482,6 +2482,7 @@ dependencies = [
  "mtarc",
  "naga",
  "serde",
+ "smallvec",
  "wgpu",
  "wgpu-types",
 ]

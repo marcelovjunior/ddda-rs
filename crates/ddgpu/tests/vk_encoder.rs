@@ -593,6 +593,7 @@ fn production_cost() {
                 }
             }
             let mut samples = vec![];
+            let mut frontend = vec![];
             let mut pixels = vec![];
             let before = ddgpu::vk::stats();
             for frame in 0..12 {
@@ -600,10 +601,12 @@ fn production_cost() {
                 for d in &draws {
                     gpu.draw(d);
                 }
+                let prepared = start.elapsed().as_secs_f64() * 1e6 / count as f64;
                 gpu.present(&targets[0]);
                 let elapsed = start.elapsed().as_secs_f64() * 1e6 / count as f64;
                 if frame >= 3 {
                     samples.push(elapsed);
+                    frontend.push(prepared);
                 }
                 pixels = gpu.read_back(&targets[0]).unwrap();
             }
@@ -619,7 +622,49 @@ fn production_cost() {
                 reference = Some(pixels.clone());
             }
             samples.sort_by(f64::total_cmp);
+            frontend.sort_by(f64::total_cmp);
+            eprintln!("L148 frontend draws={count} passes={passes} vk={vk} median={:.3}us/draw", frontend[4]);
             eprintln!("L138 production draws={count} passes={passes} pipelines={pipelines} sampled_sets={} vk={vk} median={:.3}us/unit range={:.3}..{:.3} hash={}",if textured {200} else {0},samples[4],samples[0],samples[8],blake3::hash(&pixels));
         }
+    }
+}
+
+/// Force multiple mapped-ring wraps across asynchronous chunk submissions.
+/// Every draw changes constants, with readbacks before and after the wrap.
+#[test]
+fn mapped_constants_wrap_and_reuse_are_byte_exact() {
+    let _lock = SERIAL.lock().unwrap();
+    let mut reference = None;
+    for vk in [false, true] {
+        let before = ddgpu::vk::stats();
+        let mut gpu = backend(vk);
+        gpu.set_encode_threads(4);
+        gpu.draws_per_submit = 511;
+        let t = target(0x100, 116);
+        gpu.upload(d3d9cmd::Upload::Buffer { resource: 0x300, bytes: triangle(0.0) });
+        let mut d = draw(&[[0.0; 4]], [Some(t.clone()), None, None, None], 0.0, &[]);
+        d.vertices = Vertices::Streams(vec![(0, 0x300, 0, 16, 1)].into());
+        let mut images = vec![];
+        for frame in 0..9 {
+            for n in 0..16000 {
+                d.ps_constants = Constants {
+                    f: vec![[((n + frame) % 97) as f32 / 128.0, frame as f32 / 16.0, 0.75, 1.0].map(f32::to_bits)],
+                    ..Default::default()
+                }.into();
+                gpu.draw(&d);
+            }
+            images.extend(gpu.read_back(&t).unwrap());
+        }
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+        if vk {
+            let after = ddgpu::vk::stats();
+            assert!(after.mapped_rings > before.mapped_rings, "test requires coherent Vulkan memory");
+            assert!(after.mapped_restarts >= before.mapped_restarts + 2);
+            assert!(after.draws > before.draws);
+            assert_eq!(after.encode_errors, before.encode_errors);
+        }
+        eprintln!("mapped wraps vk={vk} hash={}", blake3::hash(&images));
+        if let Some(expected) = &reference { assert_eq!(&images, expected); }
+        else { reference = Some(images); }
     }
 }

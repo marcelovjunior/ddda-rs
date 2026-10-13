@@ -8,8 +8,10 @@
 
 mod objects;
 mod pass;
+mod mapped;
+pub(crate) use mapped::MappedUniforms;
 pub(crate) use objects::{Context, Pipeline};
-pub(crate) use pass::{Draw, Pass, Ready};
+pub(crate) use pass::{Bindings, Draw, Pass, Ready};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,6 +20,8 @@ static DRAWS: AtomicU64 = AtomicU64::new(0);
 static FALLBACK: AtomicU64 = AtomicU64::new(0);
 static INITIALIZE: AtomicU64 = AtomicU64::new(0);
 static ERRORS: AtomicU64 = AtomicU64::new(0);
+static MAPPED_RINGS: AtomicU64 = AtomicU64::new(0);
+static MAPPED_RESTARTS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
@@ -26,6 +30,8 @@ pub struct Stats {
     pub fallback_passes: u64,
     pub initialization_passes: u64,
     pub encode_errors: u64,
+    pub mapped_rings: u64,
+    pub mapped_restarts: u64,
 }
 
 pub fn stats() -> Stats {
@@ -35,6 +41,8 @@ pub fn stats() -> Stats {
         fallback_passes: FALLBACK.load(Ordering::Relaxed),
         initialization_passes: INITIALIZE.load(Ordering::Relaxed),
         encode_errors: ERRORS.load(Ordering::Relaxed),
+        mapped_rings: MAPPED_RINGS.load(Ordering::Relaxed),
+        mapped_restarts: MAPPED_RESTARTS.load(Ordering::Relaxed),
     }
 }
 

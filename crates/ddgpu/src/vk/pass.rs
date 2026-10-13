@@ -15,12 +15,16 @@ pub(crate) struct Initialized {
     views: FxSet<wgpu::TextureView>,
 }
 
-pub(crate) struct Draw {
+pub(crate) struct Bindings {
     pub pipeline: wgpu::RenderPipeline,
     pub groups: [wgpu::BindGroup; 3],
     pub native: Option<(Arc<Pipeline>, [Arc<Group>; 2])>,
+}
+
+pub(crate) struct Draw {
+    pub bindings: Arc<Bindings>,
     pub offsets: [u32; 2],
-    pub vertex: Vec<(wgpu::Buffer, u64, u64)>,
+    pub vertex: smallvec::SmallVec<[(wgpu::Buffer, u64, u64); 1]>,
     pub index: Option<(wgpu::Buffer, u64, u64, wgpu::IndexFormat)>,
     pub viewport: [f32; 6],
     pub scissor: Option<[u32; 4]>,
@@ -142,7 +146,7 @@ impl Pass {
             .chain(
                 self.draws
                     .iter()
-                    .filter_map(|d| d.native.as_ref())
+                    .filter_map(|d| d.bindings.native.as_ref())
                     .flat_map(|(_, groups)| groups.iter().flat_map(|g| g.textures.iter())),
             )
     }
@@ -158,18 +162,19 @@ impl Pass {
             return None;
         }
         let mut buffers = FxMap::default();
+        let mut groups_seen = FxSet::default();
         let mut textures = FxMap::default();
         let mut texture = |view: &wgpu::TextureView, usage| {
             let tx = view.texture();
             if tx.sample_count() != 1 {
                 return None;
             }
-            if let Some(old) = textures.insert(tx.clone(), usage) {
-                // Conservatively reject different usages, even on disjoint
-                // mips. Whole-texture transitions then have no hidden overlap.
-                if old != usage {
-                    return None;
-                }
+            // Track each owner once per pass; repeated draws only compare
+            // borrowed handles and never enter wgpu-core resource tracking.
+            if let Some(old) = textures.get(tx) {
+                if *old != usage { return None; }
+            } else {
+                textures.insert(tx.clone(), usage);
             }
             Some(())
         };
@@ -187,7 +192,7 @@ impl Pass {
             texture(view, wgpu::TextureUses::DEPTH_STENCIL_WRITE)?;
         }
         for draw in &self.draws {
-            let (pipeline, groups) = draw.native.as_ref()?;
+            let (pipeline, groups) = draw.bindings.native.as_ref()?;
             if pipeline.samples != 1 {
                 return None;
             }
@@ -222,12 +227,10 @@ impl Pass {
                 }
             }
             for b in &pipeline.uniforms.buffers {
-                buffers
-                    .entry(b.clone())
-                    .and_modify(|v| *v |= wgpu::BufferUses::UNIFORM)
-                    .or_insert(wgpu::BufferUses::UNIFORM);
+                include_buffer(&mut buffers, b, wgpu::BufferUses::UNIFORM);
             }
             for group in groups {
+                if !groups_seen.insert(Arc::as_ptr(group) as usize) { continue; }
                 for view in &group.textures {
                     texture(view, wgpu::TextureUses::RESOURCE)?;
                 }
@@ -236,10 +239,7 @@ impl Pass {
                 if start >= end || *end > b.size() || start % 4 != 0 {
                     return None;
                 }
-                buffers
-                    .entry(b.clone())
-                    .and_modify(|v| *v |= wgpu::BufferUses::VERTEX)
-                    .or_insert(wgpu::BufferUses::VERTEX);
+                include_buffer(&mut buffers, b, wgpu::BufferUses::VERTEX);
             }
             if let Some((b, start, end, format)) = &draw.index {
                 let stride = if *format == wgpu::IndexFormat::Uint16 {
@@ -254,10 +254,7 @@ impl Pass {
                 {
                     return None;
                 }
-                buffers
-                    .entry(b.clone())
-                    .and_modify(|v| *v |= wgpu::BufferUses::INDEX)
-                    .or_insert(wgpu::BufferUses::INDEX);
+                include_buffer(&mut buffers, b, wgpu::BufferUses::INDEX);
             }
             let [x, y, w, h, min, max] = draw.viewport;
             if ![x, y, w, h, min, max].into_iter().all(f32::is_finite)
@@ -320,8 +317,8 @@ impl Pass {
                 multiview_mask: None,
             });
             for d in &self.draws {
-                pass.set_pipeline(&d.pipeline);
-                for (i, g) in d.groups.iter().enumerate() {
+                pass.set_pipeline(&d.bindings.pipeline);
+                for (i, g) in d.bindings.groups.iter().enumerate() {
                     pass.set_bind_group(i as u32, g, if i == 0 { &d.offsets } else { &[] });
                 }
                 let [x, y, w, h, min, max] = d.viewport;
@@ -454,8 +451,8 @@ impl Pass {
             .map_err(|e| e.to_string())?;
             let mut last: Option<&Draw> = None;
             for d in &self.draws {
-                let (p, groups) = d.native.as_ref().unwrap();
-                let previous = last.and_then(|d| d.native.as_ref());
+                let (p, groups) = d.bindings.native.as_ref().unwrap();
+                let previous = last.and_then(|d| d.bindings.native.as_ref());
                 let layout_changed = previous.is_none_or(|(old, _)| !Arc::ptr_eq(&old.layout, &p.layout));
                 if previous.is_none_or(|(old, _)| !Arc::ptr_eq(old, p)) {
                     h.set_render_pipeline(&p.raw);
@@ -551,4 +548,11 @@ unsafe fn transition(
         }));
     }
     Ok(())
+}
+
+// All recorded draws retain their owners through queue completion. Building
+// the pass preamble clones each distinct buffer once, never once per draw.
+fn include_buffer(buffers: &mut FxMap<wgpu::Buffer, wgpu::BufferUses>, buffer: &wgpu::Buffer, usage: wgpu::BufferUses) {
+    if let Some(old) = buffers.get_mut(buffer) { *old |= usage; }
+    else { buffers.insert(buffer.clone(), usage); }
 }
