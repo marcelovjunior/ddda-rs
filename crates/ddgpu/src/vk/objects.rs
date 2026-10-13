@@ -61,6 +61,13 @@ destroy!(TextureView, destroy_texture_view);
 pub(crate) struct View {
     pub raw: Object<v::TextureView>,
     _source: wgpu::TextureView,
+    pub initialized: std::sync::atomic::AtomicBool,
+}
+
+impl Drop for View {
+    fn drop(&mut self) {
+        super::LIVE_VIEWS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 pub(crate) struct Layout {
@@ -80,7 +87,7 @@ pub(crate) struct Group {
     pub buffers: Vec<wgpu::Buffer>,
     _samplers: Vec<Arc<Object<v::Sampler>>>,
     _layout: Arc<Object<v::BindGroupLayout>>,
-    _views: Vec<Arc<View>>,
+    pub views: Vec<Arc<View>>,
 }
 
 pub(crate) struct Context {
@@ -151,7 +158,7 @@ impl Context {
                 buffers: vec![buffer.clone()],
                 _samplers: vec![],
                 _layout: layout.clone(),
-                _views: vec![],
+                views: vec![],
             });
             Ok(Self {
                 device: device.clone(),
@@ -447,7 +454,7 @@ impl Context {
                     buffers: vec![],
                     _samplers: samplers,
                     _layout: layout,
-                    _views: owned,
+                    views: owned,
                 }),
             );
         }
@@ -494,11 +501,13 @@ impl Context {
                     },
                 )
                 .map_err(|e| e.to_string())?;
+            super::LIVE_VIEWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.views.insert(
                 view.clone(),
                 Arc::new(View {
                     raw: Object::new(&self.device, raw),
                     _source: view.clone(),
+                    initialized: std::sync::atomic::AtomicBool::new(false),
                 }),
             );
         }

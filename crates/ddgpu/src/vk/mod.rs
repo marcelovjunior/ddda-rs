@@ -20,6 +20,7 @@ static DRAWS: AtomicU64 = AtomicU64::new(0);
 static FALLBACK: AtomicU64 = AtomicU64::new(0);
 static INITIALIZE: AtomicU64 = AtomicU64::new(0);
 static ERRORS: AtomicU64 = AtomicU64::new(0);
+static LIVE_VIEWS: AtomicU64 = AtomicU64::new(0);
 static MAPPED_RINGS: AtomicU64 = AtomicU64::new(0);
 static MAPPED_RESTARTS: AtomicU64 = AtomicU64::new(0);
 
@@ -30,6 +31,7 @@ pub struct Stats {
     pub fallback_passes: u64,
     pub initialization_passes: u64,
     pub encode_errors: u64,
+    pub live_views: u64,
     pub mapped_rings: u64,
     pub mapped_restarts: u64,
 }
@@ -41,6 +43,7 @@ pub fn stats() -> Stats {
         fallback_passes: FALLBACK.load(Ordering::Relaxed),
         initialization_passes: INITIALIZE.load(Ordering::Relaxed),
         encode_errors: ERRORS.load(Ordering::Relaxed),
+        live_views: LIVE_VIEWS.load(Ordering::Relaxed),
         mapped_rings: MAPPED_RINGS.load(Ordering::Relaxed),
         mapped_restarts: MAPPED_RESTARTS.load(Ordering::Relaxed),
     }

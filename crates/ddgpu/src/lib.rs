@@ -2293,7 +2293,14 @@ impl WgpuBackend {
             if let (Some(vk), Some(pipeline)) = (&mut self.vk, &x.vk_pipeline) {
                 if let Err(e) = vk.group(&g, pipeline, stage, &views) { eprintln!("DDGPU_VK group fallback: {e}"); }
             }
-            if feedback && self.vk.is_some() { transient_vk_groups.push(g.clone()); }
+            if feedback {
+                if let Some(vk) = &mut self.vk {
+                    // Recorded descriptors own these temporary view handles.
+                    // The context must not retain a fresh snapshot every draw.
+                    for (_, view, _) in &views { vk.views.remove(view); }
+                    transient_vk_groups.push(g.clone());
+                }
+            }
             if !feedback {
                 let last = &mut self.last_group[stage];
                 last.0.clear();
