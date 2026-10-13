@@ -21,6 +21,19 @@
   No gameplay speedup claim; other multiword experiments were dropped.
 - Next: head's image/FPS/loading comparison and separately pinned L142
   integration. `docs/tasks/L139-gate-c21.md`.
+### L147 CRT profile attribution checkpoint (2026-10-13)
+
+- `_NLG_Return2` is a one-byte CRT return followed by private memcpy code.
+  DbgHelp's export-only Size is synthetic and cannot establish a function
+  boundary. Matching public PDB, unwind ranges and export thunks now bound
+  names; remaining gaps are explicit unresolved RVAs.
+- 17 Python tests pass; benign-process capture/replay reattributes the same
+  78/84 samples from `_NLG_Return2` to `memcpy_repmovs_amd`. No game run or
+  FPS claim. Raw module/PC evidence is retained for offline resolution.
+- L144 already removed snapshot zeroing/DrawCall copies. Remaining backend
+  and guest-worker caller costs need head's raw capture; text-only c21/c23
+  cannot recover them. Next: capture with L147 profiler, then optimize the
+  measured remaining callers. Details: `docs/tasks/L147-nlg.md`.
 
 ### L134 x87 helper follow-up, next batch (2026-10-13)
 
