@@ -53,9 +53,12 @@ fn bench(path: &str, name: &str, bodies: &[(&str, LiftFn)], step: usize, ext: &d
                 continue;
             }
             let initial = pairs(&case["initial"]);
+            if initial.len() > std::env::var("S8_MAX_INITIAL").ok().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX) {
+                continue;
+            }
             let regs: Vec<u32> = case["before"]["regs"].as_array().unwrap().iter().map(n).collect();
             for (k, (_, body)) in bodies.iter().enumerate() {
-                let mut elapsed = std::time::Duration::ZERO;
+                let mut best = std::time::Duration::MAX;
                 for _ in 0..20 {
                     x86::set_ext_calls(Some(ext(case)));
                     for &(a, b) in &initial {
@@ -65,14 +68,14 @@ fn bench(path: &str, name: &str, bodies: &[(&str, LiftFn)], step: usize, ext: &d
                     [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = [regs[0], regs[1], regs[2], regs[3], regs[4], regs[5], regs[6], regs[7]];
                     let t = std::time::Instant::now();
                     body(std::hint::black_box(&mut m), std::hint::black_box(&mut c));
-                    elapsed += t.elapsed();
+                    best = best.min(t.elapsed());
                     std::hint::black_box(c.eax);
                     if c.st.home != 0 {
                         (ddnative_base::hooks::get().x87_release)(&mut c.st);
                     }
                 }
                 if round > 0 {
-                    totals[k] += elapsed.as_nanos() as f64 / 20.0;
+                    totals[k] += best.as_nanos() as f64;
                 }
             }
             if round > 0 {
@@ -265,3 +268,37 @@ fn palette_packed_equals_scalar_on_random_bits() {
     }
     assert!(nans > 100);
 }
+
+/// Replay of the paired call/return event format (`effects` and registers of the return event).
+fn replay_paired(case: &Value) -> Ext {
+    let events: Vec<(Vec<(u32, u8)>, u32, u32)> = case["events"]
+        .as_array()
+        .unwrap()
+        .chunks(2)
+        .map(|e| {
+            let regs: Vec<u32> = e[1]["regs"].as_array().unwrap().iter().map(n).collect();
+            (pairs(&e[1]["effects"]), regs[0], regs[4])
+        })
+        .collect();
+    let at = std::cell::Cell::new(0usize);
+    Box::new(move |m, c, _| {
+        let (effects, eax, esp) = &events[at.get()];
+        at.set(at.get() + 1);
+        apply_runs(m, effects);
+        c.eax = *eax;
+        c.esp = *esp;
+    })
+}
+
+#[test]
+#[ignore]
+fn bench_draw_mesh() {
+    bench(
+        "E:/ddda-re/notes/native-L171/draw_mesh.json",
+        "draw_mesh",
+        &[("current", mtcore::semantic_draw::draw_mesh)],
+        3,
+        &replay_paired,
+    );
+}
+
