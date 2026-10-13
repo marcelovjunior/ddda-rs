@@ -70,3 +70,72 @@ successfully. All build products are under `C:/ddda-targets/L110`.
 
 Next: native GPU equivalence and game-shaped native recorder timing after
 head's combo4 game-run hold; choose backend from the measured floors.
+
+### Native wgpu device checkpoint
+
+Head selected wgpu first (board 10760), retaining a later Vulkan option.
+`ddgpu::native` provides device-scoped typed handles for blend, rasterizer,
+depth/stencil, sampler, input layout, shaders, buffers, textures and views.
+Pipeline creation interns the state handle tuple plus attachment formats,
+sample state and topology. Shader translation links semantics and uses L83's
+IR cache. Compatible pipelines share texture layouts and interned texture
+sets. Recorders only bind handles, filter redundant state, support instance
+ranges, and own separate encoders/rings so recording can move to workers.
+There are no D3D9 render-state numbers in the recording API. Descriptors
+currently reuse wgpu's portable value enums; object ownership/recording is
+behind native handles, while resource import is explicitly a wgpu bridge.
+
+Full block updates write only changed blocks; byte-range updates coalesce
+until the next draw. Submission generations preserve retained constants;
+bounded-ring failure preserves the previous snapshot and can be retried
+after submission. CPU delta writes still require full GPU blocks with this
+base's shader ABI. Imports retain resources; replacement/release in the D3D9
+backend does not retarget existing handles. Native work must be submitted
+before switching producers. Arenas retain their objects until Device drop.
+
+Verified optimized Vulkan, 2026-10-13:
+
+- **2 native GPU tests pass** (1.03 s and 1.55 s): eight combinations of
+  indexed/nonindexed, blend, scissor match the existing backend AND host
+  D3D9 pixels exactly; imported texture sampling, compatible-layout sharing,
+  constant generation reuse, redundant bind suppression, ring exhaustion
+  and coalesced range updates also pass.
+- **3 ddgpu CPU unit tests pass**. Runtime result remains 152/1/1 above;
+  L118 independently reproduced the gamma failure on its pristine base
+  (board 10844). No D3D9 implementation changes beyond module export.
+- `native_draw_cost 20 5000 native 1`: **6.538 us/draw total**, 2.149 recording
+  and 4.389 finish/submit/upload. 40 pipeline handles, 200 distinct sampled
+  texture sets, both constant blocks changing every draw, minimal synthetic
+  shaders and 16x16 target. 115,000 draws / 230,000 uniform writes including
+  three warmups. **The <2 us target is not met.**
+- Same-window existing `draw_cost_game 5000 10`: 12.43 us/draw submitted,
+  8.24 deferred recording, 105.95/129.49 ms with GPU waited. This benchmark
+  has larger shaders, six textures and larger targets, so these numbers do
+  **not** establish a matched-workload speedup.
+
+These later GPU runs used the head's explicit board 10835 exception to the
+heavy wait: run directly beside head-o1i's CPU-only build, Vulkan, 60-second
+watchdogs. Timings are CPU-contended and need a quiet repeat after compact
+constants are integrated. No game run or original gameplay comparison.
+
+### Vulkan interoperability feasibility
+
+The compiled/readback probe `native_draw_cost 1 1 interop 1` **passes**.
+It initializes wgpu-owned resources, declares COPY_DST transitions in one
+wgpu encoder, records an ash texture clear and hal buffer clear in a second
+raw encoder, then uses a third wgpu encoder to copy/read them back. The
+pixel is exactly red and the buffer exactly zero; one ordered wgpu submit
+owns synchronization. Resources remain alive through completion.
+
+The initial single-encoder probe failed with wgpu-core's explicit panic:
+mixing raw and wgpu encoding APIs is forbidden. Separate encoders are
+required in pinned wgpu 29.0.4. `transition_resources` is documented for
+interop; raw commands alone do not inform wgpu's initialization/lifetime
+tracking. `Texture::as_hal` exposes VkImage, but Vulkan Buffer's VkBuffer
+field is private in this version. Public hal encoder methods accept its
+guarded buffer; ash descriptor/vertex binding directly to wgpu buffers
+would need an accessor patch or separately owned/imported buffers. The
+probe demonstrates transfers, not a production mixed-rendering backend.
+
+Next: adopt the already integrated L90 compact shader ABI from fps-line,
+add compact native constant layouts and repeat image/timing checks.

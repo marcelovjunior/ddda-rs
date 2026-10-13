@@ -23,6 +23,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 mod cache;
+pub mod native;
 mod pipelines;
 mod shader_cache;
 pub mod present;

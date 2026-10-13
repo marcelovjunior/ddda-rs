@@ -7,9 +7,13 @@
   us/draw**. Uniform data prefilled; no texture sampling/gameplay claim.
 - 900 one-draw clear passes: **7.146 / 7.151 / 1.351 us/pass**, respectively.
   Bundles reduce repeated draw processing but do not remove pass overhead.
+- Native API: **2 GPU tests pass**, including eight exact D3D9/host-driver
+  cases and texture/constants/ring checks; **3 CPU tests pass**. Full-block
+  native workload **6.538 us/draw** under CPU contention (target not met).
+- wgpu-owned texture/buffer -> raw Vulkan/hal -> wgpu readback passes with
+  separate ordered encoders; mixing raw and normal encoding in one fails.
 - Runtime light suite **152 pass / 1 existing gamma-reset failure / 1
-  ignored**. Native API compiled; image tests pending game-run hold.
-- Next: native image equivalence and changed-constant recording benchmark.
+  ignored**. Next: L90 compact native constant layouts and repeat timings.
   Details and limitations: `docs/tasks/L110-native-device.md`.
 
 ### L90 shared draw payloads (2026-10-13)
