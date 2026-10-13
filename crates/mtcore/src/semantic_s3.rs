@@ -377,3 +377,104 @@ pub fn update_model_bounds(m: &mut dyn Mem, c: &mut Cpu) {
     }
     finish(c)
 }
+
+// Translated from 0x0076b470 (DDDA.exe 2017-12-13 Steam).
+/// 0x0076B470, `scene->update_objects()` (stdcall with the scene as its one
+/// stack argument, `ret 4`): the per-frame update of a scene's object lists.
+///
+/// 1. 0x0076F2D0 on the scene (with `+0xd44/+0xd48` set to 0x18 / 1 around
+///    it, then 0x7fffffff / 0).
+/// 2. each object of the first list (`+0xab8` count, `+0xac4` array): its
+///    value `+0x68` is set to the u16 at scene `+0xd04` (0x00F77BF0), the
+///    object is updated by 0x00773830 (ESI = object, EDI = the scene's slot
+///    `+0xcd4 + 4 * object[+0x150]`), the scene's `+0xcc4` (when non-zero)
+///    is bound to it (0x01106E20, 0x01107D70), and an object whose state
+///    (`+0x18c`) is 0 or 4 (data at `+0xa0`) or 1 (data at `+0xe0`) gets
+///    its virtual `+0x3c` called with that data. If the object's flag
+///    `+0x1c0` bit 4 is set, and the scene byte `+0xd98` is clear, it is
+///    registered with the global (0x018d0dd0) through 0x00ED5370 and then
+///    0x00ED5360.
+/// 3. each object of the second list (`+0xae0`, `+0xaec`): 0x00773830 only.
+/// 4. each entry of the third list (`+0xda8`, `+0xdb4`): 0x00779BF0.
+/// 5. clears `+0x8c0`, `+0x8c4`, `+0x8cc`, `+0x8c8`, byte `+0x8d0`, sets
+///    `+0x890..+0x898` from the three floats at 0x018cfe80 and `+0x89c` to 0.
+pub fn update_scene_objects(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let scene = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // the original's frame at its calls: four pushes
+    let frame = entry.wrapping_sub(16);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let at = |offset: u32| scene.wrapping_add(offset);
+    pg.set_u32(m, at(0xd48), 1);
+    pg.set_u32(m, at(0xd44), 0x18);
+    call_from(m, c, pg, frame, 0, &[scene], 0x0076_b492, guest(0x0076_f2d0));
+    let first_count = pg.u32(m, at(0xab8));
+    pg.set_u32(m, at(0xd48), 0);
+    pg.set_u32(m, at(0xd44), 0x7fff_ffff);
+    let slot_of = |m: &dyn Mem, object: u32| pg.u32(m, at(0xcd4).wrapping_add(pg.u32(m, object.wrapping_add(0x150)).wrapping_mul(4)));
+    let update_object = |m: &mut dyn Mem, c: &mut Cpu, object: u32, back: u32| {
+        c.esi = object;
+        c.edi = slot_of(m, object);
+        call_from(m, c, pg, frame, 0, &[], back, guest(0x0077_3830));
+    };
+    for i in 0..first_count {
+        let object = pg.u32(m, pg.u32(m, at(0xac4)).wrapping_add(i.wrapping_mul(4)));
+        if object == 0 {
+            continue;
+        }
+        let value = u32::from(pg.u16(m, at(0xd04)));
+        call_from(m, c, pg, frame, object, &[value], 0x0076_b4d6, guest(0x00f7_7bf0));
+        update_object(m, c, object, 0x0076_b4e8);
+        if pg.u32(m, at(0xcc4)) != 0 {
+            call_from(m, c, pg, frame, object, &[scene, 0], 0x0076_b4fb, guest(0x0110_6e20));
+            let binding = pg.u32(m, at(0xcc4));
+            call_from(m, c, pg, frame, object, &[binding], 0x0076_b509, guest(0x0110_7d70));
+        }
+        let data = match pg.u32(m, object.wrapping_add(0x18c)) {
+            0 | 4 => object.wrapping_add(0xa0),
+            1 => object.wrapping_add(0xe0),
+            _ => continue,
+        };
+        let method = pg.u32(m, pg.u32(m, object).wrapping_add(0x3c));
+        call_from(m, c, pg, frame, object, &[data, 0, 0], 0x0076_b534, guest(method));
+        let registers = |m: &dyn Mem| pg.u8(m, object.wrapping_add(0x1c0)) & 0x10 != 0;
+        if !registers(m) {
+            continue;
+        }
+        if pg.u8(m, at(0xd98)) == 0 {
+            let global = pg.u32(m, 0x018d_0dd0);
+            call_from(m, c, pg, frame, global, &[object, 2, scene, 0x0076_d910, 0, 2], 0x0076_b55e, guest(0x00ed_5370));
+        }
+        if registers(m) && pg.u8(m, at(0xd98)) == 0 {
+            let global = pg.u32(m, 0x018d_0dd0);
+            call_from(m, c, pg, frame, global, &[object, 2], 0x0076_b57e, guest(0x00ed_5360));
+        }
+    }
+    let second_count = pg.u32(m, at(0xae0));
+    for i in 0..second_count {
+        let object = pg.u32(m, pg.u32(m, at(0xaec)).wrapping_add(i.wrapping_mul(4)));
+        if object != 0 {
+            update_object(m, c, object, 0x0076_b5b8);
+        }
+    }
+    let mut i = 0u32;
+    while i < pg.u32(m, at(0xda8)) {
+        let entry_object = pg.u32(m, pg.u32(m, at(0xdb4)).wrapping_add(i.wrapping_mul(4)));
+        call_from(m, c, pg, frame, 0, &[entry_object], 0x0076_b5df, guest(0x0077_9bf0));
+        i += 1;
+    }
+    pg.set_u32(m, at(0x8c0), 0);
+    pg.set_u32(m, at(0x8c4), 0);
+    pg.set_u8(m, at(0x8d0), 0);
+    for k in 0..3u32 {
+        let v = pg.u32(m, 0x018c_fe80 + 4 * k);
+        pg.set_u32(m, at(0x890 + 4 * k), v);
+    }
+    pg.set_u32(m, at(0x89c), 0);
+    pg.set_u32(m, at(0x8cc), 0);
+    pg.set_u32(m, at(0x8c8), 0);
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 4);
+}

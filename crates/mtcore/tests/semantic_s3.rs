@@ -262,3 +262,28 @@ fn finish_draw_cost() {
 fn update_model_bounds_cost() {
     bench("E:/ddda-re/notes/native-L184/model_bounds.json", "update_model_bounds", mtcore::semantic_s3::update_model_bounds, update_model_bounds_callee);
 }
+
+fn update_scene_objects_callee(target: u32) -> Callee {
+    match target {
+        0x0076_f2d0 | 0x00f7_7bf0 | 0x0110_7d70 | 0x0077_9bf0 => Callee { stack_words: 1, registers: &[] },
+        0x0110_6e20 => Callee { stack_words: 2, registers: &[] },
+        0x0077_3830 => Callee { stack_words: 0, registers: &[ESI, EDI] },
+        0x3000_003c => Callee { stack_words: 3, registers: &[ECX] },
+        0x00ed_5370 => Callee { stack_words: 6, registers: &[ECX] },
+        0x00ed_5360 => Callee { stack_words: 2, registers: &[ECX] },
+        _ => panic!("unexpected callee {target:x}"),
+    }
+}
+
+// verifies 0x0076b470 (ABI level; void, `ret 4`)
+#[test]
+fn semantic_update_scene_objects_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases(
+        "E:/ddda-re/notes/native-L184/scene_update.json",
+        mtcore::semantic_s3::update_scene_objects,
+        false,
+        update_scene_objects_callee,
+    );
+    eprintln!("{n} ABI-level update_scene_objects cases passed");
+}
