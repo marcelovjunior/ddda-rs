@@ -1832,6 +1832,9 @@ fn compare_control_state(a: &Cpu, a_mxcsr: u32, b: &Cpu, b_mxcsr: u32) -> Result
         return Err("MXCSR");
     }
     if a.st.clone().state != b.st.clone().state {
+        let (x, y) = (a.st.clone().state, b.st.clone().state);
+        let differing: Vec<String> = x.iter().zip(y.iter()).enumerate().filter(|(_, (p, q))| p != q).map(|(i, (p, q))| format!("{i}:{p:#04x}/{q:#04x}")).collect();
+        eprintln!("parallel-shadow x87 image differs at (FNSAVE offset: serial/parallel) {differing:?}");
         return Err("x87 image");
     }
     if a.df != b.df
