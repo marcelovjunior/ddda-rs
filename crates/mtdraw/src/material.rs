@@ -281,3 +281,70 @@ fn push(m: &mut dyn Mem, pg: Pages, c: &mut Cpu, v: u32) {
     c.esp = c.esp.wrapping_sub(4);
     pg.set_u32(m, c.esp, v);
 }
+
+/// The material's default colour (four floats in the image).
+const DEFAULT_COLOUR: u32 = 0x0162_9470;
+/// The colour parameter's key (slot 1).
+const COLOUR_KEY: u32 = 0x6C80_11EE;
+
+// Translated from 0x01067790 (DDDA.exe 2017-12-13 Steam).
+/// 0x01067790, nDraw::Material::vf09 `this->colour(out) -> out` (thiscall,
+/// `ret 4`): the default colour, replaced by the colour parameter's value
+/// (slot 1, key 0x6C8011EE: the vector its entry's second word points at,
+/// 16-byte aligned) when it has one. The fourth component goes through
+/// the x87 stack (fld/fstp), so a signalling NaN arrives quieted.
+pub fn material_colour(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let out = pg.u32(m, c.esp.wrapping_add(4));
+    for k in 0..4 {
+        let v = pg.u32(m, DEFAULT_COLOUR + 4 * k);
+        pg.set_u32(m, out.wrapping_add(4 * k), v);
+    }
+    let entry = find(m, pg, c.ecx, 1, Key::Value(COLOUR_KEY));
+    if entry != 0 {
+        let v = pg.u32(m, entry.wrapping_add(4)) & !0xf;
+        if v != 0 {
+            let (x, y) = (pg.u32(m, v), pg.u32(m, v.wrapping_add(4)));
+            let w = quiet(pg.u32(m, v.wrapping_add(0xc)));
+            let z = pg.u32(m, v.wrapping_add(8));
+            pg.set_u32(m, out.wrapping_add(0xc), w);
+            pg.set_u32(m, out, x);
+            pg.set_u32(m, out.wrapping_add(4), y);
+            pg.set_u32(m, out.wrapping_add(8), z);
+        }
+    }
+    c.eax = out;
+    c.esp = c.esp.wrapping_add(8);
+}
+
+/// A float through fld/fstp (32-bit both ways): unchanged but for a
+/// signalling NaN, which the load quiets (the quiet bit set).
+fn quiet(v: u32) -> u32 {
+    if v & 0x7f80_0000 == 0x7f80_0000 && v & 0x007f_ffff != 0 {
+        v | 0x0040_0000
+    } else {
+        v
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod tests {
+    /// `quiet` is what the CPU's fld/fstp (32-bit both ways) does to a
+    /// float, signalling NaNs included (the recorded vectors leave those
+    /// out: Unicorn does not quiet them).
+    #[test]
+    fn quiet_matches_the_cpus_fld_fstp() {
+        let through_x87 = |v: u32| -> u32 {
+            let (input, mut output) = (v, 0u32);
+            unsafe {
+                std::arch::asm!("fld dword ptr [{i}]", "fstp dword ptr [{o}]",
+                    i = in(reg) &input, o = in(reg) &mut output, options(nostack));
+            }
+            output
+        };
+        for v in [0u32, 0x8000_0000, 1, 0x3f80_0000, 0x7f80_0000, 0xff80_0000, 0x7f80_0001, 0xff80_0001,
+                  0x7fbf_ffff, 0x7fc0_0000, 0xffc0_1234, 0x7f81_2345, 0x0000_0001, 0x807f_ffff] {
+            assert_eq!(super::quiet(v), through_x87(v), "{v:#010x}");
+        }
+    }
+}

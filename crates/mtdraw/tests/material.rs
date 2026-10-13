@@ -207,3 +207,28 @@ fn sort_records_matches_original() {
     assert!(n > 250, "{n} cases");
     eprintln!("0x00FEDD60: {n} ABI-level cases passed");
 }
+
+fn cull_vectors() -> Option<Value> {
+    let path = std::env::var("L176_CULL_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L176/cull.json".into());
+    match std::fs::read_to_string(&path) {
+        Ok(t) => Some(serde_json::from_str(&t).unwrap()),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => None,
+    }
+}
+
+// verifies 0x00FF0780, 0x00FF0AD0, 0x00FF0D20 and 0x01067790 (ABI level)
+#[test]
+fn frustum_tests_and_colour_match_original() {
+    let Some(data) = cull_vectors() else { return };
+    for (entry, body) in [
+        (0x00FF_0780u32, mtdraw::cull::cull_sphere as LiftFn),
+        (0x00FF_0AD0, mtdraw::cull::cull_oriented),
+        (0x00FF_0D20, mtdraw::cull::cull_box),
+        (0x0106_7790, mtdraw::material::material_colour),
+    ] {
+        let n = abi_cases(&data, entry, body);
+        assert!(n >= 500, "{entry:#x}: {n} cases");
+        eprintln!("{entry:#010x}: {n} ABI-level cases passed");
+    }
+}

@@ -547,6 +547,162 @@ def record_sort(out):
     print(f'{len(cases)} sort cases -> {out}')
 
 
+CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR = 0xFF0780, 0xFF0AD0, 0xFF0D20, 0x1067790
+LENGTHS.update({CULL_SPHERE: 0x7F, CULL_ORIENTED: 0x23F, CULL_BOX: 0x131, COLOUR: 0x93})
+PLANES, SHAPE, COLOUR_ENTRIES = BASE + 0x2000, BASE + 0x3000, BASE + 0x5000
+
+
+def any_float(rng):
+    """Mostly ordinary values, sometimes zero, infinity, NaN or a denormal."""
+    pick = rng.randrange(20)
+    if pick == 0:
+        return rng.choice([0, 0x80000000])
+    if pick == 1:
+        return f32(rng.choice([float('inf'), float('-inf')]))
+    if pick == 2:
+        return 0x7FC00000 | rng.getrandbits(22)
+    if pick == 3:
+        return rng.getrandbits(23)
+    return f32(rng.uniform(-50.0, 50.0))
+
+
+class CullOracle(TargetOracle):
+    """The frustum tests 0x00FF0780 (sphere), 0x00FF0AD0 (transformed
+    box), 0x00FF0D20 (box) and nDraw::Material::vf09 0x01067790 (the
+    colour parameter, through the real lookup 0x01066590)."""
+
+    def __init__(self):
+        uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
+        uc.ctl_set_tcg_buffer_size(16 * 1024 * 1024)
+        image_pages = (0xFF0000, 0x1066000, 0x1067000, 0x161C000, 0x1406000, 0x1629000)
+        for address in image_pages:
+            uc.mem_map(address, 0x1000)
+            uc.mem_write(address, h.code(address, 0x1000))
+        for address, size in ((BASE, SIZE), (STACK, STACK_SIZE), (h.RET, 0x1000)):
+            uc.mem_map(address, size)
+        self.active = False
+        uc.hook_add(UC_HOOK_MEM_READ, self.read)
+        uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
+        uc.hook_add(UC_HOOK_CODE, self.code)
+
+    def code(self, uc, address, size, data):
+        if address == h.RET:
+            uc.emu_stop()
+            return
+        assert any(e <= address < e + n for e, n in LENGTHS.items()), hex(address)
+        if self.last is not None:
+            self.edges.add((self.last, address))
+        self.last = address
+
+    def run(self, entry, seed):
+        uc = self.uc
+        rng = self.rng = random.Random(seed)
+        uc.mem_write(BASE, rng.randbytes(SIZE))
+        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
+        ctx = CONTEXT
+
+        def word(a, v):
+            uc.mem_write(a, struct.pack('<I', v & 0xFFFFFFFF))
+
+        word(ctx + 0xCA0, PLANES | rng.getrandbits(4))
+        exact = seed % 4 == 0  # integer planes and shapes: equalities happen exactly
+        for k in range(24):  # six planes (a, b, c, d); normals mostly modest
+            if exact:
+                word(PLANES + 4 * k, f32(float(rng.choice([0, 0, 1, -1]) if k % 4 != 3 else rng.randrange(-8, 9))))
+            else:
+                word(PLANES + 4 * k, any_float(rng) if rng.randrange(8) == 0 else f32(rng.uniform(-1.5, 1.5) * (10 if k % 4 == 3 else 1)))
+        args = []
+        if entry == CULL_SPHERE and exact:
+            for k in range(4):
+                word(SHAPE + 4 * k, f32(float(rng.randrange(-6, 7) if k < 3 else rng.randrange(0, 8))))
+            args = [SHAPE]
+        elif entry == CULL_BOX and exact:
+            for k in range(3):
+                lo = rng.randrange(-8, 8)
+                word(SHAPE + 4 * k, f32(float(lo)))
+                word(SHAPE + 0x10 + 4 * k, f32(float(lo + 2 * rng.randrange(0, 5))))
+            args = [SHAPE, rng.choice([0, rng.getrandbits(6)])]
+        elif entry == CULL_ORIENTED and exact:
+            for k in range(19):  # an axis-aligned transform with integer translation and extents
+                v = 1.0 if k in (0, 5, 10, 15) else (float(rng.randrange(-6, 7)) if k in (12, 13, 14, 16, 17, 18) else 0.0)
+                word(SHAPE + 4 * k, f32(abs(v) if k >= 16 else v))
+            args = [SHAPE, rng.choice([0, rng.getrandbits(6)])]
+        elif entry == CULL_SPHERE:
+            for k in range(4):
+                word(SHAPE + 4 * k, f32(rng.uniform(-20, 20)) if rng.randrange(6) else any_float(rng))
+            if rng.randrange(3) == 0:
+                word(SHAPE + 12, f32(rng.uniform(0, 200)))  # a large radius: wholly in front
+            args = [SHAPE]
+        elif entry == CULL_BOX:
+            for k in range(3):
+                lo = rng.uniform(-30, 30)
+                word(SHAPE + 4 * k, f32(lo) if rng.randrange(8) else any_float(rng))
+                word(SHAPE + 0x10 + 4 * k, f32(lo + rng.uniform(0, 40)))
+            args = [SHAPE, rng.choice([0, rng.getrandbits(6), 0x3F, rng.getrandbits(32)])]
+        elif entry == CULL_ORIENTED:
+            for k in range(19):
+                word(SHAPE + 4 * k, f32(rng.uniform(-2, 2) * (10 if k in (3, 7, 11) else 1)) if rng.randrange(10) else any_float(rng))
+            args = [SHAPE, rng.choice([0, rng.getrandbits(6), 0x3F, rng.getrandbits(32)])]
+        else:  # the colour: a material with a slot 1 lookup table
+            material = ctx
+            count = rng.choice([0, 1, 2, 3, 7])
+            word(material + 0x30, COLOUR_ENTRIES)
+            word(material + 0x7C, LIST)
+            word(material + 0x8C, count)
+            keys = sorted(rng.sample(range(0x1000), 8))
+            if rng.randrange(3) and count:
+                keys[rng.randrange(count)] = 0x1EE
+                keys = sorted(keys)
+            for k in range(8):
+                word(COLOUR_ENTRIES + 12 * k, keys[k] << 20 | rng.getrandbits(20))
+                word(COLOUR_ENTRIES + 12 * k + 4, rng.choice([0, SHAPE | rng.getrandbits(4), SHAPE]))
+                word(LIST + 4 * k, k)
+            # (no signalling NaNs: Unicorn does not quiet them on x87 fld, the
+            # hardware does; crates/mtdraw's material tests check that
+            # against the CPU itself)
+            for k in range(4):
+                word(SHAPE + 4 * k, rng.choice([any_float(rng), 0x7FC00000 | rng.getrandbits(22), f32(rng.uniform(0, 1))]))
+            args = [BASE + 0x6000]
+        for i, v in enumerate([h.RET] + args):
+            word(SP + 4 * i, v)
+        regs = [rng.getrandbits(32), ctx, rng.getrandbits(32), rng.getrandbits(32), SP,
+                rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(32)]
+        for reg, v in zip(REGS, regs):
+            uc.reg_write(reg, v)
+        for i in range(8):
+            uc.reg_write(x.UC_X86_REG_XMM0 + i, rng.getrandbits(128))
+        uc.reg_write(x.UC_X86_REG_MXCSR, 0x1F80)
+        uc.reg_write(x.UC_X86_REG_FPCW, 0x37F)
+        uc.reg_write(x.UC_X86_REG_FPSW, 0)
+        uc.reg_write(x.UC_X86_REG_FPTAG, 0xFFFF)
+        uc.reg_write(x.UC_X86_REG_EFLAGS, 0x202 | (rng.getrandbits(12) & 0xCD5))
+        self.initial, self.written, self.events, self.edges, self.last = {}, set(), [], set(), None
+        before = self.snapshot(False)
+        self.active = True
+        uc.emu_start(entry, h.RET, count=100000)
+        self.active = False
+        assert uc.reg_read(x.UC_X86_REG_EIP) == h.RET
+        return dict(entry=entry, seed=seed, before=before, initial=sorted(self.initial.items()),
+                    events=self.events, after=self.snapshot(), edges=sorted(self.edges))
+
+
+def record_cull(out):
+    oracle = CullOracle()
+    cases = [oracle.run(entry, i + 1) for i, entry in enumerate(
+        e for e in (CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR) for _ in range(500))]
+    for entry in (CULL_SPHERE, CULL_ORIENTED, CULL_BOX, COLOUR):
+        edges = {tuple(e) for c in cases if c['entry'] == entry for e in c['edges']}
+        missing = [(hex(i.address), hex(t)) for i in branches(entry)
+                   for t in (i.address + i.size, int(i.op_str, 16)) if (i.address, t) not in edges]
+        assert not missing, (hex(entry), missing)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(dict(
+        source='DDDA.exe 2017-12-13 Steam',
+        exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+        cases=cases), separators=(',', ':')))
+    print(f'{len(cases)} cull/colour cases -> {out}')
+
+
 def record_target(out):
     oracle = TargetOracle()
     cases = [oracle.run(i + 1, kind) for i, kind in enumerate(
@@ -595,6 +751,7 @@ def main():
     p.add_argument('--state', action='store_true', help='record 0x010655A0 (material_state.json beside --out)')
     p.add_argument('--target', action='store_true', help='record 0x00FEFB90 (set_target.json beside --out)')
     p.add_argument('--sort', action='store_true', help='record 0x00FEDD60 (record_sort.json beside --out)')
+    p.add_argument('--cull', action='store_true', help='record the frustum tests and the colour (cull.json beside --out)')
     a = p.parse_args()
     if a.state:
         record_state(Path(a.out).with_name('material_state.json'))
@@ -604,6 +761,9 @@ def main():
         return
     if a.sort:
         record_sort(Path(a.out).with_name('record_sort.json'))
+        return
+    if a.cull:
+        record_cull(Path(a.out).with_name('cull.json'))
         return
     oracle = Oracle()
     cases, skipped, seed = [], 0, 0

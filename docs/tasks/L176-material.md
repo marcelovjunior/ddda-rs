@@ -152,5 +152,35 @@ tails with memcpy. Returns the buffer holding the result.
 - Microbenchmark: 59-62 us -> 2.3-2.4 us per call over the cases (25-27x).
 - Opt-in `DDRUNTIME_RECORD_SORT=1`.
 
+### The frustum tests and the material colour
+
+Unowned leaves under uBaseModel::vf11 (0x00EA3130) in stacks_c26vk/def
+(about 4% of that tree together):
+
+- 0x00FF0780 `context->cull_sphere(sphere)`, 0x00FF0D20
+  `context->cull_box(box, known)` and 0x00FF0AD0
+  `context->cull_oriented(transform, known)`: the six planes at
+  `context + 0xCA0`; -1 when wholly behind a plane, otherwise the mask of
+  the planes wholly in front (plus `known`, whose planes are skipped).
+  `crates/mtdraw/src/cull.rs`: the float steps in the original's order as
+  Rust f32 operations (the same scalar SSE instructions under the live
+  MXCSR; Rust neither reassociates nor contracts them); the oriented
+  box's packed steps lane by lane.
+- 0x01067790 nDraw::Material::vf09 `this->colour(out)`: the default
+  colour (0x01629470), replaced by the colour parameter (slot 1, key
+  0x6C8011EE) when present; the fourth component goes through x87
+  fld/fstp, which quiets a signalling NaN.
+- Vectors: `record_material.py --cull`, 2000 cases (500 each; a quarter
+  with integer planes and shapes so that the boundary equalities happen
+  exactly); every conditional branch covered. Signalling NaNs are left
+  out of the colour's cases (Unicorn's fld does not quiet them); a unit
+  test checks the quieting against the CPU's own fld/fstp.
+- Mutation check: 5/6 caught; the survivor reassociates the plane
+  normal's squared length, whose rounding difference flips no test.
+- Microbenchmark: sphere 173 -> 37 ns (4.7x), oriented box 571 -> 114 ns
+  (5.0x), box 246 -> 41 ns (6.0x), colour 120 -> 34 ns (3.5x).
+- Opt-in `DDRUNTIME_CULL=1` (the three tests); the colour with
+  `DDRUNTIME_MATERIAL=1`.
+
 Not yet measured in game. Skipped: 0x01066C60 nDraw::Material::vf12 (11
 self samples, ~0x600 bytes, six guest calls: little to gain).
