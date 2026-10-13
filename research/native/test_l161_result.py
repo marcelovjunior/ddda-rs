@@ -88,7 +88,7 @@ impl Mem for Observed {
 '''.replace('PAIRS',pairs)
         with tempfile.TemporaryDirectory(dir=os.environ['CARGO_TARGET_DIR'],prefix='result-zf-') as directory:
             src,exe=Path(directory)/'test.rs',Path(directory)/'test.exe';src.write_text(source)
-            for opt in (0,1):
+            for opt in (0,1,2):
                 for command in (['rustc','--edition=2021','--test',f'-Copt-level={opt}',str(src),'-o',str(exe)], [str(exe),'--test-threads=1']):
                     r=subprocess.run(command,capture_output=True,text=True,timeout=60)
                     self.assertEqual(r.returncode,0,r.stdout+r.stderr)

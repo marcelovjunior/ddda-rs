@@ -1,5 +1,21 @@
 # Milestones
 
+### L161c opt-in guest register/flag locals (2026-10-13)
+
+- Default-off `LIFT_REG_LOCALS=1` keeps GPRs and Flags in host locals,
+  flushing at known full-Cpu calls and exits. Split parts and helper
+  boundaries covered; restartable steps unchanged. DD42C0 opt2 Cpu ESP
+  loads/stores **23/14 -> 3/3**; EDI loads **6 -> 3**.
+- **51 focused tests**, **40 original cases per variant at opt0/1/2**,
+  paired full-state/byte checks, and **234 light runtime tests pass**
+  (seven ignored). No shard/game/GPU run or full-corpus gate.
+- No general timing gain: four hot-function opt2 fixture ratios
+  **0.974..1.007x**. Locals also inhibit default opt2 dispatcher removal
+  in DD42C0; isolated LLVM clone-rate-32 removes that dispatcher but still
+  gives no sparse-fixture win. Compiler profiles/defaults unchanged.
+  Next: head's combined train and real worker corpus, including the
+  separate inline-flags candidate. Details: `docs/tasks/L161-codegen.md`.
+
 ### L161b adjacent-result zero predicates (2026-10-13)
 
 - Default-off `LIFT_RESULT_ZF=1` replaces adjacent 32-bit result ZF

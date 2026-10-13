@@ -113,8 +113,9 @@ their original order. Call, live-flag and control-flow barriers remain.
 E0E5E0's unused SHR Flags constructor is a concrete affected site.
 
 `scripts/l161_check.py` compiles only selected bodies against base/host
-opt3 and their original fixtures. `--variant registers` reproduces the
-rejected cache experiment; the default `flags` uses the real generator
+opt3 and their original fixtures. `--variant registers` at the original
+L161 commit reproduces the rejected cache experiment (L161c replaces
+it with the production switch); the default `flags` uses the real generator
 on the private cached instruction arms. Its optional benchmark restores
 fixtures outside the timed call, alternates order for seven rounds, and
 keeps mocked callees inside the timing. These are fixture-path timings,
@@ -313,3 +314,108 @@ data commit or push. Next: head cherry-picks this generator/evidence
 commit only (not historical regenerated snapshot `f32bf0ca`), regenerates
 the shared train with `LIFT_RESULT_ZF=1`, and gates/compares it. The wider
 redesign should use codex-6's new corpus before further codegen changes.
+
+## L161c: guest registers and flags as host locals (2026-10-13)
+
+User continuation: structural codegen behind independent default-off
+`LIFT_REG_LOCALS=1`, including opt2 assembly and the DD42C0, DB63E0,
+EFD240 and FEE320 hot bodies. No generated-shard build in this lane.
+
+The whole-function emitter caches every referenced GPR and the complete
+lazy `Flags` value in Rust locals. Memory accessors and field-specific
+x87/SSE helpers do not receive `Cpu`, so those calls leave the locals
+live. Before known full-Cpu lifted/platform/service dispatch and the
+PUSHFD/POPFD/string/scan helpers, it writes cached state back; afterward
+it reloads the callee's state. Existing dispatch still handles overrides,
+services and preemption. Push/pop narrow to the same ordered memory
+access and local ESP updates; no guest stack bytes are promoted.
+
+Every explicit normal or split-part return flushes locals. Split wrappers
+keep their existing CPU interface; each part owns its cache. Instruction
+step emission is unchanged. Unknown Cpu observers, unsupported expressions
+or returns retain their entire original body. Whole-function memory
+faults remain nonrestartable: event order and prior memory writes match,
+but cached registers are not committed at each faulting accessor. CPU
+state at CPU-taking call boundaries (including callee unwinds) is exact.
+This is the same whole-function versus instruction-step distinction used
+by the existing dead-flags pass, not a new checkpoint contract.
+
+`scripts/l161_check.py --variant registers --extra-hot --opt 2 --bench
+--cpu 5 --asm` builds only eighteen selected entries against base/host,
+with the same fixed-point flags setting on both sides. Caller opt0/1/2
+is selected separately; base/host remain opt3. It replays forty original
+cases, then measures seven alternating pairs per case using restored
+input pages. Thread-cycle and wall-time readings include the same mock
+callee dispatch. Each first iteration also compares complete Cpu state
+and the fixture-address bytes across variants. These are sparse fixture
+paths, not a real gameplay corpus or FPS measurements.
+
+### Results
+
+- **51 focused tests pass**, the previous 47 plus four locals-specific
+  tests. Compiled differential fixtures now cover opt0, opt1 and opt2.
+  New coverage includes 121 full-state/access/call cases through unsplit
+  and split bodies, and 112 fault/callee-unwind cases per optimization
+  level. Flag-image, string and scan helper boundaries are exercised;
+  unknown observers and nested boundary expressions stay conservative.
+- **40 original cases across 14 entries pass for both variants at each
+  opt0/opt1/opt2**, plus four real lifted dependencies. The initial
+  EFD240 failures were identical in baseline and candidate: its recorded
+  path executes FED8F0, which was missing from the isolated dispatch
+  table. Including that dependency resolves all three cases without
+  changing vectors, generator semantics or checks.
+- Seven alternating benchmark pairs per fixture pass full Cpu and
+  fixture-address byte comparisons. Pinned logical CPU 5; Rust
+  `1.99.0 (b940084d7 2026-09-28)`. Median paired **thread-cycle** ratios
+  (baseline/candidate), pooling the 21 pairs for each entry:
+
+| Entry | Opt0 | Opt1 | Opt2 |
+|---|---:|---:|---:|
+| DD42C0 | 1.052x | 0.984x | 0.974x |
+| DB63E0 | 0.985x | 1.010x | 1.004x |
+| EFD240 | 0.977x | 1.003x | 0.982x |
+| FEE320 | 1.024x | 0.964x | 1.007x |
+
+These sparse paths include timer-query overhead and mocked callees;
+DD42C0/FEE320 cases are particularly short. The numbers establish **no
+general speedup**. Real captured gameplay inputs remain a separate gate.
+
+Opt2 assembly proves the requested residency in DD42C0: guest ESP stays
+in host R15 across five consecutive pushes. Static Cpu ESP loads/stores
+fall **23/14 -> 3/3**, and EDI loads **6 -> 3** (EDI stores **2 -> 3**).
+Entry and two full-Cpu boundaries account for the candidate loads;
+memory-accessor calls do not reload those fields. Other values can spill
+to the host stack: locals do not promise enough physical registers for
+all guest state simultaneously.
+
+There is a material compiler interaction: the default opt2 baseline
+removes DD42C0's dispatcher, while the locals candidate retains one
+indirect jump-table site. Filtered assembly grows **467 -> 641 lines**.
+This reproduces in a standalone one-function library as well as the
+18-entry test crate (both one codegen unit). Raising ordinary jump-
+threading block/PHI thresholds to 1000 does not fix it. The isolated
+compiler flag **`-Cllvm-args=-dfa-max-cloned-rate=32`** does; 8 does not.
+No Cargo profile or compiler default is changed by this commit.
+
+The clone-rate-32 diagnostic also passes all forty original cases and
+paired state checks. Its opt2 DD42C0/DB63E0/EFD240/FEE320 ratios are
+**0.983/0.980/0.993/0.984x**, so dispatcher removal alone does not establish
+a win on these sparse paths. This is evidence for the head's combined
+codegen investigation, not a recommendation to enable a broad LLVM knob.
+
+Runtime light: **234 passed / zero failures / seven ignored**, including
+all 36 reported test binaries/doc-test results. No runtime code changed.
+No game/GPU execution, shard generation/build, full-corpus gate or push.
+Next: head's combined train and real captured worker corpus, evaluating
+locals together with the separate inline-flags lane and the dispatcher
+interaction before any default change. Only this generator/evidence
+commit should be adopted, not historical generated snapshot `f32bf0ca`.
+
+Private receipts in `C:/ddda-targets/L161`, SHA-256:
+
+- `reg-tests.log`: `b24dd4b26dca39de9199d016ec7d96137319d9ead85aa22568dd46d8c23fcb12`
+- `reg-opt0.log`: `72e493279aa094a8cb2e475c8bd4605e6ea91c6ce20852949ee7434bd5b7cb2e`
+- `reg-opt1.log`: `78327ed37079411f4f32216760b7055bf89447101f564bfae025ba32f645d5d4`
+- `reg-opt2.log`: `97ce5131097763abdab559574d533390ca417bb05dddfa1e7f3a813e20f37369`
+- `reg-opt2-dfa32.log`: `13c8083219abebc1f1950b99da8db25845392f2c39e3cad67b7d5cd5a2388664`
+- `reg-runtime.log`: `c76e1dc1c87989da5a8074114fc49bdd7ee6839ca296a31f25682391263f76e5`

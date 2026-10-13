@@ -2916,6 +2916,14 @@ def exact_compares(arm, read=None, start=None):
 
 
 def rust_fn(addr, name, arms):
+    source = _rust_fn(addr, name, arms)
+    if os.environ.get('LIFT_REG_LOCALS', '0') == '1':
+        import register_cache
+        source = register_cache.cache_functions(source)
+    return source
+
+
+def _rust_fn(addr, name, arms):
     header = [
         f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
         f"pub fn f_{addr:08x}(m: &mut dyn Mem, cpu: &mut Cpu) {{",
