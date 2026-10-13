@@ -63,8 +63,31 @@ game command sequence. Minimal shaders/16x16 triangles are not FPS evidence.
 
 ## Results
 
-Core checkpoint ready: resident scatter and exact bundle caching pass the
-optimized GPU and CPU gates. Benchmark checkpoint and final numbers follow.
+Core checkpoint: `e062d80a`. Three alternating optimized repeats (20 measured
+frames each, 3 warmups) on RTX 4060 / Vulkan / NVIDIA 610.62:
+
+| Mode | Repeat medians, us/draw | Median |
+|---|---|---:|
+| full upload (`churn`) | 1.962 / 1.559 / 1.644 | 1.644 |
+| resident | 1.699 / 1.264 / 1.238 | 1.264 |
+| resident + bundles | 0.868 / 0.843 / 0.822 | **0.843** |
+
+CPU timings include updates, upload, encoder finish and queue submit; GPU
+completion waits are outside timing. Warm resident uploads are **340,016
+bytes/frame** (17,000 dirty snapshot registers plus indices/header), versus
+**15,666,960 bytes/frame** for the identical full-upload workload. Sequential
+setter payload is 15,500 registers / 248,000 bytes: retained fifth-register
+values explain the larger cross-frame snapshot count. Warm bundles rebuild
+zero / hit one sequence per frame. Two initial builds include startup offset
+alignment changes. The <1 us synthetic target is met; cold misses, changing
+sequences, larger shaders/targets and tiny-pass workloads need separate data.
+
+N2 API agreement: head decision **#11087** adopts the owned NativeJob FIFO
+proposal. The worker adapter owns Device/Recorder; Claude-2 never touches
+wgpu. Head assigns that adapter/transport as L126 to codex-9 on this branch.
+Creating a recorder per job is valid but forfeits cross-job resident/bundle
+reuse; that integration limitation remains explicit until worker persistence
+is implemented.
 No game image or gameplay/FPS comparison claimed. Private logs:
 `C:/ddda-targets/L123-final-gate.log`, `C:/ddda-targets/L123-runtime-all.log`.
 A rebuild was externally terminated with exit 0xffffffff and no diagnostic;

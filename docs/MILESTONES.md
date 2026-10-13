@@ -1,5 +1,21 @@
 # Milestones
 
+### L123 native resident constants and bundles (2026-10-13)
+
+- Stable constant snapshots upload changed 16-byte registers in one packed
+  transfer + ordered compute scatter. Exact repeated draw sequences reuse
+  render bundles; dynamic state splits sequences. Persistent texture/sampler
+  groups retain identity keys. Existing direct API remains available.
+- Matched optimized 5,000 draws / 40 pipelines / 200 sampled sets, synthetic
+  8,200 VS + 7,300 PS register writes/frame: full **1.644**, resident **1.264**,
+  resident + bundles **0.843 us/draw**, including upload/finish/submit.
+  Three alternating repeats; bundle range 0.822–0.868. Uploads **15.67 MB ->
+  340 KB/frame**. Minimal shaders; no gameplay/FPS claim.
+- **6 GPU tests / 11 CPU tests pass**; runtime light **171 pass / 1 inherited
+  fullscreen gamma-reset failure / 3 ignored**. Core `e062d80a`.
+- Next: head-assigned L126 owned NativeJob FIFO + WgpuBackend worker adapter
+  for L119 N2. Exact conditions and limitations: `docs/tasks/L123-native-device-2.md`.
+
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 
 - Head instr1: at 16.032 s, archive inflate **4.854 s**, file reads
