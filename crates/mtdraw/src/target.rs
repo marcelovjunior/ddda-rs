@@ -223,7 +223,7 @@ fn reserve(m: &mut dyn Mem, c: &mut Cpu, ctx: u32, cursor: u32, size: u32, frame
     c.esp = frame;
     push(m, pg, c, chunk);
     push(m, pg, c, resume);
-    x86::call_ext(m, c, ALLOCATE);
+    mtcore::semantic::call_guest(m, c, ALLOCATE);
     let arena = c.eax;
     pg.set_u32(m, ctx.wrapping_add(0x24), arena);
     pg.set_u32(m, ctx.wrapping_add(0x28), if arena != 0 { arena.wrapping_add(chunk) } else { 0 });

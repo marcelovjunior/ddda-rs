@@ -335,7 +335,7 @@ pub static E12A20_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = st
 /// registered as an override for `target` (no dispatch), otherwise through
 /// `call_ext` (replayed seams in tests, the lifted program in the game).
 #[inline(always)]
-pub(crate) fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
+pub fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
     // one bit test per 16 bytes of code: no override, no further cost
     if ddnative_base::x86::may_be_overridden(target) {
         return call_overridden(m, c, target);
@@ -347,9 +347,49 @@ pub(crate) fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
 /// (a deep recursion in a debug build) keep small frames.
 #[inline(never)]
 fn call_overridden(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
-    match ddnative_base::x86::override_of(target) {
+    match override_lookup(target) {
         Some(f) => f(m, c),
         None => ddnative_base::x86::call_ext(m, c, target), // raw
+    }
+}
+
+/// The registered overrides as an open-addressing hash table (power-of-two
+/// size, at least four slots per override, linear probing; address 0 marks
+/// an empty slot), built on first use: a lookup is a multiply, a shift and
+/// about one probe, instead of the binary search of
+/// [`ddnative_base::x86::override_of`].
+static OVERRIDE_TABLE: std::sync::OnceLock<(Box<[(u32, Option<ddnative_base::x86::LiftFn>)]>, u32)> = std::sync::OnceLock::new();
+
+fn override_slot(address: u32, shift: u32) -> usize {
+    (address.wrapping_mul(0x9e37_79b1) >> shift) as usize
+}
+
+#[inline]
+fn override_lookup(target: u32) -> Option<ddnative_base::x86::LiftFn> {
+    let (table, shift) = OVERRIDE_TABLE.get_or_init(|| {
+        let list = ddnative_base::x86::overrides();
+        let size = (list.len() * 4).next_power_of_two().max(8);
+        let shift = 32 - size.trailing_zeros();
+        let mut table = vec![(0u32, None); size].into_boxed_slice();
+        for &(address, f) in list {
+            let mut i = override_slot(address, shift);
+            while table[i].0 != 0 {
+                i = (i + 1) & (size - 1);
+            }
+            table[i] = (address, Some(f));
+        }
+        (table, shift)
+    });
+    let mut i = override_slot(target, *shift);
+    loop {
+        let (address, f) = table[i];
+        if address == target {
+            return f;
+        }
+        if address == 0 {
+            return None;
+        }
+        i = (i + 1) & (table.len() - 1);
     }
 }
 
@@ -357,7 +397,7 @@ fn call_overridden(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
 /// whole source is read before the destination is written). Whole pages are
 /// moved with host copies; anything the page table does not serve directly
 /// goes byte by byte through the memory.
-pub(crate) fn copy_guest(m: &mut dyn Mem, pg: Pages, destination: u32, source: u32, bytes: u32) {
+pub fn copy_guest(m: &mut dyn Mem, pg: Pages, destination: u32, source: u32, bytes: u32) {
     use ddnative_base::mem::{PAGE, READ, WRITE};
     if bytes == 0 {
         return;

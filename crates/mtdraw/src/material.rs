@@ -273,7 +273,7 @@ pub fn apply_material_state(m: &mut dyn Mem, c: &mut Cpu) {
     push(m, pg, c, ctx);
     push(m, pg, c, 0x0106_589C);
     c.ecx = this;
-    x86::call_ext(m, c, UPDATE);
+    mtcore::semantic::call_guest(m, c, UPDATE);
     c.esp = entry_esp.wrapping_add(12);
 }
 
@@ -395,7 +395,7 @@ pub fn update_material(m: &mut dyn Mem, c: &mut Cpu) {
                         push(m, pg, c, size);
                         push(m, pg, c, 0x0106_2FBE);
                         c.ecx = ctx;
-                        x86::call_ext(m, c, REFILL);
+                        mtcore::semantic::call_guest(m, c, REFILL);
                     }
                     let block = pg.u32(m, ctx.wrapping_add(0x24));
                     pg.set_u32(m, ctx.wrapping_add(0x24), size.wrapping_add(block));

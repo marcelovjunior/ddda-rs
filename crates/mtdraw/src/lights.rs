@@ -58,7 +58,7 @@ fn call(m: &mut dyn Mem, c: &mut Cpu, s: u32, ecx: u32, arg: u32, resume: u32, t
     push(m, pg, c, arg);
     push(m, pg, c, resume);
     c.ecx = ecx;
-    x86::call_ext(m, c, target);
+    mtcore::semantic::call_guest(m, c, target);
     c.esp = s;
     c.eax
 }
