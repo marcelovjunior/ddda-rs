@@ -107,3 +107,177 @@ pub fn bind_parameter(m: &mut dyn Mem, c: &mut Cpu) {
     };
     c.esp = c.esp.wrapping_add(12);
 }
+
+/// The frame serial the material's apply stamps (a counter).
+const SERIAL: u32 = 0x018D_2CE8;
+/// The colour scale's threshold and the scale (floats in the image).
+const THRESHOLD: u32 = 0x0140_6CE0;
+const SCALE: u32 = 0x0161_C298;
+/// The shader-binding cache's tag.
+const SHADER_TAG: u32 = 0x10FD_CA55;
+/// 0x01062F20, the context update the apply ends with (a guest call).
+const UPDATE: u32 = 0x0106_2F20;
+
+// Translated from 0x010655A0 (DDDA.exe 2017-12-13 Steam).
+/// 0x010655A0, `this->apply(context, value) -> update(context)` (thiscall,
+/// `ret 8`): stamp the material with the frame serial, write its states
+/// into the context's caches (each group only when it differs, marking
+/// what changed in the context's flags at +0x154 and +0x114), flush a
+/// pending record, copy the material's source entries into the context's
+/// slot table, then call 0x01062F20 (`this->update(context)`, a guest
+/// call) and return its EAX.
+///
+/// The reads and writes keep the original's order (the context and the
+/// material may alias), including its reloads of `context + 0x6C` and of
+/// the source count. The four colour bytes use the original's SSE steps
+/// (comiss against the threshold, mulss, cvttss2si) through the same
+/// hardware helpers as the lifted code.
+pub fn apply_material_state(m: &mut dyn Mem, c: &mut Cpu) {
+    use ddnative_base::x86;
+    let pg = Pages::of(m);
+    let this = c.ecx;
+    let entry_esp = c.esp;
+    let serial = pg.u32(m, SERIAL).wrapping_add(1);
+    let value = pg.u32(m, entry_esp.wrapping_add(8));
+    let shader = pg.u32(m, this.wrapping_add(0x10));
+    pg.set_u32(m, this.wrapping_add(4), serial);
+    let ctx = pg.u32(m, entry_esp.wrapping_add(4));
+    let at = |o: u32| ctx.wrapping_add(o);
+
+    // the shader binding: shader, value byte (compared as 32 bits), tag
+    if !(pg.u32(m, at(0x1cc)) == shader && pg.u8(m, at(0x169)) as u32 == value && pg.u32(m, at(0x1d0)) == SHADER_TAG) {
+        pg.set_u32(m, at(0x1cc), shader);
+        let f = pg.u32(m, at(0x154));
+        pg.set_u32(m, at(0x154), f | 3);
+        pg.set_u8(m, at(0x169), value as u8);
+        pg.set_u32(m, at(0x1d0), SHADER_TAG);
+        pg.set_u16(m, at(0x158), (shader & 0xfff) as u16);
+        pg.set_u16(m, at(0x15a), value as u16);
+    }
+
+    // the blend state and its mode byte
+    let blend = pg.u32(m, this.wrapping_add(0x28));
+    let mode = pg.u8(m, this.wrapping_add(0x14));
+    if !(pg.u32(m, at(0x11c)) == blend && pg.u8(m, at(0x114)) == mode) {
+        pg.set_u32(m, at(0x11c), blend);
+        pg.set_u8(m, at(0x114), mode);
+        let f = pg.u32(m, at(0x114));
+        pg.set_u32(m, at(0x114), (f & 0xfff) | 0x1000);
+    }
+
+    // the colour: four bytes, each the component scaled (or the scale
+    // itself above the threshold), truncated
+    let first = pg.u32(m, this.wrapping_add(0x40));
+    let threshold = pg.u32(m, THRESHOLD);
+    let scale = pg.u32(m, SCALE);
+    let above = |a: u32| {
+        let f = x86::comiss_hw::<true>(a, threshold);
+        !f.cf() && !f.zf()
+    };
+    let byte = |a: u32| -> u32 {
+        let v = if above(a) { scale } else { x86::mulss(a, scale) };
+        x86::cvttss2si(v) & 0xff
+    };
+    let b0 = byte(first);
+    let b1 = byte(pg.u32(m, this.wrapping_add(0x44)));
+    let b2 = byte(pg.u32(m, this.wrapping_add(0x48)));
+    let fourth = pg.u32(m, this.wrapping_add(0x4c));
+    // (mulss scale, component: the operands the other way round)
+    let b3 = x86::cvttss2si(if above(fourth) { scale } else { x86::mulss(scale, fourth) }) & 0xff;
+    let colour = b0 | b1 << 8 | b2 << 16 | b3 << 24;
+
+    // the texture of the material's slot, and the colour
+    let slot = pg.u32(m, this.wrapping_add(0x2c)) & 0xfff;
+    let texture = pg.u32(m, ctx.wrapping_add(slot.wrapping_mul(8)).wrapping_add(0x1f8));
+    if !(pg.u32(m, at(0x118)) == texture && colour == pg.u32(m, at(0x110))) {
+        pg.set_u32(m, at(0x110), colour);
+        let f = pg.u32(m, at(0x114));
+        pg.set_u32(m, at(0x118), texture);
+        pg.set_u32(m, at(0x114), (f & 0xfff) | 0x1000);
+    }
+
+    let extra = pg.u32(m, this.wrapping_add(0x24));
+    if pg.u32(m, at(0x120)) != extra {
+        pg.set_u32(m, at(0x120), extra);
+        let f = pg.u32(m, at(0x114));
+        pg.set_u32(m, at(0x114), (f & 0xfff) | 0x1000);
+    }
+
+    // the material's flag bits into the context's flags word
+    let flags = pg.u32(m, this.wrapping_add(0x14));
+    let bit13 = (flags >> 13) & 1;
+    let bit8 = (flags >> 8) & 1;
+    let high = (flags >> 14) & 0xff;
+    let nibble = (flags >> 9) & 0xf;
+    let cached = pg.u32(m, at(0x154));
+    if !((cached >> 20) & 1 == bit8 && (cached >> 3) & 0xff == nibble && (cached >> 11) & 0xff == high && (cached >> 19) & 1 == bit13) {
+        let packed = ((bit8 << 1 | bit13) << 16 | nibble) << 3;
+        let kept = ((high << 11) | (cached & 0xffe8_0007)) & 0xfff7_ffff;
+        pg.set_u32(m, at(0x154), packed | kept | 1);
+    }
+
+    // a pending record: appended to the context's record list when
+    // recording (bit 0x80 of +0x5C), then cleared
+    if pg.u32(m, at(0x1c30)) != 0 {
+        if pg.u8(m, at(0x5c)) & 0x80 != 0 {
+            let record = |m: &dyn Mem| ctx.wrapping_add(pg.u32(m, at(0x6c)).wrapping_mul(12)).wrapping_add(0x30c7c);
+            let r = record(m);
+            let w = pg.u32(m, r);
+            pg.set_u32(m, r, (w & 0x8000_0347) | 0x347);
+            let r = record(m);
+            let w = pg.u32(m, r);
+            pg.set_u32(m, r, w & 0x7fff_ffff);
+            let pending = pg.u32(m, at(0x1c30));
+            let r = record(m);
+            pg.set_u32(m, r.wrapping_add(4), pending);
+            let second = pg.u32(m, at(0x1c34));
+            pg.set_u32(m, r.wrapping_add(8), second);
+            let n = pg.u32(m, at(0x6c));
+            pg.set_u32(m, at(0x6c), n.wrapping_add(1));
+        }
+        pg.set_u32(m, at(0x1c30), 0);
+        if pg.u32(m, at(0x1c34)) != 0 {
+            pg.set_u32(m, at(0x1c34), 0);
+            let f = pg.u32(m, at(0x154));
+            pg.set_u32(m, at(0x154), f | 2);
+        }
+        let f = pg.u32(m, at(0x154));
+        pg.set_u32(m, at(0x154), f | 1);
+    }
+
+    // the material's source entries into the context's slot table (the
+    // count reread every step, as the original)
+    let mut source = pg.u32(m, this.wrapping_add(0x30));
+    if pg.u32(m, this.wrapping_add(0x18)) & 0x1ff != 0 {
+        let mut i = 0u32;
+        loop {
+            let key = pg.u32(m, source) >> 20;
+            let slot = ctx.wrapping_add(key.wrapping_mul(8));
+            let w1 = pg.u32(m, source.wrapping_add(4));
+            pg.set_u32(m, slot.wrapping_add(0x1f8), w1);
+            let w2 = pg.u32(m, source.wrapping_add(8));
+            pg.set_u32(m, slot.wrapping_add(0x1fc), w2);
+            i = i.wrapping_add(1);
+            source = source.wrapping_add(12);
+            if i >= pg.u32(m, this.wrapping_add(0x18)) & 0x1ff {
+                break;
+            }
+        }
+    }
+    let f = pg.u32(m, at(0x154));
+    pg.set_u32(m, at(0x154), f | 3);
+
+    // this->update(context): the original's frame (three saved registers)
+    // and its pushes, so the callee sees the same stack
+    c.esp = entry_esp.wrapping_sub(12);
+    push(m, pg, c, ctx);
+    push(m, pg, c, 0x0106_589C);
+    c.ecx = this;
+    x86::call_ext(m, c, UPDATE);
+    c.esp = entry_esp.wrapping_add(12);
+}
+
+fn push(m: &mut dyn Mem, pg: Pages, c: &mut Cpu, v: u32) {
+    c.esp = c.esp.wrapping_sub(4);
+    pg.set_u32(m, c.esp, v);
+}

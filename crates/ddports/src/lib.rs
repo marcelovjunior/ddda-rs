@@ -38,6 +38,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_MATERIAL").as_deref() == Ok("1") {
         ports.push((0x0106_6590, mtdraw::material::find_parameter));
         ports.push((0x0106_6b10, mtdraw::material::bind_parameter));
+        ports.push((0x0106_55a0, mtdraw::material::apply_material_state));
     }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.

@@ -18,6 +18,8 @@ ports the lookup pair:
 - 0x01066B10 `this->bind(key, value) -> found`: find in slot 0, then fill
   the entry's second word from the binding table at 0x018D12CC and its
   third from `value`.
+- 0x010655A0 `this->apply(context, value)`: the material's states into
+  the draw context (below).
 
 ## Method
 
@@ -46,15 +48,45 @@ the synthetic memory are skipped), private output
 
 ## Results
 
-- `crates/mtdraw/src/material.rs`: `find_parameter`, `bind_parameter`.
-- `crates/mtdraw/tests/material.rs`: 762 (0x01066590) and 766
-  (0x01066B10) ABI-level cases pass.
-- `crates/ddports`: opt-in `DDRUNTIME_MATERIAL=1` registers both.
+- `crates/mtdraw/src/material.rs`: `find_parameter` (0x01066590),
+  `bind_parameter` (0x01066B10), `apply_material_state` (0x010655A0).
+- `crates/mtdraw/tests/material.rs`: 762, 766 and 1080 ABI-level cases
+  pass. Memory is compared everywhere but the popped stack scratch (the
+  4 KiB below the returned ESP): the recorders put their data below the
+  stack, so L171's "at or above the returned ESP" alone would not check
+  it (it did not at first here; see below).
+- `crates/ddports`: opt-in `DDRUNTIME_MATERIAL=1` registers all three.
+- Mutation check (`C:/ddda-targets/L176/mutate.py`, private): six of
+  seven mutations are caught; the survivor (`k >= key` to `k > key` in
+  the binary search) is equivalent, since equality has already returned.
 - Microbenchmark (private, `C:/ddda-targets/L176/bench`: the lifted
   bodies and the ports on the same recorded cases, paged guest memory,
-  release build for both): find 28-36 -> 20-25 ns (1.34-1.43x), bind
-  121-127 -> 49-53 ns (2.4-2.5x).
+  release build for both, the apply's guest call stubbed): find 26-31 ->
+  18-21 ns (1.5x), bind 113-133 -> 40-49 ns (2.7-2.8x), apply 680-870 ->
+  536-670 ns (1.3x; its memory accesses and the entry copy loop dominate
+  either way).
 - mtdraw and ddports tests pass, with and without the switch.
 
-Not yet measured in game. Next: 0x010655A0 (material state apply, SSE
-compares and conversions) and 0x01066C60 nDraw::Material::vf12.
+### 0x010655A0, the material state apply
+
+`this->apply(context, value)`: stamps the material with the frame serial
+(0x018D2CE8 + 1), writes its shader binding, blend, colour, texture,
+extra and flag bits into the context's caches (each group only when it
+differs, marking changes in the context's flags at +0x154 and +0x114),
+appends a pending record when recording, copies the material's source
+entries into the context's slot table, then calls 0x01062F20
+(`this->update(context)`, left a guest call) and returns its EAX. The
+port keeps the original's read and write order (context and material may
+alias), its reloads of `context + 0x6C` and of the source count, and the
+colour's SSE steps through the same hardware helpers as the lifted code.
+
+Vectors: `record_material.py --state`, 1080 cases from a warm run (the
+original run once untraced, so the caches hold what it sets, then single
+cache fields changed) or random caches; colour components at the
+threshold, NaN, infinities, denormals and conversion overflow; the
+constants at 0x01406CE0 and 0x0161C298 from the image. The guest call is
+stubbed: at the call the test checks ECX, ESP, the pushed argument and
+return address and every byte written so far outside the stack scratch.
+Every conditional branch is covered.
+
+Not yet measured in game. Next: 0x01066C60 nDraw::Material::vf12.
