@@ -359,7 +359,6 @@ fn provider_for(mode: u32, this: u32, joint: u32, model: u32, frame: u32) -> Opt
     let angles = f(F_ANGLES);
     // mode: (target, call site return, [eax, ecx, esi, edi], args, angles, offset and scale)
     let (target, back, r, args, nargs, takes_angles, offset_and_scale) = match mode {
-        7 => (0x0086_5990, 0x0086_156b, [7, angles, f(0x380), joint], [this, model, angles], 3, true, false),
         8 => (0x0086_7420, 0x0086_163c, [angles, this, f(0x200), this], [this, joint, model], 3, true, false),
         9 => (0x0086_7b70, 0x0086_1709, [9, model, f(0x300), angles], [this, joint, model], 3, true, true),
         10 => (0x0086_7b70, 0x0086_1709, [10, this, f(0x280), angles], [this, joint, model], 3, true, true),
@@ -461,6 +460,11 @@ fn apply(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, model: 
         let callee_entry = frame.wrapping_sub(8);
         let callee_frame = (callee_entry.wrapping_sub(4) & !15).wrapping_sub(0xdc + 4);
         (aim_twist_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame), true)
+    } else if mode == 7 {
+        // 0x00865990 folded in (three stack arguments, so its entry ESP is F - 16)
+        let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
+        let callee_frame = (frame.wrapping_sub(16).wrapping_sub(4) & !15).wrapping_sub(0x16c + 4);
+        (euler_twist_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame, frame + 0x380), false)
     } else if mode <= 5 {
         (euler_local_matrix(m, c, pg, this, mode, frame), true)
     } else if let Some(provider) = provider_for(mode, this, joint, model, frame) {
@@ -579,6 +583,26 @@ pub fn scale_translate_in_parent_space(m: &mut dyn Mem, c: &mut Cpu) {
 
 mod kernels;
 
+/// What the generated kernels' loaders read their inputs from: record
+/// addresses in the guest and already-read values.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Bases {
+    /// the constraint (`uCnsEdit`)
+    this: u32,
+    /// the constrained joint record
+    joint: u32,
+    /// another joint record (the aim target)
+    child: u32,
+    /// the parent bone's matrix
+    parent: u32,
+    /// the angle of the stage being run
+    angle: f32,
+    /// the three angles of the constraint (radians)
+    angles: [f32; 3],
+    /// a vector returned by a guest helper
+    r: [f32; 3],
+}
+
 /// The joint record of `model` for joint index `index` (the byte table at
 /// `model + 0x368` maps indices to joints; 0xFF is none, the null record),
 /// as the accessor 0x00421ED0 (thiscall, `ret 4`) does.
@@ -636,20 +660,20 @@ fn aim_twist_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u
         let index = pg.u32(m, this + 0xa8).wrapping_add(2);
         if index < pg.u32(m, model + 0x360) {
             let child = joint_record(m, pg, model, index);
-            let inputs = kernels::load_m6_aim(m, pg, joint, child, &matrix, a0);
+            let inputs = kernels::load_m6_aim(m, pg, &Bases { joint, child, angle: a0, ..Default::default() }, &matrix);
             let mut t = trig(AIM_TRIG_SITES);
             matrix = kernels::kernel_m6_aim(&inputs, &mut |cosine, x| t(m, c, cosine, x));
         }
     }
     let a1 = angles.get(m, pg, 1);
     if a1 > ANGLE_EPSILON {
-        let inputs = kernels::load_m6_pitch(m, pg, joint, 0, &matrix, a1);
+        let inputs = kernels::load_m6_pitch(m, pg, &Bases { angle: a1, ..Default::default() }, &matrix);
         let mut t = trig(PITCH_TRIG_SITES);
         matrix = kernels::kernel_m6_pitch(&inputs, &mut |cosine, x| t(m, c, cosine, x));
     }
     let a2 = angles.get(m, pg, 2);
     if a2 > ANGLE_EPSILON {
-        let inputs = kernels::load_m6_roll(m, pg, joint, 0, &matrix, a2);
+        let inputs = kernels::load_m6_roll(m, pg, &Bases { angle: a2, ..Default::default() }, &matrix);
         let mut t = trig(ROLL_TRIG_SITES);
         matrix = kernels::kernel_m6_roll(&inputs, &mut |cosine, x| t(m, c, cosine, x));
     }
@@ -672,6 +696,84 @@ pub fn aim_twist_provider(m: &mut dyn Mem, c: &mut Cpu) {
     write_matrix(m, pg, out, &matrix);
     c.eax = out;
     c.esp = entry.wrapping_add(4 + 4);
+    c.esi = out;
+    c.edi = joint;
+}
+
+// ---------------------------------------------------------------------
+// 0x00865990: mode 7, the Euler-with-twist provider
+
+/// Return addresses of the sinf/cosf calls of 0x00865990 (first sine and cosine of the angles).
+const EULER_TRIG_SITES: [u32; 2] = [0x0086_59af, 0x0086_59f5];
+/// ... and of the second rotation built from the decomposed matrix.
+const TWIST_TRIG_SITES: [u32; 2] = [0x0086_6da0, 0x0086_6de5];
+/// The guest helper that decomposes a rotation matrix into three angles
+/// (usercall: ECX = the matrix, one stack argument = an output buffer for
+/// the three floats, returns a pointer to them, `ret 4`).
+const DECOMPOSE_ROTATION: u32 = 0x00cf_c9e0;
+
+/// The parent bone's matrix (joint byte `+0x91`; 0xFF: the model's virtual
+/// +0x58(-1) accessor) as a guest address. `back` is the call site's return
+/// address when the accessor is called.
+fn parent_matrix_address(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, joint: u32, model: u32, frame: u32, regs: Registers, back: u32) -> u32 {
+    let index = pg.u8(m, joint + 0x91);
+    if index == 0xff {
+        let vtable = pg.u32(m, model);
+        let method = pg.u32(m, vtable + 0x58);
+        guest_call(m, c, pg, frame, method, back, Registers { eax: vtable, edi: regs.edi, ..regs }, &[0xffff_ffff])
+    } else {
+        let joints = pg.u32(m, model + 0x364);
+        joints.wrapping_add(index as u32 * 0xa0).wrapping_add(0x10)
+    }
+}
+
+/// The matrix of mode 7 (0x00865990): the Euler rotation of the three
+/// angles (radians); then, when the constraint's weight at `this + 0x84` is
+/// not 1, the joint's rotation relative to its parent bone is decomposed
+/// into angles (0x00CFC9E0), scaled by `weight - 1` (x and y by `this +
+/// 0x80` and `this + 0x84`) and rotated back in; finally row 0 is scaled by
+/// `this + 0x88` and the translation (`this + 0x90`) added.
+///
+/// `out` is the guest address of the original's output buffer (it is passed
+/// to the guest helper); `frame` the provider's frame.
+fn euler_twist_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u32, joint: u32, angles: Angles, frame: u32, out: u32) -> Matrix {
+    let angles = [angles.get(m, pg, 0), angles.get(m, pg, 1), angles.get(m, pg, 2)];
+    let mut matrix = IDENTITY;
+    let mut bases = Bases { this, joint, angles, ..Default::default() };
+    let inputs = kernels::load_m7_euler(m, pg, &bases, &matrix);
+    matrix = kernels::kernel_m7_euler(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, EULER_TRIG_SITES[cosine as usize]));
+    if read_f32(m, pg, this + 0x84) != 1.0 {
+        let regs = Registers { eax: 0, ecx: model, esi: out, edi: joint };
+        bases.parent = parent_matrix_address(m, c, pg, joint, model, frame, regs, 0x0086_5b62);
+        let inputs = kernels::load_m7_in_parent_space(m, pg, &bases, &matrix);
+        let relative = kernels::kernel_m7_in_parent_space(&inputs, &mut |_, x| x);
+        // the helper reads the matrix at F + 0x130 and writes three angles to the buffer at F + 0xf0
+        write_matrix(m, pg, frame + 0x130, &relative);
+        let result = guest_call(m, c, pg, frame, DECOMPOSE_ROTATION, 0x0086_6d4a, Registers { eax: frame + 0xf0, ecx: frame + 0x130, esi: out, edi: joint }, &[frame + 0xf0]);
+        bases.r = [read_f32(m, pg, result), read_f32(m, pg, result + 4), read_f32(m, pg, result + 8)];
+        let inputs = kernels::load_m7_scale_rotation(m, pg, &bases, &matrix);
+        matrix = kernels::kernel_m7_scale_rotation(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, TWIST_TRIG_SITES[cosine as usize]));
+    }
+    let inputs = kernels::load_m7_scale_translate(m, pg, &bases, &matrix);
+    kernels::kernel_m7_scale_translate(&inputs, &mut |_, x| x)
+}
+
+/// 0x00865990 (usercall: EDI = joint, ESI = output buffer; stack arguments
+/// `this`, `model`, pointer to the three angles; `ret 0xc`):
+/// [`euler_twist_matrix`] written to the buffer and returned in EAX. EBX,
+/// ESI, EDI and EBP are preserved.
+// Translated from 0x00865990 (DDDA.exe 2017-12-13 Steam)
+pub fn euler_twist_provider(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let (this, model, angles) = (pg.u32(m, entry.wrapping_add(4)), pg.u32(m, entry.wrapping_add(8)), pg.u32(m, entry.wrapping_add(12)));
+    // ESP after the prologue: ebp, 16-byte alignment, 0x16c bytes of locals, ebx
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x16c + 4);
+    let (joint, out) = (c.edi, c.esi);
+    let matrix = euler_twist_matrix(m, c, pg, this, model, joint, Angles::Memory(angles), frame, out);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 12);
     c.esi = out;
     c.edi = joint;
 }

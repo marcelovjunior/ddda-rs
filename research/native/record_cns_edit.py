@@ -31,7 +31,7 @@ import unicorn.x86_const as x  # noqa: E402
 
 ENTRY, END = 0x00860AC0, 0x008645A8  # code through RET 8 at 0x00864560 plus the 17-entry jump table at 0x00864564
 SINCOS = (0x012F0906, 0x012F0BAC)
-BLEND, VSTUB = 0x00CFDC80, 0x30000058
+BLEND, VSTUB, DECOMPOSE = 0x00CFDC80, 0x30000058, 0x00CFC9E0  # DECOMPOSE: rotation matrix -> three angles (stub; ECX = matrix, stack: output buffer)
 # lengths of the providers that can run as the original's real code (argv[3]: comma-separated addresses)
 REAL_LENGTH = {0x00864660: 0x1326, 0x00865990: 0x1a87, 0x00867420: 0x749, 0x00867B70: 0x48d, 0x00868000: 0x1251,
                0x00869260: 0xe99, 0x0086A100: 0xee3, 0x0086AFF0: 0x2e8, 0x0086B2E0: 0x1e9b, 0x0086D180: 0x418}
@@ -67,6 +67,8 @@ class Oracle:
             uc.mem_map(page, 0x1000)
             uc.mem_write(page, h.code(page, 0x1000))
         uc.mem_write(BLEND, b'\xc3')  # stub (the page's real bytes are not needed)
+        uc.mem_map(0x00CFC000, 0x1000)
+        uc.mem_write(DECOMPOSE, bytes([0xC3]))
         uc.mem_map(0x30000000, 0x1000)
         uc.mem_write(VSTUB, b'\xc3')
         for address, size in ((THIS, 0x1000), (JOINT, 0x1000), (MODEL, 0x2000), (JOINTS, 0x10000), (PTRS, 0x10000),
@@ -119,7 +121,7 @@ class Oracle:
             uc.emu_stop()
             return
         spec = PROVIDERS.get(address)
-        if (address in PROVIDERS and address not in REAL) or address in (BLEND, VSTUB):
+        if (address in PROVIDERS and address not in REAL) or address in (BLEND, VSTUB, DECOMPOSE):
             return self.stub(uc, address, spec)
         assert ENTRY <= address < END or 0x421ED0 <= address < 0x421EFF or SINCOS[0] <= address < SINCOS[1] or any(a <= address < a + REAL_LENGTH[a] for a in REAL), hex(address)
 
@@ -128,7 +130,7 @@ class Oracle:
         rng = self.rng
         if address == BLEND:
             nargs = 3
-        elif address == VSTUB:
+        elif address in (VSTUB, DECOMPOSE):
             nargs = 1
         else:
             nargs = spec[0]
@@ -148,6 +150,14 @@ class Oracle:
             dest = PTRS + 0x40 * rng.randrange(64)
             effects += self.stub_write(dest, self.matrix())
             eax = dest
+        elif address == DECOMPOSE:
+            ecx = uc.reg_read(x.UC_X86_REG_ECX)
+            buf = struct.unpack('<I', uc.mem_read(esp + 4, 4))[0]
+            self.remember(ecx, 64)
+            reads.append((ecx, list(uc.mem_read(ecx, 64))))
+            angles = [rng.choice((0.0, rng.uniform(-3.2, 3.2), rng.uniform(-3.2, 3.2), rng.uniform(-100, 100))) for _ in range(3)]
+            eax = buf if rng.random() < 0.7 else PTRS + 0x100 + 0x10 * rng.randrange(8)
+            effects += self.stub_write(eax, b''.join(f32(a) for a in angles))
         else:
             _, out_reg, angles = spec
             if angles:

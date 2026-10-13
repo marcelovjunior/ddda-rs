@@ -202,3 +202,12 @@ fn semantic_aim_twist_provider_matches_original() {
     let count = cases(&path, mtcore::semantic_s5::aim_twist_provider, input_registers, true);
     eprintln!("{count} ABI-level 0x00864660 cases passed");
 }
+
+// verifies 0x00865990 (ABI level; EAX = the output buffer)
+#[test]
+fn semantic_euler_twist_provider_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S5_EULER_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/cns_euler.json".into());
+    let count = cases(&path, mtcore::semantic_s5::euler_twist_provider, input_registers, true);
+    eprintln!("{count} ABI-level 0x00865990 cases passed");
+}
