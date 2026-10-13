@@ -47,6 +47,7 @@ pub mod user32;
 pub mod win32;
 pub mod movies;
 pub mod net;
+pub mod ndraw_stats;
 
 /// Take the TEB TLS slots the lifted code's hot paths read now, first thing
 /// in a host's main (L103, L103b): the x87 live id and the dispatch cache.

@@ -1,5 +1,22 @@
 # Milestones
 
+### L111 nDraw executor observer (2026-10-13)
+
+- Opt-in read-only executor wrapper plus Present-selected frame counters;
+  off registers no new execution/Present hooks. Nested command decoder,
+  state/shader/sampler/buffer identities and ordered surface target runs
+  sourced to DAB480/DA6DA0 and apply helpers. Counts are raw records.
+- Seven synthetic regressions pass; enabled light unit suite 35 pass /
+  1 existing ignored. Full suite validation continues: fullscreen gamma
+  fails with switch off too; recorded L34 display resolves it, while two
+  existing lock-timing tests failed on a later loaded-machine repeat.
+- cap1 last20 analytical extraction preserves 108,502 command payloads
+  and 50,507 referenced blobs (284 MB raw vs 19.79 GB whole-capture blobs).
+  Unchanged frame_stats completed: 107,544 draws / 19,704 passes.
+- Next: head-run DDRUNTIME_NDRAW_STATS=1, EVERY=1 for executor/capture
+  correlation; no game, image-equivalence or FPS claim from this batch.
+  Details: docs/tasks/L111-executor-stats.md.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants
