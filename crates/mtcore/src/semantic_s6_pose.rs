@@ -175,8 +175,8 @@ pub fn euler_matrix(sx: f32, sy: f32, sz: f32, cx: f32, cy: f32, cz: f32) -> Mat
 /// infinities), which run the guest function.
 pub(crate) fn crt_f32_at(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, base: u32, target: u32, back: u32, x: f32) -> f32 {
     let native = match target {
-        0x012f_0906 => crate::semantic_s7_trig::sinf(x),
-        0x012f_0a55 => crate::semantic_s7_trig::cosf(x),
+        0x012f_0906 => crate::semantic_s7_trig::sinf(m, pg, x),
+        0x012f_0a55 => crate::semantic_s7_trig::cosf(m, pg, x),
         _ => None,
     };
     if let Some(v) = native {
