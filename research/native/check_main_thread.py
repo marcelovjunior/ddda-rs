@@ -60,6 +60,7 @@ def main():
     p.add_argument('--geometry',action='store_true')
     p.add_argument('--identifiers',action='store_true')
     p.add_argument('--durations',action='store_true')
+    p.add_argument('--restore',action='store_true')
     p.add_argument('--recording',action='store_true')
     p.add_argument('--emu',action='store_true',help='benchmark runtime Unicorn fallback, no game/shards')
     a=p.parse_args()
@@ -85,7 +86,10 @@ def main():
     recording_match=re.search(r'pub fn f_00fedb80\(.*?\n\}',recording,re.S)
     assert recording_match
     recording_source=recording_match.group().replace('x86::call_local(m, cpu, 0x012EFEA0, crate::platform::memcpy)', 'x86::call_ext(m, cpu, 0x012EFEA0)')
-    (out/'src/lib.rs').write_text(prelude+recording_source+'\n'+match.group()+'\n'+geometry_match.group()+'\n'+identifier_match.group()+'\n'+duration_source)
+    restore_match=re.search(r'pub fn f_00fedc00\(.*?\n\}',recording,re.S)
+    assert restore_match
+    restore_source=restore_match.group().replace('x86::call_local(m, cpu, 0x012EFEA0, crate::platform::memcpy)', 'x86::call_ext(m, cpu, 0x012EFEA0)')
+    (out/'src/lib.rs').write_text(prelude+restore_source+'\n'+recording_source+'\n'+match.group()+'\n'+geometry_match.group()+'\n'+identifier_match.group()+'\n'+duration_source)
     deps='\n'.join(f'{n}={{path="{(repo/"crates"/n).as_posix()}"}}' for n in ('mtcore','ddnative-base','ddnative-host'))
     if a.emu:
         deps+='\nddruntime={path="'+(repo/'crates/ddruntime').as_posix()+'",default-features=false,features=["emu"]}'
@@ -114,11 +118,14 @@ def main():
     test=test.replace('// L130_RECORDING_REFERENCE','run_with_callees(main_thread_check::f_00fedb80,case);')
     test,count=re.subn(r'vec!\[\("port",\s*mtcore::hot::save_draw_recording_state\)\]; // L130_RECORDING_COST', 'vec![("lifted",main_thread_check::f_00fedb80),("port",mtcore::hot::save_draw_recording_state)];',test)
     assert count==1,'recording cost marker missing'
+    test=test.replace('// L130_RESTORE_REFERENCE','run_with_callees(main_thread_check::f_00fedc00,case);')
+    test,count=re.subn(r'vec!\[\("port",\s*mtcore::hot::restore_draw_recording_state\)\]; // L130_RESTORE_COST', 'vec![("lifted",main_thread_check::f_00fedc00),("port",mtcore::hot::restore_draw_recording_state)];',test)
+    assert count==1,'restore cost marker missing'
     if a.emu: test+=EMU_TEST
     (out/'tests/hot.rs').write_text(test)
     env=dict(os.environ,CARGO_TARGET_DIR='C:/ddda-targets/L130',CARGO_BUILD_JOBS='4',CARGO_INCREMENTAL='0',DDNATIVE_REQUIRE_VECTORS='1')
     command=['cargo','test','--manifest-path',str(out/'Cargo.toml'),'--test','hot']
-    benchmark='recording_cost' if a.recording else 'durations_cost' if a.durations else 'identifiers_cost' if a.identifiers else 'geometry_cost' if a.geometry else 'dependencies_cost'
+    benchmark='restore_cost' if a.restore else 'recording_cost' if a.recording else 'durations_cost' if a.durations else 'identifiers_cost' if a.identifiers else 'geometry_cost' if a.geometry else 'dependencies_cost'
     if a.emu: benchmark='durations_runtime_cost'
     command+=['--release',benchmark,'--','--ignored','--nocapture'] if a.bench else ['--','--nocapture']
     raise SystemExit(subprocess.call(command,env=env))
