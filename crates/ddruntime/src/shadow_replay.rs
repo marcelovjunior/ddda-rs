@@ -74,7 +74,7 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
         ports.push((address, body));
     }
     eprintln!(
-        "parallel-shadow installed capture=v3 first={} count={} after_ms={} dump={:?}",
+        "parallel-shadow installed capture=v4 first={} count={} after_ms={} dump={:?}",
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST").unwrap_or_else(|_| "0".into()),
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_COUNT").unwrap_or_else(|_| "1".into()),
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_AFTER_MS").unwrap_or_else(|_| "0".into()),
@@ -803,9 +803,39 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     ddnative_base::x87::park();
     x86::ldmxcsr(x86::MXCSR_DEFAULT);
     journal.stage.set("serial stream capture");
+    let mut shader_handles = std::collections::BTreeSet::new();
     let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        capture_context(&journal, context, Limits::default())
+        mtcore::shadow_lanes::capture_stream(
+            &journal,
+            journal.u32(context + 0x44),
+            journal.u32(context + 0x48),
+            Limits::default(),
+            &mut |m, binding| {
+                // Original consumer DAA8B0, also decoded by mtdraw::decode_shader.
+                let metadata = m.u32(binding + 8);
+                for offset in [0x10, 0x14] {
+                    let handle = m.u32(metadata + offset);
+                    if handle != 0 {
+                        shader_handles.insert(handle);
+                    }
+                }
+                mtcore::shadow_lanes::capture_shader(m, binding, Limits::default().bytes)
+            },
+        )
     }));
+    // Clone immutable host bytecode under the D3D object lock. No host service
+    // executes during offline replay; absent objects remain an explicit refusal.
+    let shaders = crate::d3d9dev::objects(|objects| {
+        shader_handles
+            .iter()
+            .filter_map(
+                |handle| match objects.live.get(handle).map(|object| &object.kind) {
+                    Some(crate::d3d9dev::Kind::Shader { tokens, .. }) => Some((*handle, tokens.to_vec())),
+                    _ => None,
+                },
+            )
+            .collect::<BTreeMap<_, _>>()
+    });
     let rejection = journal
         .failure
         .get()
@@ -816,7 +846,8 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
             } else {
                 Some("serial stream capture refused".into())
             }
-        });
+        })
+        .or_else(|| (shaders.len() != shader_handles.len()).then(|| "captured shader object missing".into()));
     let fixture = capture_file::Fixture {
         input: Arc::new(journal.input.into_inner()),
         incoming,
@@ -828,6 +859,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         stack,
         writes: journal.writes.into_inner(),
         rejection,
+        shaders,
     };
     if let Some(directory) = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP") {
         let save = || -> std::io::Result<()> {
@@ -877,6 +909,10 @@ pub fn replay_file(path: &std::path::Path) -> Result<usize, String> {
 
 fn replay_fixture(fixture: capture_file::Fixture, raw: Arc<BTreeMap<u32, LiftFn>>) -> Result<usize, String> {
     let rejection = fixture.rejection.clone();
+    eprintln!(
+        "parallel-shadow captured shader objects={}",
+        fixture.shaders.len()
+    );
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let final_input = fixture.input.with_writes(&fixture.writes);
         let observed = capture_context(&final_input, fixture.context, Limits::default())
@@ -1592,6 +1628,7 @@ mod tests {
             stack: 0x80000..0x82000,
             writes: expected.writes().clone(),
             rejection: None,
+            shaders: BTreeMap::new(),
         }
     }
 

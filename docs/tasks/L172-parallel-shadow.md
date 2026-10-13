@@ -393,3 +393,13 @@ and388-byte snapshots match in size; first byte difference offsetA4 is
 constant (value index2), not pointer identity. Added bounded containing-word
 diagnostic to trace the producer; no assumed padding/float tolerance.
 37 focused pass. Self-build/replay next.
+
+2026-10-13 CBSkinning root22 evidence: original FE49xx producer writes
+xyz only; installed MFX declares scalar+float2 in a four-float allocation.
+29198 installed shaders scanned,566 CBSkinning declarations; direct reads
+use xyz only, but indirect constant accesses prevent blanket padding proof.
+Added bounded v4 private capture shader bank from exact referenced host
+objects under D3D lock; v3 remains readable. No comparator relaxation.
+37 focused tests pass; format checks cover legacy, oversized and duplicate
+shader banks. Next: head-only v4 capture with exact shader tokens; continue
+consumer proof and publication boundary while waiting.
