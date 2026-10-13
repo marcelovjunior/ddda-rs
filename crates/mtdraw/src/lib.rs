@@ -5,6 +5,8 @@
 //!   command records sRender queued for the frame and issues them to the
 //!   Direct3D 9 device through the four apply functions and the device's
 //!   draw, clear and copy methods.
+//! - [`sink`]: where commands can go instead of the D3D9 device (a native
+//!   implementation takes them command by command; L119).
 //! - [`abi`]: the port behind the lifted calling convention; registered
 //!   over the lifted body by `ddports` (crates/ddports).
 //!
@@ -17,3 +19,4 @@
 
 pub mod abi;
 pub mod executor;
+pub mod sink;
