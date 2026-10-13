@@ -14,9 +14,10 @@
 #   --tries N           attempts (default 3); a compile error stops at once,
 #                       a rustc killed by the memory guard is retried
 #   --timings           write cargo's HTML timing report (<target>/cargo-timings)
-#   --gate              cargo -j 16 with scripts/rustc_gate.rs as RUSTC_WRAPPER:
-#                       shard compilers limited by free RAM instead of by -j,
-#                       so their threads get all 16 job tokens (see the file)
+#   --no-gate           plain cargo with heavy.py's CARGO_BUILD_JOBS. The default
+#                       (L100) is cargo -j 16 with scripts/rustc_gate.rs as
+#                       RUSTC_WRAPPER: shard compilers limited by free RAM
+#                       instead of by -j, so their threads get all 16 job tokens
 #
 # The environment is fixed here so that every caller hits the same cargo
 # fingerprints: RUSTC_BOOTSTRAP=1 for the -Z flags, RUSTFLAGS from
@@ -26,7 +27,7 @@ set -u
 PLAY_RUSTFLAGS="-Zthreads=8"
 
 profile=play-fast; td=${CARGO_TARGET_DIR:-}; who=${BUILD_PLAY_WHO:-head}
-heavy=1; tries=3; timings=; gate=; tag=
+heavy=1; tries=3; timings=; gate=--gate; tag=
 while [ $# -gt 0 ]; do
   case $1 in
     --profile) profile=$2; shift 2 ;;
@@ -36,6 +37,7 @@ while [ $# -gt 0 ]; do
     --tries) tries=$2; shift 2 ;;
     --timings) timings=--timings; shift ;;
     --gate) gate=--gate; shift ;;
+    --no-gate) gate=--no-gate; shift ;;
     --) shift; break ;;
     -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     -*) echo "build_play: unknown option $1" >&2; exit 2 ;;
@@ -67,7 +69,7 @@ export PATH="/c/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/Comm
 export CARGO_TARGET_DIR=$td RUSTC_BOOTSTRAP=1 RUSTFLAGS=$PLAY_RUSTFLAGS
 unset CARGO_INCREMENTAL CARGO_ENCODED_RUSTFLAGS
 jobs=()
-if [ -n "$gate" ]; then
+if [ "$gate" = --gate ]; then
   # the wrapper is not fingerprinted: building or changing it rebuilds nothing
   gexe=C:/ddda-targets/tools/rustc_gate.exe
   if [ ! -x "$gexe" ] || [ scripts/rustc_gate.rs -nt "$gexe" ]; then

@@ -10,7 +10,7 @@ CPU time and the core count ("x2.2") are the more stable figures.
 
 ## Use
 
-    scripts/build_play.sh [--profile play-fast] [--gate] [--timings] TAG
+    scripts/build_play.sh [--profile play-fast] [--no-gate] [--timings] TAG
 
 The script:
 - takes a heavy slot (`HEAVY_BIG=1`);
@@ -24,7 +24,7 @@ The script:
 The default target directory is the profile's shared warm one
 (`C:/ddda-targets/playfast` for play-fast).
 
-`--gate` runs cargo with `-j 16` and `scripts/rustc_gate.rs` as
+By default (L100) the script runs cargo with `-j 16` and `scripts/rustc_gate.rs` as
 `RUSTC_WRAPPER` (see "Job tokens" below). The wrapper is not part of
 cargo's fingerprints: switching it on or off rebuilds nothing.
 
@@ -71,8 +71,9 @@ in 72 s instead of 216 s, back to back. It costs 10% more CPU and 1 GB
 more peak RAM. At opt-level 0 the split is also a little faster (20.7 vs
 26.5 s).
 
-Decision (head): `gen` chunks by bytes (claude-7, lift.py). Accepted
-side effect: at opt-level 1, calls between lifted functions in different
+Since L100, `lift.py gen` starts a new module after about 160 KB of
+emitted source (`--chunk-bytes`) or 400 functions (`--chunk`): the
+shards hold 1,461 modules (ddlift-05: 48). Accepted side effect: at opt-level 1, calls between lifted functions in different
 modules of a shard are no longer inlined. FPS is to be checked by the head.
 
 ### Job tokens cap the threads
