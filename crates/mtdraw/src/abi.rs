@@ -12,4 +12,10 @@ pub fn f_00dab480(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// Every port: (address, adapter, registers checked by the differential
 /// test: all eight).
-pub const PORTS: &[(u32, LiftFn, u8)] = &[(0x00DA_B480, f_00dab480, 0b1111_1111)];
+pub const PORTS: &[(u32, LiftFn, u8)] = &[
+    (0x00DA_B480, f_00dab480, 0xff),
+    (0x00DA_6FE0, crate::apply::targets, 0xff),
+    (0x00DA_A5F0, crate::apply::fixed, 0xff),
+    (0x00DA_A7C0, crate::apply::streams, 0xff),
+    (0x00DA_A8B0, crate::apply::shader, 0xff),
+];
