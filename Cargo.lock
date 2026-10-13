@@ -2957,6 +2957,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtdraw",
  "mtframe",
  "mtmath",
 ]
