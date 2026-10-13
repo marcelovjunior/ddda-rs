@@ -7,6 +7,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ash = "0.38"
+smallvec = "1"
 d3d9cmd = { path = "../d3d9cmd" }
 d3d9shader = { path = "../d3d9shader" }
 d3d9wgsl = { path = "../d3d9wgsl" }
@@ -18,7 +20,6 @@ wgpu-types = { version = "=29.0.4", features = ["serde"] }
 blake3 = "1"
 
 [dev-dependencies]
-ash = "0.38"
 # examples/pipeline_cost.rs reads the game's shader packages
 mtarc = { path = "../mtarc" }
 d3d9frame = { path = "../d3d9frame" }

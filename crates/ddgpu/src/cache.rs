@@ -4,13 +4,14 @@
 //! of this changes what a draw draws: every key holds everything the cached
 //! object was built from.
 
-/// A buffer that per-draw data is appended to. The bytes are staged on the
-/// CPU and written in one `write_buffer` before the submission that uses
-/// them (writes take effect at the start of the next submission, after
-/// everything submitted before, so a region can be reused after a flush).
+/// Append-only draw data. Normally staged on the CPU and copied by the queue
+/// before submission. DDGPU_VK uniforms instead use cached coherent mapped
+/// memory: submission publishes fresh tail writes, and restart waits for GPU
+/// completion before any bytes are reused.
 pub(crate) struct Ring {
     pub buffer: wgpu::Buffer,
     cpu: Vec<u8>,
+    mapped: Option<crate::vk::MappedUniforms>,
     at: u64,
     /// the first byte not yet written to the GPU buffer
     dirty_from: u64,
@@ -21,12 +22,18 @@ pub(crate) struct Ring {
 
 impl Ring {
     pub fn new(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages, label: &str) -> Ring {
+        if usage == wgpu::BufferUsages::UNIFORM && crate::vk::enabled() {
+            match crate::vk::MappedUniforms::new(device, size) {
+                Ok(mapped) => return Ring { buffer: mapped.buffer(), cpu: Vec::new(), mapped: Some(mapped), at: 0, dirty_from: 0, generation: 0 },
+                Err(e) => eprintln!("DDGPU_VK mapped constants fallback: {e}"),
+            }
+        }
         let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: usage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        Ring { buffer, cpu: vec![0; size as usize], at: 0, dirty_from: 0, generation: 0 }
+        Ring { buffer, cpu: vec![0; size as usize], mapped: None, at: 0, dirty_from: 0, generation: 0 }
     }
 
     pub fn size(&self) -> u64 {
-        self.cpu.len() as u64
+        self.buffer.size()
     }
 
     pub fn fits(&self, len: u64, align: u64) -> bool {
@@ -41,11 +48,17 @@ impl Ring {
             return None;
         }
         self.at = off + len;
-        Some((off, &mut self.cpu[off as usize..(off + len) as usize]))
+        let bytes = match &mut self.mapped {
+            // Fresh tail range; restart waits for every earlier GPU reader.
+            Some(mapped) => unsafe { mapped.range(off, len) },
+            None => &mut self.cpu[off as usize..(off + len) as usize],
+        };
+        Some((off, bytes))
     }
 
     /// Write the staged bytes to the GPU buffer.
     pub fn upload(&mut self, queue: &wgpu::Queue) {
+        if self.mapped.is_some() { return; }
         let end = self.at.next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT);
         if end > self.dirty_from {
             queue.write_buffer(&self.buffer, self.dirty_from, &self.cpu[self.dirty_from as usize..end as usize]);
@@ -53,9 +66,10 @@ impl Ring {
         self.dirty_from = end;
     }
 
-    /// Start again at the beginning (after a flush: earlier users are
-    /// submitted).
+    /// Start again after the finisher has submitted earlier users. Mapped
+    /// storage additionally waits for their GPU completion before reuse.
     pub fn restart(&mut self) {
+        if let Some(mapped) = &self.mapped { mapped.restart(); }
         self.at = 0;
         self.dirty_from = 0;
         self.generation += 1;
