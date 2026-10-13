@@ -1,5 +1,27 @@
 # Milestones
 
+### L139 combo21 combined native gate (2026-10-13)
+
+- FPS line `335318fc` plus x87 discard `f4bfb866` and L130 FEDB80/FEDC00/
+  FED200 candidates: combined pin `981fb77a` is **GREEN**, **100 tests
+  passed / zero failures / seven benchmark ignores**. All 33 generated
+  crates rebuilt; expanded required-vector supplements and inventory pass.
+- Per-candidate correctness GREEN: `f4bfb866`, `382e5f35`, `4d53d724`,
+  `546a052d`. Existing five inventory gaps remain. No agent game/GPU run.
+- Head's c21 profile: main word loads/stores account for 23.9%/8.3% of
+  180 busy samples; similar shares on job threads. Retained store128 helper
+  compiles once in base, preserving each lane's permission/access checks.
+- Follow-up gate **102 pass / zero failures / seven benchmark ignores**;
+  base debug **36 pass**; runtime light **198 pass / inherited gamma
+  failure / four ignored**. Ordered-access oracle: 2,304 cases plus fault
+  ordering. All 33 generated crates rebuilt; no L142 flat-view code included.
+- Synthetic aligned reference-loop/helper thread cycles: caller opt0
+  **153.486 -> 61.833**, opt1 **29.657 -> 15.197**. All 33 opt0 paired
+  samples improve across three access cases; opt1 has two mixed cases.
+  No gameplay speedup claim; other multiword experiments were dropped.
+- Next: head's image/FPS/loading comparison and separately pinned L142
+  integration. `docs/tasks/L139-gate-c21.md`.
+
 ### L134 x87 helper follow-up, next batch (2026-10-13)
 
 - Discarding x87 callers omit unused PUSHFQ/POP capture; public flag-returning
