@@ -318,7 +318,12 @@ impl Mem for PrivateMemory {
     }
     fn u8(&self, a: u32) -> u8 {
         reject_unsynchronized_counter_access(a);
-        self.0.borrow().u8(a)
+        let v = self.0.borrow().u8(a);
+        if std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_WATCH_READS").is_some() && watched().iter().any(|&w| a & !3 == w & !3) {
+            let recent: Vec<String> = RECENT.with(|r| r.borrow().iter().rev().take(3).map(|t| format!("{t:#x}")).collect());
+            eprintln!("parallel-shadow watch {:?} read {a:#x} = {v:#04x} after {}", std::thread::current().id(), recent.join(" "));
+        }
+        v
     }
     fn u32(&self, address: u32) -> u32 {
         if COUNTER_CAPACITY_READ.with(Cell::get) {
