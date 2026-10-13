@@ -41,6 +41,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         for (a, f) in [
             (0x00e0ec50u32, mtcore::semantic::expand_dependencies as LiftFn),
             (0x00e10fc0, mtcore::semantic::intern_dependency_keys),
+            (0x00ea5320, mtcore::semantic_draw::draw_mesh),
         ] {
             ports.retain(|p| p.0 != a);
             ports.push((a, f));

@@ -172,7 +172,7 @@ pub static E12A20_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = st
 /// A guest call from the frame `frame` (the caller's ESP at its call
 /// sites): push `args` (last first) and `back`, set ECX and run `body`.
 /// Returns EAX; ESP is `frame` again after the callee's own `ret n`.
-fn call_from(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, args: &[u32], back: u32, body: impl FnOnce(&mut dyn Mem, &mut Cpu)) -> u32 {
+pub(crate) fn call_from(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, args: &[u32], back: u32, body: impl FnOnce(&mut dyn Mem, &mut Cpu)) -> u32 {
     c.esp = frame;
     for &v in args.iter().rev() {
         c.esp = c.esp.wrapping_sub(4);
