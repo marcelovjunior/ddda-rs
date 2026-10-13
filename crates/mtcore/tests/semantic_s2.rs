@@ -85,6 +85,11 @@ fn stack_args(target: u32) -> u32 {
         0x011c_3a30 => 0,
         0x010a_f350 | 0x010b_4710 | 0x010b_4560 | 0x010b_4960 | 0x010f_ea80 | 0x0111_b2b0 => 4,
         0x0111_b570 => 5,
+        0x0115_f650 => 5,
+        0x00fb_3790 => 0,
+        0x00de_d390 | 0x0076_7960 => 1,
+        0x0116_6a60 | 0x0116_69b0 => 2,
+        0x0116_68a0 | 0x0116_5ef0 | 0x0116_67b0 | 0x0116_5e00 | 0x0116_4500 | 0x0116_5560 => 3,
         _ => panic!("unknown callee {target:x}"),
     }
 }
@@ -223,6 +228,18 @@ fn semantic_sweep_step_matches_original() {
     let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L184/sweep_step.json", mtcore::semantic_s2::sweep_step, false);
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none());
     eprintln!("{n} ABI-level sweep_step cases passed");
+}
+
+// verifies 0x01166c00 / 0x01166b10 / 0x00dea870 (ABI level)
+#[test]
+fn semantic_collision_query_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/cast_b.json", mtcore::semantic_s2::cast_shape_b);
+    eprintln!("{n} ABI-level cast_shape_b cases passed");
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/cast_a.json", mtcore::semantic_s2::cast_shape_a);
+    eprintln!("{n} ABI-level cast_shape_a cases passed");
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/query.json", mtcore::semantic_s2::world_query);
+    eprintln!("{n} ABI-level world_query cases passed");
 }
 
 // Backed pages exercise the same fast accessor path as the parallel runtime.

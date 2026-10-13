@@ -545,3 +545,148 @@ pub fn sweep_step(m: &mut dyn Mem, c: &mut Cpu) {
     }
     finish(m, c);
 }
+
+// ---------------------------------------------------------------------
+// The collision query family (0x00DEA870 -> 0x0115F650 -> 0x01166C00 / 0x01166B10)
+// ---------------------------------------------------------------------
+
+/// The two collision-cast dispatchers differ only in the byte they store
+/// at `query + 0xCC` and in the three layer-walk routines they run.
+struct CastVariant {
+    /// Stored at `query + 0xCC`.
+    mode: u8,
+    /// Return addresses of the original's calls, in order: thread slot
+    /// (0x00FB3790), the shape's virtual method, then the three walks
+    /// (`walk_a(shape, query)`, `walk_b` and `walk_c(shape, query, slot)`),
+    /// the optional 0x01164500 and the final 0x01165560.
+    back: [u32; 7],
+    walk_a: u32,
+    walk_b: u32,
+    walk_c: u32,
+}
+
+const CAST_BACKWARD: CastVariant = CastVariant {
+    mode: 1,
+    back: [0x0116_6c2b, 0x0116_6c5c, 0x0116_6c83, 0x0116_6c95, 0x0116_6ca7, 0x0116_6ccd, 0x0116_6cdf],
+    walk_a: 0x0116_6a60,
+    walk_b: 0x0116_68a0,
+    walk_c: 0x0116_5ef0,
+};
+
+const CAST_FORWARD: CastVariant = CastVariant {
+    mode: 0,
+    back: [0x0116_6b3b, 0x0116_6b6c, 0x0116_6b93, 0x0116_6ba5, 0x0116_6bb7, 0x0116_6bdd, 0x0116_6bef],
+    walk_a: 0x0116_69b0,
+    walk_b: 0x0116_67b0,
+    walk_c: 0x0116_5e00,
+};
+
+/// 0x01166C00, `world->cast_shape_b(shape, query) -> hit_mask` (thiscall,
+/// `ret 8`): run `shape` through the world's collision layers for `query`.
+/// See [`cast_shape`].
+pub fn cast_shape_b(m: &mut dyn Mem, c: &mut Cpu) {
+    cast_shape(m, c, &CAST_BACKWARD)
+}
+
+/// 0x01166B10, `world->cast_shape_a(shape, query) -> hit_mask` (thiscall,
+/// `ret 8`): as [`cast_shape_b`] with query mode 0 and the matching walks.
+pub fn cast_shape_a(m: &mut dyn Mem, c: &mut Cpu) {
+    cast_shape(m, c, &CAST_FORWARD)
+}
+
+// Translated from 0x01166c00 / 0x01166b10 (DDDA.exe 2017-12-13 Steam).
+/// The query's +0x94 points at the result buffer, whose +0xE4 receives the
+/// query's +0x98 (the parameter block). With `flags = block[0x14]`: the
+/// shape's virtual method +0x1C (its bounds) is called with `query + 0x70`
+/// (when the shape is not null), then `query + 0x90 = shape`, `+0xCC` is
+/// the mode and `+0xE8` the thread slot from 0x00FB3790. Flag 4 runs the
+/// three layer walks (each over the 32 layer grids), flag 8 with the
+/// block's byte +0xB8 set runs 0x01164500; 0x01165560 always runs. Returns
+/// the OR of all results. (0x00FB38E0, a bare field read, is skipped.)
+fn cast_shape(m: &mut dyn Mem, c: &mut Cpu, v: &CastVariant) {
+    let pg = Pages::of(m);
+    let (this, entry) = (c.ecx, c.esp);
+    let shape = pg.u32(m, entry.wrapping_add(4));
+    let query = pg.u32(m, entry.wrapping_add(8));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    (c.ebx, c.esi, c.edi) = (this, query, shape);
+    let frame = entry.wrapping_sub(0x18);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let buffer = pg.u32(m, query.wrapping_add(0x94));
+    let block = pg.u32(m, query.wrapping_add(0x98));
+    pg.set_u32(m, buffer.wrapping_add(0xe4), block);
+    let slot = call_from(m, c, pg, frame, block, &[], v.back[0], guest(0x00fb_3790));
+    let block = pg.u32(m, query.wrapping_add(0x98));
+    let flags = pg.u32(m, block.wrapping_add(0x14));
+    if shape != 0 {
+        let method = pg.u32(m, pg.u32(m, shape).wrapping_add(0x1c));
+        call_from(m, c, pg, frame, shape, &[query.wrapping_add(0x70)], v.back[1], guest(method));
+    }
+    pg.set_u32(m, query.wrapping_add(0x90), shape);
+    pg.set_u8(m, query.wrapping_add(0xcc), v.mode);
+    pg.set_u32(m, query.wrapping_add(0xe8), slot);
+    let mut hits = 0u32;
+    if flags & 4 != 0 {
+        hits = call_from(m, c, pg, frame, this, &[shape, query], v.back[2], guest(v.walk_a));
+        hits |= call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[3], guest(v.walk_b));
+        hits |= call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[4], guest(v.walk_c));
+    }
+    if pg.u8(m, block.wrapping_add(0xb8)) != 0 && flags & 8 != 0 {
+        hits |= call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[5], guest(0x0116_4500));
+    }
+    let last = call_from(m, c, pg, frame, this, &[shape, query, slot], v.back[6], guest(0x0116_5560));
+    c.eax = last | hits;
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 8);
+}
+
+// Translated from 0x00dea870 (DDDA.exe 2017-12-13 Steam).
+/// 0x00DEA870, `world->query(a0, a1, a2, a3) -> hits` (thiscall, `ret
+/// 0x10`): build a collision query object on the stack and run
+/// 0x0115F650 on it with 0x01166B10 as the cast routine. `a1` (byte) picks
+/// the walk set installed in the query's function table, `a3`'s byte +0x3C
+/// the variant of the second entry; `a3` is stored at +0x98 of the query.
+/// The original's `memset(query + 4, 0, 0x48)` and the table fill of
+/// 0x011631F0 are done inline, and the no-op 0x00BFC7D0 is skipped.
+pub fn world_query(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (this, entry) = (c.ecx, c.esp);
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (a0, a1, a2, a3) = (arg(m, 0), arg(m, 1), arg(m, 2), arg(m, 3));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // push ebp; and esp,-16; sub esp,0xf4; push ebx/esi/edi
+    let s = (entry.wrapping_sub(4) & !15).wrapping_sub(0xf4 + 0xc);
+    let q = s.wrapping_add(0x10);
+    (c.ebx, c.ebp, c.esi, c.edi) = (0, entry.wrapping_sub(4), this, a1);
+    // the embedded bounds header and zeroed fields
+    let epsilon = pg.u32(m, 0x0162_adb0);
+    for (off, v) in [(0x68u32, epsilon), (0x64, 7), (0x60, 0x0159_4890), (0x7c, 0), (0x8c, 0), (0xa0, 0), (0xa4, 0), (0x4c, 0),
+                     (0x50, 0), (0x94, 0), (0x98, 0), (0xa8, 0)] {
+        pg.set_u32(m, q + off, v);
+    }
+    pg.set_u8(m, q + 0xb4, 0);
+    for off in (4..0x4c).step_by(4) {
+        pg.set_u32(m, q + off, 0); // memset(q + 4, 0, 0x48)
+    }
+    // 0x011631F0: the function table of the query (entry 0, 0x18 bytes apart)
+    pg.set_u32(m, q, this);
+    pg.set_u8(m, q + 0x9c, 0);
+    pg.set_u32(m, q + 0x98, a3);
+    let wide = a1 as u8 != 0;
+    let fine = pg.u8(m, a3.wrapping_add(0x3c)) != 0;
+    let (walk, variant) = match (wide, fine) {
+        (true, true) => (0x0116_0fc0, 0x0116_31e0),
+        (true, false) => (0x0116_0fc0, 0x0116_31c0),
+        (false, true) => (0x0116_0fb0, 0x0116_31d0),
+        (false, false) => (0x0116_0fb0, 0x0116_31b0),
+    };
+    for (off, v) in [(4u32, walk), (8, variant), (0xc, 0x0116_0fd0), (0x10, 0x0115_fde0), (0x14, 0x0116_1320), (0x18, 0x0116_1350)] {
+        pg.set_u32(m, q + off, v);
+    }
+    let hits = call_from(m, c, pg, s, this, &[a0, a1, a2, q, 0x0116_6b10], 0x00de_a92f, |m, c| {
+        ddnative_base::x86::call_ext(m, c, 0x0115_f650)
+    });
+    c.eax = hits;
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 0x10);
+}
