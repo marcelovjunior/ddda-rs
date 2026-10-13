@@ -520,6 +520,12 @@ mod deferred_tests {
 /// from draws per frame (title, menus and loading screens draw a few
 /// hundred things per frame, the world over a thousand).
 static DRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Count draws made outside the D3D9 draw services (the native paths, L119):
+/// the stage probes and the autoplay's gameplay detection read these counts.
+pub(crate) fn count_draws(n: u64) {
+    DRAWS.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+}
 static PRESENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// (draw calls, Presents) so far.
