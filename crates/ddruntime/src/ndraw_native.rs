@@ -110,6 +110,16 @@ pub enum Mode {
     Verify,
 }
 
+/// `DDDRAW_NATIVE_TARGETS=all` (L179): offer the decoder the draws into every
+/// colour target, not only the scene's (the shadow maps, the soft-body and
+/// half-resolution passes: ~1,900 draws a frame that otherwise take the
+/// D3D9 path at ~3x the per-draw cost); the draws it refuses still take the
+/// D3D9 path. Check with `DDDRAW_NATIVE=verify` before relying on it.
+fn all_targets() -> bool {
+    static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALL.get_or_init(|| std::env::var("DDDRAW_NATIVE_TARGETS").as_deref() == Ok("all"))
+}
+
 pub fn mode() -> Mode {
     mode_of(std::env::var("DDDRAW_NATIVE").ok().as_deref())
 }
@@ -1813,7 +1823,7 @@ impl Native {
             f.shaders.insert(m.u32(record.wrapping_add(0xC)));
             f.streams.insert(m.u32(record.wrapping_add(0x10)));
         }
-        if size != g.scene || size == (0, 0) {
+        if size == (0, 0) || (size != g.scene && !all_targets()) {
             return Taken::Default;
         }
         let t = &mut g.totals;
