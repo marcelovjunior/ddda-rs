@@ -348,7 +348,7 @@ pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
         Some(n) if in_scene(dev) => {
             let d = snapshot(m, dev, ty, count, start, 0, 0, n, None, Some(Indices::None));
             crate::ndraw_native::observe(&d);
-            backend_unlocked(|b| b.draw(&d));
+            backend_unlocked(move |b| b.draw_owned(d));
             D3D_OK
         }
         _ => D3DERR_INVALIDCALL,
@@ -366,7 +366,7 @@ pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
         Some(_) if with_device(dev, |d| d.state.in_scene && d.state.indices != 0) => {
             let d = snapshot(m, dev, ty, a[6], a[5], a[2] as i32, a[3], a[4], None, None);
             crate::ndraw_native::observe(&d);
-            backend_unlocked(|b| b.draw(&d));
+            backend_unlocked(move |b| b.draw_owned(d));
             D3D_OK
         }
         _ => D3DERR_INVALIDCALL,
@@ -399,7 +399,7 @@ pub fn draw_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
         Some(n) if in_scene(dev) && data != 0 => {
             let bytes = read_bytes(m, data, n * stride);
             let d = snapshot(m, dev, ty, count, 0, 0, 0, n, Some(Vertices::Inline { bytes, stride }), Some(Indices::None));
-            backend_unlocked(|b| b.draw(&d));
+            backend_unlocked(move |b| b.draw_owned(d));
             reset_after_up(dev, false);
             D3D_OK
         }
@@ -421,7 +421,7 @@ pub fn draw_indexed_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
             let vertices = read_bytes(m, vdata, (min + nverts) * stride);
             let d = snapshot(m, dev, ty, count, 0, 0, min, nverts,
                              Some(Vertices::Inline { bytes: vertices, stride }), Some(Indices::Inline { bytes: indices, format: ifmt }));
-            backend_unlocked(|b| b.draw(&d));
+            backend_unlocked(move |b| b.draw_owned(d));
             reset_after_up(dev, true);
             D3D_OK
         }

@@ -278,19 +278,8 @@ impl GuestMemory {
                 // has no other guest thread running
                 unsafe { std::ptr::copy_nonoverlapping(page.add(off), dst.as_mut_ptr(), n) };
             } else {
-                let mut j = 0;
-                while j < n {
-                    // SAFETY: inside a backed page; 4-byte loads only aligned
-                    // and wholly inside it
-                    let at = unsafe { page.add(off + j) };
-                    if at as usize % 4 == 0 && j + 4 <= n {
-                        dst[j..j + 4].copy_from_slice(&unsafe { load_at(at, 4) }.to_le_bytes());
-                        j += 4;
-                    } else {
-                        dst[j] = unsafe { load_at(at, 1) } as u8;
-                        j += 1;
-                    }
-                }
+                // SAFETY: off + n <= PAGE inside a backed page
+                unsafe { copy_words(page.add(off), dst) };
             }
             k += n;
         }
@@ -304,6 +293,49 @@ impl GuestMemory {
         }
         for k in 0..width {
             self.set_byte(addr.wrapping_add(k), (v >> (8 * k)) as u8);
+        }
+    }
+}
+
+/// Copy `dst.len()` guest bytes from `src` as parallel mode reads them:
+/// every aligned 4-byte word in one atomic load (Acquire, like every guest
+/// load), so none is torn by another guest thread's store; bytes at the
+/// unaligned ends. The middle goes as aligned 8-byte atomic loads, which
+/// x86-64 performs as one access (Intel SDM vol. 3 8.1.1, AMD APM vol. 2
+/// 7.3.2), so each word inside is read atomically too (L144: twice the
+/// words per load, and no per-byte branch; 3.3 GB/s before).
+///
+/// # Safety
+/// `src..src + dst.len()` lies inside one backed guest page.
+unsafe fn copy_words(src: *mut u8, dst: &mut [u8]) {
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering::Acquire};
+    let n = dst.len();
+    let out = dst.as_mut_ptr();
+    let mut j = 0;
+    unsafe {
+        // up to 8-byte alignment: bytes, then one word if 4-aligned
+        while j < n && (src as usize + j) % 4 != 0 {
+            *out.add(j) = (*(src.add(j) as *const AtomicU8)).load(Acquire);
+            j += 1;
+        }
+        if j + 4 <= n && (src as usize + j) % 8 == 4 {
+            let w = (*(src.add(j) as *const AtomicU32)).load(Acquire);
+            std::ptr::write_unaligned(out.add(j) as *mut u32, w);
+            j += 4;
+        }
+        while j + 8 <= n {
+            let w = (*(src.add(j) as *const AtomicU64)).load(Acquire);
+            std::ptr::write_unaligned(out.add(j) as *mut u64, w);
+            j += 8;
+        }
+        if j + 4 <= n {
+            let w = (*(src.add(j) as *const AtomicU32)).load(Acquire);
+            std::ptr::write_unaligned(out.add(j) as *mut u32, w);
+            j += 4;
+        }
+        while j < n {
+            *out.add(j) = (*(src.add(j) as *const AtomicU8)).load(Acquire);
+            j += 1;
         }
     }
 }
@@ -408,6 +440,13 @@ mod tests {
             (0x13FFC, 0x1004),   // written lazy page into the unbacked one
             (0x14000, 0x1000),   // only the unbacked lazy page
             (0x10003, 0),        // nothing
+            // L144's word copy: a 4-aligned start that is not 8-aligned,
+            // runs shorter than a word and than a quadword, odd tails
+            (0x10004, 13),
+            (0x10006, 3),
+            (0x1000C, 20),
+            (0x10008, 8),
+            (0x10005, 11),
         ];
         for (addr, len) in cases {
             let want = bytewise(&m, addr, len);

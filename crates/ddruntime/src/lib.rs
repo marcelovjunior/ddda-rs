@@ -28,6 +28,7 @@ pub mod dispatch;
 pub mod emu;
 pub mod executor;
 pub mod fasthash;
+pub mod guest;
 pub mod crtfast;
 pub mod fastmem;
 pub mod files;

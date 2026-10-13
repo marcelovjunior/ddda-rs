@@ -612,6 +612,8 @@ fn native_workload(gpu: &wgpu::Device, queue: &wgpu::Queue, frames: usize, draws
                     sample_mask: !0,
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index: None,
+                    sampler_ones: 0,
+                    depth_bias: false,
                 })
                 .unwrap(),
         );
