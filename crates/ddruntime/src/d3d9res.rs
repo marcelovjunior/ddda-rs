@@ -226,7 +226,7 @@ fn surface_image<R>(surf: u32, f: impl FnOnce(&SurfaceDesc, &mut Image) -> R) ->
 
 /// CreateTexture(this, w, h, levels, usage, format, pool, IDirect3DTexture9**, shared).
 pub fn create_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let a: Vec<u32> = (0..9).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 9] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     cpu.eax = match create_texture_object(m, a[0], TexKind::Flat, (a[1], a[2], 1), a[3], a[4], a[5], a[6]) {
         Ok(t) => {
             m.set_u32(a[7], t);
@@ -250,7 +250,7 @@ pub fn create_volume_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
 }
 /// CreateCubeTexture(this, edge, levels, usage, format, pool, IDirect3DCubeTexture9**, shared).
 pub fn create_cube_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let a: Vec<u32> = (0..8).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 8] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     cpu.eax = match create_texture_object(m, a[0], TexKind::Cube, (a[1], a[1], 1), a[2], a[3], a[4], a[5]) {
         Ok(t) => {
             m.set_u32(a[6], t);
@@ -263,7 +263,7 @@ pub fn create_cube_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 fn create_buffer(m: &mut dyn Mem, cpu: &mut Cpu, index: bool) {
     // (this, length, usage, fvf | format, pool, buffer**, shared)
-    let a: Vec<u32> = (0..7).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     cpu.eax = if a[1] == 0 || (index && !matches!(a[3], 101 | 102)) {
         D3DERR_INVALIDCALL
     } else {
@@ -285,7 +285,7 @@ pub fn create_index_buffer(m: &mut dyn Mem, cpu: &mut Cpu) { create_buffer(m, cp
 fn create_surface(m: &mut dyn Mem, cpu: &mut Cpu, usage: u32, rtype_usage: u32) {
     // CreateRenderTarget / CreateDepthStencilSurface:
     // (this, w, h, format, multisample, quality, lockable | discard, surface**, shared)
-    let a: Vec<u32> = (0..9).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 9] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     // a multisampled surface needs the type offered for the format and a
     // quality below its level count (CheckDeviceMultiSampleType, the same
     // answers windowed and full-screen in the recorded profile); a
@@ -316,7 +316,7 @@ pub fn create_depth_stencil_surface(m: &mut dyn Mem, cpu: &mut Cpu) { create_sur
 
 /// CreateOffscreenPlainSurface(this, w, h, format, pool, surface**, shared).
 pub fn create_offscreen_plain_surface(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let a: Vec<u32> = (0..7).map(|k| arg(m, cpu, k)).collect();
+    let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     cpu.eax = match Image::new(a[3], a[1], a[2], 1) {
         Some(image) if a[1] > 0 && a[2] > 0 => {
             let desc = SurfaceDesc { format: a[3], usage: 0, pool: a[4], multisample: 0, quality: 0, width: a[1], height: a[2] };
