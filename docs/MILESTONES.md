@@ -1,17 +1,22 @@
 # Milestones
 
-### L148 Vulkan frontend checkpoint (2026-10-13)
+### L148 Vulkan frontend and initialization history (2026-10-13)
 
-- L143 merged with L138 preserved. Opt-in raw draws retain cached binding
-  records; one-stream recording and per-pass resource ownership avoid repeated
-  allocations/clones. Constants use cached coherent mapped Vulkan memory,
-  with a GPU completion fence at wrap and staged fallback on other devices.
-- Final candidate plain + 144,000 changing-constant draws / two ring wraps
-  match wgpu byte-exactly. Earlier 13 GPU cases pass; final full sweep and
-  repeated timings await head combo24 pause. 24 CPU tests pass; runtime
-  light 205 pass / inherited gamma failure / 5 ignored. No game/FPS claim.
-- Next: bounded final GPU/timing gate after pause; details and provisional
-  timings in `docs/tasks/L148-vk-frontend.md`.
+- L143 merged with L138 preserved. Opt-in identity binding records, inline
+  one-stream recording and cached coherent mapped constants; GPU fence at
+  ring reuse, staged fallback on other memory types. Source `93d55d1f`.
+- Head c24vk profile: view-history cloning under mutex is 62-64% of both
+  encoder workers' sampled CPU. `5f8c3931` replaces it with per-view submitted
+  flags; temporary feedback views retire after completion. Head game A/B pending.
+- **24 CPU / 14 byte-exact GPU / 10 cross-path GPU tests pass**, including
+  144,000 accumulated draws/two mapped wraps and 640 feedback draws retaining
+  exactly one view after each drain. Runtime 205 pass / inherited gamma failure
+  / 5 ignored. No final GPU failures/timeouts; no agent game/shard run.
+- Three loaded paired totals: raw **2.672 -> 1.995 us/draw**, 40 pipelines /
+  200 sets **3.647 -> 2.985**; no clear additional tiny-pass gain. A lighter
+  single run reached 0.551/0.964, not a sustained 1 us/FPS claim.
+- Next: head DDGPU_VK=0/1 gameplay/profile gate. Hashes and measurement limits:
+  `docs/tasks/L148-vk-frontend.md`.
 
 ### L134 x87 helper follow-up, next batch (2026-10-13)
 

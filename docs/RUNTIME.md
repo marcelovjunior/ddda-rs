@@ -1187,7 +1187,7 @@ measurements and the unresolved `_NLG_Return2` attribution are recorded in
 remains with head.
 
 
-### L148 Vulkan frontend (checkpoint, opt-in)
+### L148 Vulkan frontend (opt-in)
 
 DDGPU_VK=1 memoizes raw/fallback binding records by retained derived-state
 and texture-list identities, skips memoization for feedback snapshots, and
@@ -1201,3 +1201,11 @@ be written while older disjoint ranges are executing. Ring reuse waits for
 ordered submission and GPU completion. Other devices retain staged uploads.
 This remains opt-in: host-memory GPU cost and ring-wrap stalls need head's
 game acceptance. Final validation status: `docs/tasks/L148-vk-frontend.md`.
+
+The c24vk initialization-history follow-up (`5f8c3931`) removes the global
+view-set clone under the encoder mutex. Owned views carry initialization
+flags published after ordered submission; temporary feedback views leave
+lookup tables while descriptor/submission owners retain GPU lifetimes.
+Vulkan stats include live_views, mapped_rings and mapped_restarts. Final gates:
+24 CPU, 14 byte-exact GPU and 10 cross-path GPU tests pass; game FPS acceptance
+remains with head. Details and hashes are in the L148 brief.
