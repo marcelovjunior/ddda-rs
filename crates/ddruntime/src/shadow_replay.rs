@@ -1325,14 +1325,15 @@ fn compare_replays(
                 if h == 0 {
                     continue;
                 }
+                // its own upload comes first (0x00DAA8B0), then its draw reads
+                if binding.constants.iter().any(|(_, c)| c.stage == ca.stage && c.section == 1 && c.register == ca.register) {
+                    persists = false;
+                    break 'later;
+                }
                 if reader(h)?.1 {
                     return Err(format!(
                         "a later draw {later_path:?} (shader {h:#x}) may read c{register} component {component} before it is uploaded again"
                     ));
-                }
-                if binding.constants.iter().any(|(_, c)| c.stage == ca.stage && c.section == 1 && c.register == ca.register) {
-                    persists = false;
-                    break 'later;
                 }
             }
         }
