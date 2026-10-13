@@ -4502,6 +4502,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtstate"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "mtswm"
 version = "0.1.0"
 

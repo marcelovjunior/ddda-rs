@@ -1,5 +1,15 @@
 # Milestones
 
+### L117 nDraw state semantics (2026-10-13, in progress)
+
+- New standalone mtstate decoder: four descriptor constructors and eight
+  apply functions compared with original-instruction Unicorn vectors.
+  **1,536 cases / 7,207 D3D9 calls** and cache/payload words match.
+- Raster depth-bias multiplier is `0x33800001`; sampler max-mip conversion
+  truncates. This is a call-level semantic decoder, not an ABI override.
+- Next: InputLayout vectors and complete wgpu mapping tables. No GPU/game
+  run or image/FPS claim. Details: `docs/tasks/L117-state-semantics.md`.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants
