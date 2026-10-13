@@ -639,7 +639,7 @@ impl RenderContext {
     /// context's bump allocator (`ctx[0x24]`, limit `ctx[0x28]`, grown by
     /// 0x00FED890 `ctx->grow(bytes)`), and marks dirty bit 1. Returns the new
     /// copy. `memcpy` (0x012EFEA0) is done natively.
-    fn recopy_block(&self, m: &mut dyn Mem, c: &mut Cpu, frame: u32, holder: u32, field: u32, grow_back: u32) -> u32 {
+    fn recopy_block(&self, m: &mut dyn Mem, c: &mut Cpu, frame: u32, holder: u32, field: u32, grow_back: u32, from_block: bool) -> u32 {
         let pg = self.pg;
         let block = pg.u32(m, self.word(m, 0x18).wrapping_add(holder));
         let bytes = ((pg.u16(m, block.wrapping_add(0x18)) as u32) * 4 + 0xf) & 0xffff_fff0;
@@ -649,8 +649,8 @@ impl RenderContext {
         }
         let copy = self.word(m, 0x24);
         self.set_word(m, 0x24, copy.wrapping_add(bytes));
-        let size = (pg.u16(m, block.wrapping_add(0x18)) as u32) * 4;
-        let source = self.word(m, field);
+        let size = if from_block && copy == 0 { 0 } else { (pg.u16(m, block.wrapping_add(0x18)) as u32) * 4 };
+        let source = if size == 0 { 0 } else if from_block { pg.u32(m, block.wrapping_add(0x24)) } else { self.word(m, field) };
         // the CRT memcpy behaves like memmove: read everything before writing
         let words: Vec<u32> = (0..size).step_by(4).map(|k| pg.u32(m, source.wrapping_add(k))).collect();
         for (k, v) in words.into_iter().enumerate() {
@@ -735,7 +735,7 @@ pub fn sync_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
                 });
             }
         }
-        let copy = rc.recopy_block(m, c, frame, 0xc2c, 0x1a50, 0x00c8_98fb);
+        let copy = rc.recopy_block(m, c, frame, 0xc2c, 0x1a50, 0x00c8_98fb, false);
         if copy != 0 {
             let on = query(m, c, 0x64c4_3356, 0x00c8_9944) != 0;
             let weight = if on { pg.u32(m, 0x0153_19b8) } else { 0 };
@@ -749,9 +749,9 @@ pub fn sync_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
             rc.release(m, 0x2068 + 8 * i, 0x3ce + i);
         }
     }
-    rc.recopy_block(m, c, frame, 0xc08, 0x1a08, 0x00c8_9c74);
-    rc.recopy_block(m, c, frame, 0x7b8, 0x1168, 0x00c8_9ccb);
-    rc.recopy_block(m, c, frame, 0xc1c, 0x1a30, 0x00c8_9d22);
+    rc.recopy_block(m, c, frame, 0xc08, 0x1a08, 0x00c8_9c74, false);
+    rc.recopy_block(m, c, frame, 0x7b8, 0x1168, 0x00c8_9ccb, false);
+    rc.recopy_block(m, c, frame, 0xc1c, 0x1a30, 0x00c8_9d22, false);
     c.eax = result;
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(12);
@@ -939,4 +939,420 @@ pub fn count_active_children(m: &mut dyn Mem, c: &mut Cpu) {
     }
     (c.ebx, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4);
+}
+
+// Translated from 0x007781a0 (DDDA.exe 2017-12-13 Steam).
+/// 0x007781A0, `object->tick()` (register convention: EAX = object, plain
+/// `ret`): the per-frame timer update of a 0x1E4-byte gauge object. The time
+/// step is `dt` = `[[obj + 0x1B4] + 0x14]` (or 1.0 without that owner).
+/// - two gauges grow by rate times `dt` and stop at their limit: `obj[0x10]`
+///   (rate +0x18, limit +0x14) and `obj[0x1C]` (rate +0x24, limit +0x20);
+/// - two hold timers (flag bytes +0x34 / +0x40, elapsed +0x38 / +0x44,
+///   duration +0x3C / +0x48) reset their gauge to its limit and stop when
+///   the duration is exceeded;
+/// - the step index `obj[0x1C0]` follows the owner's mode (`[owner + 0xD14]`)
+///   and `obj[0x1BC]`, advances by `obj[0x1E0]` and wraps (to 0 or 4);
+/// - cooldowns `obj[0x1C4]`, `obj[0x1C8]` count down to 0;
+/// - the 20 timers `obj[0x114 + 4 i]` count up to `obj[0x1D0]`; the matching
+///   charge `obj[0x70 + 4 i]` drains by `dt` times `obj[0x1D8]` once a timer
+///   passed that limit, `obj[0x1D4]` once past `obj[0x1CC]`, never below 0;
+/// - `obj[0x1E0]` is cleared.
+pub fn tick_gauges(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let obj = c.eax;
+    let at = |o: u32| obj.wrapping_add(o);
+    let one = float(pg, m, 0x0153_19b8);
+    let owner = pg.u32(m, at(0x1b4));
+    let dt = if owner != 0 { float(pg, m, owner.wrapping_add(0x14)) } else { one };
+    // a gauge grows by rate * dt up to its limit
+    let limit_a = float(pg, m, at(0x14));
+    let a = float(pg, m, at(0x18)) * dt + float(pg, m, at(0x10));
+    set_float(pg, m, at(0x10), if a >= limit_a { limit_a } else { a });
+    let limit_b = float(pg, m, at(0x20));
+    let b = float(pg, m, at(0x24)) * dt + float(pg, m, at(0x1c));
+    set_float(pg, m, at(0x1c), if b >= limit_b { limit_b } else { b });
+    // hold timers
+    if pg.u8(m, at(0x34)) == 1 {
+        let t = float(pg, m, at(0x38)) + dt;
+        set_float(pg, m, at(0x38), t);
+        if t > float(pg, m, at(0x3c)) {
+            set_float(pg, m, at(0x10), limit_a);
+            set_float(pg, m, at(0x38), 0.0);
+            pg.set_u8(m, at(0x34), 0);
+        }
+    }
+    if pg.u8(m, at(0x40)) == 1 {
+        let t = float(pg, m, at(0x44)) + dt;
+        set_float(pg, m, at(0x44), t);
+        if t > float(pg, m, at(0x48)) {
+            set_float(pg, m, at(0x1c), limit_b);
+            set_float(pg, m, at(0x44), 0.0);
+            pg.set_u8(m, at(0x40), 0);
+        }
+    }
+    // step index
+    let source = pg.u32(m, at(0x1b8));
+    if source != 0 {
+        match pg.u32(m, source.wrapping_add(0xd14)) {
+            0 => {
+                let v = pg.u32(m, at(0x1bc));
+                pg.set_u32(m, at(0x1c0), v);
+            }
+            1 => match pg.u32(m, at(0x1bc)) {
+                1 => pg.set_u32(m, at(0x1c0), 0),
+                2 => pg.set_u32(m, at(0x1c0), 1),
+                3 => pg.set_u32(m, at(0x1c0), 2),
+                _ => {}
+            },
+            _ => {}
+        }
+        let advance = pg.u32(m, at(0x1e0));
+        let step = pg.u32(m, at(0x1c0)).wrapping_add(advance);
+        pg.set_u32(m, at(0x1c0), step);
+        if step > 4 {
+            pg.set_u32(m, at(0x1c0), if (advance as i32) < 0 { 0 } else { 4 });
+        }
+    }
+    // cooldowns
+    for offset in [0x1c4, 0x1c8] {
+        let v = float(pg, m, at(offset)) - dt;
+        set_float(pg, m, at(offset), if 0.0 > v { 0.0 } else { v });
+    }
+    // the 20 timers and their charges
+    let limit = float(pg, m, at(0x1d0));
+    for i in 0..20u32 {
+        let timer = at(0x114 + 4 * i);
+        let t = dt + float(pg, m, timer);
+        let drain = if t > limit {
+            set_float(pg, m, timer, limit);
+            float(pg, m, at(0x1d8))
+        } else {
+            set_float(pg, m, timer, t);
+            if t > float(pg, m, at(0x1cc)) { float(pg, m, at(0x1d4)) } else { 0.0 }
+        };
+        let charge = at(0x70 + 4 * i);
+        let v = float(pg, m, charge) - drain * dt;
+        set_float(pg, m, charge, if 0.0 > v { 0.0 } else { v });
+    }
+    pg.set_u32(m, at(0x1e0), 0);
+    c.esp = entry.wrapping_add(4);
+}
+
+// Translated from 0x00de50b0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00DE50B0, `this->get_triangle(out0, out1, out2)` (thiscall, `ret 0xc`):
+/// copies three 16-byte-aligned vertices out of `this[0x3c]` (an array of
+/// 16-byte vectors) as 4-float vectors `(x, y, z, 0.0)`; their indices are
+/// the u16 values at `this[0x38] + 0xC / 0xE / 0x10`. The original copies
+/// the floats through the x87 stack, so a signalling NaN comes out quiet.
+pub fn load_triangle_vertices(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let header = pg.u32(m, this.wrapping_add(0x38));
+    let vertices = pg.u32(m, this.wrapping_add(0x3c));
+    for k in 0..3u32 {
+        let out = pg.u32(m, entry.wrapping_add(4 + 4 * k));
+        let index = pg.u16(m, header.wrapping_add(0xc + 2 * k)) as u32;
+        let from = vertices.wrapping_add(index.wrapping_mul(16));
+        for j in 0..3u32 {
+            let v = through_x87(pg.u32(m, from.wrapping_add(4 * j)));
+            if j == 2 {
+                pg.set_u32(m, out.wrapping_add(12), 0);
+            }
+            pg.set_u32(m, out.wrapping_add(4 * j), v);
+        }
+    }
+    c.esp = entry.wrapping_add(16);
+}
+
+/// Bit-exact `a*b + c*d`-style helper: the original adds left to right, so
+/// every sum below is written in the original's association order.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn dot4(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, g: f32, h: f32) -> f32 {
+    a * b + c * d + e * f + g * h
+}
+
+/// The 4x4 float matrix of an object (row-major): its 16 floats from `base`.
+fn read_matrix(pg: Pages, m: &dyn Mem, base: u32) -> [[f32; 4]; 4] {
+    let mut v = [[0.0f32; 4]; 4];
+    for (i, row) in v.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = float(pg, m, base.wrapping_add(16 * i as u32 + 4 * j as u32));
+        }
+    }
+    v
+}
+
+fn write_matrix(pg: Pages, m: &mut dyn Mem, base: u32, v: &[[f32; 4]; 4]) {
+    for (i, row) in v.iter().enumerate() {
+        for (j, cell) in row.iter().enumerate() {
+            set_float(pg, m, base.wrapping_add(16 * i as u32 + 4 * j as u32), *cell);
+        }
+    }
+}
+
+// Translated from 0x00ea42e0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA42E0, `node->cull_bounds(culler, owner, planes) -> planes`
+/// (thiscall, `ret 0xC`): tests the node's bounding volume against a
+/// frustum culler and returns the culler's plane mask (`0x3F` = nothing left
+/// to test, returned at once). `culler` is the callee object (ECX of the
+/// culler methods), `owner[0x2C]` the shape data, the node's flags
+/// `this[0x108]`, its world matrix the 16 floats at `this + 0xB0`
+/// (rows = x axis, y axis, z axis, translation).
+///
+/// Shape kind (flags & 0x3F == 3: shape data transformed by the matrix):
+/// - a sphere (`((flags >> 1) | flags) & 0x40`): centre = shape (x, y, z)
+///   (`shape[0x10..0x18]`) transformed by the matrix, radius =
+///   `sqrt(largest squared axis length) * shape[0x1C]`; 0x00FF0800
+///   `culler.test_sphere(&centre_radius, planes)`; if some planes remain,
+///   the shape's own matrix (0x00433B00 `build(shape + 0x40)`) is combined
+///   with the node's and handed to 0x00FF0AD0 `culler.test_oriented(matrix,
+///   planes)`;
+/// - a box (`flags & 0x100`): 0x005B19C0 fills the box corners from
+///   `shape + 0x20`, which are shifted by the translation, tested with
+///   0x00FF0D20 `culler.test_box(corners, planes)` and, when some planes
+///   remain, as above (the product's association order differs);
+/// - else the plain box `shape + 0x20` through 0x00FF0D20 and the oriented
+///   box `shape + 0x40` through 0x00FF0AD0.
+/// For any other kind the same sphere and box tests run without the
+/// transform step: only 0x00FF0800, the shifted-corner 0x00FF0D20, or the
+/// plain 0x00FF0D20.
+pub fn cull_bounds(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let node = c.ecx;
+    let culler = pg.u32(m, entry.wrapping_add(4));
+    let owner = pg.u32(m, entry.wrapping_add(8));
+    let planes = pg.u32(m, entry.wrapping_add(12));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let finish = |c: &mut Cpu, result: u32| {
+        c.eax = result;
+        (c.ebx, c.ebp, c.esi, c.edi) = saved;
+        c.esp = entry.wrapping_add(16);
+    };
+    if planes == 0x3f {
+        return finish(c, 0x3f);
+    }
+    // the original's frame after its prologue and three pushes
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0xd4 + 12);
+    let matrix_at = frame.wrapping_add(0x30);
+    let sphere_at = frame.wrapping_add(0xc0);
+    let corners_at = frame.wrapping_add(0x90);
+    let flags = pg.u32(m, node.wrapping_add(0x108));
+    let n = |o: u32| node.wrapping_add(o);
+    let transformed = flags & 0x3f == 3;
+    let sphere = ((flags >> 1) | flags) & 0x40 != 0;
+    // calls on the culler: thiscall with ECX = culler
+    let culler_call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, args: &[u32], back: u32| -> u32 {
+        call_from(m, c, pg, frame, culler, args, back, |m, c| ddnative_base::x86::call_ext(m, c, target))
+    };
+    if sphere {
+        let shape = pg.u32(m, owner.wrapping_add(0x2c));
+        let a = read_matrix(pg, m, n(0xb0));
+        // squared axis lengths and the largest of them
+        let sq = |r: &[f32; 4]| ((r[0] * r[0] + r[1] * r[1]) + r[2] * r[2]) + r[3] * r[3];
+        let (n0, n1, n2) = (sq(&a[0]), sq(&a[1]), sq(&a[2]));
+        let largest = if n0 > n1 {
+            if n0 > n2 { n0 } else { n2 }
+        } else if n1 > n2 {
+            n1
+        } else {
+            n2
+        };
+        let (x, y, z) = (float(pg, m, shape.wrapping_add(0x10)), float(pg, m, shape.wrapping_add(0x14)), float(pg, m, shape.wrapping_add(0x18)));
+        // centre = ((y * row1 + x * row0) + z * row2) + row3, per lane
+        let lane = |k: usize| ((y * a[1][k] + x * a[0][k]) + z * a[2][k]) + a[3][k];
+        let radius = largest.sqrt() * float(pg, m, shape.wrapping_add(0x1c));
+        for (k, v) in [lane(0), lane(1), lane(2), radius].into_iter().enumerate() {
+            set_float(pg, m, sphere_at.wrapping_add(4 * k as u32), v);
+        }
+        let result = culler_call(m, c, 0x00ff_0800, &[sphere_at, planes], if transformed { 0x00ea_4497 } else { 0x00ea_5218 });
+        if !transformed || (result as i32) <= 0 || result == 0x3f {
+            return finish(c, result);
+        }
+        // the shape's own matrix, then the combined matrix
+        call_from(m, c, pg, frame, matrix_at, &[shape.wrapping_add(0x40)], 0x00ea_44b7, |m, c| ddnative_base::x86::call_ext(m, c, 0x0043_3b00));
+        let mm = read_matrix(pg, m, matrix_at);
+        let (b0, b4, b8, bc) = (a[0][0], a[0][1], a[0][2], a[0][3]);
+        let (c0, c4, c8, cc) = (a[1][0], a[1][1], a[1][2], a[1][3]);
+        let (d0, d4, d8, dc) = (a[2][0], a[2][1], a[2][2], a[2][3]);
+        let (e0, e4, e8, ec) = (a[3][0], a[3][1], a[3][2], a[3][3]);
+        let [[m00, m01, m02, m03], [m10, m11, m12, m13], [m20, m21, m22, m23], [m30, m31, m32, m33]] = mm;
+        // partial products the original computes first (from the old matrix)
+        let (f13, f14, f15, f7) = (b4 * m00, b8 * m00, m01 * c8, m01 * cc);
+        let (f16, f17, f18, f19) = (bc * m00, m02 * dc, m10 * b4, m10 * b8);
+        let (f9, f20, f10, f21, f22) = (m11 * c8, m10 * bc, m11 * cc, m12 * dc, m20 * b4);
+        let p22 = dot4(m21, c8, m20, b8, m22, d8, m23, e8);
+        let p23 = dot4(m21, cc, m20, bc, m22, dc, m23, ec);
+        let p31 = dot4(m31, c4, m30, b4, m32, d4, m33, e4);
+        let p32 = dot4(m31, c8, m30, b8, m32, d8, m33, e8);
+        let p33 = dot4(m31, cc, m30, bc, m32, dc, m33, ec);
+        let product = [
+            [
+                dot4(c0, m01, b0, m00, d0, m02, e0, m03),
+                m01 * c4 + f13 + m02 * d4 + m03 * e4,
+                f14 + f15 + m02 * d8 + m03 * e8,
+                f7 + f16 + f17 + m03 * ec,
+            ],
+            [
+                dot4(m11, c0, b0, m10, m12, d0, e0, m13),
+                m11 * c4 + f18 + m12 * d4 + m13 * e4,
+                f9 + f19 + m12 * d8 + m13 * e8,
+                f10 + f20 + f21 + m13 * ec,
+            ],
+            [
+                dot4(m21, c0, b0, m20, m22, d0, e0, m23),
+                m21 * c4 + f22 + m22 * d4 + m23 * e4,
+                p22,
+                p23,
+            ],
+            [dot4(m31, c0, b0, m30, m32, d0, e0, m33), p31, p32, p33],
+        ];
+        write_matrix(pg, m, matrix_at, &product);
+        let result = culler_call(m, c, 0x00ff_0ad0, &[matrix_at, result], 0x00ea_49c3);
+        return finish(c, result);
+    }
+    let shape = pg.u32(m, owner.wrapping_add(0x2c));
+    if flags & 0x100 != 0 {
+        // box corners shifted by the node's translation
+        call_from(m, c, pg, frame, corners_at, &[shape.wrapping_add(0x20)], if transformed { 0x00ea_4a0a } else { 0x00ea_5254 }, |m, c| {
+            ddnative_base::x86::call_ext(m, c, 0x005b_19c0)
+        });
+        let (ex, ey, ez) = (float(pg, m, n(0xe0)), float(pg, m, n(0xe4)), float(pg, m, n(0xe8)));
+        for (offset, shift) in [(0x00, ex), (0x04, ey), (0x08, ez), (0x10, ex), (0x14, ey), (0x18, ez)] {
+            let v = float(pg, m, corners_at.wrapping_add(offset)) + shift;
+            set_float(pg, m, corners_at.wrapping_add(offset), v);
+        }
+        let result = culler_call(m, c, 0x00ff_0d20, &[corners_at, planes], if transformed { 0x00ea_4ab9 } else { 0x00ea_5301 });
+        if !transformed || (result as i32) <= 0 || result == 0x3f {
+            return finish(c, result);
+        }
+        call_from(m, c, pg, frame, matrix_at, &[shape.wrapping_add(0x40)], 0x00ea_4ae0, |m, c| ddnative_base::x86::call_ext(m, c, 0x0043_3b00));
+        let a = read_matrix(pg, m, n(0xb0));
+        let mm = read_matrix(pg, m, matrix_at);
+        let (b0, b4, b8, bc) = (a[0][0], a[0][1], a[0][2], a[0][3]);
+        let (c0, c4, c8, cc) = (a[1][0], a[1][1], a[1][2], a[1][3]);
+        let (d0, d4, d8, dc) = (a[2][0], a[2][1], a[2][2], a[2][3]);
+        let (e0, e4, e8, ec) = (a[3][0], a[3][1], a[3][2], a[3][3]);
+        let [[m00, m01, m02, m03], [m10, m11, m12, m13], [m20, m21, m22, m23], [m30, m31, m32, m33]] = mm;
+        let product = [
+            [
+                dot4(b0, m00, m01, c0, m02, d0, m03, e0),
+                dot4(b4, m00, c4, m01, d4, m02, e4, m03),
+                dot4(c8, m01, b8, m00, d8, m02, e8, m03),
+                dot4(cc, m01, bc, m00, dc, m02, ec, m03),
+            ],
+            [
+                dot4(b0, m10, m11, c0, m12, d0, m13, e0),
+                dot4(c4, m11, b4, m10, d4, m12, e4, m13),
+                dot4(c8, m11, b8, m10, d8, m12, e8, m13),
+                dot4(cc, m11, bc, m10, dc, m12, ec, m13),
+            ],
+            [
+                dot4(b0, m20, m21, c0, m22, d0, m23, e0),
+                dot4(c4, m21, b4, m20, d4, m22, e4, m23),
+                dot4(c8, m21, b8, m20, d8, m22, e8, m23),
+                cc * m21 + bc * m20 + dc * m22 + ec * m23,
+            ],
+            [
+                dot4(b0, m30, m31, c0, m32, d0, m33, e0),
+                dot4(c4, m31, b4, m30, d4, m32, e4, m33),
+                c8 * m31 + b8 * m30 + d8 * m32 + e8 * m33,
+                cc * m31 + bc * m30 + dc * m32 + ec * m33,
+            ],
+        ];
+        write_matrix(pg, m, matrix_at, &product);
+        let result = culler_call(m, c, 0x00ff_0ad0, &[matrix_at, result], 0x00ea_5052);
+        return finish(c, result);
+    }
+    // plain box, and for the transformed kind the oriented box after it
+    let result = culler_call(m, c, 0x00ff_0d20, &[shape.wrapping_add(0x20), planes], if transformed { 0x00ea_5074 } else { 0x00ea_5314 });
+    if !transformed || (result as i32) <= 0 || result == 0x3f {
+        return finish(c, result);
+    }
+    let result = culler_call(m, c, 0x00ff_0ad0, &[shape.wrapping_add(0x40), result], 0x00ea_5091);
+    finish(c, result)
+}
+
+// Translated from 0x00f23260 (DDDA.exe 2017-12-13 Steam).
+/// 0x00F23260, `object->draw_attachment(ctx)` (thiscall, `ret 4`): for an
+/// object of kind 1 or 2 (`this[4] & 7`) with an attached effect node
+/// `this[0x1E0]` that has data (`node[0xF0]`) and a weight `node[0x158]`
+/// different from the constant at 0x01561738, asks the node for its slot
+/// (0x00EA1EE0 `node->slot(ctx)`, negative = none), prepares it
+/// (0x00EA1F40, the virtual method 0x64, 0x00EA1FD0) and draws it with
+/// 0x00F1FD30 `this->draw(ctx, node[0xF0], node[0xF8], &scratch, slot,
+/// prepared)`. Then it updates the draw context: the binding at
+/// `ctx + 0x2E08` follows `shared[0x2C10]` and the slot at `ctx + 0x1D90` is
+/// released; and when bit 30 of `node[0x108]` is set the binding at
+/// `ctx + 0x2EB0` follows `shared[0x2CC8]` (tag 0x950A6599) and the constant
+/// block `[[ctx + 0x18] + 0x89C]` is re-copied into frame memory
+/// (`ctx[0x1330]`, journalled as 0x227) whose float at +8 is zeroed, with
+/// bit 1 of `ctx[0x5C]` set around the journal entry.
+pub fn draw_attachment(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let ctx = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let finish = |c: &mut Cpu| {
+        (c.ebx, c.ebp, c.esi, c.edi) = saved;
+        c.esp = entry.wrapping_add(8);
+    };
+    let kind = pg.u32(m, this.wrapping_add(4)) & 7;
+    if kind != 2 && kind != 1 {
+        return finish(c);
+    }
+    let node = pg.u32(m, this.wrapping_add(0x1e0));
+    if node == 0 || pg.u32(m, node.wrapping_add(0xf0)) == 0 {
+        return finish(c);
+    }
+    // the original's frame after its prologue and three pushes
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x14 + 12);
+    let scratch = frame.wrapping_add(0x10);
+    let weight = float(pg, m, node.wrapping_add(0x158));
+    if weight == float(pg, m, 0x0156_1738) {
+        return finish(c);
+    }
+    (c.esi, c.edi) = (ctx, this);
+    let node_call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, args: &[u32], back: u32| -> u32 {
+        let node = pg.u32(m, this.wrapping_add(0x1e0));
+        call_from(m, c, pg, frame, node, args, back, |m, c| ddnative_base::x86::call_ext(m, c, target))
+    };
+    let slot = node_call(m, c, 0x00ea_1ee0, &[ctx], 0x00f2_32bf);
+    if (slot as i32) < 0 {
+        return finish(c);
+    }
+    c.ebx = slot;
+    node_call(m, c, 0x00ea_1f40, &[scratch], 0x00f2_32d9);
+    {
+        let node = pg.u32(m, this.wrapping_add(0x1e0));
+        let method = pg.u32(m, pg.u32(m, node).wrapping_add(0x64));
+        call_from(m, c, pg, frame, node, &[ctx], 0x00f2_32e7, |m, c| ddnative_base::x86::call_ext(m, c, method));
+    }
+    let prepared = node_call(m, c, 0x00ea_1fd0, &[ctx], 0x00f2_32f3);
+    let node = pg.u32(m, this.wrapping_add(0x1e0));
+    let (data_b, data_a) = (pg.u32(m, node.wrapping_add(0xf8)), pg.u32(m, node.wrapping_add(0xf0)));
+    call_from(m, c, pg, frame, this, &[ctx, data_a, data_b, scratch, slot, prepared], 0x00f2_3316, |m, c| {
+        ddnative_base::x86::call_ext(m, c, 0x00f1_fd30)
+    });
+    // update the draw context
+    let rc = RenderContext { pg, ctx };
+    rc.follow(m, 0x2e08, 0x2c10, 0x582, 0x582);
+    rc.release(m, 0x1d90, 0x373);
+    let node = pg.u32(m, this.wrapping_add(0x1e0));
+    if (pg.u32(m, node.wrapping_add(0x108)) >> 0x1e) & 1 == 0 {
+        return finish(c);
+    }
+    rc.follow(m, 0x2eb0, 0x2cc8, 0x597, 0x950a_6599);
+    let v = rc.word(m, 0x5c) | 2;
+    rc.set_word(m, 0x5c, v);
+    rc.journal(m, 0x227, 0x1330);
+    let copy = rc.recopy_block(m, c, frame, 0x89c, 0x1330, 0x00f2_358d, true);
+    pg.set_u32(m, copy.wrapping_add(8), 0);
+    let v = rc.word(m, 0x5c) & 0xffff_fffd;
+    rc.set_word(m, 0x5c, v);
+    finish(c)
 }
