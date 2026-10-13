@@ -2,6 +2,7 @@
 //! This is a call-level decoder, not a guest register/stack ABI replacement.
 
 pub mod descriptor;
+pub mod layout;
 
 /// Recording representation: COM slot, arguments excluding `this`, and copied
 /// pointee words (viewport, scissor, shader constants or declaration).
@@ -136,8 +137,13 @@ fn apply_payload(
     stage: Option<u32>,
     filtering: u32,
 ) {
-    let n: Vec<_> = (0..3).map(|i| m.read32(new + i * 4)).collect();
-    let o: Vec<_> = (0..3).map(|i| m.read32(old + i * 4)).collect();
+    let words = fields.iter().map(|f| f.0).max().unwrap_or(0) as u32 + 1;
+    let n: Vec<_> = (0..words).map(|i| m.read32(new + i * 4)).collect();
+    let o: Vec<_> = if old == 0 {
+        vec![]
+    } else {
+        (0..words).map(|i| m.read32(old + i * 4)).collect()
+    };
     out.extend(packed(
         fields,
         &n,
@@ -483,7 +489,7 @@ pub fn shader(
                     };
                 if section == 3 {
                     let kind = d >> 8 & 255;
-                    if !matches!(kind, 3 | 7) || count != 1 {
+                    if !matches!(kind, 3 | 7) || count > 1 {
                         return Err(DecodeError::DerivedConstant { kind, count });
                     }
                     let dimensions = [
@@ -499,7 +505,12 @@ pub fn shader(
                         };
                     }
                     derived[3] = 0;
-                    data_call(&mut out, slot, &[register, count], derived.to_vec());
+                    data_call(
+                        &mut out,
+                        slot,
+                        &[register, count],
+                        if count == 0 { vec![] } else { derived.to_vec() },
+                    );
                 } else {
                     let pointer = (value & !15) + (d >> 6 & 1023) * 4;
                     if section == 0 && value & 15 != 0 {

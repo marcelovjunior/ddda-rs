@@ -47,6 +47,37 @@ fn original_calls_and_cache_writes() {
         let ctx = 0x0e000000;
         let new = ctx + 0x2000;
         let actual = match kind {
+            "layout" => {
+                let descriptors: Vec<[u32; 2]> = c["descriptors"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| words(v).try_into().unwrap())
+                    .collect();
+                let layout = mtstate::layout::from_descriptors(&descriptors).unwrap();
+                let heap = ctx + 0x10000;
+                let elements = heap + descriptors.len() as u32 * 8;
+                m.write32(new + 0x10, elements);
+                m.write32(new + 0x14, layout.elements.len() as u32 - 1);
+                m.write32(new + 0x18, heap);
+                m.write32(new + 0x1c, descriptors.len() as u32);
+                m.write32(new + 0x20, layout.stride_20);
+                m.write32(new + 0x24, layout.last_flag_24 as u32);
+                for (i, d) in descriptors.iter().enumerate() {
+                    for (k, &value) in d.iter().enumerate() {
+                        m.write32(heap + i as u32 * 8 + k as u32 * 4, value);
+                    }
+                }
+                for (i, d) in layout.elements.iter().enumerate() {
+                    for (k, &value) in d.iter().enumerate() {
+                        m.write32(elements + i as u32 * 8 + k as u32 * 4, value);
+                    }
+                }
+                vec![]
+            }
+            "declaration" => {
+                vec![mtstate::layout::declaration(&m, words(&c["layouts"]).try_into().unwrap()).unwrap()]
+            }
             k if k.starts_with("construct_") => {
                 let d = words(&c["descriptor"]);
                 let (offset, payload) = match k {

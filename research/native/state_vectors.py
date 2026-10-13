@@ -5,9 +5,14 @@ The user's unpacked exe is read at runtime. Device methods are recording
 stdcall stubs returning S_OK; the apply functions and their helpers execute
 original instructions. Pointer arguments are copied at call time; only the
 COM `this` and temporary stack addresses are omitted from call comparison.
+InputLayout mocks only the allocator lookup/allocation boundary, at
+0x00CF5E20 and the allocator's +0x20 method; memcpy/memset/hash and element
+generation execute original instructions. CreateVertexDeclaration returns a
+synthetic handle through its output pointer, and its S_OK checker runs.
 No vector, exe byte, or decompiler output belongs in the repository.
 """
 import argparse
+import hashlib
 import json
 import random
 import struct
@@ -21,6 +26,8 @@ BASE, SIZE = h.SCRATCH, 0x20000
 CTX, DEVICE, VTABLE = BASE, BASE + 0x1000, BASE + 0x1100
 NEW, OLD, OPTIONS, RENDER = BASE+0x2000, BASE+0x3000, BASE+0x4000, BASE+0x5000
 STUBS = 0x0D000000
+ALLOCATOR, ALLOC_VTABLE, HEAP = BASE+0xa000, BASE+0xa100, BASE+0x10000
+ALLOC_STUB = STUBS+0xf00
 COUNTS = {57: 2, 69: 3, 37: 2, 39: 1, 47: 1, 75: 1, 100: 4, 104: 1,
           87: 1, 92: 1, 107: 1, 65: 2, 94: 3, 96: 3, 98: 3,
           109: 3, 111: 3, 113: 3, 86: 2}
@@ -41,12 +48,26 @@ class Oracle:
             self.uc.mem_map(addr,size)
         for slot, count in COUNTS.items():
             self.uc.mem_write(STUBS+slot*16, b'\x31\xc0\xc2'+struct.pack('<H',(count+1)*4))
+        self.uc.mem_write(ALLOC_STUB,b'\xb8'+struct.pack('<I',HEAP)+b'\xc2\x08\x00')
         self.uc.hook_add(UC_HOOK_CODE,self.hook)
 
     def read(self, addr, n=1):
         return list(struct.unpack('<'+'I'*n,self.uc.mem_read(addr,4*n)))
 
     def hook(self, uc, address, size, _):
+        if address == 0xCF5E20 and self.kind == 'layout':
+            esp=uc.reg_read(xc.UC_X86_REG_ESP)
+            assert self.read(esp+4)[0] == 0x18d431c
+            uc.reg_write(xc.UC_X86_REG_EAX,ALLOCATOR)
+            uc.reg_write(xc.UC_X86_REG_ESP,esp+4)
+            uc.reg_write(xc.UC_X86_REG_EIP,self.read(esp)[0])
+            return
+        if address == ALLOC_STUB:
+            esp=uc.reg_read(xc.UC_X86_REG_ESP)
+            assert uc.reg_read(xc.UC_X86_REG_ECX)==ALLOCATOR
+            length,alignment=self.read(esp+4,2)
+            assert length<=4096 and alignment==16
+            return
         if address == h.RET:
             uc.emu_stop()
             return
@@ -74,6 +95,7 @@ class Oracle:
             self.calls.append({'slot':slot,'args':values,'data':data})
 
     def run(self, kind, words, *, old=0, stage=0, filtering=0, address=None, args=None, ecx=RENDER, outputs=None):
+        self.kind=kind
         uc = self.uc
         uc.mem_write(BASE,bytes(SIZE))
         uc.mem_write(h.STACK,bytes(h.STACK_SIZE))
@@ -85,6 +107,7 @@ class Oracle:
         uc.reg_write(xc.UC_X86_REG_FPCW,0x37f)
         uc.reg_write(xc.UC_X86_REG_FPTAG,0xffff)
         base = {CTX+4:DEVICE,DEVICE:VTABLE,0x018D1D20:OPTIONS,OPTIONS+0x34:filtering}
+        base.update({ALLOCATOR:ALLOC_VTABLE,ALLOC_VTABLE+0x20:ALLOC_STUB})
         base.update({VTABLE+s*4:STUBS+s*16 for s in COUNTS})
         base.update(words)
         for a,v in base.items(): uc.mem_write(a,struct.pack('<I',v & 0xffffffff))
@@ -129,10 +152,46 @@ def cases(oracle, count):
                 d=[(i%20) | r.randrange(5)<<8 | r.randrange(5)<<11 | r.randrange(5)<<14 | r.randrange(32)<<17,
                    r.getrandbits(32),f32(r.uniform(-20,20)),r.getrandbits(32),
                    *[f32(r.uniform(-1,2)) for _ in range(4)]]
+                if i%11==0:
+                    d[2]=r.choice([0x7fc00000,0x7f800000,0xff800000,0x5f000000,0xdf000000,0x3fffffff])
+                    d[4:8]=[0x7fc00000,0x7f800000,0xff800000,0x7f7fffff]
             words={OLD+j*4:v for j,v in enumerate(d)}
             case=oracle.run('construct_'+kind,words,address=address,args=[OLD],ecx=NEW,outputs=[(NEW+offset,size)])
             case['descriptor']=d
             yield case
+    for i in range(count):
+        descriptors=[]
+        offset=0
+        for j in range(i%7):
+            kind=(i+j)%14+1
+            width=[0,4,2,2,2,2,2,1,1,1,1,4,4,1,4][kind]
+            components=r.randrange(1,5)
+            descriptors.append([r.getrandbits(32),kind<<6 | components<<11 | offset<<22 | (i%2)<<31])
+            offset+=((width*components+3)&~3)+(4 if i%3==0 else 0)
+        words={OLD+j*8+k*4:v for j,d in enumerate(descriptors) for k,v in enumerate(d)}
+        case=oracle.run('layout',words,address=0x112AAB0,args=[OLD,len(descriptors)],ecx=NEW,
+                        outputs=[(NEW+0x10,0x18),(HEAP,512)])
+        case['descriptors']=descriptors
+        yield case
+    for i in range(count):
+        shader=BASE+0xb000
+        words={0x018D12CC:shader,0x018D08F4:RENDER,RENDER+0x98:DEVICE}
+        layouts=[]
+        for j in range(4):
+            layout=BASE+0x6000+j*0x100
+            elements=BASE+0x7000+j*0x100
+            present=r.randrange(2)
+            layouts.append(layout if present else 0)
+            words[NEW+j*4]=j+1 if present else 0
+            words[shader+0x3c+(j+1)*8]=layout
+            words[layout+0x10]=elements
+            words[layout+0x14]=r.randrange(1,4)
+            for k in range(words[layout+0x14]):
+                words[elements+k*8]=r.getrandbits(32)
+                words[elements+k*8+4]=r.getrandbits(32)
+        case=oracle.run('declaration',words,address=0xE0FCC0,args=[NEW,1])
+        case['layouts']=layouts
+        yield case
     for kind in ('blend','depth','raster','sampler'):
         for i in range(count):
             new = [r.getrandbits(32) for _ in range(3)]
@@ -187,7 +246,7 @@ def cases(oracle, count):
     for i in range(count):
         metadata,descriptors=BASE+0x6000,BASE+0x6100
         sampler,texture,values=BASE+0x7000,BASE+0x8000,BASE+0x9000
-        words={NEW:r.randrange(8)<<3 | r.randrange(256)<<11 | (0x180000 if i%2 else 0),
+        words={CTX:r.getrandbits(32),NEW:r.randrange(8)<<3 | r.randrange(256)<<11 | (0x180000 if i%2 else 0),
                NEW+8:metadata, metadata+4:descriptors, metadata+0x10:0x100,
                metadata+0x14:0x200,metadata+0x18:0x300,
                NEW+12:sampler,NEW+16:texture,NEW+20:values|(i%3),
@@ -196,17 +255,21 @@ def cases(oracle, count):
                texture+0x24:31<<16,texture+0x2c:(i%3==0)<<19,texture+0x34:0x777,
                RENDER+0x30:(i%2)<<8}
         for j in range(3):words[sampler+0x30+j*4]=r.getrandbits(32)
+        words[sampler+0x100+12]=43 if i%3 else 42
+        for j in range(3):words[sampler+0x130+j*4]=r.getrandbits(32)
         for j in range(100):words[values+j*4]=r.getrandbits(32)
+        words[CTX+0x98+3*4]=sampler+0x100
+        words[CTX+0x118+3*4]=texture
         for pixel in [False,True]:
             stage=r.randrange(16 if pixel else 4)
             entry=descriptors+(24 if pixel else 0)
             # One descriptor for every section, plus a second float conversion.
             ds=[stage | 1<<22,
-                (2<<1) | (2<<6) | (7<<16) | (3<<24),
+                (2<<1) | (2<<6) | (7<<16) | ((19 if i%2 else 0)<<24),
                 1 | (2<<1) | (1<<6) | (23<<16) | (2<<24),
                 (2<<1) | (3<<6) | (31<<16) | (2<<24),
                 (2<<1) | (7<<6) | (2<<16) | (3<<24),
-                (1<<1) | ((3 if i%2 else 7)<<8) | (55<<16) | (1<<24)]
+                (1<<1) | ((3 if i%2 else 7)<<8) | (55<<16) | ((0 if i%6==0 else 1)<<24)]
             if i%9==0: ds=[]
             for j,d in enumerate(ds):words[entry+j*4]=d
             words[metadata+(12 if pixel else 8)]=(6 | 1<<8 | 2<<12 | 1<<19 | 1<<23 | 1<<28) if ds else 6
@@ -214,7 +277,7 @@ def cases(oracle, count):
                 words[CTX+0x10]=OLD
                 words[CTX+(0x28 if pixel else 0x24)]=(0x200 if pixel else 0x100)
                 cache=CTX+(0xd8 if pixel else 0x98)+stage*4
-                words[cache]=sampler
+                words[cache]=sampler if i%4==1 else sampler+0x100
                 words[cache+0x80]=texture if i%4==1 else 0
         if i%5==0:words[CTX+0x24]=99
         if i%7==0:words[CTX+0x10]=NEW
@@ -225,12 +288,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',default='E:/ddda-re/notes/native-L117/state-vectors.json')
     parser.add_argument('--count',type=int,default=256)
+    parser.add_argument('--exe',default=h.EXE,help='user-owned unpacked 2017-12-13 Steam executable')
     args = parser.parse_args()
+    if args.count < 96: parser.error('--count must be at least 96 for the payload bit sweep')
+    h.EXE=args.exe
     oracle = Oracle()
     result = list(cases(oracle,args.count))
     path = Path(args.out)
     path.parent.mkdir(parents=True,exist_ok=True)
-    path.write_text(json.dumps({'source':'DDDA.exe 2017-12-13 Steam','cases':result},separators=(',',':')))
+    path.write_text(json.dumps({'source':'DDDA.exe 2017-12-13 Steam',
+                               'exe_sha256':hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+                               'cases':result},separators=(',',':')))
     print(f'{len(result)} cases / {sum(len(c["calls"]) for c in result)} calls -> {path}')
 
 
