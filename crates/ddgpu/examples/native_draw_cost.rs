@@ -4,7 +4,9 @@
 //! Run optimized with WGPU_BACKEND=vulkan. CPU timing includes pass end,
 //! encoder finish, and queue submit; GPU completion waits are outside timing.
 //! Minimal shaders and tiny triangles, NOT a gameplay/FPS prediction.
-//! `native_draw_cost [frames=20] [draws=5000] [mode=all|core|bundles|ash|native|compact|delta|interop] [passes=1]`
+//! `native_draw_cost [frames=20] [draws=5000] [mode] [passes=1]`
+//! Modes: all/core/bundles/ash/native/compact/delta/interop; L123 adds
+//! churn/resident/resident-bundles (same full ABI, cap1-sized synthetic churn).
 use std::{
     future::Future,
     sync::Arc,
@@ -68,8 +70,17 @@ fn report(name: &str, samples: &mut [[f64; 3]], draws: usize, passes: usize) {
     samples.sort_by(|a, b| a.iter().sum::<f64>().total_cmp(&b.iter().sum::<f64>()));
     let m = samples[samples.len() / 2];
     let scale = 1e6 / draws as f64;
-    println!("{name}: {:.3} us/draw total (record {:.3}, finish {:.3}, submit {:.3}); {} frames, {} draws/frame, {} pipelines, {} groups",
-        m.iter().sum::<f64>() * scale, m[0] * scale, m[1] * scale, m[2] * scale, samples.len(), draws, PIPELINES, GROUPS);
+    println!(
+        "{name}: {:.3} us/draw total (record {:.3}, finish {:.3}, submit {:.3}); {} frames, {} draws/frame, {} pipelines, {} groups",
+        m.iter().sum::<f64>() * scale,
+        m[0] * scale,
+        m[1] * scale,
+        m[2] * scale,
+        samples.len(),
+        draws,
+        PIPELINES,
+        GROUPS
+    );
     println!(
         "  {passes} passes/frame, {:.3} us/pass total CPU (includes draws)",
         m.iter().sum::<f64>() * 1e6 / passes as f64
@@ -83,7 +94,17 @@ fn main() {
     assert!(
         matches!(
             mode,
-            "all" | "core" | "bundles" | "ash" | "native" | "compact" | "delta" | "interop"
+            "all"
+                | "core"
+                | "bundles"
+                | "ash"
+                | "native"
+                | "compact"
+                | "delta"
+                | "interop"
+                | "churn"
+                | "resident"
+                | "resident-bundles"
         ),
         "unknown benchmark mode"
     );
@@ -107,8 +128,11 @@ fn main() {
         interop_probe(&device, &queue);
         return;
     }
-    if matches!(mode, "native" | "compact" | "delta") {
-        native_workload(&device, &queue, frames, draws, mode != "native", mode == "delta");
+    if matches!(
+        mode,
+        "native" | "compact" | "delta" | "churn" | "resident" | "resident-bundles"
+    ) {
+        native_workload(&device, &queue, frames, draws, mode);
         return;
     }
     println!("backend floor: uniform data prefilled, update copies excluded");
@@ -455,21 +479,20 @@ fn interop_probe(device: &wgpu::Device, queue: &wgpu::Queue) {
     );
     drop(mapped);
     read.unmap();
-    println!("INTEROP PASS: wgpu initialization -> native Vulkan texture clear + hal buffer clear -> wgpu copy/readback");
+    println!(
+        "INTEROP PASS: wgpu initialization -> native Vulkan texture clear + hal buffer clear -> wgpu copy/readback"
+    );
 }
 
 /// Game-shaped object churn, minimal synthetic shaders: 40 pipeline handles,
 /// 200 distinct sampled textures, full VS/PS blocks changed every draw. This
 /// measures our API and uploads as well as wgpu, unlike the prefilled floor.
-fn native_workload(
-    gpu: &wgpu::Device,
-    queue: &wgpu::Queue,
-    frames: usize,
-    draws: usize,
-    compact: bool,
-    delta: bool,
-) {
+fn native_workload(gpu: &wgpu::Device, queue: &wgpu::Queue, frames: usize, draws: usize, mode: &str) {
     use ddgpu::native::*;
+    let realistic = matches!(mode, "churn" | "resident" | "resident-bundles");
+    let compact = !realistic && mode != "native";
+    let delta = realistic || mode == "delta";
+    let resident = matches!(mode, "resident" | "resident-bundles");
     let mut device = Device::new(gpu.clone(), queue.clone());
     let make_shader = if compact {
         Device::create_compact_shader
@@ -585,7 +608,8 @@ fn native_workload(
     let pl = device.shader_constant_layout(pixel_shader);
     let vl = device.shader_constant_layout(vertex_shader);
     let bytes = ((pl.byte_len + vl.byte_len + 512) * draws + constant_block_size(Stage::Vertex)) as u64;
-    let mut recorder = Recorder::new(&device, bytes);
+    let mut recorder = Recorder::with_resident_constants(&device, bytes, resident);
+    recorder.enable_bundles(mode == "resident-bundles");
     let pc = recorder.create_constant_buffer_for_shader(pixel_shader);
     let vc = recorder.create_constant_buffer_for_shader(vertex_shader);
     recorder.set_constants(pc);
@@ -602,6 +626,8 @@ fn native_workload(
     }
     let mut samples = vec![];
     for frame in 0..frames + 3 {
+        let mut changes = 0;
+        let before = recorder.stats;
         let start = Instant::now();
         recorder
             .begin_pass(PassDesc {
@@ -631,14 +657,39 @@ fn native_workload(
                 },
                 wgpu::IndexFormat::Uint16,
             );
-            pb[..4].copy_from_slice(&((k % 256) as f32 / 255.0).to_le_bytes());
-            vb_bytes[..4].copy_from_slice(&(k as f32).to_le_bytes());
-            if delta {
-                recorder.update_constant_range(pc, 0, &pb[..4]).unwrap();
-                recorder.update_constant_range(vc, 0, &vb_bytes[..4]).unwrap();
+            if realistic {
+                // cap1-sized synthetic churn: 1,700 changed draws, 8,200 VS +
+                // 7,300 PS registers per 5,000 draws (248,000 payload bytes).
+                // Draw order/resources repeat; every changed register varies
+                // across frames. No claim that cap1 has this slot stability.
+                let event = k * 1700 / draws;
+                if k == 0 || event != (k - 1) * 1700 / draws {
+                    let vs_regs = if event < 1400 { 5 } else { 4 };
+                    let ps_regs = if event < 500 { 5 } else { 4 };
+                    for (j, byte) in pb[..ps_regs * 16].iter_mut().enumerate() {
+                        *byte = ((event + frame + j) % 127) as u8;
+                    }
+                    for (j, byte) in vb_bytes[..vs_regs * 16].iter_mut().enumerate() {
+                        *byte = ((event + frame + j + 1) % 127) as u8;
+                    }
+                    recorder
+                        .update_constant_range(pc, 0, &pb[..ps_regs * 16])
+                        .unwrap();
+                    recorder
+                        .update_constant_range(vc, 0, &vb_bytes[..vs_regs * 16])
+                        .unwrap();
+                    changes += (vs_regs + ps_regs) * 16;
+                }
             } else {
-                recorder.update_constants(pc, &pb).unwrap();
-                recorder.update_constants(vc, &vb_bytes).unwrap();
+                pb[..4].copy_from_slice(&((k % 256) as f32 / 255.0).to_le_bytes());
+                vb_bytes[..4].copy_from_slice(&(k as f32).to_le_bytes());
+                if delta {
+                    recorder.update_constant_range(pc, 0, &pb[..4]).unwrap();
+                    recorder.update_constant_range(vc, 0, &vb_bytes[..4]).unwrap();
+                } else {
+                    recorder.update_constants(pc, &pb).unwrap();
+                    recorder.update_constants(vc, &vb_bytes).unwrap();
+                }
             }
             recorder.draw_indexed(0..3, 0, 0..1).unwrap();
         }
@@ -651,6 +702,14 @@ fn native_workload(
             timeout: Some(std::time::Duration::from_secs(10)),
         })
         .unwrap();
+        if frame == 3 && realistic {
+            println!("synthetic sequential register payload {changes} bytes/frame");
+            println!("steady frame: upload={} bytes, dirty={} float4 slots, bundle builds={} hits={}",
+                recorder.stats.upload_bytes - before.upload_bytes,
+                recorder.stats.dirty_registers - before.dirty_registers,
+                recorder.stats.bundle_builds - before.bundle_builds,
+                recorder.stats.bundle_hits - before.bundle_hits);
+        }
         if frame >= 3 {
             samples.push([record, 0.0, submit]);
         }
@@ -660,7 +719,9 @@ fn native_workload(
         pl.byte_len, vl.byte_len, recorder.stats
     );
     report(
-        if delta {
+        if realistic {
+            mode
+        } else if delta {
             "native compact deltas (minimal shaders)"
         } else if compact {
             "native compact (minimal shaders)"

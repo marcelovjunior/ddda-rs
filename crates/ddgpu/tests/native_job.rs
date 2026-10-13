@@ -1,0 +1,362 @@
+use d3d9cmd::*;
+use std::sync::Arc;
+
+fn target(id: u32, format: u32) -> Target {
+    Target {
+        surface: id,
+        format,
+        width: 8,
+        height: 8,
+        texture: None,
+        level: 0,
+        samples: 0,
+        quality: 0,
+    }
+}
+fn vertices() -> Vec<u8> {
+    [
+        [-1.0f32, -1.0, 0.5, 1.0],
+        [-1.0, 3.0, 0.5, 1.0],
+        [3.0, -1.0, 0.5, 1.0],
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(f32::to_le_bytes)
+    .collect()
+}
+fn vs() -> Arc<[u32]> {
+    vec![
+        0xfffe0300, 0x0200001f, 0x80000000, 0x900f0000, 0x0200001f, 0x80000000, 0xe00f0000, 0x02000001,
+        0xe00f0000, 0x90e40000, 0xffff,
+    ]
+    .into()
+}
+fn ps() -> Arc<[u32]> {
+    vec![0xffff0300, 0x02000001, 0x800f0800, 0xa0e40000, 0xffff].into()
+}
+fn draw(blend: bool, scissor: bool, depth: bool, colour: [f32; 4]) -> NativeDraw {
+    let mut states = vec![
+        (7, depth as u32),
+        (8, 3),
+        (14, 1),
+        (19, 5),
+        (20, 6),
+        (22, 1),
+        (23, 4),
+        (27, blend as u32),
+        (52, 0),
+        (57, 0),
+        (58, 255),
+        (59, 255),
+        (168, 15),
+        (171, 1),
+        (174, scissor as u32),
+        (190, 15),
+        (191, 15),
+        (192, 15),
+        (193, 0xffffffff),
+        (206, 0),
+    ];
+    states.sort_unstable();
+    NativeDraw {
+        state: Arc::new(NativeFixedState {
+            identity: Default::default(),
+            render_states: states.into(),
+        }),
+        vertex_shader: vs(),
+        pixel_shader: ps(),
+        declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]].into(),
+        textures: Arc::from([]),
+        streams: vec![NativeStream {
+            stream: 0,
+            resource: 10,
+            offset: 0,
+            stride: 16,
+        }]
+        .into(),
+        indices: Some(NativeIndices {
+            resource: 11,
+            format: 101,
+        }),
+        vs_constants: Default::default(),
+        ps_constants: NativeConstants {
+            floats: vec![NativeFloatWrite {
+                first: 0,
+                registers: vec![colour.map(f32::to_bits)].into(),
+            }],
+            ..Default::default()
+        },
+        viewport: [0, 0, 8, 8, 0, 1f32.to_bits()],
+        scissor: scissor.then_some([1, 2, 6, 7]),
+        primitive: 4,
+        primitives: 1,
+        start: 0,
+        base_vertex: 0,
+        min_index: 0,
+        vertex_count: 3,
+        instances: 1,
+    }
+}
+fn legacy(d: &NativeDraw, t: &Target, depth: Option<&Target>) -> DrawCall {
+    DrawCall {
+        primitive: d.primitive,
+        primitives: d.primitives,
+        start: d.start,
+        base_vertex: d.base_vertex,
+        min_index: d.min_index,
+        vertex_count: d.vertex_count,
+        vertices: Vertices::Inline {
+            bytes: vertices(),
+            stride: 16,
+        },
+        indices: if d.indices.is_some() {
+            Indices::Inline {
+                bytes: vec![0, 0, 1, 0, 2, 0],
+                format: 101,
+            }
+        } else {
+            Indices::None
+        },
+        vertex_shader: Some(d.vertex_shader.clone()),
+        pixel_shader: Some(d.pixel_shader.clone()),
+        declaration: d.declaration.clone(),
+        fvf: 0,
+        vs_constants: Arc::new(Constants::default()),
+        ps_constants: Arc::new(Constants {
+            f: d.ps_constants.floats[0].registers.to_vec(),
+            ..Default::default()
+        }),
+        textures: d.textures.clone(),
+        render_states: d.state.render_states.to_vec().into(),
+        viewport: d.viewport,
+        scissor: d.scissor.unwrap_or([0, 0, 8, 8]),
+        targets: [Some(t.clone()), None, None, None],
+        depth: depth.cloned(),
+    }
+}
+fn clear(t: &Target, depth: Option<&Target>) -> ClearCall {
+    ClearCall {
+        rects: vec![],
+        flags: if depth.is_some() { 7 } else { 1 },
+        colour: 0xff0000ff,
+        z: 1.0,
+        stencil: 0,
+        targets: [Some(t.clone()), None, None, None],
+        depth: depth.cloned(),
+        viewport: [0, 0, 8, 8, 0, 1f32.to_bits()],
+        scissor: None,
+        srgb: false,
+    }
+}
+fn job(d: NativeDraw, t: &Target, depth: Option<&Target>) -> NativeJob {
+    NativeJob {
+        passes: vec![NativePass {
+            colours: [Some(t.clone()), None, None, None],
+            depth: depth.cloned(),
+            draws: vec![d],
+            ..Default::default()
+        }],
+    }
+}
+fn upload(b: &mut dyn GraphicsBackend) {
+    b.upload(Upload::Buffer {
+        resource: 10,
+        bytes: vertices(),
+    });
+    b.upload(Upload::Buffer {
+        resource: 11,
+        bytes: vec![0, 0, 1, 0, 2, 0],
+    });
+}
+
+#[test]
+fn native_worker_effective_states_match_backend_and_host_driver() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let mut oracle = d3d9ref::Oracle::new().unwrap();
+    let original = target(1, 21);
+    let native = target(2, 21);
+    let z = target(3, 75);
+    upload(&mut backend);
+    for case in 0..16 {
+        let depth = (case & 8 != 0).then_some(&z);
+        let mut d = draw(
+            case & 2 != 0,
+            case & 4 != 0,
+            depth.is_some(),
+            [0.8, case as f32 / 16.0, 0.25, 0.5],
+        );
+        if case & 1 == 0 {
+            d.indices = None;
+        }
+        let legacy = legacy(&d, &original, depth);
+        let expected = oracle
+            .render(
+                &[],
+                Some(&clear(&original, depth)),
+                std::slice::from_ref(&legacy),
+                &original,
+            )
+            .unwrap();
+        backend.clear(&clear(&original, depth));
+        backend.draw(&legacy);
+        backend.present(&original);
+        assert_eq!(
+            backend.last_frame.as_ref().unwrap().rgba,
+            expected.rgba,
+            "legacy case {case}"
+        );
+        backend.clear(&clear(&native, depth));
+        assert!(
+            backend.native(job(d, &native, depth)).is_ok(),
+            "native rejected case {case}"
+        );
+        backend.present(&native);
+        assert_eq!(
+            backend.last_frame.as_ref().unwrap().rgba,
+            expected.rgba,
+            "native case {case}"
+        );
+        assert!(backend.errors.is_empty(), "{:?}", backend.errors);
+    }
+    assert_eq!(backend.native_job_stats().accepted, 16);
+}
+
+#[test]
+fn native_job_rejection_is_atomic_and_recovers() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let t = target(1, 21);
+    upload(&mut backend);
+    backend.clear(&clear(&t, None));
+    let before = backend.read_back(&t).unwrap();
+    let good = draw(false, false, false, [1.0, 0.0, 0.0, 1.0]);
+    let mut bad = good.clone();
+    bad.ps_constants = NativeConstants::default();
+    let mut j = job(good.clone(), &t, None);
+    j.passes[0].clear_colour = Some(0xff00ff00);
+    j.passes[0].draws.push(bad);
+    assert_eq!(backend.native(j.clone()), Err(j));
+    assert_eq!(
+        backend.read_back(&t).unwrap(),
+        before,
+        "reject must not clear or partially draw"
+    );
+    assert!(backend.native(job(good.clone(), &t, None)).is_ok());
+    let red = backend.read_back(&t).unwrap();
+    assert_ne!(red, before);
+    backend.query_begin(99);
+    let j = job(good.clone(), &t, None);
+    assert_eq!(backend.native(j.clone()), Err(j));
+    backend.query_end(99);
+    backend.release(10);
+    let j = job(good.clone(), &t, None);
+    assert_eq!(backend.native(j.clone()), Err(j));
+    assert_eq!(backend.read_back(&t).unwrap(), red);
+    backend.upload(Upload::Buffer {
+        resource: 10,
+        bytes: vertices(),
+    });
+    assert!(backend.native(job(good, &t, None)).is_ok());
+    assert_eq!(backend.native_job_stats().rejected, 3);
+}
+
+#[test]
+fn deferred_native_jobs_preserve_upload_copy_and_resource_reuse_order() {
+    let Some(backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let mut backend = DeferredBackend::new(Box::new(backend));
+    assert!(backend.native_supported());
+    let t = target(1, 21);
+    let dst = target(2, 21);
+    upload(&mut backend);
+    let d = draw(false, false, false, [1.0, 0.0, 0.0, 1.0]);
+    backend.clear(&clear(&t, None));
+    assert!(backend.native(job(d.clone(), &t, None)).is_ok());
+    backend.copy(&CopyCall {
+        src: t.clone(),
+        dst: dst.clone(),
+        src_rect: [0, 0, 8, 8],
+        dst_rect: [0, 0, 8, 8],
+        filter: 0,
+    });
+    let first = backend.read_back(&dst).unwrap();
+    assert_eq!(first, backend.read_back(&t).unwrap());
+    backend.release(10);
+    backend.upload(Upload::Buffer {
+        resource: 10,
+        bytes: vec![0; 48],
+    });
+    backend.clear(&clear(&t, None));
+    assert!(backend.native(job(d.clone(), &t, None)).is_ok());
+    let degenerate = backend.read_back(&t).unwrap();
+    assert_ne!(
+        first, degenerate,
+        "released buffer must not be reused from native cache"
+    );
+    backend.release(10);
+    backend.upload(Upload::Buffer {
+        resource: 10,
+        bytes: vertices(),
+    });
+    assert!(backend.native(job(d, &t, None)).is_ok());
+    assert_eq!(backend.read_back(&t).unwrap(), first);
+}
+
+#[test]
+fn native_worker_sampled_uploads_and_sampler_identity_match_legacy() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let a = target(1, 21);
+    let b = target(2, 21);
+    upload(&mut backend);
+    let mut d = draw(false, false, false, [0.25, 0.25, 0.0, 0.0]);
+    d.pixel_shader = vec![
+        0xffff0300, 0x0200001f, 0x90000000, 0xa00f0800, 0x02000001, 0x800f0001, 0xa0e40000, 0x03000042,
+        0x800f0800, 0x80e40001, 0xa00f0800, 0xffff,
+    ]
+    .into();
+    let mut states = [0; 14];
+    states[1..4].fill(3);
+    states[5] = 1;
+    states[6] = 1;
+    d.textures = vec![TextureBinding {
+        sampler: 0,
+        resource: 50,
+        kind: TexKind::Flat,
+        format: 21,
+        width: 2,
+        height: 2,
+        depth: 1,
+        levels: 1,
+        usage: 0,
+        states,
+    }]
+    .into();
+    for colour in [[0u8, 0, 255, 255], [0, 255, 0, 255]] {
+        backend.upload(Upload::Image {
+            resource: 50,
+            index: 0,
+            format: 21,
+            width: 2,
+            height: 2,
+            depth: 1,
+            pitch: 8,
+            slice: 16,
+            bytes: colour.repeat(4),
+        });
+        backend.clear(&clear(&a, None));
+        backend.draw(&legacy(&d, &a, None));
+        backend.present(&a);
+        let expected = backend.last_frame.as_ref().unwrap().rgba.clone();
+        backend.clear(&clear(&b, None));
+        assert!(backend.native(job(d.clone(), &b, None)).is_ok());
+        backend.present(&b);
+        assert_eq!(backend.last_frame.as_ref().unwrap().rgba, expected);
+    }
+    assert_eq!(backend.native_job_stats().accepted, 2);
+}

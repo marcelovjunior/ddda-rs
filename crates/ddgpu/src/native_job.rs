@@ -1,0 +1,1291 @@
+//! N2 worker adapter. Guest state is already decoded; all resources resolve
+//! through this backend's maps in FIFO order. Rejection never submits a job.
+use crate::native_compare::{CompareAspect, CompareQueue, CompareResult, CompareTag};
+use crate::{cache::FxMap, native as n, WgpuBackend};
+use d3d9cmd::*;
+use std::{ops::Range, sync::Arc};
+
+#[derive(Clone)]
+struct Shadow {
+    texture: wgpu::Texture,
+    linear: wgpu::TextureView,
+    srgb: wgpu::TextureView,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+}
+struct ComparePair {
+    target: Target,
+    oracle: wgpu::Texture,
+    level: u32,
+    layer: u32,
+    shadow: Shadow,
+}
+struct CompareSnapshot {
+    begin: NativeCompareBegin,
+    pairs: Vec<ComparePair>,
+}
+pub(crate) struct Comparisons {
+    queue: CompareQueue,
+    active: Option<CompareSnapshot>,
+    shadows: [Option<Shadow>; 5],
+    completed: std::collections::VecDeque<Result<CompareResult, String>>,
+    matched: u64,
+    mismatched: u64,
+    unverified: u64,
+}
+impl Comparisons {
+    fn new(device: &wgpu::Device) -> Self {
+        // Host diagnostic budget, not a game-derived constant.
+        Self {
+            queue: CompareQueue::new(device, 256),
+            active: None,
+            shadows: Default::default(),
+            completed: Default::default(),
+            matched: 0,
+            mismatched: 0,
+            unverified: 0,
+        }
+    }
+    fn report(&mut self, result: Result<CompareResult, String>) {
+        match &result {
+            Ok(r) if r.differing_pixels == 0 => {
+                self.matched += 1;
+                if self.matched == 1 || self.matched % 128 == 0 {
+                    eprintln!(
+                        "native-compare totals: matched={} mismatched={} unverified={} pending={}",
+                        self.matched,
+                        self.mismatched,
+                        self.unverified,
+                        self.queue.pending()
+                    );
+                }
+            }
+            Ok(r) => {
+                self.mismatched += 1;
+                eprintln!("{r}");
+            }
+            Err(e) => {
+                self.unverified += 1;
+                eprintln!("{e}");
+            }
+        }
+        // Logs/counters retain every outcome. The optional structured drain
+        // keeps only the latest 256 to bound unattended diagnostic memory.
+        if self.completed.len() == 256 {
+            self.completed.pop_front();
+        }
+        self.completed.push_back(result);
+    }
+}
+impl Drop for Comparisons {
+    fn drop(&mut self) {
+        eprintln!(
+            "native-compare shutdown: matched={} mismatched={} unverified={} pending={} active_begin={:?}",
+            self.matched,
+            self.mismatched,
+            self.unverified,
+            self.queue.pending(),
+            self.active.as_ref().map(|x| x.begin.id)
+        );
+        if self.queue.pending() != 0 || self.active.is_some() {
+            eprintln!("native-compare unverified: shutdown leaves pending/unfinished comparisons; no GPU wait performed");
+        }
+    }
+}
+impl WgpuBackend {
+    /// Nonblocking structured diagnostic results (latest 256 retained). The
+    /// backend also polls at native jobs and Present and logs every failure.
+    pub fn poll_native_comparisons(&mut self) -> Vec<Result<CompareResult, String>> {
+        self.poll_native_comparisons_internal();
+        self.native_comparisons
+            .as_mut()
+            .map_or_else(Vec::new, |c| c.completed.drain(..).collect())
+    }
+    pub(crate) fn poll_native_comparisons_internal(&mut self) {
+        if let Some(c) = &mut self.native_comparisons {
+            match c.queue.poll(&self.device) {
+                Ok(results) => {
+                    for r in results {
+                        c.report(r);
+                    }
+                }
+                Err(e) => c.report(Err(e)),
+            }
+        }
+    }
+    pub(crate) fn begin_native_comparison(&mut self, begin: NativeCompareBegin) -> bool {
+        self.poll_native_comparisons_internal();
+        let mut comparisons = self
+            .native_comparisons
+            .take()
+            .unwrap_or_else(|| Comparisons::new(&self.device));
+        let result = self.seed_native_comparison(&begin, &mut comparisons);
+        let ok = result.is_ok();
+        match result {
+            Ok(pairs) => comparisons.active = Some(CompareSnapshot { begin, pairs }),
+            Err(e) => comparisons.report(Err(format!("native-compare unverified begin {}: {e}", begin.id))),
+        }
+        self.native_comparisons = Some(comparisons);
+        ok
+    }
+    fn seed_native_comparison(
+        &mut self,
+        begin: &NativeCompareBegin,
+        comparisons: &mut Comparisons,
+    ) -> Result<Vec<ComparePair>, String> {
+        if comparisons.active.is_some() {
+            return Err("another begin is active".into());
+        }
+        if !self.active_queries.is_empty() {
+            return Err("occlusion query active".into());
+        }
+        self.flush(); // Includes waiting for prior asynchronous finish/submit.
+        let mut pairs = vec![];
+        let mut needed = 0;
+        for (slot, target) in begin.colours.iter().chain([&begin.depth]).enumerate() {
+            let Some(target) = target else {
+                continue;
+            };
+            if crate::sample_count(target)? != 1 {
+                return Err("MSAA comparison unsupported".into());
+            }
+            let (oracle, level, layer, format, width, height) = self
+                .target_texture(target)
+                .ok_or("comparison target unavailable")?;
+            if width == 0
+                || height == 0
+                || width.div_ceil(8) > self.device.limits().max_compute_workgroups_per_dimension
+                || height.div_ceil(8) > self.device.limits().max_compute_workgroups_per_dimension
+            {
+                return Err("comparison target extent unsupported".into());
+            }
+            if oracle.dimension() != wgpu::TextureDimension::D2 {
+                return Err("comparison requires D2 attachments".into());
+            }
+            if pairs
+                .iter()
+                .any(|p: &ComparePair| p.oracle == oracle && p.level == level && p.layer == layer)
+            {
+                return Err("duplicate comparison attachment".into());
+            }
+            needed += if format.is_depth_stencil_format() {
+                usize::from(format.has_depth_aspect()) + usize::from(format.has_stencil_aspect())
+            } else {
+                1
+            };
+            if comparisons.queue.available() < needed {
+                return Err("comparison summary capacity exhausted".into());
+            }
+            let replace = comparisons.shadows[slot]
+                .as_ref()
+                .is_none_or(|s| s.format != format || s.width != width || s.height != height);
+            if replace {
+                // Native handles retain their views; drop that cache before
+                // replacing a pool slot, so window resizing cannot leak it.
+                self.native_worker = None;
+                let srgb_format = format.add_srgb_suffix();
+                let view_formats = if srgb_format != format {
+                    vec![srgb_format]
+                } else {
+                    vec![]
+                };
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("native comparison shadow"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &view_formats,
+                });
+                let linear = texture.create_view(&Default::default());
+                let srgb = if srgb_format != format {
+                    texture.create_view(&wgpu::TextureViewDescriptor {
+                        format: Some(srgb_format),
+                        ..Default::default()
+                    })
+                } else {
+                    linear.clone()
+                };
+                comparisons.shadows[slot] = Some(Shadow {
+                    texture,
+                    linear,
+                    srgb,
+                    format,
+                    width,
+                    height,
+                });
+            }
+            pairs.push(ComparePair {
+                target: target.clone(),
+                oracle,
+                level,
+                layer,
+                shadow: comparisons.shadows[slot].as_ref().unwrap().clone(),
+            });
+        }
+        if pairs.is_empty() {
+            return Err("comparison has no attachments".into());
+        }
+        // Copy the actual pre-oracle load state, including depth AND stencil.
+        // Pool reuse is safe because each prior comparison was submitted first.
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        for p in &pairs {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &p.oracle,
+                    mip_level: p.level,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: p.layer,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &p.shadow.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: p.shadow.width,
+                    height: p.shadow.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.queue.submit([encoder.finish()]);
+        Ok(pairs)
+    }
+    pub(crate) fn end_native_comparison(&mut self, id: u64, job: NativeJob) -> Result<(), NativeJob> {
+        let Some(mut comparisons) = self.native_comparisons.take() else {
+            return Err(job);
+        };
+        if comparisons.active.as_ref().is_none_or(|s| s.begin.id != id) {
+            comparisons.report(Err(format!(
+                "native-compare unverified end {id}: no matching begin"
+            )));
+            self.native_comparisons = Some(comparisons);
+            return Err(job);
+        }
+        let snapshot = comparisons.active.take().unwrap();
+        let compatible = job.passes.len() == 1
+            && job.passes[0].colours == snapshot.begin.colours
+            && job.passes[0].depth == snapshot.begin.depth;
+        if !compatible {
+            comparisons.report(Err(format!(
+                "native-compare unverified end {id}: expected one pass with begin attachments"
+            )));
+            self.native_comparisons = Some(comparisons);
+            return Err(job);
+        }
+        self.flush(); // Oracle must be submitted before shadow replay/reduction.
+        if let Err(job) = self.run_native_job_overrides(job, &snapshot.pairs) {
+            comparisons.report(Err(format!(
+                "native-compare unverified end {id}: native job rejected"
+            )));
+            self.native_comparisons = Some(comparisons);
+            return Err(job);
+        }
+        for p in snapshot.pairs {
+            let aspects = if p.shadow.format.is_depth_stencil_format() {
+                [
+                    (CompareAspect::Depth, p.shadow.format.has_depth_aspect()),
+                    (CompareAspect::Stencil, p.shadow.format.has_stencil_aspect()),
+                ]
+                .into_iter()
+                .filter_map(|(a, on)| on.then_some(a))
+                .collect::<Vec<_>>()
+            } else {
+                vec![CompareAspect::Color]
+            };
+            for aspect in aspects {
+                let texture_aspect = match aspect {
+                    CompareAspect::Color => wgpu::TextureAspect::All,
+                    CompareAspect::Depth => wgpu::TextureAspect::DepthOnly,
+                    CompareAspect::Stencil => wgpu::TextureAspect::StencilOnly,
+                };
+                let desc = wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_mip_level: p.level,
+                    mip_level_count: Some(1),
+                    base_array_layer: p.layer,
+                    array_layer_count: Some(1),
+                    aspect: texture_aspect,
+                    ..Default::default()
+                };
+                let oracle = p.oracle.create_view(&desc);
+                let native = p.shadow.texture.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level: 0,
+                    base_array_layer: 0,
+                    ..desc
+                });
+                let tag = CompareTag {
+                    pass: id,
+                    target: p.target.surface,
+                    aspect,
+                };
+                if let Err(e) = comparisons.queue.enqueue(
+                    &self.device,
+                    &self.queue,
+                    tag,
+                    &oracle,
+                    &native,
+                    p.shadow.width,
+                    p.shadow.height,
+                ) {
+                    comparisons.report(Err(e));
+                }
+            }
+        }
+        self.native_comparisons = Some(comparisons);
+        self.poll_native_comparisons_internal();
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NativeJobStats {
+    pub accepted: u64,
+    pub rejected: u64,
+    pub draws: u64,
+    pub passes: u64,
+}
+struct ShaderEntry {
+    _tokens: Arc<[u32]>,
+    handle: n::Shader,
+    interface: Arc<d3d9wgsl::Interface>,
+    reads: ConstantReads,
+}
+#[derive(Default)]
+struct ConstantReads {
+    floats: Vec<bool>,
+    ints: [bool; 16],
+    bools: [bool; 16],
+}
+type InputKey = (n::Shader, usize, [u32; 4]);
+struct InputEntry {
+    _declaration: Arc<[[u8; 8]]>,
+    handle: n::InputLayout,
+    streams: Arc<[u32]>,
+}
+struct FixedEntry {
+    values: Arc<[(u32, u32)]>,
+    blend: n::Blend,
+    raster: n::Rasterizer,
+    depth: n::DepthStencil,
+}
+pub(crate) struct Worker {
+    device: n::Device,
+    shaders: FxMap<(usize, n::Stage), ShaderEntry>,
+    inputs: FxMap<InputKey, InputEntry>,
+    fixed: FxMap<NativeStateIdentity, Vec<FixedEntry>>,
+    buffers: FxMap<wgpu::Buffer, n::Buffer>,
+    views: FxMap<wgpu::TextureView, n::View>,
+    sampled: FxMap<(wgpu::Texture, bool), n::View>,
+    samplers: FxMap<[u32; 14], n::Sampler>,
+    texture_sets: FxMap<(n::Pipeline, usize), (Arc<[TextureBinding]>, [n::TextureSet; 2])>,
+}
+struct PreparedDraw {
+    pipeline: n::Pipeline,
+    shaders: [n::Shader; 2],
+    sets: [n::TextureSet; 2],
+    vertices: Vec<n::BufferSlice>,
+    indices: Option<(n::BufferSlice, wgpu::IndexFormat)>,
+    range: Range<u32>,
+}
+struct PreparedPass {
+    desc: n::PassDesc,
+    draws: Vec<PreparedDraw>,
+}
+impl WgpuBackend {
+    pub fn native_job_stats(&self) -> NativeJobStats {
+        self.native_stats
+    }
+    pub(crate) fn run_native_job(&mut self, job: NativeJob) -> Result<(), NativeJob> {
+        self.poll_native_comparisons_internal();
+        self.run_native_job_overrides(job, &[])
+    }
+    fn run_native_job_overrides(
+        &mut self,
+        job: NativeJob,
+        overrides: &[ComparePair],
+    ) -> Result<(), NativeJob> {
+        if !self.active_queries.is_empty() {
+            self.native_stats.rejected += 1;
+            return Err(job);
+        }
+        // Submit earlier D3D9 draws before imports or native queue writes.
+        self.flush();
+        let mut worker = self.native_worker.take().unwrap_or_else(|| Worker::new(self));
+        let result = worker.run(self, &job, overrides);
+        self.native_worker = Some(worker);
+        match result {
+            Ok(()) => {
+                let draws = job.passes.iter().map(|p| p.draws.len() as u64).sum::<u64>();
+                self.native_stats.accepted += 1;
+                self.native_stats.draws += draws;
+                self.native_stats.passes += job.passes.len() as u64;
+                if overrides.is_empty() {
+                    self.draws_recorded.set(self.draws_recorded.get() + draws);
+                    self.passes_begun
+                        .set(self.passes_begun.get() + job.passes.len() as u64);
+                }
+                Ok(())
+            }
+            Err(reason) => {
+                self.native_stats.rejected += 1;
+                if self.native_stats.rejected <= 16 {
+                    eprintln!("native job rejected before submit: {reason}");
+                }
+                Err(job)
+            }
+        }
+    }
+}
+impl Worker {
+    fn new(backend: &WgpuBackend) -> Self {
+        Self {
+            device: n::Device::new(backend.device.clone(), backend.queue.clone()),
+            shaders: Default::default(),
+            inputs: Default::default(),
+            fixed: Default::default(),
+            buffers: Default::default(),
+            views: Default::default(),
+            sampled: Default::default(),
+            samplers: Default::default(),
+            texture_sets: Default::default(),
+        }
+    }
+    fn shader(
+        &mut self,
+        tokens: &Arc<[u32]>,
+        stage: n::Stage,
+    ) -> Result<(n::Shader, Arc<d3d9wgsl::Interface>), String> {
+        let key = (tokens.as_ptr() as usize, stage);
+        if !self.shaders.contains_key(&key) {
+            let parsed = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
+            let reads = ConstantReads::from_shader(&parsed)?;
+            let interface = Arc::new(d3d9wgsl::translate(&parsed).map_err(|e| e.to_string())?.interface);
+            let handle = self.device.create_compact_shader(tokens, stage)?;
+            self.shaders.insert(
+                key,
+                ShaderEntry {
+                    _tokens: tokens.clone(),
+                    handle,
+                    interface,
+                    reads,
+                },
+            );
+        }
+        let s = &self.shaders[&key];
+        Ok((s.handle, s.interface.clone()))
+    }
+    fn target(
+        &mut self,
+        backend: &mut WgpuBackend,
+        target: &Target,
+        srgb: bool,
+        overrides: &[ComparePair],
+    ) -> Result<(n::View, wgpu::TextureFormat), String> {
+        if crate::sample_count(target)? != 1 {
+            return Err("native job MSAA unsupported".into());
+        }
+        let (view, format) = if let Some(pair) = overrides.iter().find(|p| p.target == *target) {
+            (
+                if srgb {
+                    pair.shadow.srgb.clone()
+                } else {
+                    pair.shadow.linear.clone()
+                },
+                if srgb {
+                    pair.shadow.format.add_srgb_suffix()
+                } else {
+                    pair.shadow.format
+                },
+            )
+        } else {
+            backend
+                .cached_target_view(target, srgb)
+                .ok_or("native target unavailable")?
+        };
+        let handle = *self.views.entry(view.clone()).or_insert_with(|| {
+            self.device
+                .retain_view(view, format, [target.width, target.height], 1)
+        });
+        Ok((handle, format))
+    }
+    fn buffer(
+        &mut self,
+        backend: &WgpuBackend,
+        resource: u32,
+        offset: u32,
+    ) -> Result<n::BufferSlice, String> {
+        let gpu = backend
+            .buffers
+            .get(&resource)
+            .ok_or("native buffer not uploaded")?;
+        if offset as u64 >= gpu.size() {
+            return Err("native buffer offset outside resource".into());
+        }
+        let handle = *self
+            .buffers
+            .entry(gpu.clone())
+            .or_insert_with(|| self.device.retain_buffer(gpu.clone()));
+        Ok(n::BufferSlice {
+            buffer: handle,
+            offset: offset as u64,
+            size: gpu.size() - offset as u64,
+        })
+    }
+    fn fixed(
+        &mut self,
+        state: &NativeFixedState,
+    ) -> Result<(n::Blend, n::Rasterizer, n::DepthStencil), String> {
+        validate_fixed(state)?;
+        // Hash identities only; compare actual words to defend reuse/hash collisions.
+        let entries = self.fixed.entry(state.identity).or_default();
+        if let Some(e) = entries.iter().find(|e| {
+            e.values
+                .iter()
+                .filter(|v| !matches!(v.0, 57 | 193))
+                .eq(state.render_states.iter().filter(|v| !matches!(v.0, 57 | 193)))
+        }) {
+            return Ok((e.blend, e.raster, e.depth));
+        }
+        let s = |key| state_value(state, key);
+        let component = |src, dst, op| wgpu::BlendComponent {
+            src_factor: crate::blend_factor(s(src)),
+            dst_factor: crate::blend_factor(s(dst)),
+            operation: crate::blend_op(s(op)),
+        };
+        let colour = component(19, 20, 171);
+        let alpha = if s(206) != 0 {
+            component(207, 208, 209)
+        } else {
+            colour
+        };
+        let blend = self.device.create_blend(n::BlendDesc {
+            targets: [168, 190, 191, 192].map(|key| n::BlendTargetDesc {
+                enable: s(27) != 0,
+                colour,
+                alpha,
+                write_mask: wgpu::ColorWrites::from_bits_truncate(s(key)),
+            }),
+            alpha_to_coverage: false,
+        });
+        let raster = self.device.create_rasterizer(n::RasterizerDesc {
+            cull: match s(22) {
+                2 => Some(wgpu::Face::Front),
+                3 => Some(wgpu::Face::Back),
+                _ => None,
+            },
+            fill: match s(8) {
+                1 => wgpu::PolygonMode::Point,
+                2 => wgpu::PolygonMode::Line,
+                _ => wgpu::PolygonMode::Fill,
+            },
+            scissor_enable: s(174) != 0,
+            ..Default::default()
+        });
+        let face = |func, fail, zfail, pass| wgpu::StencilFaceState {
+            compare: crate::compare(s(func)),
+            fail_op: crate::stencil_op(s(fail)),
+            depth_fail_op: crate::stencil_op(s(zfail)),
+            pass_op: crate::stencil_op(s(pass)),
+        };
+        let front = face(56, 53, 54, 55);
+        let depth = self.device.create_depth_stencil(n::DepthStencilDesc {
+            depth_enable: s(7) != 0,
+            depth_write: s(14) != 0,
+            depth_func: crate::compare(s(23)),
+            stencil_enable: s(52) != 0,
+            front,
+            back: if s(185) != 0 {
+                face(189, 186, 187, 188)
+            } else {
+                front
+            },
+            read_mask: s(58),
+            write_mask: s(59),
+        });
+        entries.push(FixedEntry {
+            values: state.render_states.clone(),
+            blend,
+            raster,
+            depth,
+        });
+        Ok((blend, raster, depth))
+    }
+    fn input(
+        &mut self,
+        d: &NativeDraw,
+        vs: n::Shader,
+        iface: &d3d9wgsl::Interface,
+    ) -> Result<(n::InputLayout, Arc<[u32]>), String> {
+        let mut strides = [0; 4];
+        for stream in d.streams.iter() {
+            strides[stream.stream as usize] = stream.stride;
+        }
+        let key = (vs, d.declaration.as_ptr() as usize, strides);
+        if let Some(e) = self.inputs.get(&key) {
+            return Ok((e.handle, e.streams.clone()));
+        }
+        let mut used: Vec<u32> = vec![];
+        let mut elements = vec![];
+        for (location, &(usage, index, _)) in iface.inputs.iter().enumerate() {
+            let e = d
+                .declaration
+                .iter()
+                .find(|e| e[6] as u32 == usage && e[7] as u32 == index)
+                .ok_or("native input semantic missing")?;
+            if e[5] != 0 {
+                return Err("native nondefault declaration method".into());
+            }
+            let stream = u16::from_le_bytes([e[0], e[1]]) as u32;
+            let (format, _) = crate::vertex_format(e[4]).ok_or("native vertex format unsupported")?;
+            let offset = u16::from_le_bytes([e[2], e[3]]) as u64;
+            used.push(stream);
+            elements.push(n::InputElement {
+                stream,
+                offset,
+                format,
+                semantic: (usage, index),
+                location: location as u32,
+            });
+        }
+        used.sort_unstable();
+        used.dedup();
+        if used.is_empty() || used.len() > 4 {
+            return Err("native requires one to four input streams".into());
+        }
+        let mut streams = vec![];
+        for &stream in &used {
+            let binding = d
+                .streams
+                .iter()
+                .find(|s| s.stream == stream)
+                .ok_or("native stream missing")?;
+            if binding.stride == 0 || binding.stride % 4 != 0 {
+                return Err("native stream stride unsupported".into());
+            }
+            streams.push(n::InputStream {
+                stride: binding.stride as u64,
+                step: wgpu::VertexStepMode::Vertex,
+            });
+        }
+        for e in &mut elements {
+            let dense = used.iter().position(|&s| s == e.stream).unwrap();
+            if e.offset + e.format.size() > streams[dense].stride {
+                return Err("native vertex element exceeds stride".into());
+            }
+            e.stream = dense as u32;
+        }
+        let handle = self
+            .device
+            .create_input_layout(n::InputLayoutDesc { streams, elements })?;
+        self.inputs.insert(
+            key,
+            InputEntry {
+                _declaration: d.declaration.clone(),
+                handle,
+                streams: used.clone().into(),
+            },
+        );
+        Ok((handle, used.into()))
+    }
+    fn textures(
+        &mut self,
+        backend: &mut WgpuBackend,
+        pass: &NativePass,
+        d: &NativeDraw,
+        pipeline: n::Pipeline,
+        stage: n::Stage,
+        iface: &d3d9wgsl::Interface,
+    ) -> Result<n::TextureSet, String> {
+        let base = if stage == n::Stage::Pixel { 0 } else { 257 };
+        let mut bindings = vec![];
+        for &(slot, kind) in &iface.samplers {
+            let t = d
+                .textures
+                .iter()
+                .find(|t| t.sampler == base + slot)
+                .ok_or("native sampler not covered")?;
+            if pass
+                .colours
+                .iter()
+                .chain([&pass.depth])
+                .flatten()
+                .any(|target| target.texture.is_some_and(|x| x.resource == t.resource))
+            {
+                return Err("native sampled attachment feedback unsupported".into());
+            }
+            if t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0
+                && crate::missing_channels(t.format) != 0
+            {
+                return Err("native render-target sampler channel fill unsupported".into());
+            }
+            if !f32::from_bits(t.states[8]).is_finite()
+                || (stage == n::Stage::Vertex && f32::from_bits(t.states[8]) != 0.0)
+            {
+                return Err("native sampler LOD bias unsupported".into());
+            }
+            let expected = match kind {
+                d3d9wgsl::TextureKind::Flat => TexKind::Flat,
+                d3d9wgsl::TextureKind::Cube => TexKind::Cube,
+                d3d9wgsl::TextureKind::Volume => TexKind::Volume,
+            };
+            if t.kind != expected {
+                return Err("native texture dimensionality mismatch".into());
+            }
+            let tx = backend
+                .texture_for(t)
+                .ok_or("native sampled texture unavailable")?;
+            let srgb = t.states[11] != 0;
+            let key = (tx.texture.clone(), srgb);
+            let view = if let Some(&view) = self.sampled.get(&key) {
+                view
+            } else {
+                let format = if srgb {
+                    tx.gpu_format.add_srgb_suffix()
+                } else {
+                    tx.gpu_format
+                };
+                let view = tx.texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(format),
+                    dimension: Some(match expected {
+                        TexKind::Flat => wgpu::TextureViewDimension::D2,
+                        TexKind::Cube => wgpu::TextureViewDimension::Cube,
+                        TexKind::Volume => wgpu::TextureViewDimension::D3,
+                    }),
+                    ..Default::default()
+                });
+                let view = self.device.retain_view(view, format, [t.width, t.height], 1);
+                self.sampled.insert(key, view);
+                view
+            };
+            let sampler = if let Some(&s) = self.samplers.get(&t.states) {
+                s
+            } else {
+                let gpu = backend.sampler(&t.states)?;
+                let s = self.device.retain_sampler(gpu, f32::from_bits(t.states[8]));
+                self.samplers.insert(t.states, s);
+                s
+            };
+            bindings.push(n::TextureBinding { slot, view, sampler });
+        }
+        self.device.create_texture_set(pipeline, stage, &bindings)
+    }
+    fn prepare(
+        &mut self,
+        backend: &mut WgpuBackend,
+        job: &NativeJob,
+        overrides: &[ComparePair],
+    ) -> Result<Vec<PreparedPass>, String> {
+        let mut out = vec![];
+        for pass in &job.passes {
+            let target = pass
+                .colours
+                .iter()
+                .flatten()
+                .next()
+                .or(pass.depth.as_ref())
+                .ok_or("native pass has no attachment")?;
+            if target.width == 0 || target.height == 0 {
+                return Err("native empty target".into());
+            }
+            if pass
+                .colours
+                .iter()
+                .chain([&pass.depth])
+                .flatten()
+                .any(|t| t.width != target.width || t.height != target.height)
+            {
+                return Err("native attachment extent mismatch".into());
+            }
+            let mut colours = [None; 4];
+            let mut formats = [None; 4];
+            let srgb = pass
+                .draws
+                .first()
+                .is_some_and(|d| state_value(&d.state, 194) != 0);
+            for (slot, t) in pass.colours.iter().enumerate() {
+                if let Some(t) = t {
+                    let (v, f) = self.target(backend, t, srgb && slot == 0, overrides)?;
+                    colours[slot] = Some(v);
+                    formats[slot] = Some(f);
+                }
+            }
+            let depth = pass
+                .depth
+                .as_ref()
+                .map(|t| self.target(backend, t, false, overrides))
+                .transpose()?;
+            if pass.clear_colour.is_some() && formats.iter().flatten().any(|f| Some(*f) != formats[0]) {
+                return Err("native heterogeneous colour clear requires separate passes".into());
+            }
+            let mut prepared = PreparedPass {
+                desc: n::PassDesc {
+                    colours,
+                    depth: depth.map(|x| x.0),
+                    clear_colour: pass.clear_colour.map(|c| {
+                        crate::clear_colour(c, formats[0].unwrap_or(wgpu::TextureFormat::Rgba8Unorm))
+                    }),
+                    clear_depth: pass.clear_depth.map(f32::from_bits),
+                    clear_stencil: pass.clear_stencil,
+                },
+                draws: vec![],
+            };
+            if pass
+                .clear_depth
+                .is_some_and(|d| !f32::from_bits(d).is_finite() || !(0.0..=1.0).contains(&f32::from_bits(d)))
+            {
+                return Err("native invalid depth clear".into());
+            }
+            for d in &pass.draws {
+                validate_draw(d, target)?;
+                if (state_value(&d.state, 194) != 0) != srgb {
+                    return Err("native sRGB write changes within pass".into());
+                }
+                let (vs, vi) = self.shader(&d.vertex_shader, n::Stage::Vertex)?;
+                let (ps, pi) = self.shader(&d.pixel_shader, n::Stage::Pixel)?;
+                self.shaders[&(d.vertex_shader.as_ptr() as usize, n::Stage::Vertex)]
+                    .reads
+                    .validate(&d.vs_constants)?;
+                self.shaders[&(d.pixel_shader.as_ptr() as usize, n::Stage::Pixel)]
+                    .reads
+                    .validate(&d.ps_constants)?;
+                if pass
+                    .colours
+                    .iter()
+                    .enumerate()
+                    .any(|(i, t)| i != 0 && t.is_some() && !pi.outputs.contains(&(i as u32)))
+                {
+                    return Err("native pass includes unwritten colour attachment".into());
+                }
+                let (blend, rasterizer, depth_stencil) = self.fixed(&d.state)?;
+                let (input, streams) = self.input(d, vs, &vi)?;
+                let topology = match d.primitive {
+                    1 => wgpu::PrimitiveTopology::PointList,
+                    2 => wgpu::PrimitiveTopology::LineList,
+                    3 => wgpu::PrimitiveTopology::LineStrip,
+                    4 => wgpu::PrimitiveTopology::TriangleList,
+                    5 => wgpu::PrimitiveTopology::TriangleStrip,
+                    _ => return Err("native triangle fan unsupported".into()),
+                };
+                // Indexed strips have D3D9/wgpu restart differences. Defer them.
+                if d.indices.is_some() && matches!(d.primitive, 3 | 5) {
+                    return Err("native indexed strip restart unsupported".into());
+                }
+                let pipeline = self.device.create_pipeline(n::PipelineDesc {
+                    vertex_shader: vs,
+                    pixel_shader: ps,
+                    input,
+                    blend,
+                    rasterizer,
+                    depth_stencil,
+                    colours: formats,
+                    depth: depth.map(|x| x.1),
+                    samples: 1,
+                    sample_mask: !0,
+                    topology,
+                    strip_index: None,
+                })?;
+                // Texture allocations only change after release, which drops
+                // this worker. Retained Arc identities cannot be recycled.
+                for texture in d.textures.iter() {
+                    if pass
+                        .colours
+                        .iter()
+                        .chain([&pass.depth])
+                        .flatten()
+                        .any(|t| t.texture.is_some_and(|x| x.resource == texture.resource))
+                    {
+                        return Err("native sampled attachment feedback unsupported".into());
+                    }
+                }
+                let set_key = (pipeline, d.textures.as_ptr() as usize);
+                let sets = if let Some((_, sets)) = self.texture_sets.get(&set_key) {
+                    *sets
+                } else {
+                    let sets = [
+                        self.textures(backend, pass, d, pipeline, n::Stage::Pixel, &pi)?,
+                        self.textures(backend, pass, d, pipeline, n::Stage::Vertex, &vi)?,
+                    ];
+                    self.texture_sets.insert(set_key, (d.textures.clone(), sets));
+                    sets
+                };
+                let count = primitive_vertices(d.primitive, d.primitives)?;
+                let end = d.start.checked_add(count).ok_or("native draw range overflow")?;
+                let mut vertices = vec![];
+                for &stream in streams.iter() {
+                    let s = d.streams.iter().find(|s| s.stream == stream).unwrap();
+                    let buffer = self.buffer(backend, s.resource, s.offset)?;
+                    if d.indices.is_none() && (end as u64 * s.stride as u64) > buffer.size {
+                        return Err("native vertex draw exceeds buffer".into());
+                    }
+                    vertices.push(buffer);
+                }
+                let indices = d
+                    .indices
+                    .map(|i| -> Result<_, String> {
+                        let format = match i.format {
+                            101 => wgpu::IndexFormat::Uint16,
+                            102 => wgpu::IndexFormat::Uint32,
+                            _ => return Err("native index format unsupported".into()),
+                        };
+                        let slice = self.buffer(backend, i.resource, 0)?;
+                        if end as u64 * format.byte_size() as u64 > slice.size {
+                            return Err("native index draw exceeds buffer".into());
+                        }
+                        Ok((slice, format))
+                    })
+                    .transpose()?;
+                prepared.draws.push(PreparedDraw {
+                    pipeline,
+                    shaders: [ps, vs],
+                    sets,
+                    vertices,
+                    indices,
+                    range: d.start..end,
+                });
+            }
+            out.push(prepared);
+        }
+        Ok(out)
+    }
+    fn run(
+        &mut self,
+        backend: &mut WgpuBackend,
+        job: &NativeJob,
+        overrides: &[ComparePair],
+    ) -> Result<(), String> {
+        // No render commands or clears until every resource/state is prepared.
+        let prepared = self.prepare(backend, job, overrides)?;
+        let draws = job.passes.iter().map(|p| p.draws.len() as u64).sum::<u64>();
+        let bytes = draws
+            .checked_mul(2 * 4864)
+            .and_then(|n| n.checked_add(16384))
+            .ok_or("native job too large")?;
+        if bytes > backend.device.limits().max_buffer_size || bytes > u32::MAX as u64 {
+            return Err("native job exceeds constant arena limit".into());
+        }
+        // One per job for N2 integration; Device identity caches persist. L123
+        // resident/bundle reuse requires a later persistent recorder context.
+        let mut recorder = n::Recorder::new(&self.device, bytes);
+        let mut constants = FxMap::default();
+        for p in &prepared {
+            for d in &p.draws {
+                for shader in d.shaders {
+                    constants
+                        .entry(shader)
+                        .or_insert_with(|| recorder.create_constant_buffer_for_shader(shader));
+                }
+            }
+        }
+        for (pass, prepared) in job.passes.iter().zip(&prepared) {
+            recorder.begin_pass(prepared.desc)?;
+            for (d, p) in pass.draws.iter().zip(&prepared.draws) {
+                recorder.set_pipeline(p.pipeline);
+                for set in p.sets {
+                    recorder.set_texture_set(set);
+                }
+                for (slot, &v) in p.vertices.iter().enumerate() {
+                    recorder.set_vertex_buffer(slot as u32, v);
+                }
+                if let Some((buffer, format)) = p.indices {
+                    recorder.set_index_buffer(buffer, format);
+                }
+                for (stage, updates) in [&d.ps_constants, &d.vs_constants].into_iter().enumerate() {
+                    let shader = p.shaders[stage];
+                    let c = constants[&shader];
+                    apply_constants(
+                        &mut recorder,
+                        c,
+                        self.device.shader_constant_layout(shader),
+                        updates,
+                    )?;
+                    recorder.set_constants(c);
+                }
+                let v = d.viewport;
+                let extra = [1.0 / v[2] as f32, -1.0 / v[3] as f32, 0.0, 0.0].map(f32::to_bits);
+                let shader = p.shaders[1];
+                recorder.update_constant_range(
+                    constants[&shader],
+                    self.device.shader_constant_layout(shader).extra_offset,
+                    &words_bytes(&extra),
+                )?;
+                recorder.set_viewport([
+                    v[0] as f32,
+                    v[1] as f32,
+                    v[2] as f32,
+                    v[3] as f32,
+                    f32::from_bits(v[4]),
+                    f32::from_bits(v[5]),
+                ]);
+                if state_value(&d.state, 174) != 0 {
+                    if let Some([l, t, r, b]) = d.scissor {
+                        recorder.set_scissor([l as u32, t as u32, (r - l) as u32, (b - t) as u32]);
+                    }
+                }
+                recorder.set_stencil_reference(state_value(&d.state, 57));
+                let colour =
+                    crate::clear_colour(state_value(&d.state, 193), wgpu::TextureFormat::Rgba32Float);
+                recorder.set_blend_constant([colour.r, colour.g, colour.b, colour.a]);
+                if p.indices.is_some() {
+                    recorder.draw_indexed(p.range.clone(), d.base_vertex, 0..1)?;
+                } else {
+                    recorder.draw(p.range.clone(), 0..1)?;
+                }
+            }
+            recorder.end_pass();
+        }
+        recorder.submit();
+        Ok(())
+    }
+}
+fn state_value(state: &NativeFixedState, key: u32) -> u32 {
+    state
+        .render_states
+        .binary_search_by_key(&key, |x| x.0)
+        .ok()
+        .map_or(0, |i| state.render_states[i].1)
+}
+fn validate_fixed(state: &NativeFixedState) -> Result<(), String> {
+    if state.render_states.windows(2).any(|p| p[0].0 >= p[1].0) {
+        return Err("native states must be sorted and unique".into());
+    }
+    for key in [15, 175, 195, 176, 152] {
+        if state_value(state, key) != 0 {
+            return Err(format!("native state {key} unsupported"));
+        }
+    }
+    Ok(())
+}
+fn validate_draw(d: &NativeDraw, target: &Target) -> Result<(), String> {
+    if d.instances != 1 {
+        return Err("native instancing deferred".into());
+    }
+    if d.streams.len() > 4
+        || d.streams.iter().enumerate().any(|(i, s)| {
+            s.stream >= 4 || s.offset % 4 != 0 || d.streams[..i].iter().any(|p| p.stream == s.stream)
+        })
+    {
+        return Err("native invalid/duplicate stream".into());
+    }
+    if d.textures
+        .iter()
+        .enumerate()
+        .any(|(i, t)| d.textures[..i].iter().any(|p| p.sampler == t.sampler))
+    {
+        return Err("native duplicate sampler".into());
+    }
+    let v = d.viewport;
+    if v[2] == 0
+        || v[3] == 0
+        || v[0].checked_add(v[2]).is_none_or(|x| x > target.width)
+        || v[1].checked_add(v[3]).is_none_or(|y| y > target.height)
+        || ![v[4], v[5]]
+            .iter()
+            .all(|&x| f32::from_bits(x).is_finite() && (0.0..=1.0).contains(&f32::from_bits(x)))
+        || f32::from_bits(v[4]) > f32::from_bits(v[5])
+    {
+        return Err("native invalid viewport".into());
+    }
+    if state_value(&d.state, 174) != 0 {
+        let [l, t, r, b] = d.scissor.ok_or("native enabled scissor missing")?;
+        if l < 0 || t < 0 || r < l || b < t || r as u32 > target.width || b as u32 > target.height {
+            return Err("native invalid scissor".into());
+        }
+    }
+    Ok(())
+}
+fn primitive_vertices(kind: u32, primitives: u32) -> Result<u32, String> {
+    if primitives == 0 {
+        return Ok(0);
+    }
+    match kind {
+        1 => Some(primitives),
+        2 => primitives.checked_mul(2),
+        3 => primitives.checked_add(1),
+        4 => primitives.checked_mul(3),
+        5 => primitives.checked_add(2),
+        _ => None,
+    }
+    .ok_or("native primitive range unsupported/overflow".into())
+}
+fn words_bytes(words: &[u32]) -> Vec<u8> {
+    words.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+fn apply_constants(
+    recorder: &mut n::Recorder<'_>,
+    buffer: n::ConstantBuffer,
+    layout: n::ConstantLayout,
+    updates: &NativeConstants,
+) -> Result<(), String> {
+    for write in &updates.floats {
+        let first = (write.first as usize).min(layout.floats);
+        let count = write.registers.len().min(layout.floats - first);
+        if count != 0 {
+            recorder.update_constant_range(
+                buffer,
+                first * 16,
+                &write.registers[..count]
+                    .iter()
+                    .flatten()
+                    .flat_map(|x| x.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            )?;
+        }
+    }
+    for write in &updates.ints {
+        recorder.update_constant_range(
+            buffer,
+            layout.int_offset + write.first as usize * 16,
+            &write
+                .registers
+                .iter()
+                .flatten()
+                .flat_map(|x| x.to_le_bytes())
+                .collect::<Vec<_>>(),
+        )?;
+    }
+    for write in &updates.bools {
+        for (index, &value) in write.registers.iter().enumerate() {
+            recorder.update_constant_range(
+                buffer,
+                layout.bool_offset + (write.first as usize + index) * 16,
+                &value.to_le_bytes(),
+            )?;
+        }
+    }
+    Ok(())
+}
+impl ConstantReads {
+    fn from_shader(shader: &d3d9shader::Shader) -> Result<Self, String> {
+        use d3d9shader::{op, reg, Stage};
+        let mut r = Self {
+            floats: vec![false; if shader.stage == Stage::Vertex { 256 } else { 224 }],
+            ..Default::default()
+        };
+        for ins in &shader.instructions {
+            for (index, src) in ins.src.iter().enumerate() {
+                let bank: &mut [bool] = match src.kind {
+                    reg::CONST => &mut r.floats,
+                    reg::CONSTINT => &mut r.ints,
+                    reg::CONSTBOOL => &mut r.bools,
+                    reg::CONST2 | reg::CONST3 | reg::CONST4 => {
+                        return Err("native extended constant banks unsupported".into())
+                    }
+                    _ => continue,
+                };
+                if src.relative.is_some() {
+                    bank.fill(true);
+                    continue;
+                }
+                let rows = if index == 1 {
+                    match ins.opcode {
+                        op::M4X4 | op::M3X4 => 4,
+                        op::M4X3 | op::M3X3 => 3,
+                        op::M3X2 => 2,
+                        _ => 1,
+                    }
+                } else {
+                    1
+                };
+                let first = src.index as usize;
+                bank.get_mut(first..first + rows)
+                    .ok_or("native shader constant outside bank")?
+                    .fill(true);
+            }
+        }
+        for ins in &shader.instructions {
+            if let Some(dst) = &ins.dst {
+                let bank: &mut [bool] = match ins.opcode {
+                    op::DEF => &mut r.floats,
+                    op::DEFI => &mut r.ints,
+                    op::DEFB => &mut r.bools,
+                    _ => continue,
+                };
+                if let Some(needed) = bank.get_mut(dst.index as usize) {
+                    *needed = false;
+                }
+            }
+        }
+        Ok(r)
+    }
+    fn validate(&self, updates: &NativeConstants) -> Result<(), String> {
+        fn covered(required: &[bool], ranges: impl Iterator<Item = (u32, usize)>) -> Result<(), String> {
+            let mut storage = [false; 256];
+            let written = &mut storage[..required.len()];
+            for (first, len) in ranges {
+                let first = first as usize;
+                let end = first.checked_add(len).ok_or("native constant range overflow")?;
+                written
+                    .get_mut(first..end)
+                    .ok_or("native constant range outside bank")?
+                    .fill(true);
+            }
+            if required
+                .iter()
+                .zip(written.iter())
+                .any(|(&needed, &have)| needed && !have)
+            {
+                return Err("native constants do not cover shader reads".into());
+            }
+            Ok(())
+        }
+        covered(
+            &self.floats,
+            updates.floats.iter().map(|w| (w.first, w.registers.len())),
+        )?;
+        covered(
+            &self.ints,
+            updates.ints.iter().map(|w| (w.first, w.registers.len())),
+        )?;
+        covered(
+            &self.bools,
+            updates.bools.iter().map(|w| (w.first, w.registers.len())),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn coverage_rejects_missing_out_of_range_and_accepts_def_constants() {
+        let mut shader = d3d9shader::parse(&[0xffff0300,0x02000001,0x800f0800,0xa0e40003,0xffff]).unwrap();
+        let required = ConstantReads::from_shader(&shader).unwrap();
+        assert!(required.validate(&NativeConstants::default()).is_err());
+        let mut constants = NativeConstants { floats:vec![NativeFloatWrite{first:3,registers:vec![[0;4]].into()}],..Default::default() };
+        assert!(required.validate(&constants).is_ok());
+        constants.floats[0].first=224;
+        assert!(required.validate(&constants).is_err());
+        let mut def=shader.instructions[0].clone();def.opcode=d3d9shader::op::DEF;
+        def.dst=Some(def.src[0].clone());def.src.clear();def.data=vec![0;4];
+        shader.instructions.insert(0,def);
+        assert!(ConstantReads::from_shader(&shader).unwrap().validate(&NativeConstants::default()).is_ok());
+    }
+    #[test]
+    fn coverage_includes_implicit_matrix_rows_and_relative_bank() {
+        let mut shader=d3d9shader::parse(&[0xfffe0300,0x02000001,0xe00f0000,0xa0e40000,0xffff]).unwrap();
+        let ins=&mut shader.instructions[0];ins.opcode=d3d9shader::op::M4X4;
+        let mut row=ins.src[0].clone();row.index=4;ins.src.push(row);
+        let required=ConstantReads::from_shader(&shader).unwrap();
+        assert!(required.floats[0]);assert!(required.floats[4..8].iter().all(|&r|r));assert!(!required.floats[8]);
+        let mut address=shader.instructions[0].src[0].clone();address.kind=d3d9shader::reg::ADDR;
+        shader.instructions[0].src[0].relative=Some(Box::new(address));
+        assert!(ConstantReads::from_shader(&shader).unwrap().floats.iter().all(|&r|r));
+    }
+}

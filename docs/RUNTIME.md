@@ -992,3 +992,40 @@ Verified against 1,568 private Unicorn ABI cases and isolated lifted bodies
 checked against 811 L117 cases. Runtime light serial tests: 171 pass, the
 existing fullscreen gamma Reset failure, three ignored. No game/image/FPS
 comparison yet. Timings and exact validation limits: docs/tasks/L125-apply-ports.md.
+### L127 native backend comparison
+
+DDDRAW_NATIVE=compare keeps decoded D3D9 DrawCalls as the visible oracle and submits matching NativeJobs to L126 shadow attachments. FIFO begin markers precede oracle writes; end markers precede target changes, fallback commands, dirty uploads and frame end. Rejections retain the oracle exactly once. The shared nDraw decoder is covered separately by L119's runtime call oracle. GPU summaries are asynchronous and report pass, target, aspect, compared/differing pixels and maximum channel difference; submitted jobs are not yet verified. Nine GPU tests pass (four reducer, five end-to-end shadow), plus three producer FIFO tests. Synthetic mismatch/rejection checks preserve real color/depth/stencil; in-game verification remains with the head. See docs/tasks/L127-native-compare.md for coverage and test results.
+
+
+## L123 native resident constants and bundles (2026-10-13)
+
+Opt-in `ddgpu::native::Recorder::with_resident_constants(device, bytes, true)`
+preserves per-draw snapshot offsets while uploading only registers changed
+relative to the preceding submission. One compute scatter applies deltas
+before rendering on the same queue. `enable_bundles(true)` compares exact
+resource/draw/offset sequences; dynamic pass state splits them. Keep the
+recorder alive across submissions to retain caches. Existing `Recorder::new`
+and all setter/draw signatures remain compatible.
+
+Optimized synthetic 5,000-draw/40-pipeline/200-set, cap1-sized register churn:
+full 1.644 -> resident 1.264 -> resident + bundles 0.843 us/draw including
+upload/finish/submit; 15.67 MB -> 340 KB uploaded per frame. Six GPU tests and
+11 CPU tests pass. This is not game/FPS evidence. Head #11087 assigns L126's
+owned NativeJob/worker adapter next. See `tasks/L123-native-device-2.md`.
+
+
+## L126 native jobs on the backend worker (2026-10-13)
+
+`GraphicsBackend::native_supported()` is false by default and cached once by
+DeferredBackend. Supported NativeJobs enqueue on the same FIFO as uploads,
+legacy draws, queries, copies and readback, without a per-job producer wait.
+Unexpected worker rejection logs ERROR; the producer must satisfy the native
+eligibility contract before sending. Direct WgpuBackend calls return the
+untouched job on rejection before any native target submission.
+
+The worker resolves live backend resources, prewarms identity-cached native
+objects, records compact constants and submits one or more passes. Initial
+recorder lifetime is one job, so L123 cross-job resident/bundle speedups are
+not yet active here. Four focused GPU tests and 14 CPU tests pass. Shadow
+comparison begin/end hooks are compiled; L127 end-to-end gate and head's
+DDDRAW_NATIVE=1 image/FPS run remain pending. Details: tasks/L126-native-worker.md.

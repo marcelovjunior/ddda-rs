@@ -20,10 +20,33 @@
 
 - Owned NativeJob/Pass/Draw transport with effective D3D9 values, identity
   keys, resource IDs and register ranges; same DeferredBackend FIFO.
-  Rejection returns the intact job before native target writes.
-- **7 transport tests pass**, including upload/native/query ordering and
+  One-time capability check; supported jobs enqueue without a round trip.
+  Unexpected worker rejection is logged loudly (head-approved contract).
+- **8 transport tests pass**, including upload/native/query ordering and
   unsupported-job ownership. Worker and game comparison pending.
-- Next: ddgpu native worker adapter; `docs/tasks/L126-native-worker.md`.
+- Worker now executes through native::Device with immutable state/shader /
+  texture-group identity caches on the same device/queue. **4 Vulkan GPU tests
+  pass** (16 backend/host-driver image cases plus FIFO/resource/rejection tests),
+  **14 ddgpu CPU tests pass**. Per-job compact recorder; persistent resident /
+  bundle reuse and game/FPS comparison remain separate work.
+- L127 shadow hooks compiled; next: end-to-end shadow gate and head N2 run.
+  Details: `docs/tasks/L126-native-worker.md`.
+
+### L123 native resident constants and bundles (2026-10-13)
+
+- Stable constant snapshots upload changed 16-byte registers in one packed
+  transfer + ordered compute scatter. Exact repeated draw sequences reuse
+  render bundles; dynamic state splits sequences. Persistent texture/sampler
+  groups retain identity keys. Existing direct API remains available.
+- Matched optimized 5,000 draws / 40 pipelines / 200 sampled sets, synthetic
+  8,200 VS + 7,300 PS register writes/frame: full **1.644**, resident **1.264**,
+  resident + bundles **0.843 us/draw**, including upload/finish/submit.
+  Three alternating repeats; bundle range 0.822–0.868. Uploads **15.67 MB ->
+  340 KB/frame**. Minimal shaders; no gameplay/FPS claim.
+- **6 GPU tests / 11 CPU tests pass**; runtime light **171 pass / 1 inherited
+  fullscreen gamma-reset failure / 3 ignored**. Core `e062d80a`.
+- Next: head-assigned L126 owned NativeJob FIFO + WgpuBackend worker adapter
+  for L119 N2. Exact conditions and limitations: `docs/tasks/L123-native-device-2.md`.
 
 ### L122 gameplay pass map (2026-10-13)
 
@@ -2241,3 +2264,22 @@ opening (codex-31), route perf (codex-29).
   ignored**; ddports test passes. No game, GPU, shard build or FPS claim.
 - Next: head's matched boot/save/frame/profile comparison and L119 adoption
   of the pure shader/constant source iterators.
+### L127 asynchronous native comparison reduction (2026-10-13)
+
+- GPU color/depth/stencil summaries retain pass and target identity; exact loaded-channel comparisons, differing pixels and maximum difference. Bounded async MAP_READ returns 16 bytes per target without a GPU wait.
+- Four focused Vulkan tests and one CPU summary test pass. Scale fixture: 128 pending targets, 16,650,240 pixels, 2,048 readback bytes; 58.73 ms synthetic diagnostic (no gameplay/FPS claim).
+- Next: integrate L119 compare sink and L126 pre-oracle shadow lifecycle, run light runtime suite, then head-run in-game comparison. Details: docs/tasks/L127-native-compare.md.
+
+
+### L127 compare producer (2026-10-13)
+
+- DDDRAW_NATIVE=compare now emits pre-oracle begin and single-pass end markers from the L119 sink. Real targets receive D3D9 exactly once; rejected comparisons never redraw them. Attachment/fallback/frame boundaries and dirty uploads close pending comparisons.
+- Three pure transport tests pass, including DeferredBackend FIFO and rejection recovery. Earlier light runtime:173 pass,1 inherited fullscreen-gamma failure,3 ignored. Backend-path oracle shares L119 decoder, separately checked against runtime D3D9 calls.
+- Next: validate synthetic NativeJobs after L126 shadow hooks land, then head's in-game run. No gameplay equivalence claim.
+
+### L127 integrated comparison gate (2026-10-13)
+
+- DDDRAW_NATIVE=compare producer, L126 shadow worker and asynchronous GPU reduction integrated with L119 cache-2c. Five end-to-end GPU tests pass (nine GPU cases total), one summary CPU test, three producer tests and eight transport tests pass.
+- 42 matched and three intentional mismatched target summaries; five explicit rejection diagnostics. Blended pre-pass loads, repeated shadows, mip attachments and D24S8 isolation checked; real targets unchanged, zero pending comparisons on test shutdown.
+- Runtime: 180 distinct passes across full suite plus isolated timing retry; one inherited fullscreen-gamma failure, three ignored. No checks weakened; no game/shard run or game image/FPS claim.
+- Next: head-run DDDRAW_NATIVE=compare gameplay and inspect mismatch/unverified/pending counts. Details: docs/tasks/L127-native-compare.md.
