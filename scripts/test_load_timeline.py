@@ -1,8 +1,29 @@
 import unittest
-from load_timeline import add_mark, movie_spans, parse, phases, render, render_legacy
+from load_timeline import add_mark, movie_spans, parse, phases, render, render_legacy, interval
 
 
 class TimelineTests(unittest.TestCase):
+    def test_independent_snapshots_exclude_future_samples(self):
+        events = parse("load-log t=1 event=io_totals bytes=40\nload-log t=1.1 event=archive_totals zlib_ns=20\nload-log t=2 event=io_totals bytes=100\nload-log t=3 event=archive_totals zlib_ns=999")
+        result = interval(events, 1.5, 2.5)
+        self.assertEqual(result["delta"]["io_totals.bytes"], 60)
+        self.assertEqual(result["delta"]["archive_totals.zlib_ns"], 0)
+        self.assertEqual(result["sample_age_s"]["archive_totals"], 1.4)
+
+    def test_missing_counter_baseline_is_not_invented(self):
+        events = parse("load-log t=2 event=gpu_totals pipelines=7")
+        self.assertEqual(interval(events, 0, 3)["delta"], {})
+        self.assertEqual(interval(events, 1, 3)["delta"], {})
+        events = parse("load-log t=0 event=process_start\nload-log t=2 event=gpu_totals pipelines=7")
+        self.assertEqual(interval(events, 0, 3)["delta"], {"gpu_totals.pipelines": 7})
+
+    def test_nested_helpers_have_distinct_counters(self):
+        events = parse("load-log t=0 event=process_start\nload-log t=1 event=zlib_helper address=0x00cf2cb0 calls=3 ns=123\nload-log t=1.1 event=archive_totals zlib_ns=150")
+        result = interval(events, 0, 2)["delta"]
+        self.assertEqual(result["zlib_helper:0x00cf2cb0.ns"], 123)
+        self.assertEqual(result["archive_totals.zlib_ns"], 150)
+        self.assertEqual(len(list(phases(events))), 1)
+
     def test_out_of_order_and_unrelated_lines(self):
         events = parse("noise\nload-log t=2.0 event=first_window\nload-log t=0 event=process_start")
         self.assertEqual([(e.name, d) for e, d in phases(events)], [("process_start", None), ("first_window", 2.0)])

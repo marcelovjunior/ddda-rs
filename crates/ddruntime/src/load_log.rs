@@ -6,6 +6,9 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+#[path = "load_timeline.rs"]
+pub mod timeline;
+
 static ENABLED: OnceLock<bool> = OnceLock::new();
 static CLOCK: OnceLock<(Instant, Duration)> = OnceLock::new();
 static READS: AtomicU64 = AtomicU64::new(0);
@@ -22,6 +25,38 @@ static ZLIB_NS: AtomicU64 = AtomicU64::new(0);
 static ZLIB_CALLS: AtomicU64 = AtomicU64::new(0);
 static ZLIB_ENTRY_CALLS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 static ZLIB_ENTRY_NS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+struct ZlibCaller {
+    address: AtomicU64,
+    calls: AtomicU64,
+    ns: AtomicU64,
+    input: AtomicU64,
+    output: AtomicU64,
+}
+impl ZlibCaller {
+    const fn new() -> Self { Self { address: AtomicU64::new(0), calls: AtomicU64::new(0), ns: AtomicU64::new(0), input: AtomicU64::new(0), output: AtomicU64::new(0) } }
+}
+static ZLIB_CALLERS: [ZlibCaller; 32] = [const { ZlibCaller::new() }; 32];
+static ZLIB_CALLER_OVERFLOW: AtomicU64 = AtomicU64::new(0);
+static ZLIB_HELPER_CALLS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+static ZLIB_HELPER_NS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+const ZLIB_HELPERS: [u32; 4] = [0x00cf2cb0, 0x00cf34d0, 0x00cf38d0, 0x00cf01e0];
+
+#[cfg(any(feature = "game", test))]
+fn zlib_caller(address: u32, elapsed: u64, input: u32, output: u32) {
+    // Store address+1 so even a synthetic null return address has a bucket.
+    let key = u64::from(address) + 1;
+    for slot in &ZLIB_CALLERS {
+        let found = slot.address.compare_exchange(0, key, Relaxed, Relaxed).unwrap_or_else(|v| v);
+        if found == 0 || found == key {
+            slot.calls.fetch_add(1, Relaxed);
+            slot.ns.fetch_add(elapsed, Relaxed);
+            slot.input.fetch_add(u64::from(input), Relaxed);
+            slot.output.fetch_add(u64::from(output), Relaxed);
+            return;
+        }
+    }
+    ZLIB_CALLER_OVERFLOW.fetch_add(1, Relaxed);
+}
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 static CACHE_HOST_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -97,6 +132,7 @@ pub fn start() {
         return;
     }
     let _ = seconds();
+    timeline::register_thread("host_main");
     eprintln!("load-log t=0.000000 event=process_start");
     event("main_entry", format_args!(""));
 }
@@ -104,6 +140,11 @@ pub fn start() {
 pub fn event(name: &str, details: std::fmt::Arguments<'_>) {
     if enabled() {
         eprintln!("load-log t={:.6} event={name} {details}", seconds());
+        if matches!(name, "main_entry" | "gpu_init_begin" | "gpu_init_end" |
+            "runtime_init_begin" | "runtime_init_end" | "guest_start" | "guest_end" |
+            "first_present" | "movie_start" | "movie_end") {
+            timeline::transition(name, details);
+        }
     }
 }
 
@@ -115,6 +156,15 @@ pub fn once(flag: &AtomicBool, name: &str) {
 
 pub(crate) fn begin() -> Option<Instant> {
     enabled().then(Instant::now)
+}
+
+/// Counter order is shared with the interval formatter; all are completion
+/// counters, sampled independently (not an atomic stop-the-world snapshot).
+fn interval_counters() -> [u64; 15] {
+    [&READS, &BYTES, &READ_NS, &ARCHIVE_READS, &ARCHIVE_NS,
+     &INFLATES, &INFLATE_NS, &ZLIB_CALLS, &ZLIB_NS,
+     &ZLIB_HELPER_NS[0], &ZLIB_HELPER_NS[1], &ZLIB_HELPER_NS[3],
+     &GEOMETRY_NS, &OPEN_NS, &VORBIS_NS].map(|v| v.load(Relaxed))
 }
 pub(crate) fn read_done(start: Option<Instant>, bytes: u64) {
     if let Some(start) = start {
@@ -148,6 +198,20 @@ pub(crate) fn open_done(start: Option<Instant>, name: &str, success: bool) {
 pub fn totals() {
     if !enabled() {
         return;
+    }
+    for slot in &ZLIB_CALLERS {
+        let key = slot.address.load(Relaxed);
+        if key != 0 {
+            event("zlib_caller", format_args!("return_pc={:#010x} calls={} ns={} input_bytes={} output_bytes={}", key - 1,
+                slot.calls.load(Relaxed), slot.ns.load(Relaxed), slot.input.load(Relaxed), slot.output.load(Relaxed)));
+        }
+    }
+    if ZLIB_CALLER_OVERFLOW.load(Relaxed) != 0 {
+        event("zlib_caller_overflow", format_args!("calls={}", ZLIB_CALLER_OVERFLOW.load(Relaxed)));
+    }
+    for (i, address) in ZLIB_HELPERS.iter().enumerate() {
+        event("zlib_helper", format_args!("address={address:#010x} calls={} ns={}",
+            ZLIB_HELPER_CALLS[i].load(Relaxed), ZLIB_HELPER_NS[i].load(Relaxed)));
     }
     event("boot_cpu_totals", format_args!(
         "geometry_calls={} geometry_ns={} vorbis_calls={} vorbis_ns={}",
@@ -206,6 +270,13 @@ mod guest {
     const INFLATE: u32 = 0x00cf02e0;
     static ORIGINAL_READ: OnceLock<LiftFn> = OnceLock::new();
     static ORIGINAL_INFLATE: OnceLock<LiftFn> = OnceLock::new();
+    static ORIGINAL_HELPERS: [OnceLock<LiftFn>; 4] = [const { OnceLock::new() }; 4];
+    fn helper<const I: usize>(m: &mut dyn Mem, cpu: &mut Cpu) {
+        let start = Instant::now();
+        ORIGINAL_HELPERS[I].get().expect("zlib helper timing body")(m, cpu);
+        ZLIB_HELPER_NS[I].fetch_add(start.elapsed().as_nanos() as u64, Relaxed);
+        ZLIB_HELPER_CALLS[I].fetch_add(1, Relaxed);
+    }
     // Read-only exe/Ghidra: procedural mesh construction and vorbisfile's
     // packet-processing entry. Exact dispatch boundaries disambiguate PDB
     // nearest-public-symbol attribution of private split helpers.
@@ -213,6 +284,55 @@ mod guest {
     const VORBIS: u32 = 0x012eb690;
     static ORIGINAL_GEOMETRY: OnceLock<LiftFn> = OnceLock::new();
     static ORIGINAL_VORBIS: OnceLock<LiftFn> = OnceLock::new();
+    static ORIGINAL_TITLE: OnceLock<LiftFn> = OnceLock::new();
+    static ORIGINAL_AREA: OnceLock<LiftFn> = OnceLock::new();
+    static ORIGINAL_STAGE: OnceLock<LiftFn> = OnceLock::new();
+    static TITLE_STATE: AtomicU64 = AtomicU64::new(u64::MAX);
+    static STAGE_STATE: AtomicU64 = AtomicU64::new(u64::MAX);
+    // Observational reads from 0x005317b0 (aTitle slot 7) and 0x00504330
+    // (aStage slot 7), DDDA.exe 2017-12-13 Steam. See GAMEPLAY_PATH.md.
+    // These are code-state boundaries, not proof that a GUI was displayed.
+    fn title_state(m: &dyn Mem, object: u32) {
+        let state = m.u32(object.wrapping_add(0xf0));
+        let key = (u64::from(object) << 32) | u64::from(state);
+        if TITLE_STATE.swap(key, Relaxed) != key {
+            let label = match state {
+                0x00531800 => "title_press_start",
+                0x005325e0 | 0x00531a20 => "main_menu",
+                0x00532110 => "save_load_start",
+                0x005330e0 => "game_main_handover",
+                _ => "title_state",
+            };
+            timeline::transition(label, format_args!("object={object:#x} state={state:#010x} boundary=title_dispatch"));
+        }
+    }
+    fn title(m: &mut dyn Mem, cpu: &mut Cpu) {
+        let object = cpu.ecx;
+        title_state(m, object);
+        ORIGINAL_TITLE.get().expect("title timing body")(m, cpu);
+        // No post-call dereference: a callback can destroy its own object.
+    }
+    fn area(m: &mut dyn Mem, cpu: &mut Cpu) {
+        let dti = m.u32(cpu.esp.wrapping_add(4));
+        timeline::transition("area_request", format_args!("dti={dti:#010x} boundary=request_not_ready"));
+        ORIGINAL_AREA.get().expect("area timing body")(m, cpu);
+    }
+    fn stage(m: &mut dyn Mem, cpu: &mut Cpu) {
+        timeline::stage_started();
+        let object = cpu.ecx;
+        let state = m.u32(object.wrapping_add(4));
+        // 0x0050adc0 case 0xe ends the load sequence by writing +4=2;
+        // 0x00504330 dispatches that mode to 0x0050b870. This marks a
+        // post-load stage frame, not a guarantee that input is enabled.
+        if state & 0xff == 2 { timeline::gameplay_started(); }
+        // +4/+5 are mode/substate; +6 is a countdown in 0x0050adc0.
+        // Do not make every countdown tick an expensive transition snapshot.
+        let key = (u64::from(object) << 32) | u64::from(state & 0xffff);
+        if STAGE_STATE.swap(key, Relaxed) != key {
+            timeline::transition("stage_state", format_args!("object={object:#x} state={state:#x} stage={} boundary=stage_update_not_player_control", m.u32(object.wrapping_add(0x724))));
+        }
+        ORIGINAL_STAGE.get().expect("stage timing body")(m, cpu);
+    }
     thread_local! { static ARCHIVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
 
     struct ArchiveScope(Instant);
@@ -235,13 +355,19 @@ mod guest {
     }
     fn inflate(m: &mut dyn Mem, cpu: &mut Cpu) {
         let archive = ARCHIVE_DEPTH.with(|d| d.get() != 0);
+        let caller = m.u32(cpu.esp);
         let stream = m.u32(cpu.esp.wrapping_add(4));
+        let (input, output) = if stream == 0 { (0, 0) } else { (m.u32(stream + 4), m.u32(stream + 16)) };
         let bucket = if stream == 0 { 4 } else {
             zlib_entry_bucket(m.u32(stream.wrapping_add(4)), m.u32(stream.wrapping_add(16)))
         };
         let start = Instant::now();
         ORIGINAL_INFLATE.get().expect("inflate timing body")(m, cpu);
         let elapsed = start.elapsed().as_nanos() as u64;
+        let (used, produced) = if stream == 0 { (0, 0) } else {
+            (input.wrapping_sub(m.u32(stream + 4)), output.wrapping_sub(m.u32(stream + 16)))
+        };
+        zlib_caller(caller, elapsed, used, produced);
         ZLIB_NS.fetch_add(elapsed, Relaxed);
         ZLIB_CALLS.fetch_add(1, Relaxed);
         ZLIB_ENTRY_CALLS[bucket].fetch_add(1, Relaxed);
@@ -285,6 +411,13 @@ mod guest {
             (INFLATE, inflate as LiftFn, &ORIGINAL_INFLATE),
             (GEOMETRY, geometry as LiftFn, &ORIGINAL_GEOMETRY),
             (VORBIS, vorbis as LiftFn, &ORIGINAL_VORBIS),
+            (0x005317b0, title as LiftFn, &ORIGINAL_TITLE),
+            (0x00db4c10, area as LiftFn, &ORIGINAL_AREA),
+            (0x00504330, stage as LiftFn, &ORIGINAL_STAGE),
+            (ZLIB_HELPERS[0], helper::<0> as LiftFn, &ORIGINAL_HELPERS[0]),
+            (ZLIB_HELPERS[1], helper::<1> as LiftFn, &ORIGINAL_HELPERS[1]),
+            (ZLIB_HELPERS[2], helper::<2> as LiftFn, &ORIGINAL_HELPERS[2]),
+            (ZLIB_HELPERS[3], helper::<3> as LiftFn, &ORIGINAL_HELPERS[3]),
         ] {
             let body = ports.iter().chain(bodies).find(|e| e.0 == address).map(|e| e.1);
             if let Some(body) = body {
@@ -319,9 +452,14 @@ mod guest {
                 panic!("bypassed override")
             }
             let mut ports = vec![(ARCHIVE_READ, body as LiftFn)];
-            wrap_archive(&mut ports, &[(ARCHIVE_READ, replaced), (INFLATE, body), (GEOMETRY, body), (VORBIS, body)]);
+            wrap_archive(&mut ports, &[(ARCHIVE_READ, replaced), (INFLATE, body), (GEOMETRY, body), (VORBIS, body),
+                (0x005317b0, body), (0x00db4c10, body), (0x00504330, body)]);
             for (address, f) in ports {
                 let mut m = ddnative_base::mem::Sparse::default();
+                m.set_u32(35 + 0xf0, 0x00531800); // observed aTitle dispatcher field
+                m.set_u32(35 + 4, 2); // observed aStage mode/substate
+                m.set_u32(35 + 0x724, 100); // observed stage number
+                m.set_u32(100, 0x12345678); // guest return PC for caller census
                 m.set_u32(104, 4); // geometry's subdivision argument
                 if address == INFLATE {
                     m.set_u32(104, 0x2000);
@@ -335,6 +473,7 @@ mod guest {
                 };
                 f(&mut m, &mut cpu);
                 assert_eq!((cpu.eax, cpu.esp, m.u32(0x1000)), (42, 112, 42));
+                assert_eq!((m.u32(35 + 0xf0), m.u32(35 + 4), m.u32(35 + 0x724)), (0x00531800, 2, 100));
                 if address == INFLATE {
                     assert_eq!((m.u32(0x2004), m.u32(0x2010)), (5, 257));
                     assert_eq!(ZLIB_ENTRY_CALLS[3].load(Relaxed), 1);

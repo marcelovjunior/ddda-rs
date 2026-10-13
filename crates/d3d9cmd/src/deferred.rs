@@ -7,11 +7,48 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// A command: a draw by value (the commonest, L144: without a heap box per
-/// draw; the channel's slots are preallocated), or any other work.
-enum Work {
+type Work = Box<dyn FnOnce(&mut dyn GraphicsBackend) + Send>;
+
+// The bounded channel allocates its slots once. Common commands live directly
+// in those slots instead of allocating/freeing an erased closure per command.
+// Only infrequent result/presentation hooks need the arbitrary callback arm.
+enum Command {
     Draw(DrawCall),
-    Run(Box<dyn FnOnce(&mut dyn GraphicsBackend) + Send>),
+    Draws(Vec<DrawCall>),
+    Upload(Upload),
+    Clear(ClearCall),
+    Copy(CopyCall),
+    Fill(FillCall),
+    QueryBegin(u32),
+    QueryEnd(u32),
+    Release(u32),
+    Native(NativeJob),
+    NativeOrDraw(NativeJob, Vec<DrawCall>),
+    Hook(Work),
+}
+
+impl Command {
+    fn execute(self, backend: &mut dyn GraphicsBackend) {
+        match self {
+            Self::Draw(draw) => backend.draw(&draw),
+            Self::Draws(draws) => backend.draws(draws),
+            Self::Upload(upload) => backend.upload(upload),
+            Self::Clear(clear) => backend.clear(&clear),
+            Self::Copy(copy) => backend.copy(&copy),
+            Self::Fill(fill) => backend.fill(&fill),
+            Self::QueryBegin(query) => backend.query_begin(query),
+            Self::QueryEnd(query) => backend.query_end(query),
+            Self::Release(resource) => backend.release(resource),
+            Self::Native(job) => {
+                if let Err(job) = backend.native(job) {
+                    eprintln!("ERROR: accepted native job rejected on backend worker: {} passes / {} draws; producer eligibility contract violated",
+                        job.passes.len(), job.passes.iter().map(|p| p.draws.len()).sum::<usize>());
+                }
+            }
+            Self::NativeOrDraw(job, fallback) => backend.native_or_draw(job, fallback),
+            Self::Hook(work) => work(backend),
+        }
+    }
 }
 
 /// Moves a backend (including its presentation sink) onto one host thread.
@@ -21,7 +58,7 @@ enum Work {
 /// Dropping the adapter drains the stream and joins the worker.
 pub struct DeferredBackend {
     native_supported: bool,
-    sender: Option<SyncSender<Work>>,
+    sender: Option<SyncSender<Command>>,
     worker: Option<JoinHandle<()>>,
     presents: VecDeque<Receiver<()>>,
     /// Commands recorded, and executed (the worker counts them): marks.
@@ -45,15 +82,12 @@ impl DeferredBackend {
     pub fn with_capacity(mut backend: Box<dyn GraphicsBackend>, capacity: usize) -> Self {
         assert!(capacity > 0);
         let native_supported = backend.native_supported();
-        let (sender, receiver) = mpsc::sync_channel::<Work>(capacity);
+        let (sender, receiver) = mpsc::sync_channel::<Command>(capacity);
         let executed = Arc::new(AtomicU64::new(0));
         let counter = executed.clone();
         let worker = thread::Builder::new().name("d3d9-backend".into()).spawn(move || {
             while let Ok(work) = receiver.recv() {
-                match work {
-                    Work::Draw(draw) => backend.draw(&draw),
-                    Work::Run(work) => work(backend.as_mut()),
-                }
+                work.execute(backend.as_mut());
                 counter.fetch_add(1, Ordering::Release);
             }
         }).expect("start D3D9 backend worker");
@@ -64,17 +98,17 @@ impl DeferredBackend {
     }
 
     fn enqueue(&mut self, work: impl FnOnce(&mut dyn GraphicsBackend) + Send + 'static) {
-        self.send(Work::Run(Box::new(work)));
+        self.command(Command::Hook(Box::new(work)));
     }
 
-    fn send(&mut self, work: Work) {
+    fn command(&mut self, command: Command) {
         // Before recording any part of a third frame, retire the oldest
         // Present. Waiting only at the third Present would allow its entire
         // frame's draws to get three frames ahead of the display.
         if self.presents.len() == 2 {
             self.presents.pop_front().unwrap().recv().expect("D3D9 backend worker stopped before Present");
         }
-        if self.sender.as_ref().unwrap().send(work).is_err() {
+        if self.sender.as_ref().unwrap().send(command).is_err() {
             panic!("D3D9 backend worker stopped");
         }
         self.recorded += 1;
@@ -123,19 +157,14 @@ impl GraphicsBackend for DeferredBackend {
     fn native_supported(&self) -> bool { self.native_supported }
     fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> {
         if !self.native_supported { return Err(job); }
-        self.enqueue(move |b| {
-            if let Err(job) = b.native(job) {
-                eprintln!("ERROR: accepted native job rejected on backend worker: {} passes / {} draws; producer eligibility contract violated",
-                    job.passes.len(), job.passes.iter().map(|p| p.draws.len()).sum::<usize>());
-            }
-        });
+        self.command(Command::Native(job));
         Ok(())
     }
     fn native_or_draw(&mut self, job: NativeJob, fallback: Vec<DrawCall>) {
         // Decide on the worker, where resource/query state is authoritative.
         // In particular, never return enqueue success and discard a later
         // rejection (L133: indexed strips rejected whole multi-pass jobs).
-        self.enqueue(move |b| b.native_or_draw(job, fallback));
+        self.command(Command::NativeOrDraw(job, fallback));
     }
     fn native_compare_begin(&mut self, begin: NativeCompareBegin) -> bool {
         self.result(move |b| b.native_compare_begin(begin))
@@ -143,33 +172,34 @@ impl GraphicsBackend for DeferredBackend {
     fn native_compare_end(&mut self, id: u64, job: NativeJob) -> Result<(), NativeJob> {
         self.result(move |b| b.native_compare_end(id, job))
     }
-    fn upload(&mut self, upload: Upload) { self.enqueue(move |b| b.upload(upload)); }
-    fn draw(&mut self, draw: &DrawCall) { self.send(Work::Draw(draw.clone())); }
-    fn draw_owned(&mut self, draw: DrawCall) { self.send(Work::Draw(draw)); }
+    fn upload(&mut self, upload: Upload) { self.command(Command::Upload(upload)); }
+    fn draw(&mut self, draw: &DrawCall) {
+        self.command(Command::Draw(draw.clone()));
+    }
+    fn draw_owned(&mut self, draw: DrawCall) {
+        self.command(Command::Draw(draw));
+    }
     fn draws(&mut self, draws: Vec<DrawCall>) {
-        self.enqueue(move |b| b.draws(draws));
+        self.command(Command::Draws(draws));
     }
     fn clear(&mut self, clear: &ClearCall) {
-        let clear = clear.clone();
-        self.enqueue(move |b| b.clear(&clear));
+        self.command(Command::Clear(clear.clone()));
     }
     fn present(&mut self, target: &Target) { self.present_with(target, || {}); }
     fn copy(&mut self, copy: &CopyCall) {
-        let copy = copy.clone();
-        self.enqueue(move |b| b.copy(&copy));
+        self.command(Command::Copy(copy.clone()));
     }
     fn fill(&mut self, fill: &FillCall) {
-        let fill = fill.clone();
-        self.enqueue(move |b| b.fill(&fill));
+        self.command(Command::Fill(fill.clone()));
     }
     fn read_back(&mut self, target: &Target) -> Option<Vec<u8>> {
         let target = target.clone();
         self.result(move |b| b.read_back(&target))
     }
-    fn query_begin(&mut self, query: u32) { self.enqueue(move |b| b.query_begin(query)); }
+    fn query_begin(&mut self, query: u32) { self.command(Command::QueryBegin(query)); }
     fn query_end(&mut self, query: u32) {
         *self.generation.entry(query).or_default() += 1;
-        self.enqueue(move |b| b.query_end(query));
+        self.command(Command::QueryEnd(query));
     }
     /// Never waits (L102): the first call after a query_end asks the worker
     /// for the count and answers None (GetData's S_FALSE, as a driver does
@@ -206,7 +236,7 @@ impl GraphicsBackend for DeferredBackend {
         let ramp = ramp.copied();
         self.enqueue(move |b| b.gamma(ramp.as_ref()));
     }
-    fn release(&mut self, resource: u32) { self.enqueue(move |b| b.release(resource)); }
+    fn release(&mut self, resource: u32) { self.command(Command::Release(resource)); }
     fn fence(&mut self) { self.result(|b| b.fence()); }
     fn mark(&mut self) -> u64 { self.recorded }
     fn passed(&self, mark: u64) -> bool { self.executed.load(Ordering::Acquire) >= mark }

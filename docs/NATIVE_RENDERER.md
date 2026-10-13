@@ -42,6 +42,13 @@ constant blocks from them again. That re-derivation is the cost:
 | combo20 DDDRAW_NATIVE=1 | 17.0 / 17.3-18.0 | worker accepts 30% of jobs; refusals: strip restart 62,805, occlusion query 3,502, RT sampler fill 3,069, state 195 2,213 |
 | combo21 default (+L119 sampler mirror, L135, L109d, L136, L133 strips) | 19.0 / 18-21 (heavy 5,700-draw scene; same-scene re-run of combo20: 18.6) | 7.25 us per decided draw (combo20 7.97-8.40); bound wgpu-finish 77%, GPU 32%; memory peak ~3.2 GB (was 16-18 GB) |
 | combo21 DDDRAW_NATIVE=1 | 9.8 / 7-8 | worker accepts 90% of jobs, but the worker is re-created 129 times (release discard) and d3d9-backend is bound; refusals: RT sampler fill, state 195, sampled attachment feedback, strip restart |
+| combo22 default (+claude-2 2h/2i/2j per-draw cuts, L137 parallel encode at 1 thread, L139 green pin) | 18.7 / 20-20.7 | 3.2-3.4 us per decided draw (combo21 7.25); bound wgpu-finish 77% |
+| combo22 DDGPU_ENCODE_THREADS=2 (now the default, d7759b18) | 21.0 / 22-23.3 | bound moves to the render worker, guest thread 0x1034 (73%) |
+| combo22 DDGPU_ENCODE_THREADS=4 | 17.4 / 18-18.7 | slower: CPU contention on the shared 16-core machine |
+| combo23 default (+2 encode threads default, L140 loading opt-ins, L113 opt-in) | 20.9 / 20.7-22 | bound: render worker guest thread 0x1034 (~71%); DDGPU_NATIVE_SIM=1 19.5 / 25.3 end (lighter end scene) |
+| combo24 default (+L141 native keep-worker, L138 raw Vulkan opt-in, L144 render-worker cuts) | 21.9 / 22.7-25.3 (back-to-back A/B: combo23 20.8 / 21.3-23.3) | 3.88 us per decided draw |
+| combo24 DDGPU_VK=1 | 9.6 / 8.0 | raw passes 664k, fallback 46k, no thread above 50% CPU, GPU 36%: a wait somewhere (codex-9) |
+| combo24 DDDRAW_NATIVE=1 | 12.0 / 8.7-9.3 | worker_instances 1, 95% of jobs native; bound d3d9-backend 63%; compare 130,304 matched, 0 mismatched |
 
 (average / end of the run; L114, inlining the memory and flag helpers into
 the shards, gave no gain for 2.5x the compile time and was dropped.)

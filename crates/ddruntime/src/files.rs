@@ -64,6 +64,7 @@ pub struct Files {
     cwd: PathBuf,
     handles: HashMap<u32, Open>,
     archive_reads: std::collections::HashSet<u32>,
+    logged_archives: std::collections::HashSet<u32>,
     read_cache: crate::file_cache::Shared,
     next: u32,
 }
@@ -238,6 +239,10 @@ fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
         };
         let h = new_handle(f, Open::File(file));
         if cache_archive { f.archive_reads.insert(h); }
+        if crate::load_log::enabled() && !write
+            && std::path::Path::new(&name).extension().is_some_and(|e| e.eq_ignore_ascii_case("arc")) {
+            f.logged_archives.insert(h);
+        }
         Ok(h)
     });
     crate::load_log::open_done(load_started, &name, result.is_ok());
@@ -324,6 +329,7 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
         Some(Open::File(file)) => file.try_clone().ok(),
         _ => None,
     });
+    let archive = load_started.is_some() && with_files(|f| f.logged_archives.contains(&h));
     let read = file.map(|mut file| {
         crate::threads::unlocked(|| {
             with_read_scratch(count as usize, |v| {
@@ -334,6 +340,7 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
         })
     });
     crate::load_log::read_done(load_started, read.unwrap_or(0) as u64);
+    if archive { crate::load_log::timeline::archive_io(load_started, read.unwrap_or(0) as u64); }
     cpu.eax = match read {
         Some(n) => {
             if read_out != 0 {
@@ -361,6 +368,7 @@ pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
     let load_started = crate::load_log::begin();
     let (h, buf, count, ov, routine) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     let offset = m.u32(ov + 8) as u64 | (m.u32(ov + 12) as u64) << 32;
+    let archive = load_started.is_some() && with_files(|f| f.logged_archives.contains(&h));
     let file = with_files(|f| match f.handles.get(&h) {
         Some(Open::File(file)) => file.try_clone()
             .map(|file| (file, f.archive_reads.contains(&h).then(|| f.read_cache.clone())))
@@ -386,6 +394,7 @@ pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
         })
     });
     crate::load_log::read_done(load_started, data.as_ref().copied().unwrap_or(0) as u64);
+    if archive { crate::load_log::timeline::archive_io(load_started, data.as_ref().copied().unwrap_or(0) as u64); }
     cpu.eax = match data {
         Ok(n) => {
             m.set_u32(ov, 0); // Internal: STATUS_SUCCESS
@@ -476,6 +485,7 @@ pub fn close_handle(m: &mut dyn Mem, cpu: &mut Cpu) {
     let h = arg(m, cpu, 0);
     cpu.eax = (crate::threads::close(h) || with_files(|f| {
         if f.archive_reads.remove(&h) { f.read_cache.lock().unwrap().remove(h); }
+        f.logged_archives.remove(&h);
         f.handles.remove(&h).is_some()
     })) as u32;
     if cpu.eax == 0 {

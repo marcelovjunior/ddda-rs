@@ -177,6 +177,12 @@ pub struct PipelineDesc {
     pub sample_mask: u64,
     pub topology: wgpu::PrimitiveTopology,
     pub strip_index: Option<wgpu::IndexFormat>,
+    /// The pixel shader's translation, as the D3D9 path's (crates/ddgpu
+    /// derive): the channels (4 bits per pixel sampler) render-target
+    /// textures lack, which D3D9 samples as 1; and D3D9's depth bias in the
+    /// pixel shader (DEPTHBIAS / SLOPESCALEDEPTHBIAS in PS extra slot 5).
+    pub sampler_ones: u64,
+    pub depth_bias: bool,
 }
 
 struct ShaderObject {
@@ -232,12 +238,13 @@ pub struct Device {
     samplers: Vec<SamplerObject>,
     inputs: Vec<InputLayoutDesc>,
     shaders: Vec<ShaderObject>,
-    modules: FxMap<(Shader, InputLayout, Option<Shader>), Module>,
+    modules: FxMap<(Shader, InputLayout, Option<Shader>, u64, bool), Module>,
     textures: Vec<wgpu::Texture>,
     views: Vec<ViewObject>,
     buffers: Vec<wgpu::Buffer>,
     pipelines: Vec<PipelineObject>,
     pipeline_cache: FxMap<PipelineDesc, Pipeline>,
+    disk_cache: Option<std::sync::Arc<crate::pipelines::Persistent>>,
     sets: Vec<TextureSetObject>,
     texture_layouts: FxMap<(Stage, Vec<(u32, u8)>), wgpu::BindGroupLayout>,
     set_cache: FxMap<(wgpu::BindGroupLayout, Vec<TextureBinding>), TextureSet>,
@@ -260,7 +267,14 @@ macro_rules! insert {
 impl Device {
     pub fn from_backend(backend: &mut crate::WgpuBackend) -> Self {
         backend.flush();
-        Self::new(backend.device.clone(), backend.queue.clone())
+        Self::new_cached(backend)
+    }
+    pub(crate) fn new_cached(backend: &crate::WgpuBackend) -> Self {
+        let mut device = Self::new(backend.device.clone(), backend.queue.clone());
+        if std::env::var("DDGPU_NATIVE_PIPELINE_CACHE").as_deref() == Ok("1") {
+            device.disk_cache = backend.pipeline_cache.clone();
+        }
+        device
     }
     pub fn new(gpu: wgpu::Device, queue: wgpu::Queue) -> Self {
         let entry = |binding, visibility| wgpu::BindGroupLayoutEntry {
@@ -297,6 +311,7 @@ impl Device {
             buffers: vec![],
             pipelines: vec![],
             pipeline_cache: Default::default(),
+            disk_cache: None,
             sets: vec![],
             texture_layouts: Default::default(),
             set_cache: Default::default(),
@@ -522,11 +537,19 @@ impl Device {
         };
         Ok(insert!(self, views, View, v))
     }
-    fn module(&mut self, shader: Shader, input: InputLayout, vertex: Option<Shader>) -> Result<(), String> {
-        let key = (shader, input, vertex);
+    fn module(
+        &mut self,
+        shader: Shader,
+        input: InputLayout,
+        vertex: Option<Shader>,
+        ones: u64,
+        depth_bias: bool,
+    ) -> Result<(), String> {
+        let key = (shader, input, vertex, ones, depth_bias);
         if self.modules.contains_key(&key) {
             return Ok(());
         }
+        let translation_started = std::time::Instant::now();
         let s = &self.shaders[shader.index as usize];
         let parsed = d3d9shader::parse(&s.tokens).map_err(|e| e.to_string())?;
         let first = d3d9wgsl::translate(&parsed).map_err(|e| e.to_string())?;
@@ -557,10 +580,14 @@ impl Device {
             options.vs_input_types = Some(types);
         } else {
             options.lod_bias = true;
+            options.sampler_ones = ones;
+            options.depth_bias = depth_bias;
             let vs = &self.modules[&(
                 vertex.ok_or("pixel shader requires a linked vertex shader")?,
                 input,
                 None,
+                0,
+                false,
             )]
                 .interface;
             options.ps_input_locations = Some(
@@ -579,11 +606,14 @@ impl Device {
         }
         let translation = d3d9wgsl::translate_with(&parsed, options).map_err(|e| e.to_string())?;
         let source = crate::shader_cache::source(translation.wgsl)?;
+        crate::pipelines::translated(translation_started);
+        let module_started = std::time::Instant::now();
         let scope = self.gpu.push_error_scope(wgpu::ErrorFilter::Validation);
         let gpu = self.gpu.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("native translated shader"),
             source,
         });
+        crate::pipelines::module_created(module_started);
         if let Some(e) = crate::block_on(scope.pop()) {
             return Err(e.to_string());
         }
@@ -615,10 +645,10 @@ impl Device {
         {
             return Err("pipeline shader stage mismatch".into());
         }
-        self.module(desc.vertex_shader, desc.input, None)?;
-        self.module(desc.pixel_shader, desc.input, Some(desc.vertex_shader))?;
-        let vs = &self.modules[&(desc.vertex_shader, desc.input, None)];
-        let ps = &self.modules[&(desc.pixel_shader, desc.input, Some(desc.vertex_shader))];
+        self.module(desc.vertex_shader, desc.input, None, 0, false)?;
+        self.module(desc.pixel_shader, desc.input, Some(desc.vertex_shader), desc.sampler_ones, desc.depth_bias)?;
+        let vs = &self.modules[&(desc.vertex_shader, desc.input, None, 0, false)];
+        let ps = &self.modules[&(desc.pixel_shader, desc.input, Some(desc.vertex_shader), desc.sampler_ones, desc.depth_bias)];
         let kinds = [ps.interface.samplers.clone(), vs.interface.samplers.clone()];
         let mut make_layout = |stage: usize| {
             let key = (
@@ -728,6 +758,7 @@ impl Device {
             })
             .collect();
         let end = targets.iter().rposition(Option::is_some).map_or(0, |n| n + 1);
+        let pipeline_started = std::time::Instant::now();
         let scope = self.gpu.push_error_scope(wgpu::ErrorFilter::Validation);
         let gpu = self.gpu.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("native pipeline"),
@@ -782,10 +813,15 @@ impl Device {
                 alpha_to_coverage_enabled: blend.alpha_to_coverage,
             },
             multiview_mask: None,
-            cache: None,
+            cache: self.disk_cache.as_ref().map(|cache| &cache.cache),
         });
+        crate::pipelines::pipeline_created(pipeline_started);
         if let Some(e) = crate::block_on(scope.pop()) {
             return Err(e.to_string());
+        }
+        if let Some(cache) = &self.disk_cache {
+            cache.created();
+            cache.save_if_due();
         }
         let constants = [
             self.shader_constant_layout(desc.pixel_shader),
@@ -878,6 +914,18 @@ impl Device {
     }
     pub fn pipeline_count(&self) -> usize {
         self.pipelines.len()
+    }
+    /// Forget every imported or created texture, view, buffer and texture
+    /// set (their handles become invalid; the caller drops its own). The
+    /// states, shaders, modules, pipelines, samplers and layouts stay: they
+    /// do not refer to resources (L141: a guest release used to drop the
+    /// whole device, its pipelines included).
+    pub fn reset_resources(&mut self) {
+        self.textures.clear();
+        self.views.clear();
+        self.buffers.clear();
+        self.sets.clear();
+        self.set_cache.clear();
     }
     pub fn texture_set_count(&self) -> usize {
         self.sets.len()
@@ -1381,6 +1429,34 @@ impl<'a> Recorder<'a> {
     /// coalesce into one immutable ring snapshot at the next draw; previous
     /// draws keep their offsets. Register writes need not rebuild a full Vec.
     /// Full-block GPU storage is still required by this translator ABI.
+    /// `update_constant_range` for little-endian words, without building a
+    /// byte buffer (L141: the worker converted every draw's banks).
+    pub fn update_constant_words(
+        &mut self,
+        handle: ConstantBuffer,
+        offset: usize,
+        words: &[u32],
+    ) -> Result<(), &'static str> {
+        assert_eq!(
+            handle.owner, self.id,
+            "constant buffer belongs to another recorder"
+        );
+        let c = &mut self.constants[handle.index as usize];
+        let end = words.len().checked_mul(4).and_then(|n| n.checked_add(offset)).ok_or("constant range overflow")?;
+        let dst = c.bytes.get_mut(offset..end).ok_or("constant range outside block")?;
+        let mut changed = false;
+        for (d, w) in dst.chunks_exact_mut(4).zip(words) {
+            let w = w.to_le_bytes();
+            if *d != w {
+                d.copy_from_slice(&w);
+                changed = true;
+            }
+        }
+        if changed {
+            c.offset = None;
+        }
+        Ok(())
+    }
     pub fn update_constant_range(
         &mut self,
         handle: ConstantBuffer,

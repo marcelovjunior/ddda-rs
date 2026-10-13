@@ -24,7 +24,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod cache;
+mod upload_data;
+mod compute_quads;
+mod backend_data;
 mod encode;
+pub mod vk;
 pub mod native;
 pub mod native_compare;
 mod native_job;
@@ -41,18 +45,8 @@ use std::future::Future;
 
 /// Pack raw register bits without a per-component loop on little-endian
 /// hosts. Arrays of four u32 have no padding and every input byte is valid.
-fn copy_float_registers(dst: &mut [u8], registers: &[[u32; 4]]) {
-    assert_eq!(dst.len(), registers.len() * 16);
-    #[cfg(target_endian = "little")]
-    {
-        let bytes = unsafe { std::slice::from_raw_parts(registers.as_ptr().cast::<u8>(), dst.len()) };
-        dst.copy_from_slice(bytes);
-    }
-    #[cfg(target_endian = "big")]
-    for (out, word) in dst.chunks_exact_mut(4).zip(registers.iter().flatten()) {
-        out.copy_from_slice(&word.to_le_bytes());
-    }
-}
+#[cfg(test)]
+use backend_data::copy_registers as copy_float_registers;
 
 #[cfg(test)]
 mod constant_bytes_tests {
@@ -348,8 +342,9 @@ pub struct WgpuBackend {
     native_stats: NativeJobStats,
     native_comparisons: Option<native_job::Comparisons>,
     shader_identities: shader_identity::ShaderIdentities,
-    /// Derived draw state by what it derives from (L99), DRAW_MEMO slots.
-    memo: Vec<Option<DrawMemo>>,
+    /// Derived draw state by retained object identity and full value equality.
+    memo: backend_data::DrawMemo<DrawMemo>,
+    vk_bindings: backend_data::DrawMemo<BindingMemo>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     textures: cache::FxMap<u32, Tex>,
@@ -395,7 +390,7 @@ pub struct WgpuBackend {
     finisher: Option<Finisher>,
     encode_threads: usize,
     encode_profile: encode::Profile,
-    chunks: RefCell<Vec<wgpu::CommandEncoder>>,
+    chunks: RefCell<Vec<vk::Chunk>>,
     chunk_start: Cell<u32>,
     /// Draws (and clears and copies) recorded before a submission
     /// (DRAWS_PER_SUBMIT by default; ddplay lowers it with async submits,
@@ -409,6 +404,13 @@ pub struct WgpuBackend {
     /// the render pass of the open encoder that draws are recorded into,
     /// kept open while consecutive draws use the same attachments (L72)
     pass: RefCell<Option<OpenPass>>,
+    /// L113: the open compute pass of quad dispatches (compute_quads)
+    cpass: RefCell<Option<wgpu::ComputePass<'static>>>,
+    /// DDGPU_NATIVE_SIM=1: eligible full-target quad draws run as dispatches
+    native_sim: bool,
+    quads: compute_quads::QuadCache,
+    /// CPU copies of small vertex buffers (a quad's vertices, compute_quads)
+    small_buffers: cache::FxMap<u32, Vec<u8>>,
     /// draws recorded, and render passes begun for them (L72)
     draws_recorded: Cell<u64>,
     passes_begun: Cell<u64>,
@@ -418,7 +420,9 @@ pub struct WgpuBackend {
     open: RefCell<Option<wgpu::CommandEncoder>>,
     open_draws: Cell<u32>,
     /// buffers and textures the open draws read
-    open_uses: RefCell<cache::FxSet<u32>>,
+    open_uses: RefCell<backend_data::ResourceUses>,
+    draw_buffers: Vec<(wgpu::Buffer, u64, u64, Option<u32>)>,
+    instance_streams: Vec<u32>,
     /// per stage (0 pixel, 1 vertex): the last block's constants and extra
     /// vec4s, its uniform ring offset and the ring generation it was
     /// written in (L78)
@@ -434,7 +438,9 @@ pub struct WgpuBackend {
     ps_inputs: cache::FxMap<u64, Vec<(u32, u32)>>,
     tex_layouts: cache::FxMap<(bool, SamplerKinds), wgpu::BindGroupLayout>,
     pipeline_layouts: cache::FxMap<(SamplerKinds, SamplerKinds), wgpu::PipelineLayout>,
-    pipelines: cache::FxMap<PipelineKey, wgpu::RenderPipeline>,
+    pipelines: cache::FxMap<backend_data::Hashed<PipelineKey>, wgpu::RenderPipeline>,
+    vk: Option<vk::Context>,
+    vk_pass: RefCell<Option<vk::Pass>>,
     tex_groups: cache::FxMap<TexGroupKey, wgpu::BindGroup>,
     /// per stage (0 pixel, 1 vertex): the last draw's bind group key and
     /// group (L94b: a draw binding what the previous one bound takes no
@@ -489,7 +495,7 @@ type PassKey = (Vec<Option<wgpu::TextureView>>, Option<wgpu::TextureView>, Optio
 /// L124: a thread that finishes command encoders and submits them in the
 /// order given.
 struct Finisher {
-    send: Option<std::sync::mpsc::Sender<Vec<wgpu::CommandEncoder>>>,
+    send: Option<std::sync::mpsc::Sender<Vec<vk::Chunk>>>,
     sent: Cell<u64>,
     done: Arc<(std::sync::Mutex<(u64, bool)>, std::sync::Condvar)>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -497,16 +503,16 @@ struct Finisher {
 
 impl Finisher {
     fn new(queue: wgpu::Queue, threads: usize, profile: encode::Profile) -> Finisher {
-        let (send, recv) = std::sync::mpsc::channel::<Vec<wgpu::CommandEncoder>>();
+        let (send, recv) = std::sync::mpsc::channel::<Vec<vk::Chunk>>();
         let done = Arc::new((std::sync::Mutex::new((0u64, false)), std::sync::Condvar::new()));
         let d = done.clone();
         let thread = std::thread::Builder::new().name("wgpu-finish".into()).spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let pool = encode::Pool::new(threads, profile.clone(), encode::finish_wgpu);
+                let pool = encode::Pool::new(threads, profile.clone(), vk::finish);
                 for encoders in recv {
                     let buffers = pool.finish(encoders);
                     let start = profile.start();
-                    queue.submit(buffers);
+                    vk::submit(&queue, buffers);
                     profile.end(8, start);
                     let (m, c) = &*d;
                     m.lock().unwrap().0 += 1;
@@ -523,10 +529,10 @@ impl Finisher {
     }
 
     fn submit(&self, enc: wgpu::CommandEncoder) {
-        self.submit_batch(vec![enc]);
+        self.submit_batch(vec![vk::Chunk::Wgpu(enc)]);
     }
 
-    fn submit_batch(&self, encoders: Vec<wgpu::CommandEncoder>) {
+    fn submit_batch(&self, encoders: Vec<vk::Chunk>) {
         self.sent.set(self.sent.get() + 1);
         self.send.as_ref().unwrap().send(encoders).expect("the finisher thread stopped");
     }
@@ -552,10 +558,11 @@ impl Drop for Finisher {
 
 /// The draw memo's size: one slot per (shaders, declaration, render-state
 /// list) hash; a collision derives again.
-const DRAW_MEMO: usize = 256;
 
 /// What try_draw derives before binding resources (L99).
 struct Derived {
+    vk_pipeline: Option<Arc<vk::Pipeline>>,
+    vk_empty_bindings: std::sync::OnceLock<Arc<vk::Bindings>>,
     ps_kinds: Vec<(u32, u8)>,
     vs_kinds: Vec<(u32, u8)>,
     layout1: wgpu::BindGroupLayout,
@@ -585,6 +592,27 @@ struct DrawMemo {
     depth: Option<Target>,
     strides: Vec<(u32, u32)>,
     derived: Arc<Derived>,
+}
+
+// Retained identities prevent address reuse. Release clears this cache before
+// a guest resource ID can be rebound. Feedback snapshots are never memoized.
+struct BindingMemo {
+    derived: Arc<Derived>,
+    textures: Arc<[TextureBinding]>,
+    bindings: Arc<vk::Bindings>,
+}
+
+enum DrawBindings {
+    Wgpu([wgpu::BindGroup; 2]),
+    Vulkan(Arc<vk::Bindings>),
+}
+impl DrawBindings {
+    fn groups(&self) -> &[wgpu::BindGroup] {
+        match self {
+            Self::Wgpu(groups) => groups,
+            Self::Vulkan(bindings) => &bindings.groups[1..],
+        }
+    }
 }
 
 struct OpenPass {
@@ -669,6 +697,10 @@ impl WgpuBackend {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, adapter: wgpu::AdapterInfo) -> WgpuBackend {
         let uniforms = Ring::new(&device, UNIFORM_RING, wgpu::BufferUsages::UNIFORM, "constants");
         let inline = Ring::new(&device, INLINE_RING, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX, "inline data");
+        // L113: with DDGPU_NATIVE_SIM the pixel stage's bindings are also
+        // the quad dispatches' (compute_quads)
+        let native_sim = compute_quads::enabled();
+        let ps_visibility = if native_sim { wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE } else { wgpu::ShaderStages::FRAGMENT };
         let uniform = |binding, visibility| wgpu::BindGroupLayoutEntry {
             binding, visibility,
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: None },
@@ -676,7 +708,7 @@ impl WgpuBackend {
         };
         let layout0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[uniform(0, wgpu::ShaderStages::FRAGMENT), uniform(2, wgpu::ShaderStages::VERTEX)],
+            entries: &[uniform(0, ps_visibility), uniform(2, wgpu::ShaderStages::VERTEX)],
         });
         let block = |size| wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &uniforms.buffer, offset: 0, size: std::num::NonZeroU64::new(size) });
         let group0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -684,7 +716,11 @@ impl WgpuBackend {
             layout: &layout0,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: block(PS_BLOCK) }, wgpu::BindGroupEntry { binding: 2, resource: block(VS_BLOCK) }],
         });
+        let vk = vk::enabled().then(|| vk::Context::new(&device, &uniforms.buffer)
+            .map_err(|e| eprintln!("DDGPU_VK disabled: {e}"))).and_then(Result::ok);
         let mut backend = WgpuBackend {
+            vk,
+            vk_pass: RefCell::new(None),
             native_worker: None,
             native_stats: Default::default(),
             native_comparisons: None,
@@ -720,14 +756,20 @@ impl WgpuBackend {
             gamma: None,
             adapter,
             pass: RefCell::new(None),
+            cpass: RefCell::new(None),
+            native_sim,
+            quads: Default::default(),
+            small_buffers: Default::default(),
             draws_recorded: Cell::new(0),
             passes_begun: Cell::new(0),
             submissions: Cell::new(0),
             open: RefCell::new(None),
             open_draws: Cell::new(0),
-            open_uses: RefCell::new(cache::FxSet::default()),
+            open_uses: RefCell::new(backend_data::ResourceUses::default()),
+            draw_buffers: Vec::new(), instance_streams: Vec::new(),
             shader_identities: Default::default(),
-            memo: (0..DRAW_MEMO).map(|_| None).collect(),
+            memo: Default::default(),
+            vk_bindings: Default::default(),
             last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX, 0), (Default::default(), Vec::new(), 0, u64::MAX, 0)]),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
@@ -767,7 +809,7 @@ impl WgpuBackend {
     /// DDGPU_PIPELINE_WARMUP=0 records recipes without speculative compilation.
     pub fn enable_pipeline_warmup(&mut self, dir: &std::path::Path, exe: &std::path::Path) -> bool {
         let Some(cache) = self.pipeline_cache.clone() else { return false };
-        self.warmup = warmup::Warmup::start(self.device.clone(), self.adapter.clone(), self.layout0.clone(), cache, dir.to_owned(), exe.to_owned());
+        self.warmup = warmup::Warmup::start(self.device.clone(), self.adapter.clone(), self.layout0.clone(), self.native_sim, cache, dir.to_owned(), exe.to_owned());
         self.warmup.is_some()
     }
 
@@ -806,7 +848,7 @@ impl WgpuBackend {
     fn flush_async(&self) {
         self.end_pass();
         let mut encoders = std::mem::take(&mut *self.chunks.borrow_mut());
-        if let Some(enc) = self.open.borrow_mut().take() { encoders.push(enc); }
+        if let Some(enc) = self.open.borrow_mut().take() { encoders.push(vk::Chunk::Wgpu(enc)); }
         self.uniforms.borrow_mut().upload(&self.queue);
         self.inline.borrow_mut().upload(&self.queue);
         if !encoders.is_empty() {
@@ -817,10 +859,10 @@ impl WgpuBackend {
                 }
                 None => {
                     self.wait_finisher();
-                    let pool = encode::Pool::new(1, self.encode_profile.clone(), encode::finish_wgpu);
+                    let pool = encode::Pool::new(1, self.encode_profile.clone(), vk::finish);
                     let buffers = pool.finish(encoders);
                     let start = self.encode_profile.start();
-                    self.queue.submit(buffers);
+                    vk::submit(&self.queue, buffers);
                     self.encode_profile.end(8, start);
                     self.submissions.set(self.submissions.get() + 1);
                 }
@@ -879,20 +921,41 @@ impl WgpuBackend {
     /// End the open render pass: the encoder can record other commands
     /// (a copy) or be finished.
     fn end_pass(&self) {
+        if let Some(pass) = self.vk_pass.borrow_mut().take() {
+            // Any previous normal commands precede this raw pass. Later
+            // copies/clears get a fresh core encoder, never the raw encoder.
+            let mut chunks = self.chunks.borrow_mut();
+            if let Some(enc) = self.open.borrow_mut().take() { chunks.push(vk::Chunk::Wgpu(enc)); }
+            vk::Chunk::push_pass(&mut chunks, &self.device, pass,
+                self.draws_per_submit.max(1).div_ceil(self.encode_threads as u32) as usize);
+        }
         if let Some(pass) = self.pass.borrow_mut().take() {
             let start = self.encode_profile.start();
             drop(pass);
             self.encode_profile.end(1, start);
         }
+        self.cpass.borrow_mut().take();
         // A boundary never adds/splits a render pass or changes its load/store
         // semantics. Track all chunks' resources until the whole batch submits.
         let chunk_draws = self.draws_per_submit.max(1).div_ceil(self.encode_threads as u32);
         if self.encode_threads > 1 && self.open_draws.get() - self.chunk_start.get() >= chunk_draws {
             if let Some(enc) = self.open.borrow_mut().take() {
-                self.chunks.borrow_mut().push(enc);
+                self.chunks.borrow_mut().push(vk::Chunk::Wgpu(enc));
                 self.chunk_start.set(self.open_draws.get());
             }
         }
+    }
+
+    /// Submit what is recorded and wait until the GPU has run it (a replay
+    /// without Presents frees finished submissions this way).
+    pub fn wait_idle(&self) {
+        self.flush();
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Draws run as compute dispatches so far (DDGPU_NATIVE_SIM, L113).
+    pub fn quad_dispatches(&self) -> u64 {
+        self.quads.dispatches
     }
 
     /// Take the shared encoder after ending any live draw pass. Copy helpers
@@ -964,7 +1027,7 @@ impl WgpuBackend {
         let prefix = |v: &d3d9cmd::Constants| v.f.len().min(floats);
         if last.3 == generation && last.4 == floats &&
             (std::sync::Arc::ptr_eq(&last.0, c) ||
-             (last.0.i == c.i && last.0.b == c.b && last.0.f[..prefix(&last.0)] == c.f[..prefix(c)])) && last.1[..] == *extra {
+             (last.0.f[..prefix(&last.0)] == c.f[..prefix(c)] && last.0.i == c.i && last.0.b == c.b)) && last.1[..] == *extra {
             return last.2;
         }
         // Bindings still expose the fixed maximum block size. Only the
@@ -975,29 +1038,7 @@ impl WgpuBackend {
             self.uniforms.borrow_mut().restart();
         }
         let off = self.ring_fill(&self.uniforms, len as u64, UNIFORM_ALIGN, |dst| {
-            // plain loops over the vec4s: straight copies even where helpers
-            // stay out of line (the play profile's 64 codegen units)
-            fn put(dst: &mut [u8], v: [u32; 4]) {
-                for (d, w) in dst.chunks_exact_mut(4).zip(v) {
-                    d.copy_from_slice(&w.to_le_bytes());
-                }
-            }
-            let used = c.f.len().min(floats);
-            copy_float_registers(&mut dst[..used * 16], &c.f[..used]);
-            dst[used * 16..floats * 16].fill(0);
-            let mut at = floats * 16;
-            for v in c.i {
-                put(&mut dst[at..at + 16], v.map(|w| w as u32));
-                at += 16;
-            }
-            for b in c.b {
-                put(&mut dst[at..at + 16], [b, 0, 0, 0]);
-                at += 16;
-            }
-            for &v in extra {
-                put(&mut dst[at..at + 16], v);
-                at += 16;
-            }
+            backend_data::pack_constants(dst, c, floats, extra);
         }) as u32;
         last.0.clone_from(c);
         last.1.clear();
@@ -1015,6 +1056,20 @@ impl WgpuBackend {
             return v.clone();
         }
         let v = self.target_view(t, srgb);
+        // Only persistent draw attachment views belong in the Vulkan cache.
+        // Clear/copy helper views are transient and never use the raw recorder.
+        if let (Some(vk),Some((view,format))) = (&mut self.vk,&v) {
+            let (face,level) = t.texture.and_then(|tt| self.textures.get(&tt.resource))
+                .map(|tx| if tx.kind == TexKind::Cube { (t.level/tx.levels,t.level%tx.levels) } else { (0,t.level) })
+                .unwrap_or((0,0));
+            let desc=wgpu::TextureViewDescriptor {
+                format:Some(*format), dimension:Some(wgpu::TextureViewDimension::D2),
+                base_mip_level:level,mip_level_count:Some(1),base_array_layer:face,array_layer_count:Some(1),
+                ..Default::default()
+            };
+            let usage=if format.is_depth_stencil_format() {wgpu::TextureUses::DEPTH_STENCIL_WRITE} else {wgpu::TextureUses::COLOR_TARGET};
+            if let Err(e)=vk.view(view,&desc,usage) {eprintln!("DDGPU_VK target fallback: {e}");}
+        }
         self.target_views.insert(key, v.clone());
         v
     }
@@ -1112,8 +1167,11 @@ impl WgpuBackend {
         }
         let target = t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0;
         let (format, block, usage) = if target {
-            (target_format(d3d_format, false)?, 1,
-             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST)
+            let format = target_format(d3d_format, false)?;
+            // L113: float targets the quad dispatches write (compute_quads)
+            let storage = if self.native_sim && format == wgpu::TextureFormat::Rgba32Float { wgpu::TextureUsages::STORAGE_BINDING } else { wgpu::TextureUsages::empty() };
+            (format, 1,
+             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | storage)
         } else {
             let (format, _, _, block) = sampled_format(d3d_format)?;
             (format, block, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC)
@@ -1179,18 +1237,16 @@ impl WgpuBackend {
                 (width * out_bpp, bpp)
             }
         };
-        let mut data = Vec::new();
-        for z in 0..*depth {
-            let slice = &bytes[(z * pitch * rows) as usize..];
-            if conv == Conversion::Direct {
-                for y in 0..rows {
-                    let s = (y * pitch) as usize;
-                    data.extend_from_slice(&slice[s..s + (blocks_w * bpp) as usize]);
-                }
-            } else {
+        let data = if conv == Conversion::Direct {
+            upload_data::direct_image(bytes, gpu_row, rows, *depth, *pitch)
+        } else {
+            let mut data = Vec::new();
+            for z in 0..*depth {
+                let slice = &bytes[(z * pitch * rows) as usize..];
                 data.extend(convert(conv, slice, *width, rows, *pitch, src_bpp));
             }
-        }
+            std::borrow::Cow::Owned(data)
+        };
         let physical = wgpu::Extent3d { width: width.next_multiple_of(block), height: height.next_multiple_of(block), depth_or_array_layers: *depth };
         self.wait_finisher();
         self.queue.write_texture(
@@ -1623,7 +1679,7 @@ impl WgpuBackend {
                 _ => (0, t.level),
             };
             let format = if srgb { tx.gpu_format.add_srgb_suffix() } else { tx.gpu_format };
-            let view = tx.texture.create_view(&wgpu::TextureViewDescriptor {
+            let desc = wgpu::TextureViewDescriptor {
                 format: Some(format),
                 dimension: Some(wgpu::TextureViewDimension::D2),
                 base_mip_level: level,
@@ -1631,7 +1687,8 @@ impl WgpuBackend {
                 base_array_layer: face,
                 array_layer_count: Some(1),
                 ..Default::default()
-            });
+            };
+            let view = tx.texture.create_view(&desc);
             return Some((view, format));
         }
         let format = target_format(t.format, false)?;
@@ -1668,7 +1725,8 @@ impl WgpuBackend {
         }
         let rt = self.surfaces.get(&t.surface)?;
         let view_format = if srgb { target_format(t.format, true).unwrap_or(rt.format) } else { rt.format };
-        let view = rt.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(view_format), ..Default::default() });
+        let desc = wgpu::TextureViewDescriptor { format: Some(view_format), ..Default::default() };
+        let view = rt.texture.create_view(&desc);
         Some((view, view_format))
     }
 
@@ -1707,7 +1765,7 @@ impl WgpuBackend {
         let anisotropic = states[6] == 3 && states[10] > 1 && states[7] != 0;
         let filter = |v: u32| if v >= 2 || anisotropic { wgpu::FilterMode::Linear } else { wgpu::FilterMode::Nearest };
         let mip = |v: u32| if v >= 2 || anisotropic { wgpu::MipmapFilterMode::Linear } else { wgpu::MipmapFilterMode::Nearest };
-        let s = self.device.create_sampler(&wgpu::SamplerDescriptor {
+        let desc = wgpu::SamplerDescriptor {
             label: None,
             address_mode_u: address(states[1]),
             address_mode_v: address(states[2]),
@@ -1729,7 +1787,11 @@ impl WgpuBackend {
             compare: None,
             anisotropy_clamp: if anisotropic { states[10].min(16) as u16 } else { 1 },
             border_color,
-        });
+        };
+        let s = self.device.create_sampler(&desc);
+        if let Some(vk) = &mut self.vk {
+            if let Err(e) = vk.sampler(&s, &desc) { eprintln!("DDGPU_VK sampler fallback: {e}"); }
+        }
         self.samplers.insert(*states, s.clone());
         Ok(s)
     }
@@ -1750,6 +1812,9 @@ impl WgpuBackend {
         // Resolve parse/cache errors before opening the device error scope.
         // wgpu still validates the exact cached IR against this device.
         let warmed = self.warmup.as_mut().and_then(|w| w.source(key, &t.wgsl));
+        if let Some(vk) = &mut self.vk {
+            if let Err(e) = vk.shader(key, &t.wgsl) { eprintln!("DDGPU_VK shader fallback: {e}"); }
+        }
         let module = match warmed {
             Some(module) => pipeline_log::timed("module-reuse", "warm-hit", || module),
             None => {
@@ -2028,7 +2093,8 @@ impl WgpuBackend {
             // D3DRS_MULTISAMPLEMASK: the samples a draw may write
             sample_mask: if samples > 1 { state(162) } else { !0 },
         };
-        if let Some(pipeline) = self.warmup.as_mut().and_then(|w| w.pipeline(&key)) {
+        let key = backend_data::Hashed::new(key, cache::FxHasher::default());
+        if let Some(pipeline) = self.warmup.as_mut().and_then(|w| w.pipeline(&key.key)) {
             if let std::collections::hash_map::Entry::Vacant(entry) = self.pipelines.entry(key.clone()) {
                 entry.insert(pipeline);
                 self.warm_hits += 1;
@@ -2052,18 +2118,20 @@ impl WgpuBackend {
                     self.pipeline_layouts.insert(layout_key.clone(), layout);
                 }
                 let pipeline = warmup::create_pipeline(&self.device, &self.pipeline_layouts[&layout_key], &vs_module, &ps_module,
-                    &key, self.pipeline_cache.as_ref().map(|p| &p.cache), "object-miss")?;
-                if let Some(warmup) = &self.warmup { warmup.record(&key, &ps_kinds, &vs_kinds); }
+                    &key.key, self.pipeline_cache.as_ref().map(|p| &p.cache), "object-miss")?;
+                if let Some(warmup) = &self.warmup { warmup.record(&key.key, &ps_kinds, &vs_kinds); }
                 if let Some(p) = &self.pipeline_cache {
                     p.created();
                 }
                 pipelines::pipeline_created(started);
                 self.created_pipelines += 1;
-                self.pipelines.insert(key, pipeline.clone());
+                self.pipelines.insert(key.clone(), pipeline.clone());
                 pipeline
             }
         };
-        Ok(Derived { ps_kinds, vs_kinds, layout1, layout2, depth_bias, streams, colour, depth, max_out, pipeline,
+        let vk_pipeline = self.vk.as_mut().and_then(|vk| vk.pipeline(&key.key, &ps_kinds, &vs_kinds)
+            .map_err(|e| eprintln!("DDGPU_VK pipeline fallback: {e}")).ok());
+        Ok(Derived { vk_pipeline, vk_empty_bindings: Default::default(), ps_kinds, vs_kinds, layout1, layout2, depth_bias, streams, colour, depth, max_out, pipeline,
                      vs_floats: vs_iface.float_constants, ps_floats: ps_iface.float_constants })
     }
 
@@ -2083,18 +2151,16 @@ impl WgpuBackend {
             let h = (p(Arc::as_ptr(vs) as *const u8 as usize) ^ p(Arc::as_ptr(ps) as *const u8 as usize).rotate_left(16)
                 ^ p(Arc::as_ptr(&d.declaration) as *const u8 as usize).rotate_left(32) ^ d.render_states.address().rotate_left(48))
                 .wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            (h >> 56) as usize % DRAW_MEMO
+            h
         };
-        if let Some(m) = &self.memo[slot] {
-            if Arc::ptr_eq(&m.vs, vs) && Arc::ptr_eq(&m.ps, ps) && Arc::ptr_eq(&m.declaration, &d.declaration)
+        if let Some(m) = self.memo.get(slot, |m| Arc::ptr_eq(&m.vs, vs) && Arc::ptr_eq(&m.ps, ps) && Arc::ptr_eq(&m.declaration, &d.declaration)
                 && m.states.ptr_eq(&d.render_states) && m.primitive == d.primitive && m.index_format == index_format
                 && m.ones == ones && m.instanced[..] == *instanced && m.targets == d.targets && m.depth == d.depth
-                && m.strides.iter().copied().eq(strides(d)) {
-                return Ok(m.derived.clone());
-            }
+                && m.strides.iter().copied().eq(strides(d))) {
+            return Ok(m.derived.clone());
         }
         let derived = Arc::new(self.derive(d, instanced)?);
-        self.memo[slot] = Some(DrawMemo {
+        self.memo.insert(slot, DrawMemo {
             vs: vs.clone(), ps: ps.clone(), declaration: d.declaration.clone(), states: d.render_states.clone(),
             primitive: d.primitive, index_format, ones, instanced: instanced.to_vec(),
             targets: d.targets.clone(), depth: d.depth.clone(), strides: strides(d).collect(),
@@ -2103,17 +2169,21 @@ impl WgpuBackend {
         Ok(derived)
     }
 
-    fn try_draw(&mut self, d: &DrawCall) -> Result<(), String> {
-        let state = |s: u32| d.render_states.binary_search_by_key(&s, |&(k, _)| k).ok().map(|i| d.render_states[i].1).unwrap_or(0);
-        let vs_tokens = d.vertex_shader.as_ref().ok_or("draws without a vertex shader (fixed function) are not implemented")?;
-        let ps_tokens = d.pixel_shader.as_ref().ok_or("draws without a pixel shader (fixed function) are not implemented")?;
-        if d.declaration.is_empty() {
-            return Err("FVF draws are not implemented".into());
+    fn draw_bindings(&mut self, d: &DrawCall, x: &Arc<Derived>) -> Result<DrawBindings, String> {
+        if self.vk.is_some() && d.textures.is_empty() {
+            if let Some(bindings) = x.vk_empty_bindings.get() {
+                return Ok(DrawBindings::Vulkan(bindings.clone()));
+            }
         }
-        let (instances, instanced) = instancing(d)?;
-        let x = self.derived(d, vs_tokens, ps_tokens, &instanced)?;
-        let (ps_kinds, vs_kinds, layout1, layout2, streams) = (&x.ps_kinds, &x.vs_kinds, &x.layout1, &x.layout2, &x.streams);
-        let (colour, depth, max_out, depth_bias, pipeline) = (&x.colour, &x.depth, x.max_out, x.depth_bias, &x.pipeline);
+        let identity = (Arc::as_ptr(x) as usize as u64).rotate_left(19)
+            ^ (Arc::as_ptr(&d.textures) as *const TextureBinding as usize as u64);
+        if self.vk.is_some() {
+            if let Some(m) = self.vk_bindings.get(identity, |m|
+                Arc::ptr_eq(&m.derived, x) && Arc::ptr_eq(&m.textures, &d.textures)) {
+                return Ok(DrawBindings::Vulkan(m.bindings.clone()));
+            }
+        }
+        let (ps_kinds, vs_kinds, layout1, layout2) = (&x.ps_kinds, &x.vs_kinds, &x.layout1, &x.layout2);
         // A texture sampled by a draw that also renders into it: D3D9 leaves
         // this to the driver (the samples read what was there before the
         // draw); wgpu forbids one texture as both binding and attachment in
@@ -2157,6 +2227,7 @@ impl WgpuBackend {
         // a reused buffer and looked up without allocating; a stage whose key
         // equals the previous draw's reuses its group without a lookup
         let mut groups: [Option<wgpu::BindGroup>; 2] = [None, None];
+        let mut transient_vk_groups = Vec::new();
         for (stage, (kinds, layout, base, vs)) in [(ps_kinds, layout1, 0u32, false), (vs_kinds, layout2, 257u32, true)].into_iter().enumerate() {
             let mut entries = std::mem::take(&mut self.group_key[stage]);
             entries.clear();
@@ -2205,7 +2276,11 @@ impl WgpuBackend {
                 let tx = self.texture_for(b).ok_or_else(|| format!("texture format {:#x} is not supported", b.format))?;
                 let format = if srgb_read { tx.gpu_format.add_srgb_suffix() } else { tx.gpu_format };
                 let texture = snapshots.get(&b.resource).unwrap_or(&tx.texture);
-                let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(view_dimension), format: Some(format), ..Default::default() });
+                let desc = wgpu::TextureViewDescriptor { dimension: Some(view_dimension), format: Some(format), ..Default::default() };
+                let view = texture.create_view(&desc);
+                if let Some(vk) = &mut self.vk {
+                    if let Err(e) = vk.view(&view, &desc, wgpu::TextureUses::RESOURCE) { eprintln!("DDGPU_VK texture fallback: {e}"); }
+                }
                 views.push((n, view, self.sampler(&states)?));
             }
             let mut entries = Vec::new();
@@ -2214,6 +2289,17 @@ impl WgpuBackend {
                 entries.push(wgpu::BindGroupEntry { binding: 2 * n + 1, resource: wgpu::BindingResource::Sampler(s) });
             }
             let g = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &entries });
+            if let (Some(vk), Some(pipeline)) = (&mut self.vk, &x.vk_pipeline) {
+                if let Err(e) = vk.group(&g, pipeline, stage, &views) { eprintln!("DDGPU_VK group fallback: {e}"); }
+            }
+            if feedback {
+                if let Some(vk) = &mut self.vk {
+                    // Recorded descriptors own these temporary view handles.
+                    // The context must not retain a fresh snapshot every draw.
+                    for (_, view, _) in &views { vk.views.remove(view); }
+                    transient_vk_groups.push(g.clone());
+                }
+            }
             if !feedback {
                 let last = &mut self.last_group[stage];
                 last.0.clear();
@@ -2224,6 +2310,61 @@ impl WgpuBackend {
             groups[stage] = Some(g);
         }
         let groups = groups.map(|g| g.expect("both stages bound"));
+        let vk_binding = x.vk_pipeline.as_ref().and_then(|p| {
+            let cache = &self.vk.as_ref()?.groups;
+            Some((p.clone(), [cache.get(&groups[0])?.clone(), cache.get(&groups[1])?.clone()]))
+        });
+        if let Some(vk) = &mut self.vk {
+            for group in transient_vk_groups { vk.groups.remove(&group); }
+        }
+
+        if self.vk.is_none() { return Ok(DrawBindings::Wgpu(groups)); }
+        let bindings = Arc::new(vk::Bindings {
+            pipeline: x.pipeline.clone(),
+            groups: [self.group0.clone(), groups[0].clone(), groups[1].clone()],
+            native: vk_binding,
+        });
+        if d.textures.is_empty() {
+            let _ = x.vk_empty_bindings.set(bindings.clone());
+        } else if snapshots.is_empty() {
+            self.vk_bindings.insert(identity, BindingMemo {
+                derived: x.clone(), textures: d.textures.clone(), bindings: bindings.clone(),
+            });
+        }
+        Ok(DrawBindings::Vulkan(bindings))
+    }
+
+    fn try_draw(&mut self, d: &DrawCall) -> Result<(), String> {
+        let mut buffers = std::mem::take(&mut self.draw_buffers);
+        let mut instanced = std::mem::take(&mut self.instance_streams);
+        let result = self.try_draw_buffered(d, &mut buffers, &mut instanced);
+        // Also recycle after an unsupported draw; never retain resource handles
+        // past the command (release/upload may follow immediately).
+        buffers.clear();
+        instanced.clear();
+        self.draw_buffers = buffers;
+        self.instance_streams = instanced;
+        result
+    }
+
+    fn try_draw_buffered(&mut self, d: &DrawCall, vbufs: &mut Vec<(wgpu::Buffer, u64, u64, Option<u32>)>, instanced: &mut Vec<u32>) -> Result<(), String> {
+        let state = |s: u32| d.render_states.binary_search_by_key(&s, |&(k, _)| k).ok().map(|i| d.render_states[i].1).unwrap_or(0);
+        let vs_tokens = d.vertex_shader.as_ref().ok_or("draws without a vertex shader (fixed function) are not implemented")?;
+        let ps_tokens = d.pixel_shader.as_ref().ok_or("draws without a pixel shader (fixed function) are not implemented")?;
+        if d.declaration.is_empty() {
+            return Err("FVF draws are not implemented".into());
+        }
+        let timing = self.encode_profile.start();
+        let instances = instancing(d, instanced)?;
+        let x = self.derived(d, vs_tokens, ps_tokens, instanced)?;
+        let streams = &x.streams;
+        let (colour, depth, max_out, depth_bias, pipeline) = (&x.colour, &x.depth, x.max_out, x.depth_bias, &x.pipeline);
+        self.encode_profile.end(10, timing);
+        let timing = self.encode_profile.start();
+        let bindings = self.draw_bindings(d, &x)?;
+        let groups = bindings.groups();
+        self.encode_profile.end(12, timing);
+        let timing = self.encode_profile.start();
         // uniforms: half-pixel offset from the viewport; alpha test from the states
         let (vw, vh_) = (d.viewport[2].max(1) as f32, d.viewport[3].max(1) as f32);
         // D3D9 samples pixels at their integer corner, wgpu at the centre:
@@ -2239,7 +2380,6 @@ impl WgpuBackend {
         }
         let ps_extra = &ps_extra[..if depth_bias { 6 } else { 5 }];
         // vertex and index data
-        let mut vbufs = Vec::new();
         for &s in streams {
             match &d.vertices {
                 Vertices::Streams(v) => {
@@ -2286,6 +2426,8 @@ impl WgpuBackend {
             4 => 3 * d.primitives,
             _ => d.primitives + 2,
         } };
+        self.encode_profile.end(13, timing);
+        let timing = self.encode_profile.start();
         // the constant blocks last: a ring restart above (a flush) must not
         // separate them from this draw
         // A restart between the two stage allocations would invalidate the
@@ -2296,6 +2438,8 @@ impl WgpuBackend {
         }
         let ps_off = self.constants(&d.ps_constants, x.ps_floats, ps_extra, PS_BLOCK, 0);
         let vs_off = self.constants(&d.vs_constants, x.vs_floats, &[hp], VS_BLOCK, 1);
+        self.encode_profile.end(14, timing);
+        let timing = self.encode_profile.start();
         // a draw made while guest occlusion queries count gets its own slot
         let slot = (!self.active_queries.is_empty()).then(|| self.occlusion_slot());
         if let Some(s) = slot {
@@ -2313,6 +2457,42 @@ impl WgpuBackend {
             uses.extend(d.targets.iter().chain(std::iter::once(&d.depth)).flatten().filter_map(|t| t.texture.map(|x| x.resource)));
         }
         let scissor = state(174) != 0;
+        if self.vk.is_some() && slot.is_none() {
+            let same = self.vk_pass.borrow().as_ref().is_some_and(|p|
+                p.colors.len() == max_out
+                && p.colors.iter().zip(&colour[..max_out]).all(|(a,c)| a.as_ref() == c.as_ref().map(|(v,_)| v))
+                && p.depth.as_ref().map(|(v,_)| v) == depth.as_ref().map(|(v,_)| v)
+                && (scissor || p.draws.last().is_none_or(|d| d.scissor.is_none())));
+            if !same {
+                self.end_pass();
+                let extent = d.targets[..max_out].iter().zip(&colour[..max_out]).filter_map(|(t,v)| v.as_ref().and(t.as_ref())).chain(d.depth.iter().filter(|_| depth.is_some()))
+                    .fold(wgpu::Extent3d { width: u32::MAX, height: u32::MAX, depth_or_array_layers: 1 }, |mut e,t| {
+                        e.width=e.width.min(t.width); e.height=e.height.min(t.height); e
+                    });
+                *self.vk_pass.borrow_mut() = Some(vk::Pass {
+                    native_colors: colour[..max_out].iter().map(|c| c.as_ref().and_then(|(v,_)| self.vk.as_ref().unwrap().views.get(v).cloned())).collect(),
+                    native_depth: depth.as_ref().and_then(|(v,_)| self.vk.as_ref().unwrap().views.get(v).cloned()),
+                    colors: colour[..max_out].iter().map(|c| c.as_ref().map(|(v,_)| v.clone())).collect(),
+                    depth: depth.clone(), extent, draws: vec![], initialize: false, initialized: self.vk.as_ref().unwrap().initialized.clone(),
+                });
+                self.passes_begun.set(self.passes_begun.get()+1);
+            }
+            let v=d.viewport;
+            self.vk_pass.borrow_mut().as_mut().unwrap().draws.push(vk::Draw {
+                bindings: match &bindings { DrawBindings::Vulkan(b) => b.clone(), _ => unreachable!() },
+                offsets: [ps_off,vs_off], vertex: vbufs.iter().map(|(b,s,e,_)| (b.clone(),*s,*e)).collect(),
+                index: index.as_ref().map(|(b,s,e,_)| (b.clone(),*s,*e,format)),
+                viewport: [v[0] as f32,v[1] as f32,v[2] as f32,v[3] as f32,f32::from_bits(v[4]),f32::from_bits(v[5])],
+                scissor: scissor.then(|| { let s=d.scissor; [s[0].max(0) as u32,s[1].max(0) as u32,(s[2]-s[0]).max(0) as u32,(s[3]-s[1]).max(0) as u32] }),
+                stencil: state(57), blend: clear_colour(state(193),wgpu::TextureFormat::Rgba32Float), first,count,
+                base: if fan {0} else {d.base_vertex}, instances,
+            });
+            self.encode_profile.end(15, timing);
+            self.draws_recorded.set(self.draws_recorded.get()+1);
+            self.open_draws.set(self.open_draws.get()+1);
+            if self.open_draws.get() >= self.draws_per_submit { self.flush_async(); }
+            return Ok(());
+        }
         // (L94b: compared in place; the key is built for a new pass only)
         let same_pass = matches!(&*self.pass.borrow(), Some(p) if (scissor || !p.scissored)
             && p.key.0.len() == max_out
@@ -2320,6 +2500,7 @@ impl WgpuBackend {
             && p.key.1.as_ref() == depth.as_ref().map(|(v, _)| v)
             && p.key.2 == query_set);
         if !same_pass {
+            if self.vk.is_some() { vk::unsupported_pass(); }
             let key: PassKey = (colour[..max_out].iter().map(|c| c.as_ref().map(|(v, _)| v.clone())).collect(),
                                 depth.as_ref().map(|(v, _)| v.clone()), query_set.clone());
             self.end_pass();
@@ -2437,7 +2618,9 @@ impl WgpuBackend {
         if let Some(l) = self.tex_layouts.get(&key) {
             return l.clone();
         }
-        let l = warmup::texture_layout(&self.device, vs, kinds);
+        // L113: with DDGPU_NATIVE_SIM the pixel textures are the quad
+        // dispatches' too (compute_quads)
+        let l = warmup::texture_layout(&self.device, vs, kinds, self.native_sim);
         self.tex_layouts.insert(key, l.clone());
         l
     }
@@ -2466,15 +2649,15 @@ fn strides(d: &DrawCall) -> impl Iterator<Item = (u32, u32)> + '_ {
     streams.iter().map(|x| (x.0, x.3)).chain(inline)
 }
 
-fn instancing(d: &DrawCall) -> Result<(u32, Vec<u32>), String> {
+fn instancing(d: &DrawCall, instanced: &mut Vec<u32>) -> Result<u32, String> {
+    instanced.clear();
     const INDEXEDDATA: u32 = 0x4000_0000;
     const INSTANCEDATA: u32 = 0x8000_0000;
-    let Vertices::Streams(streams) = &d.vertices else { return Ok((1, vec![])) };
+    let Vertices::Streams(streams) = &d.vertices else { return Ok(1) };
     let geometry = streams.iter().find(|s| s.0 == 0).map(|s| s.4).unwrap_or(1);
     if geometry & INDEXEDDATA == 0 {
-        return Ok((1, vec![]));
+        return Ok(1);
     }
-    let mut instanced = Vec::new();
     for s in streams.iter() {
         if s.4 & INSTANCEDATA != 0 {
             if s.4 & 0x3FFF_FFFF != 1 {
@@ -2484,7 +2667,7 @@ fn instancing(d: &DrawCall) -> Result<(u32, Vec<u32>), String> {
         }
     }
     let count = if matches!(d.indices, Indices::None) { 1 } else { (geometry & 0x3FFF_FFFF).max(1) };
-    Ok((count, instanced))
+    Ok(count)
 }
 
 fn vertex_format(ty: u8) -> Option<(wgpu::VertexFormat, d3d9wgsl::InputType)> {
@@ -2751,7 +2934,7 @@ impl GraphicsBackend for WgpuBackend {
         Some(out)
     }
 
-    fn upload(&mut self, upload: Upload) {
+    fn upload(&mut self, mut upload: Upload) {
         // recorded draws read the old contents: submit them first
         let resource = match &upload {
             Upload::Buffer { resource, .. } | Upload::Image { resource, .. } => *resource,
@@ -2759,23 +2942,22 @@ impl GraphicsBackend for WgpuBackend {
         if self.open_uses.borrow().contains(&resource) {
             self.flush();
         }
-        match &upload {
+        match &mut upload {
             Upload::Buffer { resource, bytes } => {
+                if self.native_sim {
+                    if bytes.len() <= 512 {
+                        self.small_buffers.insert(*resource, bytes.clone());
+                    } else {
+                        self.small_buffers.remove(resource);
+                    }
+                }
                 // a buffer of the same size is written in place
                 let size = (bytes.len() as u64).next_multiple_of(4).max(4);
                 match self.buffers.get(resource) {
                     Some(b) if b.size() == size => {
+                        upload_data::pad_buffer(bytes);
                         self.wait_finisher();
-                        // (L144: a 4-aligned upload as it is, without a padded copy)
-                        let whole = bytes.len() & !3;
-                        if whole != 0 {
-                            self.queue.write_buffer(b, 0, &bytes[..whole]);
-                        }
-                        if whole != size as usize {
-                            let mut tail = [0u8; 4];
-                            tail[..bytes.len() - whole].copy_from_slice(&bytes[whole..]);
-                            self.queue.write_buffer(b, whole as u64, &tail);
-                        }
+                        self.queue.write_buffer(b, 0, bytes);
                     }
                     _ => {
                         let b = self.inline_buffer(bytes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX);
@@ -2801,6 +2983,9 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn draw(&mut self, draw: &DrawCall) {
+        if self.native_sim && self.try_quad(draw) {
+            return;
+        }
         if let Err(e) = self.try_draw(draw) {
             if self.errors.len() < 1000 {
                 self.errors.push(e);
@@ -2926,13 +3111,29 @@ impl GraphicsBackend for WgpuBackend {
 
     fn release(&mut self, resource: u32) {
         self.flush();
-        self.native_worker = None; // Guest/resource identities may now be reused.
+        self.small_buffers.remove(&resource);
+        self.quads.forget(resource);
+        // Guest/resource identities may now be reused: the native worker
+        // forgets its resources if it holds this one (a target, an imported
+        // buffer or a sampled texture), keeping its pipelines (L141).
+        if let Some(worker) = self.native_worker.as_mut() {
+            let tex = self.textures.get(&resource);
+            let held = self.surfaces.contains_key(&resource)
+                || tex.is_some_and(|t| t.target)
+                || worker.holds(self.buffers.get(&resource), tex.map(|t| &t.texture));
+            if held {
+                worker.reset_resources();
+                self.native_stats.resource_resets += 1;
+            }
+        }
         // cached views and bind groups may hold the resource
         self.tex_groups.clear();
+        if let Some(vk) = &mut self.vk { vk.release_resources(); }
         self.last_group = Default::default();
         self.target_views.clear();
         // memo entries hold target views (L99)
-        self.memo.iter_mut().for_each(|m| *m = None);
+        self.memo.clear();
+        self.vk_bindings.clear();
         self.textures.remove(&resource);
         self.pending.remove(&resource);
         self.buffers.remove(&resource);
@@ -2942,6 +3143,7 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn present(&mut self, back_buffer: &Target) {
+        if self.vk.is_some() { vk::report(); }
         self.poll_native_comparisons_internal();
         pipeline_log::present();
         self.flush();
