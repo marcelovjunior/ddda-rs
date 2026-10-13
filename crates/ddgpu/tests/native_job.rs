@@ -693,15 +693,27 @@ fn bounded_indexed_strips_match_host_driver_with_start_base_and_culling() {
     }
     assert_eq!(backend.native_job_stats().accepted, 6);
     assert_eq!(backend.native_job_stats().rejected, 0);
-    // Retain rejection for a declared range that permits the u16 sentinel.
-    let mut unsafe_strip = draw(false, false, false, [1.0; 4]);
-    unsafe_strip.primitive = 5;
-    unsafe_strip.vertex_count = 65536;
-    assert!(backend.native(job(unsafe_strip, &native, None)).is_err());
-    assert_eq!(
-        backend.native_job_stats().rejection_reasons["native indexed strip range may include restart index"],
-        1
-    );
+    // L141: a declared vertex range reaching the u16 sentinel draws as the
+    // D3D9 path draws it (DrawIndexedPrimitive's NumVertices is a hint the
+    // D3D9 path does not use for strips; both give the pipeline the index
+    // format, so an index 0xFFFF would restart both: their shared limit)
+    let mut wide = draw(false, false, false, [1.0, 0.5, 0.25, 1.0]);
+    wide.primitive = 5;
+    wide.primitives = 1;
+    wide.vertex_count = 65536;
+    let mut call = legacy(&wide, &original, None);
+    call.vertices = Vertices::Streams(vec![(0, 10, 0, 16, 1)].into());
+    call.indices = Indices::Buffer(11, 102);
+    wide.indices.as_mut().unwrap().format = 102;
+    backend.clear(&clear(&original, None));
+    backend.draw(&call);
+    backend.present(&original);
+    let expected = backend.last_frame.as_ref().unwrap().rgba.clone();
+    backend.clear(&clear(&native, None));
+    assert!(backend.native(job(wide, &native, None)).is_ok());
+    backend.present(&native);
+    assert_eq!(backend.last_frame.as_ref().unwrap().rgba, expected, "a wide declared range");
+    assert_eq!(backend.native_job_stats().rejected, 0);
 }
 
 /// L141: a guest release keeps the native worker and its pipelines. A
@@ -826,5 +838,89 @@ fn native_depth_bias_matches_the_d3d9_path() {
         images.push(expected);
     }
     assert_ne!(images[0], images[1], "the bias changes what passes the depth test");
+    assert!(backend.errors.is_empty(), "{:?}", backend.errors);
+}
+
+/// L141: a draw sampling the texture it renders into samples what the pass
+/// drew before it (the D3D9 path copies it first; L59), natively too.
+#[test]
+fn native_feedback_draws_sample_what_the_pass_drew_before_them() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let rt = |surface: u32| Target {
+        surface,
+        format: 21,
+        width: 8,
+        height: 8,
+        texture: Some(TargetTexture { resource: 70, kind: TexKind::Flat, width: 8, height: 8, depth: 1, levels: 1, usage: USAGE_RENDERTARGET }),
+        level: 0,
+        samples: 0,
+        quality: 0,
+    };
+    let t = rt(71);
+    upload(&mut backend);
+    // first: a flat colour; second: samples the target at c0 = (0.25, 0.25)
+    let first = draw(false, false, false, [0.0, 0.5, 1.0, 1.0]);
+    let mut second = draw(false, false, false, [0.25, 0.25, 0.0, 0.0]);
+    // dcl_2d s0; mov r1, c0; texld r0, r1, s0; mov oC0, r0
+    second.pixel_shader = vec![
+        0xffff0300, 0x0200001f, 0x90000000, 0xa00f0800, 0x02000001, 0x800f0001, 0xa0e40000, 0x03000042,
+        0x800f0000, 0x80e40001, 0xa0e40800, 0x02000001, 0x800f0800, 0x80e40000, 0xffff,
+    ]
+    .into();
+    let mut states = [0; 14];
+    states[1..4].fill(3);
+    states[5] = 1;
+    states[6] = 1;
+    second.textures = vec![TextureBinding {
+        sampler: 0, resource: 70, kind: TexKind::Flat, format: 21, width: 8, height: 8, depth: 1, levels: 1,
+        usage: USAGE_RENDERTARGET, states,
+    }]
+    .into();
+    backend.clear(&clear(&t, None));
+    backend.draw(&legacy(&first, &t, None));
+    backend.draw(&legacy(&second, &t, None));
+    let expected = backend.read_back(&t).unwrap();
+    backend.clear(&clear(&t, None));
+    let job = NativeJob {
+        passes: vec![NativePass { colours: [Some(t.clone()), None, None, None], draws: vec![first, second], ..Default::default() }],
+    };
+    assert!(backend.native(job).is_ok(), "{:?}", backend.native_job_stats().rejection_reasons);
+    assert_eq!(backend.read_back(&t).unwrap(), expected);
+    // the second draw sampled the first's colour, not the clear's
+    let p = &expected[..4];
+    assert!(p[0] == 255 && p[1] > 100 && p[2] == 0 && p[3] == 255, "BGRA of (0, 0.5, 1, 1): {p:?}");
+    assert!(backend.errors.is_empty(), "{:?}", backend.errors);
+}
+
+/// L141: native jobs no longer wait for the finisher to submit all earlier
+/// work; each job's constant deltas go to a scatter source no pending batch
+/// reads. Many jobs in a row (more than the sources), each a different
+/// colour into its own target, with the finisher asynchronous and no read
+/// in between: every target holds its own job's colour.
+#[test]
+fn consecutive_native_jobs_keep_their_own_constants_without_waiting() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    backend.set_async_submit(true);
+    upload(&mut backend);
+    let n = 12;
+    let targets: Vec<Target> = (0..n).map(|k| target(100 + k, 21)).collect();
+    for (k, t) in targets.iter().enumerate() {
+        let v = (k as f32 + 1.0) / 16.0;
+        let mut j = job(draw(false, false, false, [v, 1.0 - v, 0.5, 1.0]), t, None);
+        j.passes[0].clear_colour = Some(0xff00_0000);
+        assert!(backend.native(j).is_ok());
+    }
+    let images: Vec<Vec<u8>> = targets.iter().map(|t| backend.read_back(t).unwrap()).collect();
+    for (k, image) in images.iter().enumerate() {
+        let v = (k as f32 + 1.0) / 16.0;
+        // A8R8G8B8 read back as BGRA
+        let want = [(0.5f32 * 255.0).round() as i32, ((1.0 - v) * 255.0).round() as i32, (v * 255.0).round() as i32, 255];
+        let p = &image[..4];
+        assert!(p.iter().zip(want).all(|(&g, w)| (g as i32 - w).abs() <= 1), "job {k}: {p:?} vs {want:?}");
+    }
     assert!(backend.errors.is_empty(), "{:?}", backend.errors);
 }

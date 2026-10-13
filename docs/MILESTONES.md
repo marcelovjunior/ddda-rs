@@ -100,9 +100,11 @@
   is byte-exact. Runtime light **212 pass / inherited gamma failure / 5 ignored**.
 - Minimal-shader native wgpu/raw medians: changing 5,000-draw jobs
   **1.249/1.197 us per draw**; 64-draw jobs **2.495/2.505**; other fixtures
-  regress. Remains opt-in, no native-game FPS claim.
+  regress. Split/combined submission timings are also mixed despite one
+  queue batch/job. Remains opt-in, no native-game FPS claim.
 - Next: head native VK=0/1 image/FPS/profile and VK=1 compare (zero mismatches).
   Evidence and remaining timing isolation: `docs/tasks/L152-native-vk.md`.
+  Evidence and submission timings: `docs/tasks/L152-native-vk.md`.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)

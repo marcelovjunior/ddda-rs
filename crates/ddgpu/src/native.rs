@@ -1146,6 +1146,10 @@ pub struct RecorderState {
     pub stats: RecorderStats,
 }
 impl RecorderState {
+    /// See Uniforms::tag.
+    pub(crate) fn tag_upload(&mut self, ticket: u64) {
+        self.ring.tag(ticket);
+    }
     pub fn uniform_capacity(&self) -> u64 {
         self.ring.capacity()
     }
@@ -1486,14 +1490,31 @@ impl<'a> Recorder<'a> {
         let c = &mut self.constants[handle.index as usize];
         let end = words.len().checked_mul(4).and_then(|n| n.checked_add(offset)).ok_or("constant range overflow")?;
         let dst = c.bytes.get_mut(offset..end).ok_or("constant range outside block")?;
-        let mut changed = false;
-        for (d, w) in dst.chunks_exact_mut(4).zip(words) {
-            let w = w.to_le_bytes();
-            if *d != w {
-                d.copy_from_slice(&w);
-                changed = true;
+        // the words' little-endian bytes: compared and copied as one range
+        #[cfg(target_endian = "little")]
+        let changed = {
+            // SAFETY: any u32 slice is readable as bytes (alignment 1, the
+            // same length in bytes); on a little-endian target those bytes
+            // are each word's to_le_bytes
+            let src = unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 4) };
+            let changed = dst != src;
+            if changed {
+                dst.copy_from_slice(src);
             }
-        }
+            changed
+        };
+        #[cfg(not(target_endian = "little"))]
+        let changed = {
+            let mut changed = false;
+            for (d, w) in dst.chunks_exact_mut(4).zip(words) {
+                let w = w.to_le_bytes();
+                if *d != w {
+                    d.copy_from_slice(&w);
+                    changed = true;
+                }
+            }
+            changed
+        };
         if changed {
             c.offset = None;
         }
@@ -1576,6 +1597,31 @@ impl<'a> Recorder<'a> {
             self.flush_bundle();
         }
         self.blend = colour;
+    }
+    /// End the pass and copy every mip level of `src` into `dst` (the same
+    /// size and format), recorded in order on this recorder's encoder.
+    pub fn copy_texture(&mut self, src: &wgpu::Texture, dst: &wgpu::Texture) {
+        self.end_pass();
+        let device = self.device;
+        let copy = |encoder: &mut wgpu::CommandEncoder| {
+            for level in 0..src.mip_level_count() {
+                let size = src.size().mip_level_size(level, src.dimension());
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo { texture: src, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyTextureInfo { texture: dst, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    size,
+                );
+            }
+        };
+        match &mut self.raw {
+            // raw passes are chunks: the copy is a wgpu chunk in their order
+            Some(raw) => {
+                let mut encoder = device.gpu.create_command_encoder(&Default::default());
+                copy(&mut encoder);
+                raw.chunks.push(crate::vk::Chunk::Wgpu(encoder));
+            }
+            None => copy(self.encoder.get_or_insert_with(|| device.gpu.create_command_encoder(&Default::default()))),
+        }
     }
     pub fn begin_pass(&mut self, desc: PassDesc) -> Result<(), &'static str> {
         self.end_pass();
@@ -1839,6 +1885,10 @@ impl<'a> Recorder<'a> {
         }
         self.stats.draws += 1;
         Ok(())
+    }
+    /// See Uniforms::gate.
+    pub(crate) fn upload_gate(&self) -> Option<u64> {
+        self.ring.gate()
     }
     pub fn end_pass(&mut self) {
         if let Some(raw) = &mut self.raw { raw.end(self.device); }
