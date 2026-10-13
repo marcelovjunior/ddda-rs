@@ -14,6 +14,43 @@
   Four parser tests pass. Details: `docs/tasks/L153-sync.md`.
 - Next: head profile-on same-route census, then profile-off matched
   cache/futex A/B and image acceptance before changing defaults.
+### L155 combo25 save-load ranking (2026-10-13)
+
+- Head FAST=0/1: stage-200 request to first stage update **8.176676 ->
+  7.429188 s** (-9.14%), same **1,739 reads / 207.6 MB / 8,544 inflates**.
+  Inclusive zlib **6.097 -> 5.101 s**; read services **0.279 -> 0.297 s**;
+  zero pipeline creations in that interval. Keep exact FAST=1 selected,
+  PORT=0; no new speculative archive scheduling or default change.
+- Menu-exit callback to first gameplay Present **15.504909 -> 14.583692 s**
+  (-0.921217 s), not confirmed input/display readiness. Neither run enters
+  old `00532110`; raw title chain verifies the PC bypass. L151 preparation
+  remains a boot candidate, not the dominant warm-cache save-load cost.
+- **15 parser tests pass**, both 39-interval logs ranked with hashes and
+  nested/parallel costs kept distinct. Light suite **212 reported passes /
+  inherited gamma failure / five ignored**; required vectors **632 fast
+  cases x3 + 12 outer cases pass**. Next: head repeat/logging-off FAST
+  acceptance and resource-worker profiling. `docs/tasks/L155-saveload.md`.
+
+### L155 save-load source map (2026-10-13)
+
+- One resource FIFO worker already overlaps reads with up to three entry
+  decode workers. Shared archive workspace and ordered finalizers block a
+  simple parallel-archive change (`00DB9C30`/`00DB9C80`/`00DB9F40`).
+- Added base/append shader gates and stage list/barrier order. The historical
+  `00532110` marker is not proven PC Continue: PC storage ignores its kind 9,
+  and `00531E60` has direct GameMain paths. Raw callback IDs and head input
+  observations must establish the actual load interval.
+- Static evidence only; no measured speedup. Next: completed combo25 FAST
+  timeline ranking and exact intervention. `docs/tasks/L155-saveload.md`.
+
+### L155 ddgpu example build repair (2026-10-13)
+
+- `module_cost` now declares the existing pipeline logger required by its
+  example-local shader cache module. `cargo build -p ddgpu --examples`
+  **passes**, 3m14s in a fresh L155 target, four jobs, no incremental build.
+- No GPU/game execution or renderer behavior change. Next: save-load source
+  map and head's combo25 interval ranking; L151 preparation merged on L155.
+
 ### L151 parallel pipeline preparation (2026-10-13)
 
 - Opt-in 2-4 creator threads precompile L116 exact recipes with L140 driver
