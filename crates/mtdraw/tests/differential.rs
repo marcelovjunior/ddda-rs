@@ -478,8 +478,13 @@ fn run(body: LiftFn, m: &TestMem, cpu: &Cpu) -> (TestMem, Cpu, Vec<Call>) {
     (m, cpu, TRACE.with(|t| std::mem::take(&mut *t.borrow_mut())))
 }
 
+/// The sink slot is process-wide: a test installing a sink would hand
+/// the other test's commands to it (codex-7's gate ran the two in parallel).
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn the_port_executes_frames_as_the_lifted_executor_does() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     ddnative_host::install();
     x86::set_lifted_lookup(lookup);
     x86::set_ext_calls(Some(Box::new(mock)));
@@ -575,6 +580,7 @@ fn taker(take: fn(u32) -> bool) -> std::sync::Arc<Taker> {
 /// device calls, and nothing else, are gone.
 #[test]
 fn a_sink_takes_whole_commands_and_nothing_else() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     ddnative_host::install();
     x86::set_lifted_lookup(lookup);
     x86::set_ext_calls(Some(Box::new(mock)));

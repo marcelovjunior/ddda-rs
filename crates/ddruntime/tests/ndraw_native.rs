@@ -15,6 +15,8 @@ const DATA: u32 = SCRATCH + 0x1000;
 const NDRAW: u32 = SCRATCH + 0x4000;
 /// the call data the D3D9 path passes by pointer
 const ARGS: u32 = SCRATCH + 0xF000;
+/// the executor context the sink's sampler section runs on
+const CONTEXT: u32 = SCRATCH + 0x8000;
 
 fn installed_exe() -> Option<ddexe::ExeFile> {
     let path = std::env::var("DDDA_EXE").unwrap_or_else(|_| r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe".into());
@@ -194,16 +196,23 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     let info = FrameInfo { device: dev, srgb: false, filtering: 0, invalid_viewport: [0; 4] };
     let mut caches = Caches::default();
     caches.begin_frame(&info);
-    let native = draw_call(&s.mem, &info, &mut caches, record, 1).expect("the draw is taken");
+    for k in 0..0xE28 / 4 {
+        s.mem.set_u32(CONTEXT + 4 * k, 0);
+    }
+    let native = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("the draw is taken").call;
     let reads: Vec<u32> = reads_of(&native).collect();
     assert!(reads.contains(&texture) && reads.contains(&vb) && reads.contains(&ib) && reads.contains(&target));
     // from the caches: the same draw
-    assert_eq!(draw_call(&s.mem, &info, &mut caches, record, 1).unwrap(), native);
+    assert_eq!(draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap().call, native);
+    // taken: its sampler section made, then the draw again from the caches
+    let first = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap();
+    ddruntime::ndraw_native::commit(&mut s.mem, &info, &mut caches, first.shadow);
+    assert_eq!(draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap().call, native);
     // what a taken draw costs from the caches (debug build: an upper bound)
     let n = 20_000;
     let t = std::time::Instant::now();
     for _ in 0..n {
-        std::hint::black_box(draw_call(&s.mem, &info, &mut caches, record, 1).unwrap());
+        std::hint::black_box(draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap());
     }
     eprintln!("draw_call from the caches: {:.3} us", t.elapsed().as_secs_f64() * 1e6 / n as f64);
 
