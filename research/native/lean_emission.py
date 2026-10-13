@@ -310,3 +310,52 @@ def sse(arm):
 def lean(arm):
     """All lean passes, in order, for one lowered whole-function arm."""
     return idioms(tidy(fold_results(dead_flags(const_shifts(arm)))))
+
+
+# Whole functions whose arms exceed this many bytes are split into part
+# functions (L73: shard 05 at opt-level 1, see docs/tasks/L73-lean-emission.md).
+SPLIT_BYTES = 16384
+ARM_HEAD = re.compile(r"\s*0x([0-9A-Fa-f]+) => \{")
+RETURN = re.compile(STRING + r"|\breturn;")
+
+
+def split_function(addr, arms, limit=None):
+    """Split a dispatcher function's lowered arms into part functions over
+    contiguous address ranges, or None (small, or not provably safe).
+
+    Arms keep all guest state in `cpu` and memory; their locals never
+    outlive the arm. A part runs its own `loop { match pc }` and returns
+    Some(pc) when control leaves its range (the dispatcher picks the part
+    owning pc) or None where the function returned; an unknown pc inside a
+    range is unreachable!() as before. Returns (dispatcher lines, part
+    lines)."""
+    limit = SPLIT_BYTES if limit is None else limit
+    if len(arms) < 2 or sum(len(a) for a in arms) <= limit:
+        return None
+    heads = []
+    for a in arms:
+        m = ARM_HEAD.match(a)
+        if m is None or re.search(r"\|m: &mut dyn Mem[^|]*\|[^;]*\breturn\b", a):
+            return None  # a `return` inside a closure must stay a closure return
+        heads.append(int(m[1], 16))
+    if heads != sorted(heads):
+        return None
+    groups, size = [[]], 0
+    for a, h in zip(arms, heads):
+        if groups[-1] and size + len(a) > limit:
+            groups.append([]); size = 0
+        groups[-1].append((h, a)); size += len(a)
+    name = f"f_{addr:08x}"
+    dispatch = ["    loop {", "        pc = match pc {"]
+    parts = []
+    for g, group in enumerate(groups):
+        span = f"0x{group[0][0]:X}..=0x{group[-1][0]:X}"
+        dispatch.append(f"            {span} => match {name}_p{g}(m, cpu, pt, pc) {{ Some(next) => next, None => return }},")
+        parts += [f"fn {name}_p{g}(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<crate::mem::PageTable>>, "
+                  "mut pc: u32) -> Option<u32> {",
+                  "    loop {", "        match pc {",
+                  *(RETURN.sub(lambda m: "return None;" if m[0] == "return;" else m[0], a) for _, a in group),
+                  f"            _ if !({span}).contains(&pc) => return Some(pc),",
+                  "            _ => unreachable!(),", "        }", "    }", "}"]
+    dispatch += ["            _ => unreachable!(),", "        };", "    }"]
+    return dispatch, parts

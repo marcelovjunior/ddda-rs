@@ -172,7 +172,7 @@ FIXTURE = r'''
                     initial.xmm[i][j] = [value, other, 0x3f80_0000, 0x7f7f_ffff, 1, 0xff80_0000][(i + j) % 6] ^ (i as u32);
                 } }
                 let mut results = Vec::new();
-                for run in [plain::f_00001000 as fn(&mut dyn Mem, &mut Cpu), lean::f_00001000] {
+                for run in [plain::f_00001000 as fn(&mut dyn Mem, &mut Cpu), lean::f_00001000, split::g_00001000] {
                     let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
                     let log = calls.clone();
                     x86::set_ext_calls(Some(Box::new(move |m, c, t| {
@@ -184,7 +184,8 @@ FIXTURE = r'''
                     x86::set_ext_calls(None);
                     results.push((format!("{:?}", c), m.bytes, m.events.into_inner(), calls.borrow().clone()));
                 }
-                assert_eq!(results[0], results[1], "eax {value:#x} ecx {other:#x}");
+                assert_eq!(results[0], results[1], "lean: eax {value:#x} ecx {other:#x}");
+                assert_eq!(results[0], results[2], "split: eax {value:#x} ecx {other:#x}");
             }
         }
     }
@@ -228,13 +229,16 @@ class Differential(unittest.TestCase):
                 f"{{ let t = 0x403000u32; esp = esp.wrapping_sub(4); m.set_u32(esp, 0x1050); {S} x86::call_ext(m, cpu, t); {L} }}",
                 alu("cmp", "eax", "0x5u32"), pop("ecx"), f"esp = esp.wrapping_add(4 + 0); {S} return; }}"]),
         ]
+        saved_split = le.SPLIT_BYTES
         try:
             lift.LEAN = False
             plain = lift.rust_fn(0x1000, "synthetic", arms)
             lift.LEAN = True
             lean = lift.rust_fn(0x1000, "synthetic", arms)
+            le.SPLIT_BYTES = 900  # three parts of one arm each
+            split = lift.rust_fn(0x1000, "synthetic", arms).replace("f_00001000", "g_00001000")
         finally:
-            lift.LEAN = True
+            lift.LEAN, le.SPLIT_BYTES = True, saved_split
         for wanted in ("emit::push(", "emit::pop(", "cpu.eax = cpu.eax.wrapping_add(0x1u32);",
                        "x86::call_ext(m, cpu, 0x402000);", "cpu.xmm[1] = emit::load128(m, pt, cpu.esp.wrapping_add(0x10));",
                        "cpu.xmm[4] = emit::load64(m, pt, cpu.esp.wrapping_add(0x20));",
@@ -247,6 +251,11 @@ class Differential(unittest.TestCase):
                        "cpu.xmm[2] = emit::andnps(cpu.xmm[2], cpu.xmm[1]);",
                        "cpu.xmm[3] = emit::xorps(cpu.xmm[3], emit::load128(m, pt, cpu.ebx & 0xFF0u32));", "m.fast_u32(pt, 0x2468u32)"):
             self.assertIn(wanted, lean)
+        self.assertNotIn("_p0(", lean)
+        for wanted in ("0x1000..=0x1000 => match g_00001000_p0(m, cpu, pt, pc) { Some(next) => next, None => return },",
+                       "0x1020..=0x1020 => match g_00001000_p2(", "_ if !(0x1010..=0x1010).contains(&pc) => return Some(pc),",
+                       "return None; }"):
+            self.assertIn(wanted, split)
         self.assertNotIn("x86::SHL, a, n, r, 32); cpu.ebx", lean)  # dies: the xor overwrites it
         self.assertIn("x86::SHL, a, n, r, 32); cpu.eax", lean)  # live: cmp is past a call
         root = Path(__file__).resolve().parents[2]
@@ -259,6 +268,7 @@ class Differential(unittest.TestCase):
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod plain {{ use super::*; {plain} }}
             mod lean {{ use super::*; {lean} }}
+            mod split {{ use super::*; {split} }}
         ''' + FIXTURE
         target = root / "target"
         target.mkdir(exist_ok=True)

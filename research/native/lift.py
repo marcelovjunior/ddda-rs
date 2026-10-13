@@ -2878,6 +2878,12 @@ def rust_fn(addr, name, arms):
     body = None if traced else straight_line(addr, arms)  # a trace needs the block loop
     if body is not None:
         return "\n".join([*header, "    " + cpu_arm(body, start=addr), "}", ""])
+    lowered = [cpu_arm(a) for a in arms]
+    # L73: a large dispatcher becomes part functions (lean_emission.py)
+    split = None if traced or not LEAN else lean_emission.split_function(addr, lowered)
+    if split is not None:
+        dispatch, parts = split
+        return "\n".join([*header, f"    let mut pc: u32 = 0x{addr:X};", *dispatch, "}", *parts, ""])
     return "\n".join([*header,
         f"    let mut pc: u32 = 0x{addr:X};",
         "    loop {",
@@ -2885,7 +2891,7 @@ def rust_fn(addr, name, arms):
             '        eprintln!("trace {pc:#x} eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x}", '
             'cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi);']),
         "        match pc {",
-        *(cpu_arm(a) for a in arms),
+        *lowered,
         "            _ => unreachable!(),",
         "        }",
         "    }",
