@@ -10,24 +10,44 @@
 //! is part of the result.
 //!
 //! Translated from 0x012F0D4C and 0x012F1109 (DDDA.exe 2017-12-13 Steam).
-use crate::semantic_s6_crt_tables::{TABLE, TABLE_BASE};
+use ddnative_base::mem::{Mem, Pages};
 
-/// A 32-bit word of the CRT's constant tables at `address` (an address of
-/// the exe, 0x0144C640 ..= 0x0144DE5F).
-#[inline(always)]
-fn word(address: u32) -> u32 {
-    TABLE[((address - TABLE_BASE) / 4) as usize]
+/// The CRT's constant tables (the exe's data at 0x0144C640 ..= 0x0144DE5F:
+/// correction tables, split constants, quadrant constants), read from the
+/// player's own copy of the game in guest memory when needed.
+pub struct Tables<'a> {
+    pub memory: &'a dyn Mem,
+    pub pages: Pages,
 }
 
-#[inline(always)]
-fn float(address: u32) -> f32 {
-    f32::from_bits(word(address))
-}
-
-/// Four consecutive words of the tables (a 16-byte vector load).
-#[inline(always)]
-fn vector(address: u32) -> [u32; 4] {
-    std::array::from_fn(|i| word(address + 4 * i as u32))
+impl Tables<'_> {
+    #[inline(always)]
+    fn word(&self, address: u32) -> u32 {
+        self.pages.u32(self.memory, address)
+    }
+    #[inline(always)]
+    fn float(&self, address: u32) -> f32 {
+        f32::from_bits(self.word(address))
+    }
+    /// Four consecutive words (a 16-byte vector load).
+    #[inline(always)]
+    fn vector(&self, address: u32) -> [u32; 4] {
+        std::array::from_fn(|i| self.word(address + 4 * i as u32))
+    }
+    /// A 64-bit table word.
+    #[inline(always)]
+    fn quad(&self, address: u32) -> u64 {
+        self.word(address) as u64 | ((self.word(address + 4) as u64) << 32)
+    }
+    #[inline(always)]
+    fn double(&self, address: u32) -> f64 {
+        f64::from_bits(self.quad(address))
+    }
+    /// Two consecutive 64-bit table words.
+    #[inline(always)]
+    fn pair(&self, address: u32) -> [u64; 2] {
+        [self.quad(address), self.quad(address + 8)]
+    }
 }
 
 /// `asinf(x)` as the CRT computes it, by the magnitude of `x`:
@@ -43,36 +63,36 @@ fn vector(address: u32) -> [u32; 4] {
 ///   plus a tiny constant ([`asin_tiny`]);
 /// * `|x| >= 1`: exactly 1 gives `+-pi/2`, NaN gives NaN, anything else the
 ///   default NaN ([`asin_out_of_range`]).
-pub fn asinf(x: f32) -> f32 {
+pub fn asinf(t: &Tables, x: f32) -> f32 {
     let bits = x.to_bits();
     let magnitude = bits & 0x7fff_ffff;
     let above_low = magnitude.wrapping_sub(0x3d80_0000); // |x| - 0.0625, as bits
     // both |x| - 0.0625 >= 0 and 0.866... - |x| >= 0 (as signed bits)
     if ((0x3f5d_b3d7u32.wrapping_sub(magnitude) | above_low) as i32) >= 0 {
-        return asin_middle(x, bits, above_low);
+        return asin_middle(t, x, bits, above_low);
     }
     if ((0x01fe_ffffu32.wrapping_sub(above_low) | above_low) as i32) >= 0 {
-        return asin_upper(x, bits);
+        return asin_upper(t, x, bits);
     }
     if (above_low as i32) < 0 {
         let shifted = above_low.wrapping_add(0x0600_0000);
-        return if (shifted as i32) < 0 { asin_tiny(x) } else { asin_small(x) };
+        return if (shifted as i32) < 0 { asin_tiny(x) } else { asin_small(t, x) };
     }
     if above_low >= 0x0200_0000 {
-        return asin_out_of_range(x, magnitude);
+        return asin_out_of_range(t, x, magnitude);
     }
-    asin_near_one(x, bits)
+    asin_near_one(t, x, bits)
 }
 
 /// `0.0625 <= |x| <= 0.866...` (0x012F0D82).
-fn asin_middle(x: f32, bits: u32, above_low: u32) -> f32 {
-    let one = float(0x0144_d280);
+fn asin_middle(t: &Tables, x: f32, bits: u32, above_low: u32) -> f32 {
+    let one = t.float(0x0144_d280);
     let index = (above_low >> 16) & 0x1fe;
-    let scale = float(0x0144_ce40 + index * 2);
-    let entry = vector(0x0144_c640 + index * 4);
+    let scale = t.float(0x0144_ce40 + index * 2);
+    let entry = t.vector(0x0144_c640 + index * 4);
     let root = (one - x * x).sqrt();
     // x's top bits (the mask 0xFFFE0000) with a marker bit
-    let marked = f32::from_bits((word(0x0144_d284) & bits) | 0x0001_0000);
+    let marked = f32::from_bits((t.word(0x0144_d284) & bits) | 0x0001_0000);
     let sum = x + marked;
     let scaled = x * scale;
     let difference = (x - marked) * sum;
@@ -80,14 +100,14 @@ fn asin_middle(x: f32, bits: u32, above_low: u32) -> f32 {
     let quotient = difference / denominator;
     let reduced = scaled - marked * root;
     let sign = bits & 0x8000_0000;
-    let correction = (float(0x0144_d288) * reduced) * (reduced * reduced);
+    let correction = (t.float(0x0144_d288) * reduced) * (reduced * reduced);
     let tail = correction + f32::from_bits(entry[0] ^ sign);
     (quotient + tail) + f32::from_bits(entry[1] ^ sign)
 }
 
 /// `0.866... < |x| <= 0x3f7effff` (0x012F0E2F).
-fn asin_upper(x: f32, bits: u32) -> f32 {
-    let one = float(0x0144_d280);
+fn asin_upper(t: &Tables, x: f32, bits: u32) -> f32 {
+    let one = t.float(0x0144_d280);
     let root = (one - x * x).sqrt();
     let sign = bits & 0x8000_0000;
     let magnitude = f32::from_bits(bits & 0x7fff_ffff);
@@ -97,9 +117,9 @@ fn asin_upper(x: f32, bits: u32) -> f32 {
     let sum = magnitude + high;
     let one_less = one - high_squared;
     let product = sum * low;
-    let marked = f32::from_bits((word(0x0144_d284) & root.to_bits()) | 0x0001_0000);
+    let marked = f32::from_bits((t.word(0x0144_d284) & root.to_bits()) | 0x0001_0000);
     let exponent = ((root.to_bits() >> 16).wrapping_sub(0x3d80)) & 0xfffe;
-    let scaled_root = root * float(0x0144_ce40 + exponent * 2);
+    let scaled_root = root * t.float(0x0144_ce40 + exponent * 2);
     let high_marked = high * marked;
     let low_marked = low * marked;
     let marked_squared = marked * marked;
@@ -107,9 +127,9 @@ fn asin_upper(x: f32, bits: u32) -> f32 {
     let t4 = (one_less - marked_squared) - product;
     let doubled = scaled_root + scaled_root;
     let quotient = t4 / (doubled + t6);
-    let entry = vector(0x0144_c640 + exponent * 4);
-    let constants = vector(0x0144_d270);
-    let poly = (float(0x0144_d288) * t6) * (t6 * t6);
+    let entry = t.vector(0x0144_c640 + exponent * 4);
+    let constants = t.vector(0x0144_d270);
+    let poly = (t.float(0x0144_d288) * t6) * (t6 * t6);
     let p0 = f32::from_bits(constants[0]) - f32::from_bits(entry[0]);
     let p1 = f32::from_bits(constants[1]) - f32::from_bits(entry[1]);
     let mut result = poly + p0;
@@ -121,11 +141,11 @@ fn asin_upper(x: f32, bits: u32) -> f32 {
     f32::from_bits(sign | result.to_bits())
 }
 
-fn asin_small(x: f32) -> f32 {
+fn asin_small(t: &Tables, x: f32) -> f32 {
     let x2 = x * x;
-    let a = x * float(0x0144_d288);
-    let b = x * float(0x0144_d28c);
-    let c = x * float(0x0144_d290);
+    let a = x * t.float(0x0144_d288);
+    let b = x * t.float(0x0144_d28c);
+    let c = x * t.float(0x0144_d290);
     let x4 = x2 * x2;
     let a = a * x2;
     let x6 = x2 * x4;
@@ -141,10 +161,10 @@ fn asin_tiny(x: f32) -> f32 {
     x
 }
 
-fn asin_out_of_range(x: f32, magnitude: u32) -> f32 {
+fn asin_out_of_range(t: &Tables, x: f32, magnitude: u32) -> f32 {
     if magnitude == 0x3f80_0000 {
-        let sign = x.to_bits() & word(0x0144_d294);
-        let half_pi = float(0x0144_d274) + float(0x0144_d270);
+        let sign = x.to_bits() & t.word(0x0144_d294);
+        let half_pi = t.float(0x0144_d274) + t.float(0x0144_d270);
         return f32::from_bits(sign | half_pi.to_bits());
     }
     if magnitude > 0x7f80_0000 {
@@ -154,8 +174,8 @@ fn asin_out_of_range(x: f32, magnitude: u32) -> f32 {
 }
 
 /// `0x3f7f0000 <= |x| < 1` (0x012F0F95).
-fn asin_near_one(x: f32, bits: u32) -> f32 {
-    let one = float(0x0144_d280);
+fn asin_near_one(t: &Tables, x: f32, bits: u32) -> f32 {
+    let one = t.float(0x0144_d280);
     let root = (one - x * x).sqrt();
     let high = f32::from_bits(bits & 0xffff_f000);
     let root_high = f32::from_bits(root.to_bits() & 0xffff_f000);
@@ -169,7 +189,7 @@ fn asin_near_one(x: f32, bits: u32) -> f32 {
     let root_low = root_high - root; // the (negative) low part of the root
     let double_root = root + root;
     t4 -= root_high_squared;
-    let root_poly = root * float(0x0144_d288);
+    let root_poly = root * t.float(0x0144_d288);
     t4 -= low_squared;
     let double_root_adjusted = double_root + root_low;
     let double_root_lane = root + root;
@@ -177,12 +197,12 @@ fn asin_near_one(x: f32, bits: u32) -> f32 {
     t4 += product;
     let quotient = t4 / double_root_lane;
     let s = root;
-    let s_cubed = s * float(0x0144_d28c);
+    let s_cubed = s * t.float(0x0144_d28c);
     let s_squared = s * s;
     let a = root_poly * s_squared;
     let s_fourth = s_squared * s_squared;
     let sign = (bits >> 16) & 0x8000;
-    let constants = vector(0x0144_d270);
+    let constants = t.vector(0x0144_d270);
     let b = s_cubed * s_fourth;
     let poly = a + b;
     let half_pi = f32::from_bits(constants[1]);
@@ -198,23 +218,6 @@ fn asin_near_one(x: f32, bits: u32) -> f32 {
 
 // ---------------------------------------------------------------------------
 // atan2
-
-/// A 64-bit table word (two consecutive 32-bit words).
-#[inline(always)]
-fn quad(address: u32) -> u64 {
-    word(address) as u64 | ((word(address + 4) as u64) << 32)
-}
-
-#[inline(always)]
-fn double(address: u32) -> f64 {
-    f64::from_bits(quad(address))
-}
-
-/// Two consecutive 64-bit table words (a 16-byte vector load).
-#[inline(always)]
-fn pair(address: u32) -> [u64; 2] {
-    [quad(address), quad(address + 8)]
-}
 
 /// The high 16-bit word of a double's representation.
 #[inline(always)]
@@ -252,25 +255,25 @@ fn reciprocal_estimate(x: f32) -> f32 {
 /// Arguments whose binary exponents are within 2^+-120 take the main path
 /// ([`atan2_main`]); extreme or special ones are rescaled and retried, or
 /// answered directly (zeros, infinities, NaNs, quotients beyond the table).
-pub fn atan2(y: f64, x: f64) -> f64 {
+pub fn atan2(t: &Tables, y: f64, x: f64) -> f64 {
     let (y_bits, x_bits) = (y.to_bits(), x.to_bits());
     let in_range = |bits: u64| (top_word(bits) & 0x7ff0).wrapping_sub(0x3870) <= 0xf00;
     if in_range(y_bits) && in_range(x_bits) {
-        return atan2_main(y_bits, x_bits, y_bits, x_bits);
+        return atan2_main(t, y_bits, x_bits, y_bits, x_bits);
     }
-    atan2_special(y_bits, x_bits)
+    atan2_special(t, y_bits, x_bits)
 }
 
 /// The sum of the two halves of a two-double constant at `address`
 /// (`ADDSD` of its high double to its low one).
-fn constant_sum(address: u32) -> f64 {
-    let p = pair(address);
+fn constant_sum(t: &Tables, address: u32) -> f64 {
+    let p = t.pair(address);
     f64::from_bits(p[0]) + f64::from_bits(p[1])
 }
 
 /// Arguments outside the main range (0x012F1404): infinities and NaNs,
 /// zeros and denormals, exponents too far apart or too extreme.
-fn atan2_special(y_bits: u64, x_bits: u64) -> f64 {
+fn atan2_special(t: &Tables, y_bits: u64, x_bits: u64) -> f64 {
     let y_exponent = top_word(y_bits) & 0x7ff0;
     let x_exponent = top_word(x_bits) & 0x7ff0;
     let sign_of = |bits: u64| bits & (1 << 63);
@@ -282,17 +285,17 @@ fn atan2_special(y_bits: u64, x_bits: u64) -> f64 {
         }
         let sign = sign_of(y_bits);
         if x_exponent < 0x7ff0 {
-            return f64::from_bits(sign | constant_sum(0x0144_dce0).to_bits());
+            return f64::from_bits(sign | constant_sum(t, 0x0144_dce0).to_bits());
         }
         // x is infinite or NaN as well
         if mantissa_nonzero(x_bits) {
             return f64::from_bits(x_bits);
         }
         if x_bits >> 63 == 0 {
-            return f64::from_bits(sign | constant_sum(0x0144_dd00).to_bits());
+            return f64::from_bits(sign | constant_sum(t, 0x0144_dd00).to_bits());
         }
-        let a = pair(0x0144_dd00);
-        let b = pair(0x0144_dce0);
+        let a = t.pair(0x0144_dd00);
+        let b = t.pair(0x0144_dce0);
         let s = [f64::from_bits(a[0]) + f64::from_bits(b[0]), f64::from_bits(a[1]) + f64::from_bits(b[1])];
         return f64::from_bits(sign | (s[0] + s[1]).to_bits());
     }
@@ -305,10 +308,10 @@ fn atan2_special(y_bits: u64, x_bits: u64) -> f64 {
         if x_bits >> 63 == 0 {
             return f64::from_bits(sign);
         }
-        return f64::from_bits(sign | constant_sum(0x0144_dcf0).to_bits());
+        return f64::from_bits(sign | constant_sum(t, 0x0144_dcf0).to_bits());
     }
     // finite: bring both exponents into range
-    let scale = double(0x0144_de48);
+    let scale = t.double(0x0144_de48);
     let mut offset: u32 = 0x400;
     let (mut y, mut x) = (f64::from_bits(y_bits), f64::from_bits(x_bits));
     let (mut y_exp, mut x_exp) = (y_exponent, x_exponent);
@@ -318,7 +321,7 @@ fn atan2_special(y_bits: u64, x_bits: u64) -> f64 {
         y_exp = top_word(y.to_bits()) & 0x7ff0;
         if y_exp == 0 {
             // y is zero
-            return if top_word(x_bits) & 0x8000 != 0 { f64::from_bits(y.to_bits() | constant_sum(0x0144_dcf0).to_bits()) } else { y };
+            return if top_word(x_bits) & 0x8000 != 0 { f64::from_bits(y.to_bits() | constant_sum(t, 0x0144_dcf0).to_bits()) } else { y };
         }
     }
     if x_exp == 0 {
@@ -327,31 +330,31 @@ fn atan2_special(y_bits: u64, x_bits: u64) -> f64 {
         x_exp = top_word(x.to_bits()) & 0x7ff0;
         if x_exp == 0 {
             // x is zero: +-pi/2
-            return f64::from_bits(sign_of(y_bits) | constant_sum(0x0144_dce0).to_bits());
+            return f64::from_bits(sign_of(y_bits) | constant_sum(t, 0x0144_dce0).to_bits());
         }
     }
     let offset = offset.wrapping_add(y_exp).wrapping_sub(x_exp);
     if offset > 0x800 {
-        return atan2_generic(y_bits, x_bits);
+        return atan2_generic(t, y_bits, x_bits);
     }
     let exponent = ((offset.wrapping_add(0x3bf0) & 0xffff) as u64) << 48;
-    let y_rescaled = (y.to_bits() & quad(0x0144_de40)) | exponent;
-    let x_rescaled = (x.to_bits() & quad(0x0144_de40)) | quad(0x0144_de50);
-    atan2_main(y_rescaled, x_rescaled, y_bits, x_bits)
+    let y_rescaled = (y.to_bits() & t.quad(0x0144_de40)) | exponent;
+    let x_rescaled = (x.to_bits() & t.quad(0x0144_de40)) | t.quad(0x0144_de50);
+    atan2_main(t, y_rescaled, x_rescaled, y_bits, x_bits)
 }
 
 /// The quotient is outside what the table covers (0x012F139A): `+-pi/2`
 /// when `y`'s exponent is the larger, `+-pi` for a negative `x`, else
 /// `y / x`.
-fn atan2_generic(y_bits: u64, x_bits: u64) -> f64 {
+fn atan2_generic(t: &Tables, y_bits: u64, x_bits: u64) -> f64 {
     let y_exponent = (top_word(y_bits) & 0x7ff0) as i32;
     let x_exponent = (top_word(x_bits) & 0x7ff0) as i32;
-    let sign_mask = quad(0x0144_dd10);
+    let sign_mask = t.quad(0x0144_dd10);
     if y_exponent > x_exponent {
-        return f64::from_bits((y_bits & sign_mask) ^ quad(0x0144_dce0));
+        return f64::from_bits((y_bits & sign_mask) ^ t.quad(0x0144_dce0));
     }
     if top_word(x_bits) > 0x7fff {
-        return f64::from_bits((y_bits & sign_mask) ^ quad(0x0144_dcf0));
+        return f64::from_bits((y_bits & sign_mask) ^ t.quad(0x0144_dcf0));
     }
     f64::from_bits(y_bits) / f64::from_bits(x_bits)
 }
@@ -366,7 +369,7 @@ fn atan2_generic(y_bits: u64, x_bits: u64) -> f64 {
 /// `r` of the remainder `|y| - |x| q` over `|x| + |y| q` is then the small
 /// argument of an odd polynomial that adds to it, with the quadrant
 /// constants selected by the signs of the operands.
-fn atan2_main(y_bits: u64, x_bits: u64, y_original: u64, x_original: u64) -> f64 {
+fn atan2_main(t: &Tables, y_bits: u64, x_bits: u64, y_original: u64, x_original: u64) -> f64 {
     let y = f64::from_bits(y_bits);
     // x as a float built from the double's top bits (exponent rebased by
     // 0x80 in the 16-bit word), its estimated reciprocal moved back into
@@ -396,57 +399,57 @@ fn atan2_main(y_bits: u64, x_bits: u64, y_original: u64, x_original: u64) -> f64
     if index > 0x461 {
         // the quotient is tiny (a series in y/x) or huge (generic)
         if index.wrapping_add(0x3ae) > 0x3ae {
-            return atan2_generic(y_original, x_original);
+            return atan2_generic(t, y_original, x_original);
         }
-        return atan2_tiny_quotient(numerator, abs_y, abs_x, signs, capped);
+        return atan2_tiny_quotient(t, numerator, abs_y, abs_x, signs, capped);
     }
     let r = numerator / denominator;
     let table = signs * 2 * 8;
-    let quadrant = pair(0x0144_dd20 + table);
-    let flip = pair(0x0144_dd60 + table);
+    let quadrant = t.pair(0x0144_dd20 + table);
+    let flip = t.pair(0x0144_dd60 + table);
     let entry_index = top_word(capped.to_bits()).wrapping_sub(0x3f9e).wrapping_add(if small { 0 } else { 1 }).wrapping_mul(2);
-    let entry = pair(0x0144_d2a0 + entry_index * 8);
+    let entry = t.pair(0x0144_d2a0 + entry_index * 8);
     let entry_high = f64::from_bits(entry[0] ^ flip[0]) + f64::from_bits(quadrant[0]);
     let entry_low = f64::from_bits(entry[1] ^ flip[1]) + f64::from_bits(quadrant[1]);
     let head = f64::from_bits(flip[0] ^ r.to_bits());
     let r_squared = r * r;
-    let c0 = double(0x0144_de20) * r_squared;
-    let c1 = double(0x0144_de30) + r_squared;
+    let c0 = t.double(0x0144_de20) * r_squared;
+    let c1 = t.double(0x0144_de30) + r_squared;
     let sum = head + entry_high;
     let mut tail = entry_high - sum;
     tail += head;
-    let c0 = c0 + double(0x0144_de28);
+    let c0 = c0 + t.double(0x0144_de28);
     let c1 = c1 * r_squared;
     let head_cubed = head * r_squared;
     tail += entry_low;
     let c0 = c0 * head_cubed;
-    let c1 = c1 + double(0x0144_de38);
+    let c1 = c1 + t.double(0x0144_de38);
     let poly = c0 * c1;
     sum + (poly + tail)
 }
 
 /// A small quotient `|y| / |x|` (0x012F12F7): the polynomial in `y / x`
 /// itself, with the quadrant constants.
-fn atan2_tiny_quotient(numerator: f64, abs_y: u64, abs_x: u64, signs: u32, capped: f64) -> f64 {
+fn atan2_tiny_quotient(t: &Tables, numerator: f64, abs_y: u64, abs_x: u64, signs: u32, capped: f64) -> f64 {
     let reciprocal = 1.0 / f64::from_bits(abs_x);
     let table = signs * 2 * 8;
-    let flip = pair(0x0144_dd60 + table);
-    let mask = pair(0x0144_dde0 + table);
-    let base = pair(0x0144_dda0 + table);
+    let flip = t.pair(0x0144_dd60 + table);
+    let mask = t.pair(0x0144_dde0 + table);
+    let base = t.pair(0x0144_dda0 + table);
     let u = f64::from_bits(abs_y ^ flip[0]) * reciprocal;
     let v = f64::from_bits(numerator.to_bits() ^ flip[0]) * reciprocal;
     let capped_lanes = [capped.to_bits() ^ flip[0], capped.to_bits() ^ flip[1]];
     let masked = [capped_lanes[0] & mask[0], capped_lanes[1] & mask[1]];
     let u_squared = u * u;
-    let c0 = double(0x0144_de20) * u_squared;
-    let c1 = double(0x0144_de30) + u_squared;
+    let c0 = t.double(0x0144_de20) * u_squared;
+    let c1 = t.double(0x0144_de30) + u_squared;
     let u_cubed = u * u_squared;
-    let c0 = c0 + double(0x0144_de28);
+    let c0 = c0 + t.double(0x0144_de28);
     let c1 = c1 * u_squared;
     let lane0 = (f64::from_bits(base[0]) + v) + f64::from_bits(masked[0]);
     let lane1 = f64::from_bits(base[1]) + f64::from_bits(masked[1]);
     let c0 = c0 * u_cubed;
-    let c1 = c1 + double(0x0144_de38);
+    let c1 = c1 + t.double(0x0144_de38);
     let poly = c1 * c0;
     (poly + lane0) + lane1
 }

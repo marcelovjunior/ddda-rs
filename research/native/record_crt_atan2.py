@@ -101,7 +101,8 @@ def main():
     if len(sys.argv) > 3:  # disassembly listings of the two routines: instruction starts never run
         starts = [int(l.split(':')[0], 16) for f in sys.argv[3:] for l in open(f) if l[:8].strip() and l[8:9] == ':']
         print('never run:', [hex(a) for a in starts if a not in covered])
-    json.dump(dict(asinf=asin_cases, atan2=atan_cases), open(out, 'w'))
+    table = h.code(0x0144C640, 0x0144DE60 - 0x0144C640)  # the CRT tables the routines read (private: never committed)
+    json.dump(dict(asinf=asin_cases, atan2=atan_cases, table_base=0x0144C640, table=list(table)), open(out, 'w'))
     print(len(asin_cases), 'asinf cases,', len(atan_cases), 'atan2 cases')
 
 

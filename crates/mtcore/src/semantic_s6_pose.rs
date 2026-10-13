@@ -194,11 +194,11 @@ fn crt_f32(m: &mut dyn Mem, c: &mut Cpu, call: &PoseCall, base: u32, target: u32
 /// The joint's rotation as the Euler angles (radians converted to degrees
 /// by the caller) of 0x00CFC9E0 applied to the quaternion's matrix
 /// (0x007E4B60).
-fn joint_euler_degrees(m: &mut dyn Mem, call: &PoseCall) -> [f32; 3] {
+fn joint_euler_degrees(m: &dyn Mem, call: &PoseCall) -> [f32; 3] {
     let f32_at = |m: &dyn Mem, offset: u32| f32::from_bits(call.pages.u32(m, call.joint.wrapping_add(offset)));
     let (x, y, z, w) = (f32_at(m, 0x60), f32_at(m, 0x64), f32_at(m, 0x68), f32_at(m, 0x6c));
     let matrix = quaternion_matrix_3x3(x, y, z, w);
-    euler_from_matrix(&matrix)
+    euler_from_matrix(&crate::semantic_s6_crt::Tables { memory: m, pages: call.pages }, &matrix)
 }
 
 /// The elements 0, 1, 2, 4, 5, 6 and 10 of the rotation matrix of the
@@ -221,14 +221,14 @@ pub fn quaternion_matrix_3x3(x: f32, y: f32, z: f32, w: f32) -> [f32; 11] {
 /// extraction with atan2 in double precision and asinf (both native, bit
 /// exact: [`crate::semantic_s6_crt`]), and the gimbal cases when `m[2]`
 /// reaches +-1.
-pub fn euler_from_matrix(matrix: &[f32; 11]) -> [f32; 3] {
+pub fn euler_from_matrix(t: &crate::semantic_s6_crt::Tables, matrix: &[f32; 11]) -> [f32; 3] {
     use crate::semantic_s6_crt::{asinf, atan2};
     // CVTPS2PD of the arguments, CVTSD2SS of the result
-    let atan2 = |y: f32, x: f32| -> f32 { atan2(y as f64, x as f64) as f32 };
+    let atan2 = |y: f32, x: f32| -> f32 { atan2(t, y as f64, x as f64) as f32 };
     let m2 = matrix[2];
     if 1.0 > m2 {
         if m2 > -1.0 {
-            [-atan2(-matrix[6], matrix[10]), -asinf(m2), -atan2(-matrix[1], matrix[0])]
+            [-atan2(-matrix[6], matrix[10]), -asinf(t, m2), -atan2(-matrix[1], matrix[0])]
         } else {
             [atan2(matrix[4], matrix[5]), std::f32::consts::FRAC_PI_2, 0.0]
         }

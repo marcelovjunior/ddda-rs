@@ -350,7 +350,10 @@ def main():
         starts = [int(l.split(':')[0], 16) for l in open(sys.argv[3]) if l[:8].strip() and l[8:9] == ':']
         missed = [hex(a) for a in starts if a not in oracle.covered]
         print(f"{len(starts) - len(missed)}/{len(starts)} run; never run outside 0x82ab89..0x82afaa:", [a for a in missed if not (0x82ab89 <= int(a,16) <= 0x82afaa)])
-    json.dump(dict(function='0x00872420', cases=cases), open(out, 'w'))
+    # the CRT tables atan2/asinf read (private: never committed): the port's reciprocal
+    # estimate is the host's, so it can read a different table entry than this run did
+    table = h.code(0x0144C640, 0x0144DE60 - 0x0144C640)
+    json.dump(dict(function='0x00872420', cases=cases, table_base=0x0144C640, table=list(table)), open(out, 'w'))
     print(f'{n} cases, {calls} calls -> {out}')
     print(by_target)
 
