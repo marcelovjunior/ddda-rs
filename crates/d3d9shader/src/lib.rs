@@ -12,6 +12,7 @@
 
 pub mod ctab;
 pub mod disasm;
+pub mod flow;
 
 use std::fmt;
 
