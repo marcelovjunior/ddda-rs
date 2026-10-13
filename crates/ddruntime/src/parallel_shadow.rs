@@ -162,6 +162,7 @@ pub(crate) enum Reject {
     UnsupportedTarget(u32),
     UnsupportedScheduler(u32),
     IncoherentInput(u32),
+    PublicationConflict(u32),
 }
 
 /// Each lane owns its writes and reads the same immutable input. Keeping
@@ -192,6 +193,51 @@ impl LaneMemory {
     }
     pub(crate) fn writes(&self) -> &BTreeMap<u32, u8> {
         &self.writes
+    }
+
+    /// Publish a proven candidate at an externally established exclusive guest
+    /// boundary. The caller must keep every checked location stable through
+    /// completion; this preflight is NOT a lock or a concurrent transaction.
+    /// `baseline` contains the serial writes in same-run check mode, or is
+    /// empty for candidate-only execution. Dependency and stream proof happen
+    /// before calling this method. Popped callback stack bytes stay private.
+    /// All permissions and expected values are checked before the first store.
+    pub(crate) fn publish(
+        &self,
+        live: &mut dyn Mem,
+        baseline: &BTreeMap<u32, u8>,
+        scratch: Range<u32>,
+    ) -> Result<usize, Reject> {
+        if scratch.start > scratch.end {
+            return Err(Reject::InvalidPrivateRange);
+        }
+        let reads = self.reads.borrow();
+        for &address in reads.keys().chain(self.writes.keys()).chain(baseline.keys()) {
+            if scratch.contains(&address) {
+                continue;
+            }
+            live.probe(address, 1, false)
+                .map_err(|address| Reject::Permission { address, write: false })?;
+            if self.writes.contains_key(&address) {
+                live.probe(address, 1, true)
+                    .map_err(|address| Reject::Permission { address, write: true })?;
+            }
+            let expected = match baseline.get(&address) {
+                Some(value) => *value,
+                None => self.input.byte(address, false)?,
+            };
+            if live.u8(address) != expected {
+                return Err(Reject::PublicationConflict(address));
+            }
+        }
+        let mut bytes = 0;
+        for (&address, &value) in &self.writes {
+            if !scratch.contains(&address) {
+                live.set_u8(address, value);
+                bytes += 1;
+            }
+        }
+        Ok(bytes)
     }
 
     /// Incorporate a fully validated child batch into the parent's transaction.
@@ -499,6 +545,71 @@ mod tests {
         snapshot.capture_page(&m, 0x1000, READ | WRITE);
         snapshot.capture_page(&m, 0x3000, READ);
         Arc::new(snapshot)
+    }
+
+    #[test]
+    fn publication_preflights_all_dependencies_before_any_store() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, PAGE * 2, READ | WRITE).unwrap();
+        let mut snapshot = Snapshot::default();
+        for page in [0x1000, 0x2000] {
+            snapshot.capture_page(&live, page, READ | WRITE);
+        }
+        let mut candidate = LaneMemory::new(Arc::new(snapshot), 100);
+        assert_eq!(candidate.u8(0x2fff), 0);
+        candidate.set_u32(0x1000, 0x12345678);
+        candidate.set_u8(0x1800, 99); // Popped private callback stack.
+        live.set_u8(0x2fff, 1);
+        assert_eq!(candidate.publish(&mut live, &BTreeMap::new(), 0x1800..0x1900),
+            Err(Reject::PublicationConflict(0x2fff)));
+        assert_eq!(live.u32(0x1000), 0);
+        assert_eq!(live.u8(0x1800), 0);
+        live.set_u8(0x2fff, 0);
+        assert_eq!(candidate.publish(&mut live, &BTreeMap::new(), 0x1800..0x1900), Ok(4));
+        assert_eq!(live.u32(0x1000), 0x12345678);
+        assert_eq!(live.u8(0x1800), 0);
+    }
+
+    #[test]
+    fn publication_checks_write_only_locations_and_serial_baseline() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, PAGE, READ | WRITE).unwrap();
+        let mut snapshot = Snapshot::default();
+        snapshot.capture_page(&live, 0x1000, READ | WRITE);
+        let mut candidate = LaneMemory::new(Arc::new(snapshot), 100);
+        candidate.set_u8(0x1000, 3);
+        candidate.set_u8(0x1001, 4);
+        live.set_u8(0x1001, 4);
+        assert_eq!(candidate.publish(&mut live, &BTreeMap::new(), 0..0),
+            Err(Reject::PublicationConflict(0x1001)));
+        assert_eq!(live.u8(0x1000), 0);
+        let baseline = BTreeMap::from([(0x1001, 4), (0x1002, 7)]);
+        assert_eq!(candidate.publish(&mut live, &baseline, 0..0),
+            Err(Reject::PublicationConflict(0x1002)));
+        assert_eq!(live.u8(0x1000), 0);
+        live.set_u8(0x1002, 7);
+        assert_eq!(candidate.publish(&mut live, &baseline, 0..0), Ok(2));
+        assert_eq!([live.u8(0x1000), live.u8(0x1001), live.u8(0x1002)], [3, 4, 7]);
+    }
+
+    #[test]
+    fn publication_checks_late_permissions_before_early_store() {
+        let mut writable = GuestMemory::new();
+        writable.map(0x1000, PAGE * 2, READ | WRITE).unwrap();
+        let mut snapshot = Snapshot::default();
+        for page in [0x1000, 0x2000] {
+            snapshot.capture_page(&writable, page, READ | WRITE);
+        }
+        let mut candidate = LaneMemory::new(Arc::new(snapshot), 100);
+        candidate.set_u8(0x1000, 3);
+        candidate.set_u8(0x2000, 4);
+        let mut live = GuestMemory::new();
+        live.map(0x1000, PAGE, READ | WRITE).unwrap();
+        live.map(0x2000, PAGE, READ).unwrap();
+        assert_eq!(candidate.publish(&mut live, &BTreeMap::new(), 0..0),
+            Err(Reject::Permission { address: 0x2000, write: true }));
+        assert_eq!(live.u8(0x1000), 0);
+        assert_eq!(live.u8(0x2000), 0);
     }
 
     #[test]
