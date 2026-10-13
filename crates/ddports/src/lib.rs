@@ -65,10 +65,12 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             ports.push((a, f));
         }
     }
-    // L171: semantic per-mesh draw, separate until checked on recorded vectors
+    // L171: semantic ports not yet checked on recorded vectors
     if std::env::var("DDRUNTIME_SEMANTIC_DRAW").as_deref() == Ok("1") {
-        ports.retain(|p| p.0 != 0x00ea5320);
-        ports.push((0x00ea5320, mtcore::semantic_draw::draw_mesh));
+        for (a, f) in [(0x00ff1090u32, mtcore::semantic::set_pass as LiftFn)] {
+            ports.retain(|p| p.0 != a);
+            ports.push((a, f));
+        }
     }
     ports
 }

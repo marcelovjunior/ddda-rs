@@ -403,3 +403,62 @@ fn merge_runs(src: &[[u32; 2]], dst: &mut [[u32; 2]], run: usize) {
         start += 2 * run;
     }
 }
+
+/// 0x00FF1090, `context->set_pass(pass, force)` (thiscall, `ret 8`):
+/// select a render pass. When `force` or the pass differs from the low 5
+/// bits of +0x164, store it there and, if the context has a pass table
+/// (+0x1D4), bind that pass's colour targets (up to four, from the table's
+/// per-pass slots at +0x18 + pass * 0x10, ending at the first empty one)
+/// and depth target (+0x198 + pass * 4): one colour target through
+/// 0x00FEFB90, several through 0x00FF00A0, with the pass's binding flags.
+pub fn set_pass(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let ctx = c.ecx;
+    let entry = c.esp;
+    let force = pg.u8(m, entry.wrapping_add(8)) != 0;
+    let pass = pg.u32(m, entry.wrapping_add(4));
+    let finish = |c: &mut Cpu| c.esp = entry.wrapping_add(4 + 8);
+    let mode = pg.u32(m, ctx + 0x164);
+    if !force && mode & 0x1f == pass {
+        return finish(c);
+    }
+    let table = pg.u32(m, ctx + 0x1d4);
+    pg.set_u32(m, ctx + 0x164, mode ^ ((mode ^ pass) & 0x1f));
+    if table == 0 {
+        return finish(c);
+    }
+    // The original's frame: 0x10 locals (the colour array), then four pushes.
+    let colours_at = entry.wrapping_sub(0x10);
+    let frame = entry.wrapping_sub(0x20);
+    let mut colours = 0u32;
+    for i in 0..4u32 {
+        let slot = pg.u32(m, table.wrapping_add(pass.wrapping_mul(0x10) + 0x18 + 4 * i));
+        let target = if slot == 0 { 0 } else { pg.u32(m, pg.u32(m, slot + 0x44)) };
+        pg.set_u32(m, colours_at + 4 * i, target);
+        if target == 0 {
+            break;
+        }
+        colours += 1;
+    }
+    let depth_slot = pg.u32(m, table.wrapping_add(0x198).wrapping_add(pass.wrapping_mul(4)));
+    let depth = if depth_slot == 0 { 0 } else { pg.u32(m, pg.u32(m, depth_slot + 0x48)) };
+    if colours == 0 && depth == 0 {
+        return finish(c);
+    }
+    let caps = pg.u32(m, table + 0x10);
+    let mut flags = if caps & 0x10000 != 0 && (pass == 0xb || pass == 0xc) { 0x40 } else { 0 } | 3;
+    if caps & 0x4000 != 0 && caps & 0x2000 != 0 && (pass == 8 || pass == 9) && pg.u32(m, table + 0x2dc) != 2 {
+        flags |= 0x20;
+    }
+    if pg.u8(m, table + 0x2e0) != 0 && pass == 0x12 {
+        flags |= 0x20;
+    }
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    if colours < 2 {
+        let first = pg.u32(m, colours_at);
+        call_from(m, c, pg, frame, ctx, &[first, depth, flags, 0], 0x00ff_1187, guest(0x00fe_fb90));
+    } else {
+        call_from(m, c, pg, frame, ctx, &[colours, colours_at, depth, flags, 0], 0x00ff_119c, guest(0x00ff_00a0));
+    }
+    finish(c)
+}
