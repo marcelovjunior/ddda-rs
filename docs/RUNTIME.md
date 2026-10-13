@@ -1217,3 +1217,20 @@ be written while older disjoint ranges are executing. Ring reuse waits for
 ordered submission and GPU completion. Other devices retain staged uploads.
 This remains opt-in: host-memory GPU cost and ring-wrap stalls need head's
 game acceptance. Final validation status: `docs/tasks/L148-vk-frontend.md`.
+
+### L150 optional mapped upload pages
+
+`DDGPU_UPLOAD_RING=1` replaces WgpuBackend queue staging for uniform/inline
+ranges, dynamic buffers and texture updates with mapped COPY_SRC pages.
+The producer uses write-only mapped views, unmaps at batch handoff, and the
+finisher registers page recycling after the actual submission's completion.
+Copies preserve command order across async/parallel/raw encoding. L148's
+primary Vulkan uniform mapping takes precedence. Pending texture creation
+is flushed before independent readback and native-worker consumers.
+
+This remains off by default: 26 CPU, 13 command and 24 GPU cases pass, but
+ordinary wgpu's exact constant-range copy encoding regresses total synthetic
+backend time (5.944 -> 6.538 us/draw). Raw Vulkan is approximately flat;
+small buffer and texture producer uploads improve. Runtime light has 203
+passes, five ignored and the inherited gamma failure. See
+[timings, byte hashes and limitations](tasks/L150-upload-belt.md).

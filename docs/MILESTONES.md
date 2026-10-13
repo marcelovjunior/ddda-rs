@@ -1,5 +1,23 @@
 # Milestones
 
+### L150 opt-in upload staging (2026-10-13)
+
+- `DDGPU_UPLOAD_RING=1` fills reusable mapped COPY_SRC pages directly and
+  carries their ownership through the ordered finisher to GPU completion.
+  Uniform/inline ranges, dynamic buffers, and texture updates preserve
+  command order; L148 primary Vulkan uniforms retain their direct mapping.
+- **26 ddgpu CPU / 13 d3d9cmd / 24 GPU cases pass**, including 9 MiB byte
+  readbacks, compressed/mip/volume layouts, native jobs, 1/2/4 workers and
+  144,000 changing-constant draws / two wraps. Runtime light: **203 pass,
+  one inherited fullscreen-gamma failure, five ignored**.
+- Three alternating pairs: dynamic 4 KiB producer **2,339 -> 737 ns/upload**,
+  padded 65,792-byte texture **13,271 -> 11,294 ns/upload**. All hashes match.
+  Ordinary wgpu total **5.944 -> 6.538 us/draw regresses** (per-range constant
+  encoding); raw Vulkan **3.170 -> 3.178 us/draw**, no clear gain. Keep opt-in.
+- Next: head's optional raw-path image/loading A/B; ordinary-path promotion
+  requires removing constant-copy encoding overhead. No game/FPS claim.
+  Source `575bcba0`; details: `docs/tasks/L150-upload-belt.md`.
+
 ### L147 CRT profile attribution and upload copies (2026-10-13)
 
 - `_NLG_Return2` is a one-byte CRT return followed by private memcpy code.
