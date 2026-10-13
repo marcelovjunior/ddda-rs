@@ -80,6 +80,8 @@ fn abi_cases(path: &str, body: LiftFn) -> usize {
 /// checked separately).
 fn stack_args(target: u32) -> u32 {
     match target {
+        0x00fe_d890 | 0x00ff_1310 => 1,
+        0x00fe_66a0 | 0x2500_0000 => 4,
         0x0105_4690 => 0,
         0x3000_0000 => 0, // find_sorted vectors: the count stub
         0x3000_0010 => 1, // and the entry(i) stub
@@ -162,7 +164,7 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             // the return address and the callee's own stack arguments
             let words = 1 + stack_args(target);
             for (&a, &b) in &recorded {
-                let argument = a >= esp && a < esp + 4 * words;
+                let argument = (a >= esp && a < esp + 4 * words) || target == 0x00fe_66a0 || target == 0x2500_0000;
                 let data = a >= buffer && a < buffer.wrapping_add(len);
                 if argument || data {
                     assert_eq!(m.u8(a), b, "case {i}: call {target:x} memory {a:x}");
@@ -207,4 +209,13 @@ fn pop_render_state_matches_original() {
     let n = abi_cases_full("E:/ddda-re/notes/native-L184/pop_render_state.json", mtcore::semantic_s9::pop_render_state, true, &[0x012e_fea0]);
     assert!(n >= 1000, "{n} cases");
     eprintln!("{n} ABI-level pop_render_state cases passed");
+}
+
+// verifies 0x00ea5b50 (ABI level; void; the CRT memcpy is done natively)
+#[test]
+fn model_upload_state_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L184/model_upload_state.json", mtcore::semantic_s9::model_upload_state, false, &[0x012e_fea0]);
+    assert!(n >= 1000, "{n} cases");
+    eprintln!("{n} ABI-level model_upload_state cases passed");
 }
