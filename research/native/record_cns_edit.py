@@ -32,6 +32,10 @@ import unicorn.x86_const as x  # noqa: E402
 ENTRY, END = 0x00860AC0, 0x008645A8  # code through RET 8 at 0x00864560 plus the 17-entry jump table at 0x00864564
 SINCOS = (0x012F0906, 0x012F0BAC)
 BLEND, VSTUB = 0x00CFDC80, 0x30000058
+# lengths of the providers that can run as the original's real code (argv[3]: comma-separated addresses)
+REAL_LENGTH = {0x00864660: 0x1326, 0x00865990: 0x1a87, 0x00867420: 0x749, 0x00867B70: 0x48d, 0x00868000: 0x1251,
+               0x00869260: 0xe99, 0x0086A100: 0xee3, 0x0086AFF0: 0x2e8, 0x0086B2E0: 0x1e9b, 0x0086D180: 0x418}
+REAL = set()
 # target: (stack arguments, output-buffer register, takes a pointer to the angle vector)
 PROVIDERS = {
     0x00864660: (1, 'esi', True), 0x00865990: (3, 'esi', True), 0x00867420: (3, 'esi', True),
@@ -56,14 +60,16 @@ class Oracle:
         uc.mem_map(0x00860000, 0x10000)
         uc.mem_write(ENTRY, h.code(ENTRY, END - ENTRY))
         for target in PROVIDERS:
-            uc.mem_write(target, b'\xc3')
-        for page in (0x00CFD000, 0x00CFE000, 0x012F0000, 0x0144B000, 0x01521000, 0x01531000, 0x0161C000, 0x01629000):
+            uc.mem_write(target, h.code(target, REAL_LENGTH[target]) if target in REAL else bytes([0xc3]))
+        uc.mem_map(0x00421000, 0x1000)
+        uc.mem_write(0x00421ED0, h.code(0x00421ED0, 0x2F))  # joint accessor the aim provider calls
+        for page in (0x014F0000, 0x014F9000, 0x0150A000, 0x00CFD000, 0x00CFE000, 0x012F0000, 0x0144B000, 0x01521000, 0x01531000, 0x0161C000, 0x01629000):
             uc.mem_map(page, 0x1000)
             uc.mem_write(page, h.code(page, 0x1000))
         uc.mem_write(BLEND, b'\xc3')  # stub (the page's real bytes are not needed)
         uc.mem_map(0x30000000, 0x1000)
         uc.mem_write(VSTUB, b'\xc3')
-        for address, size in ((THIS, 0x1000), (JOINT, 0x1000), (MODEL, 0x1000), (JOINTS, 0x10000), (PTRS, 0x10000),
+        for address, size in ((THIS, 0x1000), (JOINT, 0x1000), (MODEL, 0x2000), (JOINTS, 0x10000), (PTRS, 0x10000),
                               (STACK, 0x10000), (h.RET, 0x1000)):
             uc.mem_map(address, size)
         uc.hook_add(UC_HOOK_MEM_READ, self.read)
@@ -113,9 +119,9 @@ class Oracle:
             uc.emu_stop()
             return
         spec = PROVIDERS.get(address)
-        if address in PROVIDERS or address in (BLEND, VSTUB):
+        if (address in PROVIDERS and address not in REAL) or address in (BLEND, VSTUB):
             return self.stub(uc, address, spec)
-        assert ENTRY <= address < END or SINCOS[0] <= address < SINCOS[1], hex(address)
+        assert ENTRY <= address < END or 0x421ED0 <= address < 0x421EFF or SINCOS[0] <= address < SINCOS[1] or any(a <= address < a + REAL_LENGTH[a] for a in REAL), hex(address)
 
     def stub(self, uc, address, spec):
         esp = uc.reg_read(x.UC_X86_REG_ESP)
@@ -182,7 +188,7 @@ class Oracle:
     def case(self, seed):
         rng = self.rng = random.Random(seed)
         uc = self.uc
-        for a, n in ((THIS, 0x1000), (JOINT, 0x1000), (MODEL, 0x1000), (JOINTS, 0x10000), (PTRS, 0x10000)):
+        for a, n in ((THIS, 0x1000), (JOINT, 0x1000), (MODEL, 0x2000), (JOINTS, 0x10000), (PTRS, 0x10000)):
             uc.mem_write(a, b'\0' * n)
         w = uc.mem_write
         w(THIS + 0x44, f32(rng.choice((1.0, 1.0, 1.0, rng.uniform(0, 1), rng.uniform(0, 1), 0.0, 1e-30, 2.5, -1.0, 0.5))))
@@ -212,6 +218,15 @@ class Oracle:
         w(MODEL + 0x364, struct.pack('<I', JOINTS))
         w(VTABLE + 0x58 - 0x800 + 0x800, struct.pack('<I', VSTUB)) if False else None
         uc.mem_write(VTABLE + 0x58, struct.pack('<I', VSTUB))
+        # tables the aim provider (mode 6) reads: joint count, index->joint bytes, constraint base index
+        TABLE = MODEL + 0x1000
+        w(MODEL + 0x360, struct.pack('<I', rng.choice((0, 3, 8, 40, 256))))
+        w(MODEL + 0x368, struct.pack('<I', TABLE))
+        w(TABLE, bytes(rng.randrange(4) for _ in range(256)))
+        w(THIS + 0xA8, struct.pack('<I', rng.randrange(0, 5)))
+        for k in range(4):
+            if rng.random() < 0.9:
+                w(JOINTS + 0xA0 * k + 0x10, self.matrix())
         if index != 0xFF:
             w(JOINTS + index * 0xA0 + 0x10, self.matrix())
         self.initial, self.written, self.events = {}, set(), []
@@ -230,6 +245,8 @@ class Oracle:
 
 def main():
     out, n = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 3000
+    if len(sys.argv) > 3:
+        REAL.update(int(a, 16) for a in sys.argv[3].split(',') if a)
     oracle = Oracle()
     cases = [oracle.case(seed) for seed in range(n)]
     calls = {}

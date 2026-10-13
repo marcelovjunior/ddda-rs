@@ -9,7 +9,7 @@
 //! |------|--------------|
 //! | 0..=5 | rotation from the Euler angles (degrees at `this + 0x70..0x78`) in the order XYZ, XZY, YXZ, YZX, ZXY, ZYX (row-vector convention, `Rx * Ry * Rz` for XYZ) |
 //! | 6..=15 | a matrix returned by one of ten guest "matrix provider" functions |
-//! | 16 | not a matrix: the guest function 0x0086B2E0 does the whole edit |
+//! | 16 | not a matrix: the whole edit is done in parent space (0x0086B2E0, ported below) |
 //! | >16 | whatever the original's stack slots hold (never used by the game) |
 //!
 //! Modes 0..=6, 9..=11 and 15 then add the translation at `this + 0x90`
@@ -352,14 +352,13 @@ struct Provider {
 /// Offset of the angle vector in the original's frame.
 const F_ANGLES: u32 = 0x120;
 
-/// The guest function of `mode` 6..=16 (`None` above). `this`, `joint` and
+/// The guest function of `mode` 6..=15 (`None` for 16, which is native, and above). `this`, `joint` and
 /// `model` are the constraint, joint record and model; `frame` is `F`.
 fn provider_for(mode: u32, this: u32, joint: u32, model: u32, frame: u32) -> Option<Provider> {
     let f = |offset: u32| frame.wrapping_add(offset);
     let angles = f(F_ANGLES);
     // mode: (target, call site return, [eax, ecx, esi, edi], args, angles, offset and scale)
     let (target, back, r, args, nargs, takes_angles, offset_and_scale) = match mode {
-        6 => (0x0086_4660, 0x0086_1498, [this, model, f(0xe0), joint], [angles, 0, 0], 1, true, true),
         7 => (0x0086_5990, 0x0086_156b, [7, angles, f(0x380), joint], [this, model, angles], 3, true, false),
         8 => (0x0086_7420, 0x0086_163c, [angles, this, f(0x200), this], [this, joint, model], 3, true, false),
         9 => (0x0086_7b70, 0x0086_1709, [9, model, f(0x300), angles], [this, joint, model], 3, true, true),
@@ -369,7 +368,6 @@ fn provider_for(mode: u32, this: u32, joint: u32, model: u32, frame: u32) -> Opt
         13 => (0x0086_9260, 0x0086_18d6, [model, this, joint, f(0x240)], [this, model, angles], 3, true, false),
         14 => (0x0086_a100, 0x0086_19a9, [14, angles, joint, f(0x2c0)], [this, model, angles], 3, true, false),
         15 => (0x0086_aff0, 0x0086_1a76, [angles, this, f(0x340), this], [this, joint, 0], 2, true, true),
-        16 => (0x0086_b2e0, 0x0086_1b39, [16, model, f(0x3c0), joint], [this, 0, 0], 1, false, false),
         _ => return None,
     };
     let regs = Registers { eax: r[0], ecx: r[1], esi: r[2], edi: r[3] };
@@ -407,9 +405,8 @@ fn euler_local_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, mode: 
     euler_matrix(mode, sines, cosines)
 }
 
-/// The local matrix from a guest provider (modes 6..=15). `None` for mode
-/// 16, whose provider does the whole edit itself.
-fn provider_local_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, provider: &Provider, mode: u32, frame: u32) -> Option<Matrix> {
+/// The local matrix from a guest provider (modes 6..=15).
+fn provider_local_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, provider: &Provider, frame: u32) -> Matrix {
     if provider.angles {
         let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
         for (k, v) in angles.iter().enumerate() {
@@ -418,7 +415,7 @@ fn provider_local_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, pro
         pg.set_u32(m, frame + F_ANGLES + 12, 0);
     }
     let result = guest_call(m, c, pg, frame, provider.target, provider.back, provider.regs, &provider.args[..provider.nargs]);
-    (mode != 16).then(|| read_matrix(m, pg, result))
+    read_matrix(m, pg, result)
 }
 
 /// Blend `local` toward identity by `weight` through the guest function
@@ -450,13 +447,24 @@ fn parent_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32,
 
 fn apply(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, model: u32, frame: u32) {
     let mode = pg.u32(m, this.wrapping_add(0xa4));
-    let (mut local, offset_and_scale) = if mode <= 5 {
+    if mode == 16 {
+        // the provider 0x0086B2E0 does the whole edit; its scale-matrix output buffer is
+        // scratch in this frame, so it is folded in without writing it
+        let callee_entry = frame.wrapping_sub(8);
+        let callee_frame = (callee_entry.wrapping_sub(4) & !15).wrapping_sub(0x11c + 4);
+        scale_and_translate_in_parent_space(m, c, pg, this, joint, model, callee_frame, frame + 0x3c0);
+        return;
+    }
+    let (mut local, offset_and_scale) = if mode == 6 {
+        // 0x00864660 folded in: its three angles are the ones computed for the stack vector
+        let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
+        let callee_entry = frame.wrapping_sub(8);
+        let callee_frame = (callee_entry.wrapping_sub(4) & !15).wrapping_sub(0xdc + 4);
+        (aim_twist_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame), true)
+    } else if mode <= 5 {
         (euler_local_matrix(m, c, pg, this, mode, frame), true)
     } else if let Some(provider) = provider_for(mode, this, joint, model, frame) {
-        match provider_local_matrix(m, c, pg, this, &provider, mode, frame) {
-            Some(matrix) => (matrix, provider.offset_and_scale),
-            None => return, // mode 16 did everything
-        }
+        (provider_local_matrix(m, c, pg, this, &provider, frame), provider.offset_and_scale)
     } else {
         // mode > 16: the original reads its (uninitialised) stack slots
         (read_matrix(m, pg, frame + 0x30), true)
@@ -481,4 +489,189 @@ fn apply(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, model: 
         let result = matrix_multiply(&matrix_multiply(&matrix_multiply(&current, &inverse), &local), &parent);
         write_matrix(m, pg, joint_matrix, &result);
     }
+}
+
+// ---------------------------------------------------------------------
+// 0x0086B2E0: mode 16 of the constraint edit
+
+/// The scale matrix of mode 16: identity with its first three rows scaled
+/// by the vector at `this + 0x80` when that vector's squared length exceeds
+/// [`SCALE_EPSILON`]. Rows are only multiplied, never summed.
+fn scale_matrix(m: &dyn Mem, pg: Pages, this: u32) -> Matrix {
+    let mut scale = IDENTITY;
+    let (x, y, z) = (read_f32(m, pg, this + 0x80), read_f32(m, pg, this + 0x84), read_f32(m, pg, this + 0x88));
+    if x * x + y * y + z * z > SCALE_EPSILON {
+        for e in &mut scale[0..4] {
+            *e *= x;
+        }
+        for e in &mut scale[4..8] {
+            *e *= y;
+        }
+        for e in &mut scale[8..12] {
+            *e *= z;
+        }
+    }
+    scale
+}
+
+/// Mode 16 of `uCnsEdit::vf24`: re-express the joint in the frame of its
+/// parent bone with the constraint's scale and translation applied there:
+/// `joint = (scale * (joint * inverse(parent))) * parent`, then the
+/// constraint translation (`this + 0x90`), carried through the parent's 3x3
+/// part, is added to the joint's translation row. Returns the scale matrix
+/// (the original keeps it in a caller buffer and returns it).
+///
+/// `frame` is the callee's ESP after its prologue (for the parent accessor
+/// call); the joint matrix is written in place.
+fn scale_and_translate_in_parent_space(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, model: u32, frame: u32, out: u32) -> Matrix {
+    let scale = scale_matrix(m, pg, this);
+    let index = pg.u8(m, joint + 0x91);
+    let parent = if index == 0xff {
+        let vtable = pg.u32(m, model);
+        let method = pg.u32(m, vtable + 0x58);
+        let regs = Registers { eax: method, ecx: model, esi: out, edi: joint };
+        let result = guest_call(m, c, pg, frame, method, 0x0086_b4d0, regs, &[0xffff_ffff]);
+        read_matrix(m, pg, result)
+    } else {
+        let joints = pg.u32(m, model + 0x364);
+        read_matrix(m, pg, joints.wrapping_add(index as u32 * 0xa0).wrapping_add(0x10))
+    };
+    let inverse = invert_parent_matrix(&parent);
+    let current = read_matrix(m, pg, joint + 0x10);
+    let mut result = matrix_multiply(&matrix_multiply(&scale, &matrix_multiply(&current, &inverse)), &parent);
+    let (tx, ty, tz) = (read_f32(m, pg, this + 0x90), read_f32(m, pg, this + 0x94), read_f32(m, pg, this + 0x98));
+    // the translation transformed by the parent, minus the parent's own translation
+    let delta = |k: usize| (((ty * parent[4 + k] + tx * parent[k]) + tz * parent[8 + k]) + parent[12 + k]) - parent[12 + k];
+    result[12] += delta(0);
+    result[13] = delta(1) + result[13];
+    result[14] = delta(2) + result[14];
+    // the original loads and stores the last element through the x87 stack,
+    // which turns a signalling NaN into a quiet one
+    if result[15].is_nan() {
+        result[15] = f32::from_bits(result[15].to_bits() | 0x0040_0000);
+    }
+    write_matrix(m, pg, joint + 0x10, &result);
+    scale
+}
+
+/// 0x0086B2E0 (usercall: ECX = model, EDI = joint, ESI = output buffer,
+/// stack argument `this`, `ret 4`): [`scale_and_translate_in_parent_space`],
+/// writing the scale matrix to the buffer and returning it in EAX. Only
+/// EAX, ECX/EDX and ESP change; EBX, ESI, EDI and EBP are preserved.
+// Translated from 0x0086B2E0 (DDDA.exe 2017-12-13 Steam)
+pub fn scale_translate_in_parent_space(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = pg.u32(m, entry.wrapping_add(4));
+    // ESP after the prologue: ebp, 16-byte alignment, 0x11c bytes, ebx
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x11c + 4);
+    let (model, joint, out) = (c.ecx, c.edi, c.esi);
+    let scale = scale_and_translate_in_parent_space(m, c, pg, this, joint, model, frame, out);
+    write_matrix(m, pg, out, &scale);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 4);
+    c.esi = out;
+    c.edi = joint;
+}
+
+// ---------------------------------------------------------------------
+// 0x00864660: mode 6, the aim/twist provider
+
+mod kernels;
+
+/// The joint record of `model` for joint index `index` (the byte table at
+/// `model + 0x368` maps indices to joints; 0xFF is none, the null record),
+/// as the accessor 0x00421ED0 (thiscall, `ret 4`) does.
+fn joint_record(m: &dyn Mem, pg: Pages, model: u32, index: u32) -> u32 {
+    let table = pg.u32(m, model + 0x368);
+    let slot = pg.u8(m, table.wrapping_add(index & 0xff)) as u32;
+    if slot == 0xff {
+        return 0;
+    }
+    slot.wrapping_mul(0xa0).wrapping_add(pg.u32(m, model + 0x364))
+}
+
+/// Smallest angle (radians) the aim/twist stages act on, 0x0150A350.
+const ANGLE_EPSILON: f32 = f32::from_bits(0x3400_0000);
+
+/// Return addresses of the sinf/cosf call sites in 0x00864660, per stage.
+const AIM_TRIG_SITES: [u32; 2] = [0x0086_5101, 0x0086_513f];
+const PITCH_TRIG_SITES: [u32; 2] = [0x0086_5299, 0x0086_52aa];
+const ROLL_TRIG_SITES: [u32; 2] = [0x0086_5613, 0x0086_5624];
+
+/// The three angles (radians) a provider is driven by: in guest memory (the
+/// provider's stack argument points at them) or already computed.
+#[derive(Clone, Copy)]
+enum Angles {
+    Memory(u32),
+    Values([f32; 3]),
+}
+
+impl Angles {
+    fn get(self, m: &dyn Mem, pg: Pages, k: usize) -> f32 {
+        match self {
+            Angles::Memory(address) => read_f32(m, pg, address + 4 * k as u32),
+            Angles::Values(v) => v[k],
+        }
+    }
+}
+
+/// The matrix of mode 6 (0x00864660): identity, then up to three stages
+/// driven by the three angles (radians) at `angles`: an aim rotation of the
+/// joint toward joint `this+0xA8 + 2` of the model by angle 0 (a half-angle
+/// quaternion about the axis from the joint to that joint, seen in the
+/// joint's own frame), and rotations by angle 1 and angle 2 about two of the
+/// matrix's axes. A stage runs only when its angle exceeds [`ANGLE_EPSILON`];
+/// without a model the matrix stays identity.
+fn aim_twist_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u32, joint: u32, angles: Angles, frame: u32) -> Matrix {
+    let mut matrix = IDENTITY;
+    if model == 0 {
+        return matrix;
+    }
+    let mut trig = |sites: [u32; 2]| {
+        move |m: &mut dyn Mem, c: &mut Cpu, cosine: bool, x: f32| crt_sincos(m, c, pg, frame, x, cosine, sites[cosine as usize])
+    };
+    let a0 = angles.get(m, pg, 0);
+    if a0 > ANGLE_EPSILON {
+        let index = pg.u32(m, this + 0xa8).wrapping_add(2);
+        if index < pg.u32(m, model + 0x360) {
+            let child = joint_record(m, pg, model, index);
+            let inputs = kernels::load_m6_aim(m, pg, joint, child, &matrix, a0);
+            let mut t = trig(AIM_TRIG_SITES);
+            matrix = kernels::kernel_m6_aim(&inputs, &mut |cosine, x| t(m, c, cosine, x));
+        }
+    }
+    let a1 = angles.get(m, pg, 1);
+    if a1 > ANGLE_EPSILON {
+        let inputs = kernels::load_m6_pitch(m, pg, joint, 0, &matrix, a1);
+        let mut t = trig(PITCH_TRIG_SITES);
+        matrix = kernels::kernel_m6_pitch(&inputs, &mut |cosine, x| t(m, c, cosine, x));
+    }
+    let a2 = angles.get(m, pg, 2);
+    if a2 > ANGLE_EPSILON {
+        let inputs = kernels::load_m6_roll(m, pg, joint, 0, &matrix, a2);
+        let mut t = trig(ROLL_TRIG_SITES);
+        matrix = kernels::kernel_m6_roll(&inputs, &mut |cosine, x| t(m, c, cosine, x));
+    }
+    matrix
+}
+
+/// 0x00864660 (usercall: EAX = this, ECX = model, EDI = joint, ESI = output
+/// buffer, stack argument = pointer to the three angles, `ret 4`):
+/// [`aim_twist_matrix`] written to the buffer and returned in EAX. EBX, ESI,
+/// EDI and EBP are preserved.
+// Translated from 0x00864660 (DDDA.exe 2017-12-13 Steam)
+pub fn aim_twist_provider(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let angles = pg.u32(m, entry.wrapping_add(4));
+    // ESP after the prologue: ebp, 16-byte alignment, 0xdc bytes of locals, ebx
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0xdc + 4);
+    let (this, model, joint, out) = (c.eax, c.ecx, c.edi, c.esi);
+    let matrix = aim_twist_matrix(m, c, pg, this, model, joint, Angles::Memory(angles), frame);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 4);
+    c.esi = out;
+    c.edi = joint;
 }
