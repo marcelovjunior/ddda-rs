@@ -1,5 +1,20 @@
 # Milestones
 
+### L156 exact inflate and Huffman builder (2026-10-13)
+
+- Opt-in FAST=2 adds bounded table/output spans, packed input pairs and
+  aligned wide matches; TABLE=1 ports exact cf30c0 table construction.
+  Defaults unchanged. Speculative input staging/literal batching regressed
+  and were removed; modern-library throughput parity is not established.
+- Original-instruction gate: 217 streams / 12,893 returns; 632 leaf cases
+  x5; 81 table cases. Light 224 reported pass / inherited gamma failure /
+  6 ignored. All final focused and full-stream rechecks passed.
+- Combined ARC microbench gains are 4.1-13.6% and shared-host dependent; no
+  game loading gain claimed. New zlib_table_ns isolates table work in the
+  next real stage capture. Details: docs/tasks/L156-inflate-fast.md.
+- Next: head FAST=1/TABLE=0 vs FAST=2/TABLE=1 with PORT=0, then repeat
+  logging-off with image/control acceptance; retain separate table-only A/B.
+
 ### L153 game-thread synchronization (2026-10-13)
 
 - Head combo26 late-game census: main plus six joined workers, about 69

@@ -6,9 +6,10 @@ callees as original instructions. No game process is launched.
 """
 from pathlib import Path
 import re
+import os
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = Path('C:/ddda-targets/L145/inflate-bench')
+OUT = Path(os.environ.get('CARGO_TARGET_DIR', 'C:/ddda-targets/L145')) / 'inflate-bench'
 
 
 def original(address='00cf02e0'):
@@ -89,12 +90,14 @@ fn restore(r:&[u32],cpu:&mut Cpu){
 type Callee=unsafe extern "C" fn(u32,*mut u32);
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn l145_inflate(w:*mut Window,n:usize,r:*mut u32,callee:Callee,implementation:u32)->u32{
+ ddnative_base::mem::ATOMIC_ACCESSES.store(true,std::sync::atomic::Ordering::Relaxed);
  let views=unsafe{std::slice::from_raw_parts(w,n)}.iter().map(|w|(w.address,w.length,w.bytes as usize)).collect::<Vec<_>>();
  let mut m=Memory(unsafe{std::slice::from_raw_parts_mut(w,n)});
  let r=unsafe{std::slice::from_raw_parts_mut(r,41)};
  let mut cpu=Cpu::default();restore(r,&mut cpu);
  x86::set_ext_calls(Some(Box::new(move |m,cpu,target|{
-  if implementation & 2 != 0 && target==0xcf2cb0 { fast_mapped(m,cpu,&views); return; }
+  if implementation & 16 != 0 && target==0xcf30c0 { ddruntime::archive_inflate::table::build(m,cpu); return; }
+  if implementation & 2 != 0 && target==0xcf2cb0 { fast_mapped(m,cpu,&views,implementation); return; }
   let mut r=[0u32;41];save(cpu,&mut r);unsafe{callee(target,r.as_mut_ptr())};restore(&r,cpu);
  })));
  if implementation & 1==0 {l145_original_inflate::f_00cf02e0(&mut m,&mut cpu)}
@@ -107,7 +110,7 @@ pub unsafe extern "C" fn l145_inflate(w:*mut Window,n:usize,r:*mut u32,callee:Ca
 // Exercise the actual page-backed specialization, not its Mem-only fallback.
 // Reuse the mapping across calls; refresh all stream windows before each leaf
 // and copy them back afterwards. The oracle still compares all original bytes.
-fn fast_mapped(source:&mut dyn Mem,cpu:&mut Cpu,views:&[(u32,u32,usize)]){
+fn fast_mapped(source:&mut dyn Mem,cpu:&mut Cpu,views:&[(u32,u32,usize)],implementation:u32){
  use ddruntime::{memory::{GuestMemory,READ,WRITE},fastmem::write_bulk};
  use std::{cell::RefCell,collections::BTreeSet};
  thread_local!{static MEMORY:RefCell<(GuestMemory,BTreeSet<u32>)>=RefCell::new((GuestMemory::new(),BTreeSet::new()));}
@@ -129,7 +132,8 @@ fn fast_mapped(source:&mut dyn Mem,cpu:&mut Cpu,views:&[(u32,u32,usize)]){
     let mut bytes=[0;4096];source.read_bytes(page,&mut bytes);put(page,&bytes);
    }
   }
-  ddruntime::archive_inflate::inflate_fast_pages(m,cpu);
+  if implementation&8!=0 {ddruntime::archive_inflate::inflate_fast_wide(m,cpu)}
+  else {ddruntime::archive_inflate::inflate_fast_pages(m,cpu)};
   for &(address,length,pointer)in &views[..4]{
    m.read_bytes(address,unsafe{std::slice::from_raw_parts_mut(pointer as *mut u8,length as usize)});
   }
@@ -144,16 +148,29 @@ use std::{io::{Cursor,Read},time::Instant};
 use l145_original_inflate as original;
 fn word(c:&mut Cursor<Vec<u8>>)->u32{let mut b=[0;4];c.read_exact(&mut b).unwrap();u32::from_le_bytes(b)}
 fn windows(c:&mut Cursor<Vec<u8>>)->Vec<(u32,Vec<u8>)>{(0..word(c)).map(|_|{let a=word(c);let mut b=vec![0;word(c)as usize];c.read_exact(&mut b).unwrap();(a,b)}).collect()}
-fn helper(m:&mut dyn Mem,c:&mut Cpu,t:u32,implementation:u32){match t{
- 0xcf01e0=>original::f_00cf01e0(m,c),0xcf30c0=>original::f_00cf30c0(m,c),
+thread_local! {static COST:std::cell::RefCell<[(u128,u64);5]>=const{std::cell::RefCell::new([(0,0);5])};}
+fn helper(m:&mut dyn Mem,c:&mut Cpu,t:u32,implementation:u32){
+ static PROFILE:std::sync::OnceLock<bool>=std::sync::OnceLock::new();
+ let timer=(*PROFILE.get_or_init(||std::env::var_os("L156_PROFILE").is_some())).then(Instant::now);
+ match t{
+ 0xcf01e0=>original::f_00cf01e0(m,c),
+ 0xcf30c0=>if implementation&16!=0 {ddruntime::archive_inflate::table::build(m,c)} else {original::f_00cf30c0(m,c)},
  0xcf34d0=>ddruntime::archive_inflate::adler32(m,c),
- 0xcf2cb0=>if implementation&4!=0 {original::f_00cf2cb0(m,c)}
+ 0xcf2cb0=>if implementation&8!=0 {ddruntime::archive_inflate::inflate_fast_wide(m,c)}
+   else if implementation&4!=0 {original::f_00cf2cb0(m,c)}
    else if implementation&2!=0 {ddruntime::archive_inflate::inflate_fast_pages(m,c)}
    else{ddruntime::archive_inflate::inflate_fast(m,c)},
  0x12efea0=>ddruntime::fastmem::memcpy(m,c),_=>panic!("unexpected helper {t:#x}")
-}}
+}
+ if let Some(start)=timer {
+  let slot=match t{0xcf2cb0=>0,0xcf30c0=>1,0xcf01e0=>2,0xcf34d0=>3,_=>4};
+  COST.with(|cost|{let mut cost=cost.borrow_mut();cost[slot].0+=start.elapsed().as_nanos();cost[slot].1+=1;});
+ }
+}
 fn main(){
- const REPEATS:u128=200;
+ ddnative_base::mem::ATOMIC_ACCESSES.store(true,std::sync::atomic::Ordering::Relaxed);
+ println!("atomic_accesses=true units=decimal_decompressed_MB original_opt=1 native_opt=3");
+ let repeats:u128=std::env::var("L156_REPEATS").ok().and_then(|v|v.parse().ok()).unwrap_or(200);
  let path=std::env::args().nth(1).expect("private benchmark image");
  let mut c=Cursor::new(std::fs::read(path).unwrap());
  let common=windows(&mut c);let cases=word(&mut c);
@@ -162,12 +179,14 @@ fn main(){
   let mut m=GuestMemory::new();
   for(a,b)in common.iter().chain(input.iter()){m.map(*a,b.len()as u32,READ|WRITE).unwrap();write_bulk(&mut m,*a,b);}
   for (input_chunk,output_chunk) in [(u32::MAX,u32::MAX),(8192,16384),(5,257)] {
+   if input_chunk==5 && std::env::var_os("L156_SKIP_TINY").is_some(){continue;}
    let mut reference=None;
    for round in 0..3 {
-    for implementation in if round%2==0{[4,0,2,1,3]}else{[3,1,2,0,4]} {
+    for implementation in if round%2==0{[4,2,10,18,26]}else{[26,18,10,2,4]} {
      x86::set_ext_calls(Some(Box::new(move|m,c,t|helper(m,c,t,implementation))));
+     COST.with(|cost|*cost.borrow_mut()=[(0,0);5]);
      let mut ns=0;let mut calls=0;
-     for _ in 0..REPEATS {
+     for _ in 0..repeats {
       for(a,b)in &input{write_bulk(&mut m,*a,b);}
       let mut cpu=Cpu::default();let mut limit=0;
       let start=Instant::now();
@@ -186,8 +205,10 @@ fn main(){
       assert_eq!(m.u32(0xe000014),size);
      }
      let mut bytes=vec![0;size as usize];m.read_bytes(0x30000000,&mut bytes);
+     let digest=bytes.iter().fold(0xcbf29ce484222325u64,|hash,&byte|(hash^u64::from(byte)).wrapping_mul(0x100000001b3));
      if let Some(expected)=&reference{assert_eq!(&bytes,expected)}else{reference=Some(bytes);}
-     println!("case={index} bytes={size} input_chunk={input_chunk} output_chunk={output_chunk} round={round} implementation={implementation} repeats={REPEATS} calls={calls} ns_per_stream={} ns_per_MB={}",ns/REPEATS,ns*1_000_000/(REPEATS*size as u128));
+     if std::env::var_os("L156_PROFILE").is_some(){COST.with(|cost|println!("profile case={index} implementation={implementation} total_ns={ns} fast_table_window_adler_copy={:?}",cost.borrow()));}
+     println!("case={index} bytes={size} input_chunk={input_chunk} output_chunk={output_chunk} round={round} implementation={implementation} repeats={repeats} calls={calls} output_fnv64={digest:016x} ns_per_stream={} ns_per_MB={}",ns/repeats,ns*1_000_000/(repeats*size as u128));
     }
    }
   }
