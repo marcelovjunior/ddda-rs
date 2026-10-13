@@ -1,6 +1,7 @@
 """Synthetic multi-crate calls and regeneration, without private game data."""
 import importlib.util
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -145,6 +146,48 @@ fn hundred(_: &mut dyn Mem, c: &mut Cpu) { c.eax += 100; }
             ported, tested = inventory.native_declarations(repo)
             self.assertEqual(ported, {0x400000, 0x500000})
             self.assertEqual(ported, tested)
+
+
+class ChunkTests(unittest.TestCase):
+    def test_modules_split_by_bytes_and_count(self):
+        # L100: a shard's functions go into modules of about `chunk_bytes`
+        # (rustc gives each module its own codegen units), in address order.
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "Cargo.toml").write_text('[workspace]\n')
+            for i in range(lift.SHARDS):
+                (repo / f"crates/ddlift/lift_{i:02}/src").mkdir(parents=True)
+            for name in ("Cargo.toml", "src/lib.rs"):
+                shutil.copyfile(root / "crates/ddlift/lift_00" / name, repo / "crates/ddlift/lift_00" / name)
+            (repo / "crates/ddnative/src/generated").mkdir(parents=True)
+            shutil.copyfile(root / "crates/ddnative/Cargo.toml", repo / "crates/ddnative/Cargo.toml")
+            (repo / "crates/ddnative/src/generated/mod.rs").write_text('pub mod lifted;\n')
+            (repo / "patterns").mkdir()
+            addrs = [0x500000 + 0x10 * k for k in range(5)]
+            (repo / "patterns/lift.json").write_text(json.dumps(
+                [dict(addr=a, name="synthetic", arms=[f"0x{a:X} => {{ eax += 1; return; }}"]) for a in addrs]))
+            generated = repo / f"crates/ddlift/lift_{lift.shard(0x500000):02}/src/generated"
+
+            def modules():
+                found = {}
+                for p in sorted(generated.glob("lifted_*.rs")):
+                    found[p.stem] = [int(a, 16) for a in re.findall(r'^pub fn f_([0-9a-f]{8})', p.read_text(), re.M)]
+                return found
+
+            with patch.object(lift, "R", str(repo)), patch.object(lift, "N", str(repo)):
+                lift.gen(instructions=False)
+                self.assertEqual(modules(), {'lifted_000': addrs})
+                lift.gen(instructions=False, chunk=2)
+                self.assertEqual(modules(), {'lifted_000': addrs[:2], 'lifted_001': addrs[2:4], 'lifted_002': addrs[4:]})
+                lift.gen(instructions=False, chunk_bytes=1)
+                self.assertEqual(modules(), {f'lifted_{k:03}': [a] for k, a in enumerate(addrs)})
+                index = (generated / "mod.rs").read_text()
+                for k in range(len(addrs)):
+                    self.assertIn(f'mod lifted_{k:03}; pub use lifted_{k:03}::*;', index)
+                # back to one module: the stale ones are removed
+                lift.gen(instructions=False)
+                self.assertEqual(modules(), {'lifted_000': addrs})
 
 
 if __name__ == '__main__':
