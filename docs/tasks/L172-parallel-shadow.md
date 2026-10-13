@@ -153,6 +153,22 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Publication preflight is implemented separately from the live hook. It checks
+all candidate read/write locations and optional same-run serial baseline,
+including permissions, before any store. It requires an externally proven
+exclusive boundary; optimistic preflight alone is not concurrency safety.
+Three new refusal/success tests pass (11 executor tests total). Live use is
+still gated on actual capture/source evidence.
+
+
+Continuation: replay now checks the full x87 image, saved/live MXCSR and
+thread control state in addition to its existing ABI/stream/memory gates.
+Capture format v2 retains live outgoing MXCSR separately from the saved
+CPU value; v1 refuses because that evidence was absent. Five focused
+replay tests pass, including distinct saved/live MXCSR round-trip and
+11 deliberate FP/control-state mutations. Real capture remains pending.
+
+
 Default light gate before the final capture-file addition: **271 passed,
 zero failures, seven ignored**. Final focused shadow gate: **17 passed**
 (includes eight executor tests, three private replay tests, one bounded

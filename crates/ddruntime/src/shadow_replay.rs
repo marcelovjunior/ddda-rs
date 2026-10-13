@@ -520,6 +520,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
                     incoming: incoming.clone(),
                     outgoing: outgoing.clone(),
                     mxcsr,
+                    result_mxcsr,
                     context,
                     scheduler,
                     stack: stack.clone(),
@@ -535,7 +536,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
             }
         }
         compare_replays(
-            input, incoming, outgoing, mxcsr, context, scheduler, stack, observed, writes,
+            input, incoming, outgoing, mxcsr, result_mxcsr, context, scheduler, stack, observed, writes,
         )
     } else {
         Err("serial stream capture refused".into())
@@ -563,6 +564,7 @@ pub fn replay_file(path: &std::path::Path) -> Result<usize, String> {
         fixture.incoming,
         fixture.outgoing,
         fixture.mxcsr,
+        fixture.result_mxcsr,
         fixture.context,
         fixture.scheduler,
         fixture.stack,
@@ -576,6 +578,7 @@ fn compare_replays(
     incoming: Cpu,
     outgoing: Cpu,
     mxcsr: u32,
+    result_mxcsr: u32,
     context: u32,
     scheduler: u32,
     stack: Range<u32>,
@@ -609,12 +612,13 @@ fn compare_replays(
                         }
                         x86::ldmxcsr(mxcsr);
                         resolve(TRAVERSE)(m, &mut cpu);
+                        let final_mxcsr = x86::stmxcsr();
                         ddnative_base::x87::park();
                         x86::ldmxcsr(x86::MXCSR_DEFAULT);
                         let stream = capture_context(m, context, Limits::default())
                             .map_err(|e| format!("stream: {e:?}"))?;
                         let writes = memory.0.borrow().writes().clone();
-                        Ok::<_, String>((cpu.clone(), stream, writes))
+                        Ok::<_, String>((cpu.clone(), stream, writes, final_mxcsr))
                     },
                 )
             })
@@ -631,6 +635,8 @@ fn compare_replays(
     if abi(&results[0].0) != abi(&outgoing) {
         return Err("original serial replay ABI differs from live serial".into());
     }
+    compare_control_state(&outgoing, result_mxcsr, &results[0].0, results[0].3)
+        .map_err(|field| format!("live/original serial replay {field} mismatch"))?;
     if observed.first_difference(&results[0].1).is_some() {
         return Err("original serial replay stream differs from live serial".into());
     }
@@ -683,16 +689,61 @@ fn compare_replays(
     if abi(&results[0].0) != abi(&results[1].0) {
         return Err("serial/parallel ABI mismatch".into());
     }
+    compare_control_state(&results[0].0, results[0].3, &results[1].0, results[1].3)
+        .map_err(|field| format!("serial/parallel {field} mismatch"))?;
     if observed.entries.is_empty() {
         return Err("empty stream is not shadow acceptance".into());
     }
     Ok(observed.entries.len())
 }
 
+/// Conservative state gate. Do not discard x87 status/register contents or
+/// control changes merely because the command bytes happened to match.
+fn compare_control_state(a: &Cpu, a_mxcsr: u32, b: &Cpu, b_mxcsr: u32) -> Result<(), &'static str> {
+    if a_mxcsr != b_mxcsr || a.mxcsr.0 != b.mxcsr.0 {
+        return Err("MXCSR");
+    }
+    if a.st.clone().state != b.st.clone().state {
+        return Err("x87 image");
+    }
+    if a.df != b.df || a.fs_base != b.fs_base || a.sys_flags != b.sys_flags
+        || [a.seg.es, a.seg.cs, a.seg.ss, a.seg.ds, a.seg.fs, a.seg.gs]
+            != [b.seg.es, b.seg.cs, b.seg.ss, b.seg.ds, b.seg.fs, b.seg.gs]
+    {
+        return Err("thread control state");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::memory::{GuestMemory, READ, WRITE};
+
+    #[test]
+    fn proof_rejects_fp_and_thread_control_changes() {
+        let cpu = Cpu::default();
+        assert_eq!(compare_control_state(&cpu, 0x1f80, &cpu.clone(), 0x1f80), Ok(()));
+        assert_eq!(compare_control_state(&cpu, 0x1f80, &cpu, 0x3f80), Err("MXCSR"));
+        let mut changed = cpu.clone();
+        changed.mxcsr.0 ^= 0x2000;
+        assert_eq!(compare_control_state(&cpu, 0x1f80, &changed, 0x1f80), Err("MXCSR"));
+        for byte in [0, 4, 8, 28, 107] {
+            let mut changed = cpu.clone();
+            changed.st.state[byte] ^= 1;
+            assert_eq!(compare_control_state(&cpu, 0x1f80, &changed, 0x1f80), Err("x87 image"));
+        }
+        for field in 0..4 {
+            let mut changed = cpu.clone();
+            match field {
+                0 => changed.df = !changed.df,
+                1 => changed.fs_base ^= 4096,
+                2 => changed.sys_flags ^= 1,
+                _ => changed.seg.fs ^= 1,
+            }
+            assert_eq!(compare_control_state(&cpu, 0x1f80, &changed, 0x1f80), Err("thread control state"));
+        }
+    }
 
     #[test]
     fn journal_is_observational_and_rejects_concurrent_input_changes() {
