@@ -109,11 +109,84 @@ malformed input and CPU/memory preservation around a stub original.
   `ddports::ensure_with`. Head should keep only one copy of that patch.
 - Implemented decoder and opt-in wrappers. **Seven synthetic tests pass**;
   enabled light serial unit suite **35 pass / 1 existing ignored**.
-- Full-suite validation is in progress. The fullscreen gamma Reset test
+- Full enabled light run: **158 passed, 2 failed, 1 existing ignored**;
+  both failed existing timing tests passed in isolated reruns, covering
+  **all 160 tests across runs**. This is not a single all-green suite run.
+  The fullscreen gamma Reset test
   fails with D3DERR_INVALIDCALL with instrumentation both ON and OFF using
   the current desktop. With the private L34 recorded display it passes
   (all five device tests pass); the loaded-machine repeat instead fails
   two existing lock-timing assertions in threads.rs. No checks weakened.
+  Logs: `C:/ddda-targets/L111/light-recorded-display.log`,
+  `present-timing-recheck.log`, `tail-timing-recheck.log`; display evidence
+  `E:/ddda-re/notes/L34/modes.json`. All builds used L111 target,
+  CARGO_INCREMENTAL=0 and four jobs; only light runtime dependencies.
+- Instrumentation checkpoint **8135984f** sent to head for integration.
+  L108 **62fabf37** includes the companion NDRAW instrumentation section.
 - No game/shard/GPU execution, gameplay equivalence or FPS claim.
-- Next: commit tested instrumentation, head-run stats with EVERY=1 and
-  gameplay capture; run L107 frame_stats and compare target runs/counts.
+- Next: head-run stats with EVERY=1 and gameplay capture, then compare
+  target runs/counts. cap1 has no executor telemetry, so that comparison
+  remains unverified. Capture indices are zero-based/global; telemetry
+  frames are one-based/per-device, requiring aligned startup/device use.
+
+## cap1 gameplay measurement
+
+Ran the unchanged L107 release `frame_stats` on original capture frames
+**7539..7559** (20 complete frames). The private capture contains 7,559
+Presents, 716,888 blobs and 19,791,748,792 decompressed blob bytes, although
+the file is only 2,400,766,615 bytes. Because Reader retains all blobs,
+first extracted a private analytical slice with exact selected command
+payloads and only their referenced blobs; unused blob IDs get empty
+deflate placeholders. This is for analysis, **not standalone replay**:
+earlier resource uploads are omitted. No capture/blob data committed.
+
+The extraction parses the v1 command layouts from d3d9frame's own Decoder,
+checks complete payload consumption and prior definition of every blob,
+and verifies selected-command SHA-256 before/after writing:
+`aa3b155e8bede1cf104e2e23aa27c685ee9521deb4b7579a66226a296b14e269`.
+It retains 50,507 referenced blobs / 284,160,664 raw bytes. The incomplete
+trailing record after the last Present is excluded (same Reader behavior).
+L107 reads the resulting slice successfully; its local frames 0..20
+correspond to original 7539..7559.
+
+| Measurement | 20-frame total | Per-frame mean |
+|---|---:|---:|
+| Commands | 108,502 | 5,425.10 |
+| Draws | 107,544 | 5,377.20 |
+| Target passes | 19,704 | 985.20 |
+| Primitives | 63,795,780 | 3,189,789 |
+| VS changed float4 / bytes | 163,972 / 2,623,552 | 8,198.60 / 131,177.60 |
+| PS changed float4 / bytes | 146,931 / 2,350,896 | 7,346.55 / 117,544.80 |
+
+Frame ranges: 5,295..5,436 draws and 951..991 passes. Consecutive-draw
+change rates over 107,524 comparisons: shaders **38.212%**, declaration/FVF
+28.901%, render states **4.898%**, textures/samplers **54.603%**, streams
+59.841%, IB 22.233%, VS constants 34.270%, PS constants 34.523%,
+viewport/scissor 1.888%, targets 18.251%. These count state differences,
+not setter calls, driver uploads or dynamic shader executions.
+
+Equal-constant candidate runs: 94,646, with 85.05% of draws singleton;
+ignoring constants: 91,212 runs, with 80.57% singleton. Both maximum runs
+are 167. Candidate runs do not prove legal batching or reorderability.
+
+| First color target group | Passes/frame | Draws/frame |
+|---|---:|---:|
+| 64x8 A32B32G32R32F | 624.00 | 624.00 |
+| 64x16 A32B32G32R32F | 274.20 | 274.20 |
+| 1920x1080 A8R8G8B8 | 19.00 | 3,682.00 |
+| 512x1536 R32F | 1.00 | 492.45 |
+| 960x540 A8R8G8B8 | 4.00 | 163.60 |
+
+The two tiny float32 target groups contribute **898.2 single-draw passes
+per frame**. Their producer/system identity is assigned to claude-9/L113;
+this report makes no class or shader-technique inference. There are also
+15.15 clear records, eight copies and six query begin/end/result calls
+per frame. Clear pixel visits total 325,080,832; each copy-side requested
+area totals 166,871,040. These are rectangle visits, not unique pixels.
+
+Head and L113 received the full report:
+`C:/ddda-targets/L111/cap1-report.txt`, detailed
+`cap1-last20-stats.json` / `.txt`, and `cap1-extraction.json`.
+The report includes representative surface tuples for future executor
+correlation. A later run can reuse addresses differently; compare the
+same run's tuples or dimensions/order, not pointer values across runs.

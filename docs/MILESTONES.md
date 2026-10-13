@@ -7,12 +7,16 @@
   state/shader/sampler/buffer identities and ordered surface target runs
   sourced to DAB480/DA6DA0 and apply helpers. Counts are raw records.
 - Seven synthetic regressions pass; enabled light unit suite 35 pass /
-  1 existing ignored. Full suite validation continues: fullscreen gamma
-  fails with switch off too; recorded L34 display resolves it, while two
-  existing lock-timing tests failed on a later loaded-machine repeat.
+  1 existing ignored. Full suite 158 pass / 2 existing timing failures /
+  1 ignored; both failures pass isolated reruns (160 verified across runs).
+  Fullscreen gamma fails with switch off too on current desktop; recorded
+  L34 display resolves it. No tests/checks weakened.
 - cap1 last20 analytical extraction preserves 108,502 command payloads
   and 50,507 referenced blobs (284 MB raw vs 19.79 GB whole-capture blobs).
   Unchanged frame_stats completed: 107,544 draws / 19,704 passes.
+- Mean 5,377.2 draws / 985.2 passes per frame, including 898.2 single-draw
+  tiny float32 target passes. Constants change 248,722 bytes/frame;
+  fixed-state lists differ for 4.898% of predecessor comparisons.
 - Next: head-run DDRUNTIME_NDRAW_STATS=1, EVERY=1 for executor/capture
   correlation; no game, image-equivalence or FPS claim from this batch.
   Details: docs/tasks/L111-executor-stats.md.
