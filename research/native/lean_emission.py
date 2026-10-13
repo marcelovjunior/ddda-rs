@@ -255,6 +255,34 @@ CALL_CONST = re.compile(PLAIN + r"\{ let t = (0x[0-9A-F]+u32); (emit::push\(0x[0
 ABSOLUTE = re.compile(r"\b0u32\.wrapping_add\((0x[0-9A-F]+)\)")  # 0 + disp: an absolute address
 
 
+# Flags::cond (ddnative-base x86.rs) per condition code, with the same
+# predicate calls in the same order: at opt-level 0 cond() compares the
+# condition string on every evaluation.
+CONDITIONS = {
+    ("e", "z"): "f.zf()", ("ne", "nz"): "!f.zf()",
+    ("b", "c", "nae"): "f.cf()", ("ae", "nb", "nc"): "!f.cf()",
+    ("be", "na"): "f.cf() || f.zf()", ("a", "nbe"): "!f.cf() && !f.zf()",
+    ("s",): "f.sf()", ("ns",): "!f.sf()",
+    ("l", "nge"): "f.sf() != f.of()", ("ge", "nl"): "f.sf() == f.of()",
+    ("le", "ng"): "f.zf() || f.sf() != f.of()", ("g", "nle"): "!f.zf() && f.sf() == f.of()",
+    ("o",): "f.of()", ("no",): "!f.of()",
+    ("p", "pe"): "f.pf()", ("np", "po"): "!f.pf()",
+}
+PREDICATE = {cc: e for codes, e in CONDITIONS.items() for cc in codes}
+COND = re.compile(r'\bcpu\.fl\.cond\("(\w+)"\)')
+
+
+def predicates(arm):
+    """`cpu.fl.cond("be")` -> `(cpu.fl.cf() || cpu.fl.zf())`."""
+    def replace(m):
+        e = PREDICATE.get(m[1])
+        if e is None:
+            return m[0]  # unknown code: keep cond()'s panic
+        e = e.replace("f.", "cpu.fl.")
+        return e if re.fullmatch(r"cpu\.fl\.\w+\(\)", e) else f"({e})"
+    return COND.sub(replace, arm)
+
+
 def idioms(arm):
     """Push/pop through ddnative_base::emit, direct call targets."""
     arm = PUSH.sub(lambda m: f"emit::push({m[1]}, m, pt, cpu);", arm)
@@ -264,7 +292,7 @@ def idioms(arm):
     arm = CLOSURE.sub(lambda m: m[1], arm)
     arm = CALL_CONST.sub(lambda m: f"{m[2]} x86::call_ext(m, cpu, {m[1]});", arm)
     arm = ABSOLUTE.sub(lambda m: f"{m[1]}u32", arm)
-    return sse(arm)
+    return predicates(sse(arm))
 
 
 LOAD128 = re.compile(r"\[m\.fast_u32\(pt, a(?:\.wrapping_add\(0\))?\), m\.fast_u32\(pt, a\.wrapping_add\(4\)\), "
