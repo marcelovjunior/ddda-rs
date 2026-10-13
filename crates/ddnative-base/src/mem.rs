@@ -56,11 +56,11 @@ pub trait Mem {
 /// Guest pages: 4 KiB, 2^20 of them.
 pub const PAGE: u32 = 0x1000;
 pub const PAGES: usize = 1 << 20;
-/// Page permission bits in [`PageTable::perms`].
+/// Page permission bits returned by [`PageTable::perm`].
 pub const READ: u8 = 1;
 pub const WRITE: u8 = 2;
 
-use std::sync::atomic::{AtomicPtr, AtomicU16, AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicU16, AtomicU32, AtomicU8, Ordering};
 
 /// Where a page's bytes live: a zeroed host allocation of PAGE bytes,
 /// PAGE-aligned (so a guest-aligned access is host-aligned).
@@ -77,10 +77,21 @@ fn alloc_zero_page() -> *mut u8 {
     p
 }
 
+const POINTER_MASK: usize = !(PAGE as usize - 1);
+// Bits 8/9 certify both permission and non-null backing. The low byte
+// retains the full public permission value even for unbacked lazy pages.
+const FAST_SHIFT: usize = 8;
+
+#[inline]
+fn tagged_page(pointer: usize, perm: u8) -> usize {
+    pointer | perm as usize | if pointer != 0 { ((perm & (READ | WRITE)) as usize) << FAST_SHIFT } else { 0 }
+}
+
 /// A software page table (the runtime's guest address space keeps its
 /// pages here): per page, its bytes if backed and its permission bits.
-/// Fixed-size tables, so a page index (`addr / PAGE`) needs no bounds
-/// check and the tables never move.
+/// A fixed-size table, so a page index (`addr / PAGE`) needs no bounds
+/// check and the entries never move. Backed-access bits are published in
+/// the same atomic entry as the pointer and permission byte.
 ///
 /// Every entry is atomic, so guest threads running at the same time
 /// (ddruntime's parallel mode, brief L42) may read and write the table
@@ -92,8 +103,10 @@ fn alloc_zero_page() -> *mut u8 {
 /// retired, not freed, until the table is dropped, because another thread
 /// may still be reading it.
 pub struct PageTable {
-    pages: Box<[AtomicPtr<u8>; PAGES]>,
-    perms: Box<[AtomicU8; PAGES]>,
+    // PAGE-aligned pointer, permission byte and backed-access bits below.
+    // One acquire observes both backing and permissions; zero pointer bits
+    // still mean unbacked even when a lazy page has permission bits set.
+    entries: Box<[AtomicUsize; PAGES]>,
     retired: std::sync::Mutex<Vec<usize>>,
 }
 
@@ -116,9 +129,8 @@ unsafe fn zeroed_box<T>() -> Box<T> {
 impl Default for PageTable {
     fn default() -> Self {
         PageTable {
-            // SAFETY: a null AtomicPtr and a zero AtomicU8 are all-zero bytes
-            pages: unsafe { zeroed_box() },
-            perms: unsafe { zeroed_box() },
+            // SAFETY: zero is a valid AtomicUsize.
+            entries: unsafe { zeroed_box() },
             retired: Default::default(),
         }
     }
@@ -127,7 +139,7 @@ impl Default for PageTable {
 impl Drop for PageTable {
     fn drop(&mut self) {
         let retired = std::mem::take(self.retired.get_mut().unwrap_or_else(|e| e.into_inner()));
-        let live = self.pages.iter().map(|p| p.load(Ordering::Relaxed) as usize).filter(|&p| p != 0);
+        let live = self.entries.iter().map(|p| p.load(Ordering::Relaxed) & POINTER_MASK).filter(|&p| p != 0);
         for p in live.chain(retired) {
             // SAFETY: every non-null page came from alloc_zero_page and is
             // freed once (a retired page is no longer in the table)
@@ -140,16 +152,24 @@ impl PageTable {
     /// Page `p`'s permission bits.
     #[inline(always)]
     pub fn perm(&self, p: usize) -> u8 {
-        self.perms[p].load(Ordering::Acquire)
+        self.entries[p].load(Ordering::Acquire) as u8
     }
     /// Set page `p`'s permission bits (after its page pointer, if any).
     pub fn set_perm(&self, p: usize, v: u8) {
-        self.perms[p].store(v, Ordering::Release)
+        // Preserve backing if another guest thread materialises concurrently.
+        let mut entry = self.entries[p].load(Ordering::Relaxed);
+        loop {
+            match self.entries[p].compare_exchange_weak(entry, tagged_page(entry & POINTER_MASK, v),
+                Ordering::Release, Ordering::Relaxed) {
+                Ok(_) => return,
+                Err(changed) => entry = changed,
+            }
+        }
     }
     /// Page `p`'s bytes, or null while it is not backed.
     #[inline(always)]
     pub fn page(&self, p: usize) -> *mut u8 {
-        self.pages[p].load(Ordering::Acquire)
+        (self.entries[p].load(Ordering::Acquire) & POINTER_MASK) as *mut u8
     }
     /// Page `p`'s bytes, backing it with zeros first if needed. When two
     /// threads race, one page wins and the other allocation is freed.
@@ -165,26 +185,34 @@ impl PageTable {
     #[inline(never)]
     fn materialise(&self, p: usize) -> *mut u8 {
         let fresh = alloc_zero_page();
-        match self.pages[p].compare_exchange(std::ptr::null_mut(), fresh, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => fresh,
-            Err(winner) => {
-                // SAFETY: `fresh` was never published
+        // Converting the allocation to an integer exposes its provenance;
+        // masking the tag off later recovers an address in that allocation.
+        let mut entry = self.entries[p].load(Ordering::Acquire);
+        loop {
+            if entry & POINTER_MASK != 0 {
+                // SAFETY: fresh was never published.
                 unsafe { std::alloc::dealloc(fresh, page_layout()) };
-                winner
+                return (entry & POINTER_MASK) as *mut u8;
+            }
+            match self.entries[p].compare_exchange_weak(entry, tagged_page(fresh as usize, entry as u8),
+                Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return fresh,
+                Err(changed) => entry = changed,
             }
         }
     }
+
     /// Take page `p`'s bytes away (it reads as unbacked again); the old
     /// bytes are kept until the table is dropped.
     pub fn unback(&self, p: usize) {
-        let old = self.pages[p].swap(std::ptr::null_mut(), Ordering::AcqRel);
-        if !old.is_null() {
-            self.retired.lock().unwrap_or_else(|e| e.into_inner()).push(old as usize);
+        let old = self.entries[p].fetch_and(u8::MAX as usize, Ordering::AcqRel) & POINTER_MASK;
+        if old != 0 {
+            self.retired.lock().unwrap_or_else(|e| e.into_inner()).push(old);
         }
     }
     /// How many pages are backed (diagnostics).
     pub fn backed_count(&self) -> usize {
-        self.pages.iter().filter(|p| !p.load(Ordering::Relaxed).is_null()).count()
+        self.entries.iter().filter(|p| p.load(Ordering::Relaxed) & POINTER_MASK != 0).count()
     }
 }
 
@@ -268,12 +296,12 @@ fn allowed(pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, width: usize, pe
     // SAFETY: page_table()'s contract: the table is alive and does not
     // move.
     let t = unsafe { t.as_ref() };
-    if t.perm(p) & perm == 0 {
+    let entry = t.entries[p].load(Ordering::Acquire);
+    if entry & ((perm as usize) << FAST_SHIFT) == 0 {
         return None;
     }
-    let page = t.page(p);
-    // SAFETY: a backed page holds PAGE bytes
-    (!page.is_null()).then(|| unsafe { page.add(off) })
+    // SAFETY: the pointer bits name a backed PAGE-byte allocation.
+    Some(unsafe { ((entry & POINTER_MASK) as *mut u8).add(off) })
 }
 
 /// The lifted code's memory accesses (lift.py lowers `m.u32(a)` to
@@ -307,52 +335,60 @@ impl dyn Mem + '_ {
     }
     #[inline(never)]
     pub fn fast_u8(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u8 {
-        match allowed(pt, addr, 1, READ) {
-            // SAFETY: allowed() points at 1 byte inside a backed page
-            Some(p) => unsafe { load_at(p, 1) as u8 },
-            None => self.u8(addr),
-        }
+        let Some(p) = allowed(pt, addr, 1, READ) else { return self.slow_u8(addr); };
+        // SAFETY: allowed returns 1 byte inside a backed page.
+        unsafe { load_at(p, 1) as u8 }
     }
     #[inline(never)]
     pub fn fast_u16(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u16 {
-        match allowed(pt, addr, 2, READ) {
-            // SAFETY: 2 bytes inside a backed page
-            Some(p) => unsafe { load_at(p, 2) as u16 },
-            None => self.u16(addr),
-        }
+        let Some(p) = allowed(pt, addr, 2, READ) else { return self.slow_u16(addr); };
+        // SAFETY: allowed returns 2 bytes inside a backed page.
+        unsafe { load_at(p, 2) as u16 }
     }
     #[inline(never)]
     pub fn fast_u32(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
-        match allowed(pt, addr, 4, READ) {
-            // SAFETY: 4 bytes inside a backed page
-            Some(p) => unsafe { load_at(p, 4) },
-            None => self.u32(addr),
-        }
+        let Some(p) = allowed(pt, addr, 4, READ) else { return self.slow_u32(addr); };
+        // SAFETY: allowed returns 4 bytes inside a backed page.
+        unsafe { load_at(p, 4) }
     }
     #[inline(never)]
     pub fn fast_set_u8(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u8) {
-        match allowed(pt, addr, 1, WRITE) {
-            // SAFETY: 1 byte inside a backed page
-            Some(p) => unsafe { store_at(p, 1, v as u32) },
-            None => self.set_u8(addr, v),
-        }
+        let Some(p) = allowed(pt, addr, 1, WRITE) else { return self.slow_set_u8(addr, v); };
+        // SAFETY: allowed returns 1 byte inside a backed page.
+        unsafe { store_at(p, 1, v as u32) }
     }
     #[inline(never)]
     pub fn fast_set_u16(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u16) {
-        match allowed(pt, addr, 2, WRITE) {
-            // SAFETY: 2 bytes inside a backed page
-            Some(p) => unsafe { store_at(p, 2, v as u32) },
-            None => self.set_u16(addr, v),
-        }
+        let Some(p) = allowed(pt, addr, 2, WRITE) else { return self.slow_set_u16(addr, v); };
+        // SAFETY: allowed returns 2 bytes inside a backed page.
+        unsafe { store_at(p, 2, v as u32) }
     }
     #[inline(never)]
     pub fn fast_set_u32(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u32) {
-        match allowed(pt, addr, 4, WRITE) {
-            // SAFETY: 4 bytes inside a backed page
-            Some(p) => unsafe { store_at(p, 4, v) },
-            None => self.set_u32(addr, v),
-        }
+        let Some(p) = allowed(pt, addr, 4, WRITE) else { return self.slow_set_u32(addr, v); };
+        // SAFETY: allowed returns 4 bytes inside a backed page.
+        unsafe { store_at(p, 4, v) }
     }
+    #[cold]
+    #[inline(never)]
+    fn slow_u8(&self, addr: u32) -> u8 { self.u8(addr) }
+    #[cold]
+    #[inline(never)]
+    fn slow_set_u8(&mut self, addr: u32, v: u8) { self.set_u8(addr, v) }
+
+    #[cold]
+    #[inline(never)]
+    fn slow_u16(&self, addr: u32) -> u16 { self.u16(addr) }
+    #[cold]
+    #[inline(never)]
+    fn slow_set_u16(&mut self, addr: u32, v: u16) { self.set_u16(addr, v) }
+
+    #[cold]
+    #[inline(never)]
+    fn slow_u32(&self, addr: u32) -> u32 { self.u32(addr) }
+    #[cold]
+    #[inline(never)]
+    fn slow_set_u32(&mut self, addr: u32, v: u32) { self.set_u32(addr, v) }
 }
 
 /// Where Sparse hands out fresh blocks: research/native/harness.py uses the
