@@ -142,7 +142,46 @@ fn run_leaf_only(m: &mut dyn Mem, cpu: &mut Cpu, targets: &[u32], n: usize) {
     }
 }
 
+mod old_ext {
+    use super::*;
+    thread_local! {
+        static EXT: std::cell::RefCell<Option<std::rc::Rc<x86::ExtCall>>> = std::cell::RefCell::new(None);
+    }
+    pub fn set(f: Box<x86::ExtCall>) { EXT.with(|e| *e.borrow_mut() = Some(std::rc::Rc::from(f))); }
+    #[inline]
+    pub fn call_ext(m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        let f = EXT.with(|e| e.borrow().clone())
+            .unwrap_or_else(|| panic!("call to {target:#010x}: no handler for untranslated code"));
+        f(m, cpu, target);
+    }
+}
+#[inline(never)]
+fn run_ext_old(m: &mut dyn Mem, cpu: &mut Cpu, targets: &[u32], n: usize) {
+    for k in 0..n {
+        let t = targets[k & (targets.len() - 1)];
+        (|m: &mut dyn Mem, cpu: &mut Cpu| old_ext::call_ext(m, cpu, t))(m, cpu);
+    }
+}
+#[inline(never)]
+fn old_ext_out_of_line(m: &mut dyn Mem, cpu: &mut Cpu, t: u32) { old_ext::call_ext(m, cpu, t) }
+#[inline(never)]
+fn run_ext_old_ool(m: &mut dyn Mem, cpu: &mut Cpu, targets: &[u32], n: usize) {
+    for k in 0..n {
+        let t = targets[k & (targets.len() - 1)];
+        (|m: &mut dyn Mem, cpu: &mut Cpu| old_ext_out_of_line(m, cpu, t))(m, cpu);
+    }
+}
+#[inline(never)]
+fn run_ext_new(m: &mut dyn Mem, cpu: &mut Cpu, targets: &[u32], n: usize) {
+    for k in 0..n {
+        let t = targets[k & (targets.len() - 1)];
+        (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, t))(m, cpu);
+    }
+}
+
 fn main() {
+    x86::set_ext_calls(Some(Box::new(|_, cpu: &mut Cpu, _| cpu.eax = cpu.eax.wrapping_add(1))));
+    old_ext::set(Box::new(|_, cpu: &mut Cpu, _| cpu.eax = cpu.eax.wrapping_add(1)));
     let _ = H3.set(host_shape);
     let _ = H2.set(via_host_target);
     let _ = H.set(old_out_of_line);
@@ -151,13 +190,15 @@ fn main() {
     let targets: Vec<u32> = (0..1024u32).map(|k| 0x0040_1000 + k * 0x10).collect();
     let mut mem = Sparse::default();
     let n = 10_000_000;
-    let variants: [(&str, fn(&mut dyn Mem, &mut Cpu, &[u32], usize)); 9] = [
+    let variants: [(&str, fn(&mut dyn Mem, &mut Cpu, &[u32], usize)); 12] = [
+        ("call_ext (before, not inlined)", run_ext_old_ool),
+        ("call_ext (before)", run_ext_old), ("call_ext (base)", run_ext_new),
         ("harness + leaf only", run_leaf_only),
         ("hook->bench host shape", run_host_shape),
         ("hook->host target", run_hook_host_target), ("base hook park()", run_base_hooks_local),
         ("old inline cache", run_old), ("old out of line", run_out_of_line), ("local hook", run_local_hook),
         ("host cache direct", run_host_direct), ("new hook", run_new)];
-    let mut best = [f64::MAX; 9];
+    let mut best = [f64::MAX; 12];
     for _ in 0..15 {
         for (k, (_, f)) in variants.iter().enumerate() {
             let mut cpu = Cpu::default();
@@ -167,6 +208,6 @@ fn main() {
         }
     }
     for (k, (name, _)) in variants.iter().enumerate() {
-        println!("{name:>17}: {:.2} ns/call (best of 15)", best[k]);
+        println!("{name:>30}: {:.2} ns/call (best of 15)", best[k]);
     }
 }
