@@ -459,6 +459,94 @@ class TargetOracle(Oracle):
                     events=self.events, after=self.snapshot(), edges=sorted(self.edges))
 
 
+SORT, SORT_END = 0xFEDD60, 0xFEE0EF
+LENGTHS[SORT] = SORT_END - SORT
+RECORDS, SCRATCH = BASE + 0x1000, BASE + 0x40000
+
+
+class SortOracle(TargetOracle):
+    """0x00FEDD60 `sort(records, count, scratch) -> sorted` (stdcall, `ret
+    0xc`); memcpy (0x012EFEA0, a platform model) is done by the stub."""
+
+    def __init__(self):
+        uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
+        uc.ctl_set_tcg_buffer_size(16 * 1024 * 1024)
+        for address, size in ((0xFED000, 0x2000), (MEMCPY & ~0xFFF, 0x1000),
+                              (BASE, SIZE), (STACK, STACK_SIZE), (h.RET, 0x1000)):
+            uc.mem_map(address, size)
+        uc.mem_write(SORT, h.code(SORT, SORT_END - SORT))
+        uc.mem_write(MEMCPY, bytes.fromhex('c3'))
+        self.active = False
+        uc.hook_add(UC_HOOK_MEM_READ, self.read)
+        uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
+        uc.hook_add(UC_HOOK_CODE, self.code)
+
+    def code(self, uc, address, size, data):
+        if address == h.RET:
+            uc.emu_stop()
+            return
+        if address == MEMCPY:
+            return super().code(uc, address, size, data)
+        assert SORT <= address < SORT_END, hex(address)
+        if self.last is not None:
+            self.edges.add((self.last, address))
+        self.last = address
+
+    def run(self, seed, count, keys, overlap):
+        """keys: the key range (duplicates when small); overlap: the
+        scratch overlapping the records by that many records (0: apart)"""
+        uc = self.uc
+        rng = self.rng = random.Random(seed)
+        uc.mem_write(BASE, rng.randbytes(SIZE))
+        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
+        for k in range(count if count < 0x10000 else 0):
+            uc.mem_write(RECORDS + 8 * k, struct.pack('<II', rng.randrange(keys) if keys else rng.getrandbits(32), k))
+        scratch = RECORDS + 8 * overlap if overlap else SCRATCH
+        for i, v in enumerate((h.RET, RECORDS, count & 0xFFFFFFFF, scratch)):
+            uc.mem_write(SP + 4 * i, struct.pack('<I', v))
+        regs = [rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(32), SP,
+                rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(32)]
+        for reg, v in zip(REGS, regs):
+            uc.reg_write(reg, v)
+        uc.reg_write(x.UC_X86_REG_EFLAGS, 0x202 | (rng.getrandbits(12) & 0xCD5))
+        self.initial, self.written, self.events, self.edges, self.last = {}, set(), [], set(), None
+        before = self.snapshot(False)
+        self.active = True
+        uc.emu_start(SORT, h.RET, count=20_000_000)
+        self.active = False
+        assert uc.reg_read(x.UC_X86_REG_EIP) == h.RET
+        return dict(entry=SORT, seed=seed, count=count, overlap=overlap, before=before,
+                    initial=sorted(self.initial.items()), events=self.events, after=self.snapshot(),
+                    edges=sorted(self.edges))
+
+
+def record_sort(out):
+    oracle = SortOracle()
+    plan = [(count, keys, 0) for count in (-5, 0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 47, 63, 64, 65,
+                                          100, 127, 128, 129, 200, 255, 256, 257, 511, 513, 1000)
+            for keys in (0, 4, 1 << 16) for _ in range(3)]
+    plan += [(count, 8, overlap) for count in (5, 16, 40, 70) for overlap in (1, 3, 16)]
+    # huge counts: the width stops after 32 doublings (it wraps to 0, below 2)
+    plan += [(0x7FFFFFFF, 0, 0), (0x80000000, 0, 0)]
+    cases = [oracle.run(i + 1, *p) for i, p in enumerate(plan)]
+    edges = {tuple(e) for c in cases for e in c['edges']}
+    missing = [(hex(i.address), hex(t)) for i in branches(SORT)
+               for t in (i.address + i.size, int(i.op_str, 16)) if (i.address, t) not in edges]
+    # Unreachable: a width of 2 or more means at least two records, so no
+    # pass sees a non-positive count, no run is empty, and a run's merge
+    # always ends through one of its tail copies (one record is written
+    # per step and one run is exhausted before the last).
+    assert missing == [('0xfedd97', '0xfeddf1'), ('0xfede41', '0xfee0b4'), ('0xfedeba', '0xfedf5b'),
+                       ('0xfedf13', '0xfedf15'), ('0xfedf19', '0xfedf57'), ('0xfedf8a', '0xfee0b4'),
+                       ('0xfedffc', '0xfee08b'), ('0xfee053', '0xfee055')], missing
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(dict(
+        source='DDDA.exe 2017-12-13 Steam',
+        exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+        uncovered_edges=missing, cases=cases), separators=(',', ':')))
+    print(f'{len(cases)} sort cases -> {out}')
+
+
 def record_target(out):
     oracle = TargetOracle()
     cases = [oracle.run(i + 1, kind) for i, kind in enumerate(
@@ -506,12 +594,16 @@ def main():
     p.add_argument('--out', default='E:/ddda-re/notes/native-L176/material_lookup.json')
     p.add_argument('--state', action='store_true', help='record 0x010655A0 (material_state.json beside --out)')
     p.add_argument('--target', action='store_true', help='record 0x00FEFB90 (set_target.json beside --out)')
+    p.add_argument('--sort', action='store_true', help='record 0x00FEDD60 (record_sort.json beside --out)')
     a = p.parse_args()
     if a.state:
         record_state(Path(a.out).with_name('material_state.json'))
         return
     if a.target:
         record_target(Path(a.out).with_name('set_target.json'))
+        return
+    if a.sort:
+        record_sort(Path(a.out).with_name('record_sort.json'))
         return
     oracle = Oracle()
     cases, skipped, seed = [], 0, 0

@@ -122,5 +122,35 @@ new size finds no arena, otherwise memcpy's.
 - Opt-in `DDRUNTIME_SET_TARGET=1` (separate from the material ports, for
   a separate A/B).
 
+### 0x00FEDD60, the draw recording's record sort
+
+The hottest unowned nearest-lifted function on the job threads in the
+four profile_c34 runs (120 samples; reached from 0x00FEE0F0 through
+`call_local`). `sort(records, count, scratch) -> sorted` (stdcall, `ret
+0xc`): a stable bottom-up merge sort of 8-byte records by their first word
+(unsigned), alternating between the two buffers: pairs into the scratch,
+then merge passes doubling the run width up to the smallest power of two
+above the count (at most 32 doublings); runs of 32 or more copy their
+tails with memcpy. Returns the buffer holding the result.
+
+- `crates/mtdraw/src/sort.rs`: `sort_records`. When the buffers do not
+  overlap, every pass writes all records to its buffer, so each buffer
+  ends with its last pass's output, and after the pass of width `w` each
+  aligned block of `w` records is that block of the input stably sorted:
+  the port reads the records once and writes the full sort and the
+  half-width block sort. Overlapping buffers run the original's passes in
+  guest memory, with its read/write order and memcpy calls.
+- Vectors: `record_material.py --sort`, 293 cases: counts -5 to 1000 and
+  the 32-doubling cap (0x7FFFFFFF, 0x80000000), keys from 4 values (many
+  duplicates: stability) to 32 bits, 12 overlapping layouts. Every
+  reachable branch is covered (eight edges are unreachable: no pass sees a
+  count under 2, no run is empty, a run's merge always ends through a
+  tail copy).
+- `tests/material.rs`: 293 ABI-level cases pass; mutation check 8/9
+  caught (the survivor caps the width at 31 doublings instead of 32: the
+  width is then 0x80000000 instead of 0, below 2 either way).
+- Microbenchmark: 59-62 us -> 2.3-2.4 us per call over the cases (25-27x).
+- Opt-in `DDRUNTIME_RECORD_SORT=1`.
+
 Not yet measured in game. Skipped: 0x01066C60 nDraw::Material::vf12 (11
 self samples, ~0x600 bytes, six guest calls: little to gain).

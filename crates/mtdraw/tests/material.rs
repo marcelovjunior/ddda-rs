@@ -192,3 +192,18 @@ fn set_render_target_matches_original() {
     assert!(n > 1000, "{n} cases");
     eprintln!("0x00FEFB90: {n} ABI-level cases passed");
 }
+
+// verifies 0x00FEDD60 (ABI level; its tail copies are the platform memcpy)
+#[test]
+fn sort_records_matches_original() {
+    let path = std::env::var("L176_SORT_VECTORS")
+        .unwrap_or_else(|_| "E:/ddda-re/notes/native-L176/record_sort.json".into());
+    let data: Value = match std::fs::read_to_string(&path) {
+        Ok(t) => serde_json::from_str(&t).unwrap(),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let n = abi_cases(&data, 0x00FE_DD60, mtdraw::sort::sort_records);
+    assert!(n > 250, "{n} cases");
+    eprintln!("0x00FEDD60: {n} ABI-level cases passed");
+}

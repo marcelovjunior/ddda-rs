@@ -45,6 +45,11 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_SET_TARGET").as_deref() == Ok("1") {
         ports.push((0x00fe_fb90, mtdraw::target::set_render_target));
     }
+    // L176: the draw recording's record sort (semantic port, a stable
+    // merge sort; crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_RECORD_SORT").as_deref() == Ok("1") {
+        ports.push((0x00fe_dd60, mtdraw::sort::sort_records));
+    }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
     if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
