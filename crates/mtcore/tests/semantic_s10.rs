@@ -284,3 +284,20 @@ fn semantic_commit_current_state_matches_original() {
     let (cases, made) = run_cases(&vectors("commit_current.json"), mtcore::semantic_draw_c::commit_current_state_guest_commit, true, &callees, &[]);
     eprintln!("{cases} ABI-level commit_current cases passed; calls {made:x?}");
 }
+
+// verifies 0x00ea3130 (ABI level; void) with 0x00EA1EE0 and 0x00EA1F40 folded in
+#[test]
+fn semantic_base_model_draw_unit_matches_original() {
+    let c = |target, stack_args| Callee { target, reads: &[ECX], stack_args };
+    let callees = [
+        c(0x00ff_0780, 1),
+        c(0x00ff_0ad0, 2),
+        c(0x00ea_1fd0, 1),
+        c(0x3000_0064, 1),
+        c(0x3000_0068, 6),
+        c(0x3000_0030, 1),
+        c(0x00fe_d890, 1),
+    ];
+    let (cases, made) = run_cases(&vectors("unit_draw.json"), mtcore::semantic_p2c::base_model_draw_unit, false, &callees, &[0x012e_fea0]);
+    eprintln!("{cases} ABI-level unit_draw cases passed; calls {made:x?}");
+}

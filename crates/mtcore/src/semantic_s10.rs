@@ -284,9 +284,9 @@ pub fn submit_pass_records(m: &mut dyn Mem, c: &mut Cpu) {
 /// Render-state helpers of `uPlayerBase::vf25`: the model's state slots are
 /// {value, tag} pairs; changing one while the model records an undo log
 /// (bit 7 of the byte at +0x5c) first pushes the old pair on the log.
-struct StateSlots {
-    pg: Pages,
-    model: u32,
+pub(crate) struct StateSlots {
+    pub(crate) pg: Pages,
+    pub(crate) model: u32,
 }
 
 /// Dirty bits of the model's state (+0x154): 1 = a slot changed, 2 = a
@@ -298,18 +298,18 @@ const UNDO_COUNT: u32 = 0x6c;
 const UNDO_LOG: u32 = 0x30c7c;
 
 impl StateSlots {
-    fn field(&self, m: &dyn Mem, offset: u32) -> u32 {
+    pub(crate) fn field(&self, m: &dyn Mem, offset: u32) -> u32 {
         self.pg.u32(m, self.model.wrapping_add(offset))
     }
-    fn set_field(&self, m: &mut dyn Mem, offset: u32, value: u32) {
+    pub(crate) fn set_field(&self, m: &mut dyn Mem, offset: u32, value: u32) {
         self.pg.set_u32(m, self.model.wrapping_add(offset), value);
     }
-    fn mark_dirty(&self, m: &mut dyn Mem, bits: u32) {
+    pub(crate) fn mark_dirty(&self, m: &mut dyn Mem, bits: u32) {
         let dirty = self.field(m, DIRTY);
         self.set_field(m, DIRTY, dirty | bits);
     }
     /// Push {code, slot value, slot tag} on the undo log when it is on.
-    fn log_old(&self, m: &mut dyn Mem, slot: u32, code: u32) {
+    pub(crate) fn log_old(&self, m: &mut dyn Mem, slot: u32, code: u32) {
         if self.pg.u8(m, self.model.wrapping_add(0x5c)) & 0x80 == 0 {
             return;
         }
@@ -327,7 +327,7 @@ impl StateSlots {
     /// A plain value slot: when `slot` differs from `[[model + 0x20] +
     /// table_offset]` (the device's current value), log, store it with `tag`
     /// and mark everything dirty.
-    fn set_value(&self, m: &mut dyn Mem, slot: u32, table_offset: u32, code: u32, tag: u32) {
+    pub(crate) fn set_value(&self, m: &mut dyn Mem, slot: u32, table_offset: u32, code: u32, tag: u32) {
         let table = self.field(m, 0x20);
         let current = self.field(m, slot);
         let new = self.pg.u32(m, table.wrapping_add(table_offset));
@@ -341,7 +341,7 @@ impl StateSlots {
     }
     /// A resource slot: when `slot` differs from `new`, log, store it (its
     /// use generation is stamped) with the tag `resource.id | flavour`.
-    fn set_resource(&self, m: &mut dyn Mem, slot: u32, new: u32, code: u32, flavour: u32) {
+    pub(crate) fn set_resource(&self, m: &mut dyn Mem, slot: u32, new: u32, code: u32, flavour: u32) {
         if self.field(m, slot) == new {
             return;
         }
@@ -367,7 +367,7 @@ impl StateSlots {
 /// NaN quieted (the Unicorn oracle's x87 copies it unchanged, so its
 /// vectors hold no signalling NaN there).
 #[inline]
-fn x87_copy_f32(bits: u32) -> u32 {
+pub(crate) fn x87_copy_f32(bits: u32) -> u32 {
     if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
         bits | 0x0040_0000
     } else {

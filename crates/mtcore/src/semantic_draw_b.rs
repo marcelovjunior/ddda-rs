@@ -392,7 +392,7 @@ fn commit_current_call(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, dra
 
 /// 0114085E..01140938 / 01140CC1..01140D9E: copy the parameter template
 /// through the original cdecl memcpy, then toggle its third float.
-fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, enabled: bool, native: bool) {
+pub(crate) fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, enabled: bool, native: bool) {
     let flags = p.u32(m, draw + 0x5c);
     p.set_u32(m, draw + 0x5c, flags | 2);
     save_pair(m, p, draw, 0x1330, 0x227);
