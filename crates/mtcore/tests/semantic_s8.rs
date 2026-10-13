@@ -165,3 +165,12 @@ fn semantic_init_chain_matches_original() {
     let n = abi_cases_with_calls(&path, mtcore::semantic_s8::init_chain);
     eprintln!("{n} ABI-level init_chain cases passed");
 }
+
+// verifies 0x01130a00 (ABI level, cdecl; EAX = out)
+#[test]
+fn semantic_look_at_frame_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S8_LOOKAT_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/look_at_frame.json".into());
+    let n = abi_cases_with_calls(&path, mtcore::semantic_s8::look_at_frame);
+    eprintln!("{n} ABI-level look_at_frame cases passed");
+}

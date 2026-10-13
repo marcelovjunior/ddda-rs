@@ -122,7 +122,7 @@ struct Chain {
     skeleton: u32,
     nodes: u32,
     count: i32,
-    /// Which joint matrix row the chain runs along / which one is "up"
+    /// `mIKDir` / `mIKUp`: which joint matrix row the chain runs along / which one is "up"
     /// (0..2 = X, Y, Z row, 3..5 = the same negated).
     axis_selector: u32,
     up_selector: u32,
@@ -142,7 +142,7 @@ struct Chain {
 /// 0xFF) and its local rotation, translation and (scaled mode) scale.
 /// Choose the chain axis and up vector from the joint's matrix rows
 /// (`axis_selector`, `up_selector`), build the node's look-at frame from
-/// them (0x01130A00, ported inline as [`build_look_at_frame`]) at the
+/// them (0x01130A00, ported inline as [`look_at_frame`]'s core) at the
 /// point where the joint meets the previous node's axis, and store the
 /// joint's world matrix relative to that frame. Last, measure the
 /// distance between neighbouring node frames (plus a bias, times a
@@ -480,15 +480,39 @@ fn point_on_previous_axis(m: &dyn Mem, pg: Pages, node: u32, joint: u32) -> [f32
     [px + ax * along, ay * along + py, az * along + pz]
 }
 
-/// 0x01130A00, `build_look_at_frame(out, axis, up, position)` (cdecl): a
-/// rotation frame in `out` (16 floats): row 0 the normalised `axis`, row 2
-/// the normalised `axis x up`, row 1 `row2 x row0`, and the position row.
-/// When `axis x up` is shorter than epsilon only the position row is
-/// written. (The original copies the position through the x87 stack: a bit
-/// copy except that a signalling NaN comes out quiet.)
+/// 0x01130A00, `look_at_frame(out, axis, up, position) -> out` (cdecl,
+/// plain `ret`): see [`build_look_at_frame`]. The position is read after
+/// the rotation rows are written, as the original does.
 ///
 /// Translated from 0x01130a00 (DDDA.exe 2017-12-13 Steam).
-pub fn build_look_at_frame(m: &mut dyn Mem, pg: Pages, out: u32, axis: [f32; 3], up: [f32; 3], position: [f32; 4]) {
+pub fn look_at_frame(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (out, axis, up, position) = (arg(m, 0), arg(m, 1), arg(m, 2), arg(m, 3));
+    let axis = read_floats::<3>(pg, m, axis);
+    let up = read_floats::<3>(pg, m, up);
+    build_look_at_rotation(m, pg, out, axis, up);
+    let position = read_floats::<4>(pg, m, position);
+    write_floats(pg, m, out.wrapping_add(0x30), &position);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4);
+}
+
+/// A rotation frame in `out` (16 floats) and the position row: row 0 the
+/// normalised `axis`, row 2 the normalised `axis x up`, row 1
+/// `row2 x row0`, row 3 `position`. When `axis x up` is shorter than
+/// epsilon only the position row is written (the original copies it
+/// through the x87 stack: a bit copy except that a signalling NaN comes
+/// out quiet).
+fn build_look_at_frame(m: &mut dyn Mem, pg: Pages, out: u32, axis: [f32; 3], up: [f32; 3], position: [f32; 4]) {
+    build_look_at_rotation(m, pg, out, axis, up);
+    write_floats(pg, m, out.wrapping_add(0x30), &position);
+}
+
+/// Rows 0..2 of the look-at frame (nothing when `axis x up` is below
+/// epsilon).
+fn build_look_at_rotation(m: &mut dyn Mem, pg: Pages, out: u32, axis: [f32; 3], up: [f32; 3]) {
     let (a0, a1, a2) = (axis[0], axis[1], axis[2]);
     let (b0, b1, b2) = (up[0], up[1], up[2]);
     let mut cx = b2 * a1 - b1 * a2;
@@ -496,9 +520,7 @@ pub fn build_look_at_frame(m: &mut dyn Mem, pg: Pages, out: u32, axis: [f32; 3],
     let mut cz = a0 * b1 - b0 * a1;
     let squared = ((cy * cy) + (cx * cx)) + (cz * cz);
     if EPSILON > squared {
-        // degenerate: axis and up are parallel
-        write_floats(pg, m, out.wrapping_add(0x30), &position);
-        return;
+        return; // axis and up are parallel
     }
     let length = squared.sqrt();
     if !(EPSILON > length) {
@@ -514,13 +536,12 @@ pub fn build_look_at_frame(m: &mut dyn Mem, pg: Pages, out: u32, axis: [f32; 3],
         let inverse = ONE / axis_length;
         (a0 * inverse, a1 * inverse, a2 * inverse)
     };
-    let frame = [
+    let rows = [
         n0, n1, n2, 0.0,
         n2 * cy - n1 * cz, cz * n0 - n2 * cx, n1 * cx - cy * n0, 0.0,
         cx, cy, cz, 0.0,
-        position[0], position[1], position[2], position[3],
     ];
-    write_floats(pg, m, out, &frame);
+    write_floats(pg, m, out, &rows);
 }
 
 /// Store the joint's world matrix `j` relative to the node frame (the
