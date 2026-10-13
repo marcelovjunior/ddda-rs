@@ -2841,6 +2841,7 @@ name = "ddnative-base"
 version = "0.1.0"
 dependencies = [
  "ddnative-host",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -1185,3 +1185,24 @@ ownership and wgpu/driver work can still allocate. Tests, synthetic release
 measurements and the unresolved `_NLG_Return2` attribution are recorded in
 [L143 results](tasks/L143-backend-thread.md); gameplay image/FPS validation
 remains with head.
+
+## L142: experimental flat guest memory
+
+The Windows x64 `ddruntime/flat-memory` feature plus
+`DDRUNTIME_FLAT_MEMORY=1` reserves a 4 GiB guest view and a privileged alias.
+It keeps checked runtime methods and retired backing lifetimes. Optional
+`LIFT_FLAT_MEMORY=1` generation uses inlinable scalar flat accessors;
+`LIFT_FLAT_MEMORY=outline` selects the outlined experiment for opt-0 callers.
+The VEH returns only marked access faults to the original Rust slow path;
+cross-page/wrap and parallel unaligned operations retain explicit checks.
+Sparse/watch fixtures do not opt in. Existing SSE/x87 helpers retain their
+page-table path. `Mem::entry`/`access_context` separate new function-entry
+preemption from `page_table`, whose hook remains for old generated shards.
+
+This is a prototype, disabled by default. Seven focused Rust tests and
+28 emission/lean tests pass, but opt-0 has no consistent speedup. Full native
+gating, shard compile timing and head-run image/FPS/loading comparison are
+pending. Unmapped flat slots remain inaccessible permanently; remaps use
+fresh heap pages and checked fallback. See [L142](tasks/L142-flat-memory.md)
+for the precise permission, fault, concurrency and measurement limits.
+

@@ -8,9 +8,10 @@
 //! cannot return errors). Addresses wrap at 0xFFFFFFFF like the CPU's, and
 //! unaligned and page-crossing accesses are byte-exact little-endian.
 //!
-//! This is the checked, portable backing RUNTIME.md proposes to start with;
-//! a reserved host arena can replace it later behind the same interface,
-//! once measured. The guest's threads share one address space: each holds
+//! Checked heap backing is the default. On Windows x64, the `flat-memory`
+//! feature and `DDRUNTIME_FLAT_MEMORY=1` select the experimental reserved
+//! arena (docs/tasks/L142-flat-memory.md). The guest's threads share one
+//! address space: each holds
 //! its own [`GuestMemory`] handle ([`GuestMemory::share`]). The table and
 //! the pages are atomic (ddnative-base's `PageTable`), so threads may
 //! access them at the same time (crate::threads' parallel mode): every
@@ -57,11 +58,19 @@ pub struct GuestMemory {
 
 impl Default for GuestMemory {
     fn default() -> Self {
+        #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+        if std::env::var_os("DDRUNTIME_FLAT_MEMORY").is_some_and(|v| v == "1") {
+            return Self::new_flat().expect("DDRUNTIME_FLAT_MEMORY reservation");
+        }
         GuestMemory { space: std::sync::Arc::new(PageTable::default()) }
     }
 }
 
 impl GuestMemory {
+    #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+    pub fn new_flat() -> std::io::Result<Self> {
+        Ok(Self { space: std::sync::Arc::new(PageTable::new_flat()?) })
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -357,6 +366,17 @@ impl Mem for GuestMemory {
     /// fast path leaves those to store), and the table lives as long as any
     /// handle to this address space and never moves.
     fn page_table(&self) -> Option<std::ptr::NonNull<PageTable>> {
+        // Old generated shards still use page_table as their entry hook.
+        self.entry();
+        Some(std::ptr::NonNull::from(&*self.space))
+    }
+    #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+    fn flat_base(&self) -> Option<ddnative_base::mem::FlatBase> { self.space.flat_base() }
+    fn access_context(&self) -> Option<std::ptr::NonNull<PageTable>> {
+        self.entry();
+        Some(std::ptr::NonNull::from(&*self.space))
+    }
+    fn entry(&self) {
         // Every lifted function reads its page table at entry, direct
         // in-shard calls included (they bypass call_lifted): the entry is
         // the serial-mode preemption point (L57b; the title's Vorbis decoder
@@ -365,7 +385,6 @@ impl Mem for GuestMemory {
         if ddnative_host::PREEMPT.load(std::sync::atomic::Ordering::Relaxed) {
             crate::threads::preempt_entry();
         }
-        Some(std::ptr::NonNull::from(&*self.space))
     }
     // `alloc` keeps the trait's default (panic): the fixture bump allocator
     // must not become the production allocator (RUNTIME.md, "Dispatcher").

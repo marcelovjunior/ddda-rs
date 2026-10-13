@@ -8,6 +8,16 @@ publish.workspace = true
 [lib]
 test = false
 
+[features]
+flat-memory = ["dep:windows-sys"]
+
+[[example]]
+name = "flat_cost"
+required-features = ["flat-memory"]
+
+[target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
+windows-sys = { version = "0.61.2", optional = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_Memory", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }
+
 # The tests run x87 code and lifted calls: the runtime policy behind them (L74).
 [dev-dependencies]
 ddnative-host = { path = "../ddnative-host" }

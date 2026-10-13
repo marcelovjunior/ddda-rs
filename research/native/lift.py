@@ -2915,7 +2915,28 @@ def exact_compares(arm, read=None, start=None):
     return "".join(out)
 
 
+def flat_memory(source):
+    """Opt-in final lowering, after lean peepholes and function splitting.
+
+    Keep pt for emit helpers; scalar sites can use the runtime's flat view.
+    Splits acquire a view on part entry, not once per memory operation.
+    Fixtures default to None and preserve their ordinary Mem methods.
+    """
+    mode = os.environ.get("LIFT_FLAT_MEMORY")
+    if mode not in ("1", "outline"):
+        return source
+    source = source.replace('let pt = m.page_table();', 'let pt = m.access_context();')
+    source = re.sub(r'(pub fn f_[^\n]+\{\n|fn f_[^\n]+\{\n)',
+                    r'\1    let flat = m.flat_base();\n', source)
+    return re.sub(r'"(?:\\.|[^"\\])*"|\bm\.fast_(u8|u16|u32|set_u8|set_u16|set_u32)\(pt, ',
+                  lambda m: (f"m.flat_o_{m[1]}(flat, " if mode == 'outline' else f"m.flat_{m[1]}(flat, pt, ") if m[1] else m[0], source)
+
+
 def rust_fn(addr, name, arms):
+    return flat_memory(_rust_fn(addr, name, arms))
+
+
+def _rust_fn(addr, name, arms):
     header = [
         f"// Translated from 0x{addr:08X} (DDDA.exe 2017-12-13 Steam), {name}.",
         f"pub fn f_{addr:08x}(m: &mut dyn Mem, cpu: &mut Cpu) {{",

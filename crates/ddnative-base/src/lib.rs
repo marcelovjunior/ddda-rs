@@ -1,6 +1,8 @@
 //! Shared machine state and platform models for hand ports and lifted shards.
 //! This crate has no dependency on the generated code.
 pub mod mem;
+#[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+pub mod flat;
 pub mod execution;
 pub mod hooks;
 pub mod platform;
