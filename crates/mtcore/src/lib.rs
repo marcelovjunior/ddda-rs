@@ -68,4 +68,6 @@ pub mod semantic_s7_falloff;
 pub mod semantic_s8_sweep;
 pub mod semantic_s7_ftol;
 pub mod semantic_s7_stream;
+pub mod semantic_rt;
+pub mod shadow_primitive;
 pub mod tree;
