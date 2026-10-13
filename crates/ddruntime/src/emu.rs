@@ -461,7 +461,9 @@ pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         let resume = uc.get_data().resume;
         scratch_write(&mut uc, JUMP_SLOT, &resume.to_le_bytes());
         uc.get_data_mut().exit = None;
+        let load_start = crate::load_log::begin();
         let result = uc.emu_start(STUB_IN as u64, 0, 0, 0);
+        crate::load_log::timeline::emulated(load_start);
         let exit = uc.get_data().exit;
         if exit.is_none() {
             let eip = uc.reg_read(RegisterX86::EIP).unwrap_or(0);

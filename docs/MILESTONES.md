@@ -1,6 +1,21 @@
 # Milestones
 
 ### L139 combo21 combined native gate (2026-10-13)
+### L149 loading timeline (2026-10-13)
+
+- Opt-in transition summaries tie title callback/stage state IDs to per-class
+  Windows thread CPU and archive/zlib/GPU/upload deltas. Code-state and
+  producer-Present boundaries remain distinct from visible/input readiness.
+- c23 resource-load estimate, 32.181-45.474 s: inclusive zlib **6.660 s**
+  (fast decoder **4.133 s**), file-read services **0.634 s**. Next 1.661 s
+  interval: pipelines **1.207 s**, modules **0.558 s**, overlapping costs.
+- Exact top-item candidate adopted from L145, still opt-in FAST=1; no
+  measured whole-loading improvement yet. Parser keeps legacy/manual marks.
+- Logging-on light suite **212 pass / inherited gamma failure / 5 ignored**;
+  **12 parser tests pass**; no-shard frontend and emu-feature checks pass.
+  Definitions/limits: `docs/tasks/L149-load-timeline.md`. Next: head matched
+  FAST=0/1 with PORT=0, then visual/input correlation of the state markers.
+
 ### L145 outer inflate candidate (2026-10-13)
 
 - Whole original-layout `cf02e0` translation, opt-in `DDRUNTIME_ZLIB_PORT=1`:

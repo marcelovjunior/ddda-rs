@@ -1226,3 +1226,34 @@ stream/state/window and output. Includes all 144 installed ARC type classes
 (one sampled stream per class), random splits and synthetic saves. No real
 save or game launch by the agent. Reproduction, measurements, remaining
 coverage limits and head-run requests: [L145](tasks/L145-inflate.md).
+
+
+## L149 transition loading timeline
+
+`DDRUNTIME_LOAD_LOG=1` adds `event=interval` deltas at lifecycle/movie
+boundaries, title callback changes (`aTitle+0xF0`, 0x005317B0), area requests
+(0x00DB4C10), and stage mode/substate changes (0x00504330). Process origin
+includes work before Rust main. `first_gameplay_present` is the first
+producer Present after stage mode 2 is observed, following 0x0050ADC0's
+load-completion path; visible UI and player input readiness require the
+head's observation. Raw callback/mode IDs and boundary qualifications stay
+in the log. Guest state and previously selected overrides are preserved.
+
+Each interval reports Windows CPU per evidenced thread class, archive I/O,
+inclusive outer/fast/Adler/window times, ddgpu module/pipeline creation,
+image-upload copy/enqueue counts/bytes/time, emulated-engine slices, and
+1-in-256 raw service samples. Direct lifted time is explicitly unavailable;
+sampled service wall time must not be subtracted from CPU. Nested and
+cross-thread costs are nonadditive. GPU counters are read at the transition,
+not copied from the periodic logger. Native Device module/pipeline timing
+now participates in the shared counters. Raw Vulkan Context creations also contribute; DDGPU_VK totals include
+both real fallback and raw-object creation work, excluding cache hits. No extra timing is a GPU completion measurement.
+
+`scripts/load_timeline.py --at 0,9.257559,15.971918,32.181309,45.473565,47.134738 <private-log>`
+emits sample-aged historical deltas and a log hash. Existing Markdown,
+`--mark`, and legacy-clock modes are retained. L149's c23 analysis identifies
+CF2CB0 as the dominant measured resource-load cost, followed by first-frame
+pipeline creation. The adopted exact optimization is the independently
+opt-in L145 `DDRUNTIME_ZLIB_FAST=1`; outer `DDRUNTIME_ZLIB_PORT` stays off
+for the requested A/B. Full definitions, caveats, source evidence and head
+run environment: `docs/tasks/L149-load-timeline.md`.
