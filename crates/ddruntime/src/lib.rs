@@ -26,6 +26,7 @@ pub mod d3d9state;
 pub mod d3dx;
 pub mod dispatch;
 mod critical_jobs;
+mod shadow_fee320;
 #[cfg(feature = "emu")]
 pub mod emu;
 pub mod executor;
