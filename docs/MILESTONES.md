@@ -83,6 +83,11 @@
   limits: `docs/tasks/L169-shadow.md`.
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
+- Capture v3 persists explicitly rejected diagnostic fixtures and retains
+  later bounded serial evidence. Rejected inputs can never pass the proof
+  gate, even if diagnostic replay matches;12 focused replay tests pass.
+  Head rerun queued behind train5; actual equality/publication still open.
+
 - Actual cap172 reaches sample300 but rejects capture at0. First-cause
   stage/reason/seed/allocation diagnostics added;10replay tests pass.
   Next: head rerun and source-backed capture correction; no equality yet.

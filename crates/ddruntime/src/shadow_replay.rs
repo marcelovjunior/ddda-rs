@@ -68,7 +68,7 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
         ports.push((address, body));
     }
     eprintln!(
-        "parallel-shadow installed capture=v2 first={} count={} dump={:?}",
+        "parallel-shadow installed capture=v3 first={} count={} dump={:?}",
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST").unwrap_or_else(|_| "0".into()),
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_COUNT").unwrap_or_else(|_| "1".into()),
         std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP")
@@ -120,7 +120,7 @@ impl Journal<'_> {
         }
     }
     fn page(&self, address: u32) {
-        if self.failure.get().is_some() || self.input.borrow().has_page(address) {
+        if self.input.borrow().has_page(address) {
             return;
         }
         let base = address & !4095;
@@ -140,9 +140,6 @@ impl Journal<'_> {
         self.input.borrow_mut().capture_page(self.live, base, permissions);
     }
     fn seed(&self, start: u32, length: u32) {
-        if self.failure.get().is_some() {
-            return;
-        }
         let Some(end) = start.checked_add(length) else {
             self.fail(start, "range overflow");
             return;
@@ -150,8 +147,11 @@ impl Journal<'_> {
         let mut page = start & !4095;
         while page < end {
             self.page(page);
-            if self.failure.get().is_some() {
-                eprintln!("parallel-shadow seed refusal stage={} start={start:#x} length={length:#x}", self.stage.get());
+            if !self.input.borrow().has_page(page) {
+                eprintln!(
+                    "parallel-shadow seed refusal stage={} start={start:#x} length={length:#x}",
+                    self.stage.get()
+                );
                 return;
             }
             page += 4096;
@@ -163,12 +163,13 @@ impl Journal<'_> {
         }
     }
     fn observed(&self, address: u32, bytes: &[u8], write: bool) {
-        if self.failure.get().is_some() {
-            return;
-        }
         let mut writes = self.writes.borrow_mut();
         for (offset, &value) in bytes.iter().enumerate() {
             let at = address.wrapping_add(offset as u32);
+            if !self.input.borrow().has_page(at) {
+                self.fail(at, "observed byte lacks initial captured page");
+                continue;
+            }
             if write {
                 if writes.len() == lanes::MAX_TRACKED_BYTES && !writes.contains_key(&at) {
                     self.fail(at, "tracked write limit");
@@ -621,56 +622,56 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         capture_context(&journal, context, Limits::default())
     }));
-    let result = if let Some(failure) = journal.failure.get() {
-        Err(format!("incomplete/incoherent capture: {failure:#x?}"))
-    } else if let Ok(Ok(observed)) = observed {
-        let input = Arc::new(journal.input.into_inner());
-        let writes = journal.writes.into_inner();
-        if let Some(directory) = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP") {
-            let save = || -> std::io::Result<()> {
-                let directory = std::path::PathBuf::from(directory);
-                std::fs::create_dir_all(&directory)?;
-                let path = directory.join(format!("shadow-{}-{index}.ddshadow", std::process::id()));
-                let file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)?;
-                let mut file = std::io::BufWriter::new(file);
-                capture_file::Fixture {
-                    input: input.clone(),
-                    incoming: incoming.clone(),
-                    outgoing: outgoing.clone(),
-                    mxcsr,
-                    result_mxcsr,
-                    context,
-                    scheduler,
-                    stack: stack.clone(),
-                    writes: writes.clone(),
-                }
-                .write(&mut file)?;
-                std::io::Write::flush(&mut file)?;
-                eprintln!("parallel-shadow capture={}", path.display());
-                Ok(())
-            };
-            if let Err(error) = save() {
-                eprintln!("parallel-shadow capture failed: {error}");
+    let rejection = journal
+        .failure
+        .get()
+        .map(|failure| format!("incomplete/incoherent capture: {failure:#x?}"))
+        .or_else(|| {
+            if matches!(observed, Ok(Ok(_))) {
+                None
+            } else {
+                Some("serial stream capture refused".into())
             }
+        });
+    let fixture = capture_file::Fixture {
+        input: Arc::new(journal.input.into_inner()),
+        incoming,
+        outgoing,
+        mxcsr,
+        result_mxcsr,
+        context,
+        scheduler,
+        stack,
+        writes: journal.writes.into_inner(),
+        rejection,
+    };
+    if let Some(directory) = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP") {
+        let save = || -> std::io::Result<()> {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory)?;
+            let path = directory.join(format!("shadow-{}-{index}.ddshadow", std::process::id()));
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)?;
+            let mut file = std::io::BufWriter::new(file);
+            fixture.write(&mut file)?;
+            std::io::Write::flush(&mut file)?;
+            eprintln!(
+                "parallel-shadow capture={} rejected={}",
+                path.display(),
+                fixture.rejection.is_some()
+            );
+            Ok(())
+        };
+        if let Err(error) = save() {
+            eprintln!("parallel-shadow capture failed: {error}");
         }
-        compare_replays(
-            input,
-            incoming,
-            outgoing,
-            mxcsr,
-            result_mxcsr,
-            context,
-            scheduler,
-            stack,
-            observed,
-            writes,
-            RAW.get().unwrap().clone(),
-        )
+    }
+    let result = if let Some(reason) = &fixture.rejection {
+        Err(reason.clone())
     } else {
-        Err("serial stream capture refused".into())
+        replay_fixture(fixture, RAW.get().unwrap().clone())
     };
     eprintln!("parallel-shadow sample={index} audit={result:?} publish=serial");
     x86::ldmxcsr(result_mxcsr);
@@ -687,22 +688,41 @@ pub fn replay_file(path: &std::path::Path) -> Result<usize, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let fixture =
         capture_file::Fixture::read(&mut std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
-    let final_input = fixture.input.with_writes(&fixture.writes);
-    let observed = capture_context(&final_input, fixture.context, Limits::default())
-        .map_err(|e| format!("recorded stream: {e:?}"))?;
-    compare_replays(
-        fixture.input,
-        fixture.incoming,
-        fixture.outgoing,
-        fixture.mxcsr,
-        fixture.result_mxcsr,
-        fixture.context,
-        fixture.scheduler,
-        fixture.stack,
-        observed,
-        fixture.writes,
-        RAW.get().unwrap().clone(),
-    )
+    replay_fixture(fixture, RAW.get().unwrap().clone())
+}
+
+fn replay_fixture(fixture: capture_file::Fixture, raw: Arc<BTreeMap<u32, LiftFn>>) -> Result<usize, String> {
+    let rejection = fixture.rejection.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let final_input = fixture.input.with_writes(&fixture.writes);
+        let observed = capture_context(&final_input, fixture.context, Limits::default())
+            .map_err(|e| format!("recorded stream: {e:?}"))?;
+        compare_replays(
+            fixture.input,
+            fixture.incoming,
+            fixture.outgoing,
+            fixture.mxcsr,
+            fixture.result_mxcsr,
+            fixture.context,
+            fixture.scheduler,
+            fixture.stack,
+            observed,
+            fixture.writes,
+            raw,
+        )
+    }))
+    .unwrap_or_else(|payload| {
+        Err(payload.downcast_ref::<Reject>().map_or_else(
+            || "recorded input panic".into(),
+            |reason| format!("recorded input: {reason:#x?}"),
+        ))
+    });
+    match rejection {
+        Some(reason) => Err(format!(
+            "REJECTED capture ({reason}); diagnostic replay only: {result:?}"
+        )),
+        None => result,
+    }
 }
 
 fn compare_replays(
@@ -1117,6 +1137,7 @@ mod tests {
             scheduler: 0x40000,
             stack: 0x80000..0x82000,
             writes: expected.writes().clone(),
+            rejection: None,
         }
     }
 
@@ -1133,23 +1154,8 @@ mod tests {
             let mut bytes = Vec::new();
             fixture.write(&mut bytes).unwrap();
             let fixture = capture_file::Fixture::read(&mut &bytes[..]).unwrap();
-            let observed = capture_context(
-                &fixture.input.with_writes(&fixture.writes),
-                fixture.context,
-                Limits::default(),
-            )
-            .unwrap();
-            let result = compare_replays(
-                fixture.input,
-                fixture.incoming,
-                fixture.outgoing,
-                fixture.mxcsr,
-                fixture.result_mxcsr,
-                fixture.context,
-                fixture.scheduler,
-                fixture.stack,
-                observed,
-                fixture.writes,
+            let result = replay_fixture(
+                fixture,
                 Arc::new(BTreeMap::from([
                     (TRAVERSE, synthetic_traverse as LiftFn),
                     (0x400010, synthetic_job as LiftFn),
@@ -1163,6 +1169,54 @@ mod tests {
                 ),
             }
         }
+    }
+
+    #[test]
+    fn rejected_capture_cannot_be_accepted_even_when_diagnostic_replay_matches() {
+        let mut fixture = synthetic_fixture(0);
+        fixture.rejection = Some("unreadable preseed page".into());
+        let mut bytes = Vec::new();
+        fixture.write(&mut bytes).unwrap();
+        let fixture = capture_file::Fixture::read(&mut &bytes[..]).unwrap();
+        let error = replay_fixture(
+            fixture,
+            Arc::new(BTreeMap::from([
+                (TRAVERSE, synthetic_traverse as LiftFn),
+                (0x400010, synthetic_job as LiftFn),
+            ])),
+        )
+        .unwrap_err();
+        assert!(error.contains("REJECTED capture"));
+        assert!(error.contains("diagnostic replay only: Ok(4)"));
+    }
+
+    #[test]
+    fn rejected_preseed_retains_later_bounded_serial_evidence() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, 4096, READ | WRITE).unwrap();
+        live.set_u32(0x1000, 7);
+        let mut journal = Journal {
+            live: &mut live,
+            input: RefCell::new(Snapshot::default()),
+            writes: RefCell::new(BTreeMap::new()),
+            failure: Cell::new(None),
+            stage: Cell::new("preseed"),
+        };
+        journal.seed(0, 4096);
+        journal.stage.set("serial");
+        assert_eq!(journal.u32(0x1000), 7);
+        journal.set_u32(0x1000, 9);
+        assert_eq!(journal.input.borrow().u32(0x1000), 7);
+        assert_eq!(journal.live.u32(0x1000), 9);
+        assert_eq!(journal.writes.borrow().get(&0x1000), Some(&9));
+        assert_eq!(
+            journal.failure.get(),
+            Some(CaptureFailure {
+                stage: "preseed",
+                reason: "unreadable page",
+                address: 0
+            })
+        );
     }
 
     #[test]
