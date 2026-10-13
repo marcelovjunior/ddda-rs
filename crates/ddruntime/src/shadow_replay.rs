@@ -31,6 +31,7 @@ const ACCESS_LIMIT: usize = 40_000_000;
 static ORIGINAL: OnceLock<[LiftFn; 3]> = OnceLock::new();
 static RAW: OnceLock<Arc<BTreeMap<u32, LiftFn>>> = OnceLock::new();
 static SAMPLE: AtomicU64 = AtomicU64::new(0);
+static CAPTURE_START: OnceLock<std::time::Instant> = OnceLock::new();
 #[path = "shadow_replay_file.rs"]
 mod capture_file;
 thread_local! {
@@ -49,6 +50,7 @@ pub(crate) fn enabled() -> bool {
 }
 
 pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) {
+    CAPTURE_START.get_or_init(std::time::Instant::now);
     let originals = [SHADOW, TRAVERSE, SCHEDULE].map(|address| {
         ports
             .iter()
@@ -69,9 +71,10 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
         ports.push((address, body));
     }
     eprintln!(
-        "parallel-shadow installed capture=v3 first={} count={} dump={:?}",
+        "parallel-shadow installed capture=v3 first={} count={} after_ms={} dump={:?}",
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST").unwrap_or_else(|_| "0".into()),
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_COUNT").unwrap_or_else(|_| "1".into()),
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_AFTER_MS").unwrap_or_else(|_| "0".into()),
         std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP")
     );
 }
@@ -346,7 +349,14 @@ fn resolve(target: u32) -> LiftFn {
             // Import slots referenced by 0107FB57/0107FBAE (DDDA.exe
             // 2017-12-13 Steam). Read the captured binding, never assume
             // a loader token number or invoke the live service registry.
-            for (slot, service) in [(0x0139d160, private_enter as LiftFn), (0x0139d164, private_leave)] {
+            // DA7D80 calls InterlockedExchangeAdd through this captured IAT slot.
+            // PrivateMemory has no page table: the existing service uses tracked
+            // Mem reads/writes, never a raw host atomic or live service state.
+            for (slot, service) in [
+                (0x0139d160, private_enter as LiftFn),
+                (0x0139d164, private_leave),
+                (0x0139d0a8, crate::win32::interlocked_exchange_add),
+            ] {
                 if replay.memory.probe(slot, 4, false).is_ok()
                     && replay.memory.u32(slot) == target
                     && target != 0
@@ -596,6 +606,16 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         OUTSIDE.call_once(|| eprintln!("parallel-shadow traversal outside shadow scope"));
         return original(memory, cpu);
     }
+    let after_ms = std::env::var("DDRUNTIME_PARALLEL_SHADOW_AFTER_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    if CAPTURE_START
+        .get()
+        .is_some_and(|start| start.elapsed().as_millis() < u128::from(after_ms))
+    {
+        return original(memory, cpu);
+    }
     let index = SAMPLE.fetch_add(1, Relaxed);
     if index == 0 {
         eprintln!("parallel-shadow first scoped traversal");
@@ -805,6 +825,9 @@ fn compare_replays(
     observed_writes: BTreeMap<u32, u8>,
     raw: Arc<BTreeMap<u32, LiftFn>>,
 ) -> Result<usize, String> {
+    if input.u32(SCHEDULER_GLOBAL) != scheduler {
+        return Err("capture scheduler pointer disagrees with recorded memory".into());
+    }
     let abi = |c: &Cpu| [c.eax, c.ebx, c.esi, c.edi, c.ebp, c.esp];
     let scratch = stack.start..outgoing.esp;
     let verify_serial = |result: &ReplayResult| -> Result<(), String> {
@@ -831,7 +854,7 @@ fn compare_replays(
                 .unwrap_or_else(|| input.u8(*address));
             if a != b {
                 return Err(format!(
-                    "live/original serial replay memory mismatch at {address:#x}"
+                    "live/original serial replay memory mismatch at {address:#x}: live={a:#04x} replay={b:#04x}"
                 ));
             }
         }
@@ -860,6 +883,20 @@ fn compare_replays(
                 } else {
                     input
                 };
+                // DB63E0 and the primitive callbacks find their queue through
+                // 018D0B28. The outer queue is still active during this nested
+                // traversal: redirect it only inside this private transaction.
+                // DBE560/DBD8D0 access fields through +1C14C (captured below).
+                let (input, private_scheduler) = if parallel {
+                    let (copy, range) = input
+                        .private_copy(scheduler, 0x1c150)
+                        .map_err(|error| format!("private scheduler: {error:?}"))?;
+                    let base = range.start;
+                    private_ranges.push(range);
+                    (Arc::new(copy), base)
+                } else {
+                    (input, scheduler)
+                };
                 let (input, arena) = if parallel && input.u32(context + 0x54) == 0 {
                     let size = input
                         .u32(context + 0x4c)
@@ -885,21 +922,33 @@ fn compare_replays(
                         depth: 0,
                     },
                     |m| {
+                        let nesting = [m.u8(NESTING), m.u8(NESTING_OTHER)];
                         if parallel {
                             if let Some(range) = &arena {
                                 m.set_u32(context + 0x54, range.start);
                             }
                             m.set_u8(NESTING, 0);
                             m.set_u8(NESTING_OTHER, 0);
-                            m.set_u32(scheduler + 0x98, 2);
-                            m.set_u32(scheduler + 0x8c, 0);
-                            m.set_u32(scheduler + 0x1c14c, 0);
+                            m.set_u32(SCHEDULER_GLOBAL, private_scheduler);
+                            m.set_u32(private_scheduler + 0x98, 2);
+                            m.set_u32(private_scheduler + 0x8c, 0);
+                            m.set_u32(private_scheduler + 0x1c14c, 0);
                         }
                         x86::ldmxcsr(mxcsr);
                         resolve(TRAVERSE)(m, &mut cpu);
                         let final_mxcsr = x86::stmxcsr();
                         ddnative_base::x87::park();
                         x86::ldmxcsr(x86::MXCSR_DEFAULT);
+                        if parallel {
+                            if [m.u8(NESTING), m.u8(NESTING_OTHER)] != [0, 0]
+                                || m.u32(SCHEDULER_GLOBAL) != private_scheduler
+                            {
+                                return Err("private scheduler scope was not balanced".into());
+                            }
+                            m.set_u32(SCHEDULER_GLOBAL, scheduler);
+                            m.set_u8(NESTING, nesting[0]);
+                            m.set_u8(NESTING_OTHER, nesting[1]);
+                        }
                         if arena.is_some() {
                             m.set_u32(context + 0x54, 0);
                         }
@@ -954,7 +1003,7 @@ fn compare_replays(
             .unwrap_or_else(|| input.u8(*address));
         if a != b {
             return Err(format!(
-                "streams matched {} entries; serial/parallel memory mismatch at {address:#x}",
+                "streams matched {} entries; serial/parallel memory mismatch at {address:#x}: serial={a:#04x} parallel={b:#04x}",
                 observed.entries.len()
             ));
         }
@@ -1130,6 +1179,8 @@ mod tests {
         let teb = crate::seh::initialize_teb(&mut live, crate::services::MAIN_THREAD_ID, 0x1000, 0x2000);
         live.set_u32(0x0139d160, 0x7ff01230);
         live.set_u32(0x0139d164, 0x7ff04560);
+        live.set_u32(0x0139d0a8, 0x7ff07890);
+        live.set_u32(0x1300, u32::MAX - 2);
         live.set_u32(0x1104, u32::MAX);
         live.set_u32(0x1804, 0x1100);
         let mut input = Snapshot::default();
@@ -1156,6 +1207,20 @@ mod tests {
                 assert_eq!(m.u32(0x1108), recursion);
                 assert_eq!(live.u32(0x1108), 0);
             }
+            m.set_u32(0x1804, 0x1300);
+            m.set_u32(0x1808, 7);
+            let mut cpu = Cpu {
+                esp: 0x1800,
+                ebx: 42,
+                ..Cpu::default()
+            };
+            assert!((m as &mut dyn Mem).atomic_u32(0x1300).is_none());
+            x86::call_ext(m, &mut cpu, 0x7ff07890);
+            assert_eq!(cpu.eax, u32::MAX - 2);
+            assert_eq!(cpu.esp, 0x180c);
+            assert_eq!(cpu.ebx, 42);
+            assert_eq!(m.u32(0x1300), 4);
+            assert_eq!(live.u32(0x1300), u32::MAX - 2);
         });
         assert_eq!(memory.u32(0x1104), u32::MAX);
         assert_eq!(memory.u32(0x110c), 0);
@@ -1181,9 +1246,13 @@ mod tests {
                 ..Cpu::default()
             };
             private_enter(m, &mut cpu);
-            let allocated = m.u32(0x1300);
-            m.set_u32(0x1300, allocated + 16);
             cpu.esp = 0x1800;
+            m.set_u32(0x1804, 0x1300);
+            m.set_u32(0x1808, 16);
+            crate::win32::interlocked_exchange_add(m, &mut cpu);
+            let allocated = cpu.eax;
+            cpu.esp = 0x1800;
+            m.set_u32(0x1804, 0x1100);
             private_leave(m, &mut cpu);
             allocated
         })
@@ -1222,19 +1291,29 @@ mod tests {
             assert_ne!(cpu.ecx, 0x200000);
             m.set_u8(cpu.ecx + 0xd40 + LANE_BYTES, 99);
         }
-        cpu.ecx = 0x40000;
-        m.set_u32(0x4008c, 4);
-        push(m, cpu, 1);
-        push(m, cpu, 0x1234);
-        private_schedule(m, cpu);
+        if parallel {
+            cpu.ecx = m.u32(SCHEDULER_GLOBAL);
+            assert_ne!(cpu.ecx, 0x40000);
+            m.set_u32(cpu.ecx + 0x8c, 4);
+            push(m, cpu, 1);
+            push(m, cpu, 0x1234);
+            private_schedule(m, cpu);
+        } else {
+            for job in 0..4 {
+                cpu.ecx = 0x3000 + job * 16;
+                push(m, cpu, 0x7000);
+                push(m, cpu, 0x1234);
+                synthetic_job(m, cpu);
+            }
+        }
         m.set_u32(0x1048, 4);
-        // Synthetic fixture's own postcondition, not a game-state exclusion.
-        m.set_u8(NESTING, 1);
-        m.set_u8(NESTING_OTHER, 1);
         if parallel {
             match m.u32(0x1010) {
                 3 => x86::ldmxcsr(0x3f80),
                 4 => resolve(0x12345678)(m, cpu),
+                5 => m.set_u8(NESTING, 1),
+                6 => m.set_u32(SCHEDULER_GLOBAL, 0x40000),
+                7 => m.set_u32(0x2004, m.u32(SCHEDULER_GLOBAL)),
                 _ => {}
             }
         }
@@ -1292,7 +1371,7 @@ mod tests {
             }
             expected.set_u8(0x1400 + job, 1);
         }
-        for (address, value) in [(0x1048, 4), (0x4008c, 0), (0x40090, 4), (0x40094, 1)] {
+        for (address, value) in [(0x1048, 4)] {
             expected.set_u32(address, value);
         }
         let incoming = Cpu {
@@ -1326,6 +1405,9 @@ mod tests {
             (2, Some("memory mismatch")),
             (3, Some("MXCSR mismatch")),
             (4, Some("UnsupportedTarget")),
+            (5, Some("scheduler scope was not balanced")),
+            (6, Some("scheduler scope was not balanced")),
+            (7, Some("PrivateOutputEscape")),
         ] {
             let fixture = synthetic_fixture(mutation);
             let mut bytes = Vec::new();

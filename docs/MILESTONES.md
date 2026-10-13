@@ -116,9 +116,13 @@
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
 - Complete real capture:1,633 pages/13,226 write bytes. Original serial/live
-  proof passes for6 entries; parallel stops at CreateEventA. Manager inline
-  lane1 aliases the parent; private manager copy now prevents clobbering.
-  33 focused shadow tests pass; offline-example rebuild/replay next.
+  proof passes for6 entries. Private manager copy removes the event detour.
+  Confirmed DA7D80 InterlockedExchangeAdd dependency now uses tracked private
+  memory;33 focused tests pass. Offline-example rebuild/replay next.
+  Existing sample has one job at t23s; AFTER_MS=60000 selects later work.
+- Private scheduler now preserves outer queue storage; scope balance and
+  output-pointer escape checks cover its temporary arena.33 focused pass;
+  latest complete default light288 pass/0 fail/7 ignored.
 - Earlier capture identified null nested secondary sort storage.
   FED200 gives child contexts a null secondary sort arena. Replay now
   provides bounded private storage; FED3B0 output must not retain any
@@ -138,7 +142,7 @@
   uploads (29 conservative refusals). Feature-off call routing unchanged.
 - Live output remains serial. Real parallel equality, production publication
   and FPS/job-time acceptance are OPEN. No production TRAIN READY. Next:
-  head capture with new metadata preseed, then close real replay refusals.
+  close real replay refusals, then obtain representative multi-job capture.
   Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)
