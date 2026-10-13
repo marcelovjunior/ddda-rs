@@ -26,6 +26,51 @@
   next real stage capture. Details: docs/tasks/L156-inflate-fast.md.
 - Next: head FAST=1/TABLE=0 vs FAST=2/TABLE=1 with PORT=0, then repeat
   logging-off with image/control acceptance; retain separate table-only A/B.
+### L158 critical scheduler jobs (2026-10-13)
+
+- Exact E0E5E0 hash candidate: **528 original returns** match port and
+  isolated lift; **672 paired fault/access cases** pass. All **105 paired
+  CPU samples improve**, median **1.63–2.01x**. Opt-in JOB_HASH=1;
+  combined native gate and head per-job A/B remain pending.
+- Late c26s1 main-only callback leaders: DB7620 **10.679 ms/Present**,
+  4B9FF0 **5.179**, 1090F70 **3.933**. These dispatch virtual methods;
+  old worker coverage/tail duplication prevents per-join critical ranking.
+- Opt-in private-file trace correlates frame/batch, callback completion,
+  residual join, and worker signal/wait boundaries. Complete-batch parser
+  separates last job from longest job and rejects loss/truncation.
+- Four focused runtime and four parser tests pass. Light **226 pass /
+  inherited gamma failure / six ignored**. No game or speedup claim.
+- Next: head corrected census/trace capture, then exact hot-inner A/B.
+  Source map, hashes and limits: `docs/tasks/L158-critical-jobs.md`.
+### L162 original job participation and wake diagnostics (2026-10-13)
+
+- Opt-in `DDRUNTIME_JOB_PARTICIPANTS=1..8` calls original `00DBD620`
+  after construction; original CPU/eight clamp and frame activation remain.
+  No cap patch. Intended head A/B: seven vs eight participants, main included.
+- Wake analyzer reports per-batch jobs/participants, callback gaps,
+  final-job solo tails and join overlaps; **13 parser tests pass**.
+  Signaled lanes are distinct from active participation (one-job bypass).
+- Full light gate **234 reported passes / two inherited failures / seven
+  ignored**; Present timing passes its isolated retry, gamma remains.
+  Both new ABI/configuration tests pass. Actual wake latency and
+  performance/image acceptance pending. No speculative sync fix.
+- Next: head capture with L158 and this setter, exact env in
+  `docs/tasks/L162-job-wake.md`; analyze matched 7/8 joins and hashes.
+
+### L160 job worker sizing and wake analysis (2026-10-13)
+
+- Original constructor caps participation at min(CPUs,8), minus one for
+  counts >=4: 8/12/16 CPUs all select **main + six active workers**.
+  Seven foreground workers are allocated; a separate background pool has
+  up to eight. More reported CPUs cannot enable the proposed larger pool.
+- Producers mix per-participant and per-object work with dynamic claiming;
+  the scheduler does not split a long callback. Runtime already reports
+  host logical CPU count in parallel mode; ddplay requests a 1 ms timer.
+- Offline L158 signal/wait/first-job pairing: **seven tests pass**. Actual
+  wake latency remains pending head capture; aggregate wait durations are
+  not wake delays. No runtime behavior change or game/shard run.
+- Next: head L158 trace capture, cache/futex 0/0 versus 1/1, with exact
+  binary/env hashes. Details: `docs/tasks/L160-job-threads.md`.
 
 ### L153 game-thread synchronization (2026-10-13)
 
