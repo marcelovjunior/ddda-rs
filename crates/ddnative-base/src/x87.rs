@@ -346,3 +346,57 @@ impl X87 {
         Some(bits)
     }
 }
+
+impl X87 {
+    /// Typed m32/m64 real operands. Same poll, dword accesses and opcode as
+    /// memory(), without generic byte slices or their copies/conversions.
+    /// Only these exact opcode/width/direction triples can use this path.
+    #[cfg(target_arch = "x86_64")]
+    pub fn real_memory<const OP: u16, const SIZE: usize, const WRITE: bool>(
+        &mut self,
+        m: &mut dyn crate::mem::Mem,
+        addr: u32,
+    ) {
+        const {
+            assert!(
+                (SIZE == 4
+                    && ((!WRITE && matches!(OP, 0x00d9 | 0x00d8 | 0x08d8))
+                        || (WRITE && matches!(OP, 0x10d9 | 0x18d9))))
+                    || (SIZE == 8
+                        && ((!WRITE && OP == 0x00dd) || (WRITE && matches!(OP, 0x10dd | 0x18dd))))
+            );
+        }
+        let pt = m.page_table();
+        let mut data = [0u32; 2];
+        if !WRITE {
+            data[0] = m.fast_u32(pt, addr);
+            if SIZE == 8 {
+                data[1] = m.fast_u32(pt, addr.wrapping_add(4));
+            }
+        }
+        if live_id() != self.id {
+            self.acquire();
+        }
+        // SAFETY: the compile-time whitelist admits only instructions with
+        // 4/8-byte real operands; data has 8 initialized bytes. The same
+        // hardware opcode runs on the acquired guest FPU. Default asm
+        // memory/flag clobbers match execute::<OP,false>.
+        unsafe {
+            std::arch::asm!(".byte {opcode}, {modrm}",in("rax") data.as_mut_ptr(),opcode=const(OP&255),modrm=const(OP>>8));
+        }
+        if WRITE {
+            m.fast_set_u32(pt, addr, data[0]);
+            if SIZE == 8 {
+                m.fast_set_u32(pt, addr.wrapping_add(4), data[1]);
+            }
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn real_memory<const OP: u16, const SIZE: usize, const WRITE: bool>(
+        &mut self,
+        m: &mut dyn crate::mem::Mem,
+        addr: u32,
+    ) {
+        self.memory::<OP, SIZE, WRITE>(m, addr);
+    }
+}

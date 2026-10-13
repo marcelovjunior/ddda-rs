@@ -65,6 +65,30 @@
   gamma failure remains. No game loading gain established.
 - Next: head supplies c25 FAST timeline, seeds candidate recipe namespace,
   then matched N=1/2 loading/image A/B. `docs/tasks/L151-load-parallel.md`.
+- Frozen production `006dcd96`: **104 passed / zero failed / nine ignored**
+  in the expanded required-vector play gate. Store128 `7eddfd1d` and L130
+  `a2d0407e` / `0ce6de79` are GREEN. Inventory retains five existing gaps.
+- Combined L143/L141 renderer: **38 distinct GPU tests pass / three ignored**;
+  all 150 state and 200 target cases run. A 60-second cache-test timeout
+  passes its isolated retry in 53.12 s. CPU **37 pass**; runtime light
+  **202 pass / inherited gamma failure / five ignored**. L143 `e04b76ce`
+  and L141 `784f5a9c` / `83f9ad22` are GREEN for these tested contracts.
+- All 33 shards rebuilt, artifact wall span **225.51 s**, rlibs **434.81 MiB**.
+  No game/FPS/image acceptance claim. Details: `docs/tasks/L146-gate-c24.md`.
+- Separate L142 flat exactness **106 pass / zero failures / nine ignored**;
+  runtime flat-memory **five pass**. Head rejected its gameplay performance
+  (board #12797); opt-in generated output stays private.
+- Final typed x87/live CMP/TEST predicate codegen: base **39 pass**, Python
+  **33 pass**, including 13,824 state/access comparisons plus 64 fault
+  positions. Default native gates at all-shard opt0 **and** opt1 each pass
+  **107 / zero failures / nine ignored**. Default gen **730 s**; 62,511 x87
+  sites retargeted. Shard wall spans opt0 **613.43 s** (includes pauses),
+  opt1 **558.42 s**; libraries **432.52 / 356.06 MiB** respectively.
+- Synthetic x87 opt0 improves all 198 paired samples; opt1 is mixed,
+  including regressions. Live predicate measurements improve at both
+  levels. No gameplay FPS/image improvement claimed from these tests.
+- Next: head integrates the separate helper/codegen and default-generated
+  commits together and profiles gameplay, especially guest thread 0x1038.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)
