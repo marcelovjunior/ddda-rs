@@ -202,6 +202,9 @@ impl Registry {
                 crate::load_log::wrap_archive(ports, &ddnative::generated::lifted::bodies());
             }
         });
+        // L119: DDDRAW_NATIVE (a sink over the executor port)
+        #[cfg(feature = "game")]
+        crate::ndraw_native::install();
         #[cfg(feature = "game")]
         r.set_instruction_lookup(ddnative::generated::lifted::instruction);
         #[cfg(feature = "game")]
