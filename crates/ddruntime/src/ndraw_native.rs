@@ -654,7 +654,56 @@ pub struct BindingPart {
 
 /// A shader binding's state as the full apply sets it (0x00DAA8B0 with
 /// nothing applied: every sampler, texture and upload).
-fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<BindingPart>>) -> Result<Arc<BindingPart>, Refusal> {
+/// The uploads the original's apply skips after binding `previous` (L180,
+/// 0x00DAA8B0): for the stages with the same shaders, those whose value
+/// slot holds the same pointer as the previous binding's take their
+/// registers from `source`, what the device holds, not from memory.
+struct Held<'a> {
+    previous: u32,
+    stages: [bool; 2],
+    source: [&'a Constants; 2],
+}
+
+/// Upload `u` (value `v`) held: its registers from `source`, marked written.
+fn hold_upload(bank: &mut Constants, w: &mut ([u64; 4], u16, u16), u: &Upload, v: u32, source: &Constants) {
+    let float = |bank: &mut Constants, w: &mut ([u64; 4], u16, u16), n: u32| {
+        let r = source.f.get(n as usize).copied().unwrap_or([0; 4]);
+        set_float(bank, w, n, r);
+    };
+    match u.section {
+        3 => {
+            if u.count != 0 {
+                float(bank, w, u.register);
+            }
+        }
+        0 => {
+            let count = if v & 15 != 0 { u.count.min((v & 15) * 16) } else { u.count };
+            for i in 0..count {
+                float(bank, w, u.register + i);
+            }
+        }
+        1 => {
+            for i in 0..u.count {
+                let n = u.register + i;
+                if n < 16 {
+                    bank.i[n as usize] = source.i[n as usize];
+                    w.1 |= 1 << n;
+                }
+            }
+        }
+        _ => {
+            for i in 0..u.count {
+                let n = u.register + i;
+                if n < 16 {
+                    bank.b[n as usize] = source.b[n as usize];
+                    w.2 |= 1 << n;
+                }
+            }
+        }
+    }
+}
+
+fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<BindingPart>>, held: Option<&Held>) -> Result<Arc<BindingPart>, Refusal> {
     let flags = g.u32(binding);
     let alpha = if flags & 0x18_0000 == 0x18_0000 {
         let comparison = flags >> 3 & 255;
@@ -693,6 +742,12 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         let w = &mut written[stage];
         for u in &meta.uploads[stage] {
             let v = value(u.value);
+            if let Some(h) = held.filter(|h| h.stages[stage]) {
+                if g.u32(h.previous.wrapping_add(12 + 4 * u.value)) == v {
+                    hold_upload(bank, w, u, v, h.source[stage]);
+                    continue;
+                }
+            }
             match u.section {
                 3 => {
                     if u.count == 0 {
@@ -1587,6 +1642,39 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     let (b, constants, filled, rebuilt) = match (&last, &held_constants) {
         (Some(l), Some(held)) if previous == shader => (l.part.clone(), held.clone(), true, false),
         _ => {
+            // the uploads the apply skips read what the device holds: the
+            // previous draw's constants when they have every such register,
+            // else the device's (L180)
+            let mut skipped = [([0u64; 4], 0u16, 0u16); 2];
+            let mut stages = [false; 2];
+            if previous != 0 && previous != shader {
+                if let Ok(meta) = c.meta(&g, g.u32(shader.wrapping_add(8))) {
+                    let same_vs = shaders[0] == meta.handles[0];
+                    stages = [same_vs, same_vs && shaders[1] == meta.handles[1]];
+                    skipped = skipped_registers(&g, &meta, shader, previous, shaders);
+                }
+            }
+            let any = skipped.iter().any(|s| *s != ([0; 4], 0, 0));
+            let covered = held_constants.as_ref().is_some_and(|h| {
+                (0..2).all(|stage| (0..256).all(|n| skipped[stage].0[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len()))
+            });
+            let device_banks = if any && !covered {
+                Some(
+                    objects(|o| match o.live.get(&info.device).map(|x| &x.kind) {
+                        Some(Kind::Device(d)) => Some([(*d.state.vs).clone(), (*d.state.ps).clone()]),
+                        _ => None,
+                    })
+                    .ok_or(Refusal::Device)?,
+                )
+            } else {
+                None
+            };
+            let held = match (any, &device_banks, &held_constants) {
+                (false, _, _) => None,
+                (true, Some(d), _) => Some(Held { previous, stages, source: [&d[0], &d[1]] }),
+                (true, None, Some(h)) => Some(Held { previous, stages, source: [&*h[0], &*h[1]] }),
+                (true, None, None) => None,
+            };
             let b = match c.bindings.get(&shader) {
                 Some((frame, r)) if *frame == c.frame && r.is_err() => r.clone()?,
                 other => {
@@ -1594,18 +1682,14 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
                         Some((_, Ok(p))) => Some(p.clone()),
                         _ => None,
                     };
-                    let r = binding_part(&g, c, shader, earlier.as_ref());
+                    let r = binding_part(&g, c, shader, earlier.as_ref(), held.as_ref());
                     c.bindings.insert(shader, (c.frame, r.clone()));
                     r?
                 }
             };
-            let skipped = if previous == shader {
-                // the context holds it, the sink has no constants of it:
-                // everything it writes is what the device holds
-                b.written
-            } else {
-                skipped_registers(&g, &b.meta, shader, previous, shaders)
-            };
+            // the context holds it and the sink has no constants of it:
+            // everything it writes is what the device holds
+            let skipped = if previous == shader { b.written } else { [([0; 4], 0, 0); 2] };
             let (b, constants) = held_registers(b, skipped, held_constants.as_ref(), info.device)?;
             (b, constants, false, true)
         }
@@ -2659,10 +2743,10 @@ mod tests {
         let mut c = Caches::default();
         c.metas.insert(0x2000, b.meta.clone());
         let g = G::new(&m);
-        let first = binding_part(&g, &mut c, 0x1000, None).ok().unwrap();
-        let moved = binding_part(&g, &mut c, 0x3000, None).ok().unwrap();
+        let first = binding_part(&g, &mut c, 0x1000, None, None).ok().unwrap();
+        let moved = binding_part(&g, &mut c, 0x3000, None, None).ok().unwrap();
         assert!(Arc::ptr_eq(&first, &moved));
-        let other = binding_part(&g, &mut c, 0x5000, None).ok().unwrap();
+        let other = binding_part(&g, &mut c, 0x5000, None, None).ok().unwrap();
         assert!(!Arc::ptr_eq(&first, &other));
         assert_eq!(other.alpha, Some((3, 7)));
     }
@@ -2963,7 +3047,7 @@ mod tests {
         meta.reads[0].floats[0] = 0xFF;
         let mut c = Caches::default();
         c.metas.insert(0x2000, b.meta.clone());
-        let part = binding_part(&G::new(&m), &mut c, 0x1000, None).ok().expect("not refused");
+        let part = binding_part(&G::new(&m), &mut c, 0x1000, None, None).ok().expect("not refused");
         assert_eq!(part.uncovered, [[0xFF, 0, 0, 0], [0; 4]]);
         // pending: an older binding writing c0..c7 (seed 1), a newer one c0..c5 (seed 2)
         let mut uploads = Uploads::default();
@@ -3164,7 +3248,7 @@ mod tests {
             c.banks[1].f.reserve(224);
             let storage = c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity()));
             for _ in 0..3 {
-                assert!(matches!(binding_part(&G::new(&m), &mut c, 0x1000, None), Err(e) if e == expected));
+                assert!(matches!(binding_part(&G::new(&m), &mut c, 0x1000, None, None), Err(e) if e == expected));
                 assert_eq!(c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity())), storage);
             }
         }
