@@ -63,8 +63,10 @@ pub enum Kind {
     Surface { device: u32, desc: SurfaceDesc, container: u32, owner: u32, image: crate::d3d9res::Image },
     Texture { device: u32, data: Box<crate::d3d9res::TextureData> },
     Buffer { device: u32, data: Box<crate::d3d9res::BufferData> },
-    /// IDirect3DQuery9: D3DQUERYTYPE, how far it is issued, the sampled value
-    Query { device: u32, ty: u32, state: QueryState, value: u64 },
+    /// IDirect3DQuery9: its type, how far it is issued and the sampled
+    /// value, shared with the runtime's query map (GetData reads them
+    /// without the D3D lock, L144)
+    Query { device: u32, cell: std::sync::Arc<QueryCell> },
     /// ID3DXConstantTable (D3DX9_43; crate::d3dx)
     ConstantTable { data: Box<crate::d3dx::Table> },
 }
@@ -76,6 +78,49 @@ pub enum QueryState {
     Created,
     Building,
     Ended,
+}
+
+/// A query's state: written by Issue (holding the D3D lock), read by
+/// GetData without it (L144: the main thread polls its frame-latency event
+/// queries, 0x01148290, and waited on the D3D lock while the render thread
+/// drew). The value is written before the state (Release), and read after
+/// it (Acquire).
+#[derive(Debug)]
+pub struct QueryCell {
+    pub ty: u32,
+    state: std::sync::atomic::AtomicU8,
+    value: std::sync::atomic::AtomicU64,
+}
+
+impl QueryCell {
+    pub fn new(ty: u32) -> QueryCell {
+        QueryCell { ty, state: std::sync::atomic::AtomicU8::new(0), value: std::sync::atomic::AtomicU64::new(0) }
+    }
+
+    pub fn state(&self) -> QueryState {
+        match self.state.load(std::sync::atomic::Ordering::Acquire) {
+            0 => QueryState::Created,
+            1 => QueryState::Building,
+            _ => QueryState::Ended,
+        }
+    }
+
+    pub fn set_state(&self, s: QueryState) {
+        let v = match s {
+            QueryState::Created => 0,
+            QueryState::Building => 1,
+            QueryState::Ended => 2,
+        };
+        self.state.store(v, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn value(&self) -> u64 {
+        self.value.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn set_value(&self, v: u64) {
+        self.value.store(v, std::sync::atomic::Ordering::Release);
+    }
 }
 
 #[derive(Debug)]
@@ -317,6 +362,9 @@ pub(crate) fn release_of(object: u32) -> u32 {
         } else { (x.refs, None) }
     });
     if let Some(x) = gone {
+        if matches!(x.kind, Kind::Query { .. }) {
+            crate::runtime::with(|rt| rt.queries.lock().unwrap_or_else(|e| e.into_inner()).remove(&object));
+        }
         // a DeviceState method (dispatch) runs with the guest's x87 state
         // in the FPU; host code may run from here on
         ddnative_base::x87::park();
@@ -1200,6 +1248,7 @@ const STATE_SLOTS: &[u32] = &[
 /// at run time.
 pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) -> Result<(), Conflict> {
     objects(|o| *o = Objects::default());
+    crate::runtime::with(|rt| rt.queries.lock().unwrap_or_else(|e| e.into_inner()).clear());
     for spec in INTERFACES.iter().chain(crate::d3dx::INTERFACES) {
         let v = interfaces::vtable(m, registry, tokens, spec)?;
         // L93: every D3D method holds the D3D lock; the hot device methods
@@ -1216,6 +1265,9 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
                 || spec.name == "IDirect3DSwapChain9" && slot == 3;
             let b = if spec.name == "IDirect3DDevice9" && STATE_SLOTS.contains(&slot) {
                 crate::dispatch::Binding::DeviceState(f)
+            } else if spec.name == "IDirect3DQuery9" && slot == 7 {
+                // GetData: the query's cell and the backend's own lock (L144)
+                crate::dispatch::Binding::LockFree(f)
             } else {
                 crate::dispatch::Binding::Device(f, !only_d3d)
             };
