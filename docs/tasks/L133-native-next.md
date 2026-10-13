@@ -133,28 +133,30 @@ three ignored**, across 28 test/doc-test binaries. No shard build or game run.
 
 ### Vulkan interop benchmark
 
-Prototype CPU check/build pass. **14 optimized Vulkan benchmark cases pass**,
-including **eight full-image comparisons** (1,024 RGBA bytes each, with
+Prototype CPU check/build pass. **Two 14-case optimized Vulkan gates pass**,
+each including **eight full-image comparisons** (1,024 RGBA bytes each, with
 rasterized pixels required). The eight shared-resource cases cover one
 draw, 43 draws / seven passes, and three repeats each of 5,000 draws / one
 pass and 900 draws / 900 passes. Each shared-resource frame is followed
 by ordinary wgpu readback. HEAVY_BIG, unpaused status checked before each
 case, 60 s hard timeout per process. Private log:
-`C:/ddda-targets/L133-gpu.log`.
+`C:/ddda-targets/L133-gpu.log`; final confirmation:
+`C:/ddda-targets/L133-gpu-confirmation.log`.
 
-Exploratory medians of three 20-frame repeats (three warmup frames each),
+Final medians of three 20-frame repeats (three warmup frames each),
 RTX 4060 / Vulkan / driver 610.62 / optimized play profile:
 
 | CPU measure | raw ash | ash + wgpu resources/submit | wgpu |
 |---|---:|---:|---:|
-| 5,000 draws, one pass (us/draw) | 0.326 | 0.354 | 1.129 |
-| 900 one-draw passes (us/pass) | 1.508 | 1.318 | 11.551 |
+| 5,000 draws, one pass (us/draw) | 0.315 | 0.333 | 0.966 |
+| 900 one-draw passes (us/pass) | 1.435 | 1.321 | 8.549 |
 
-Interop ranges: 0.340–0.380 us/draw and 1.303–2.048 us/pass. Raw ranges:
-0.325–0.391 and 1.481–1.509; wgpu ranges: 1.119–1.496 and 9.636–12.309.
-Shared-host scheduling is noisy and head's next game-window notice arrived
-near the end; treat these as exploratory shared-host ranges, not a stable
-production floor.
+Interop ranges: 0.331–0.341 us/draw and 1.274–1.400 us/pass. Raw ranges:
+0.315–0.325 and 1.401–1.532; wgpu ranges: 0.948–1.030 and 8.299–8.723.
+The confirmation started with all heavy slots free and no head game pause,
+then held the required GPU slot; both orders alternated over three repeats.
+It supersedes the noisier exploratory medians (0.354 interop / 1.129 wgpu).
+This remains a shared host, not a controlled production benchmark.
 The bridged path is feasible without raw queue submission, but these are
 prefilled-uniform backend floors, not the resident native workload or FPS.
 
