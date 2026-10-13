@@ -75,11 +75,25 @@ pub(crate) struct Layout {
     pub groups: [Arc<Object<v::BindGroupLayout>>; 3],
 }
 pub(crate) struct Pipeline {
-    pub raw: Object<v::RenderPipeline>,
+    pub raw: Arc<Object<v::RenderPipeline>>,
     pub layout: Arc<Layout>,
     pub uniforms: Arc<Group>,
     pub vertex_layouts: Vec<(u64, wgpu::VertexStepMode, u64)>,
     pub samples: u32,
+}
+/// Pipeline lifetime is independent of a recorder's uniform arena. Native
+/// device caches retain this template across guest resource releases.
+#[derive(Clone)]
+pub(crate) struct PipelineTemplate {
+    raw: Arc<Object<v::RenderPipeline>>,
+    layout: Arc<Layout>,
+    vertex_layouts: Vec<(u64, wgpu::VertexStepMode, u64)>,
+    samples: u32,
+}
+impl Pipeline {
+    pub fn template(&self) -> PipelineTemplate {
+        PipelineTemplate { raw:self.raw.clone(),layout:self.layout.clone(),vertex_layouts:self.vertex_layouts.clone(),samples:self.samples }
+    }
 }
 pub(crate) struct Group {
     pub raw: Object<v::BindGroup>,
@@ -95,7 +109,7 @@ pub(crate) struct Context {
     modules: FxMap<ModuleKey, Arc<Object<v::ShaderModule>>>,
     pipelines: FxMap<PipelineKey, Arc<Pipeline>>,
     layouts: FxMap<(SamplerKinds, SamplerKinds), Arc<Layout>>,
-    samplers: FxMap<wgpu::Sampler, Arc<Object<v::Sampler>>>,
+    pub samplers: FxMap<wgpu::Sampler, Arc<Object<v::Sampler>>>,
     pub groups: FxMap<wgpu::BindGroup, Arc<Group>>,
     pub views: FxMap<wgpu::TextureView, Arc<View>>,
     uniform_layout: Arc<Object<v::BindGroupLayout>>,
@@ -104,6 +118,10 @@ pub(crate) struct Context {
 }
 
 impl Context {
+    pub fn instantiate(&self, template: &PipelineTemplate) -> Arc<Pipeline> {
+        Arc::new(Pipeline { raw:template.raw.clone(),layout:template.layout.clone(),
+            vertex_layouts:template.vertex_layouts.clone(),samples:template.samples,uniforms:self.uniforms.clone() })
+    }
     pub fn new(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Self, String> {
         unsafe {
             let hal = device.as_hal::<Vulkan>().ok_or("not Vulkan")?;
@@ -287,6 +305,21 @@ impl Context {
         if let Some(p) = self.pipelines.get(key) {
             return Ok(p.clone());
         }
+        let pipeline = self.pipeline_state(key, ps, vs, wgpu::FrontFace::Cw, false, key.sample_mask as u64)?;
+        self.pipelines.insert(key.clone(), pipeline.clone());
+        Ok(pipeline)
+    }
+
+    /// Native callers cache by their own complete immutable state handles.
+    pub fn pipeline_state(
+        &mut self,
+        key: &PipelineKey,
+        ps: &SamplerKinds,
+        vs: &SamplerKinds,
+        front_face: wgpu::FrontFace,
+        alpha_to_coverage_enabled: bool,
+        sample_mask: u64,
+    ) -> Result<Arc<Pipeline>, String> {
         let layout = self.layout(ps, vs)?;
         let vertex = self.modules.get(&key.vs).ok_or("missing vertex module")?;
         let fragment = self.modules.get(&key.ps).ok_or("missing pixel module")?;
@@ -334,7 +367,7 @@ impl Context {
                     primitive: wgpu::PrimitiveState {
                         topology: key.topology,
                         strip_index_format: key.strip_index,
-                        front_face: wgpu::FrontFace::Cw,
+                        front_face,
                         cull_mode: key.cull,
                         polygon_mode: key.polygon_mode,
                         ..Default::default()
@@ -342,8 +375,8 @@ impl Context {
                     depth_stencil: key.depth.clone(),
                     multisample: wgpu::MultisampleState {
                         count: key.samples,
-                        mask: key.sample_mask as u64,
-                        alpha_to_coverage_enabled: false,
+                        mask: sample_mask,
+                        alpha_to_coverage_enabled,
                     },
                     fragment_stage: Some(stage(&***fragment)),
                     color_targets: &key.targets,
@@ -364,13 +397,12 @@ impl Context {
                 })
                 .collect();
             let pipeline = Arc::new(Pipeline {
-                raw: Object::new(&self.device, raw),
+                raw: Arc::new(Object::new(&self.device, raw)),
                 layout,
                 uniforms: self.uniforms.clone(),
                 vertex_layouts,
                 samples: key.samples,
             });
-            self.pipelines.insert(key.clone(), pipeline.clone());
             Ok(pipeline)
         }
     }

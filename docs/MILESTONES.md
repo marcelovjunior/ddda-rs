@@ -65,6 +65,21 @@
   gamma failure remains. No game loading gain established.
 - Next: head supplies c25 FAST timeline, seeds candidate recipe namespace,
   then matched N=1/2 loading/image A/B. `docs/tasks/L151-load-parallel.md`.
+### L152 native-job raw Vulkan bridge (2026-10-13)
+
+- `DDGPU_VK=1` routes accepted native jobs through raw pass/draw caches;
+  device-owned pipelines survive resource resets. Public native API stays
+  the wgpu oracle; fallback, comparison and submission ordering remain.
+- Dirty constant scatter and rendering share one ordered queue batch/job;
+  identical resident snapshots skip the dirty-register scan.
+- **27 CPU + 53 GPU cases pass**, zero GPU failures/timeouts; 96-job replay
+  is byte-exact. Runtime light **212 pass / inherited gamma failure / 5 ignored**.
+- Minimal-shader native wgpu/raw medians: changing 5,000-draw jobs
+  **1.249/1.197 us per draw**; 64-draw jobs **2.495/2.505**; other fixtures
+  regress. Split/combined submission timings are also mixed despite one
+  queue batch/job. Remains opt-in, no native-game FPS claim.
+- Next: head native VK=0/1 image/FPS/profile and VK=1 compare (zero mismatches).
+  Evidence and submission timings: `docs/tasks/L152-native-vk.md`.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)

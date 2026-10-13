@@ -537,6 +537,21 @@ impl Finisher {
         self.send.as_ref().unwrap().send(encoders).expect("the finisher thread stopped");
     }
 
+    /// The batches handed over so far: the ticket of the last one.
+    fn ticket(&self) -> u64 {
+        self.sent.get()
+    }
+
+    /// Wait until batch `ticket` (and every earlier one) is submitted.
+    fn wait_until(&self, ticket: u64) {
+        let (m, c) = &*self.done;
+        let mut submitted = m.lock().unwrap();
+        while submitted.0 < ticket.min(self.sent.get()) && !submitted.1 {
+            submitted = c.wait(submitted).unwrap();
+        }
+        assert!(!submitted.1, "the finisher thread failed during encoding/submission");
+    }
+
     fn wait(&self) {
         let (m, c) = &*self.done;
         let mut submitted = m.lock().unwrap();
@@ -879,6 +894,19 @@ impl WgpuBackend {
         if let Some(f) = &self.finisher {
             f.wait();
         }
+    }
+
+    /// Wait until finisher batch `ticket` is submitted (L141).
+    pub(crate) fn wait_finisher_until(&self, ticket: u64) {
+        if let Some(f) = &self.finisher {
+            f.wait_until(ticket);
+        }
+    }
+
+    /// The finisher's last batch ticket (0 without a finisher: submitted
+    /// as made).
+    pub(crate) fn finisher_ticket(&self) -> u64 {
+        self.finisher.as_ref().map_or(0, |f| f.ticket())
     }
 
     /// L124: finish and submit draw batches on a second thread (ddplay turns
@@ -2475,6 +2503,7 @@ impl WgpuBackend {
                     native_depth: depth.as_ref().and_then(|(v,_)| self.vk.as_ref().unwrap().views.get(v).cloned()),
                     colors: colour[..max_out].iter().map(|c| c.as_ref().map(|(v,_)| v.clone())).collect(),
                     depth: depth.clone(), extent, draws: vec![], initialize: false, initialized: self.vk.as_ref().unwrap().initialized.clone(),
+                    clear_colour: None, clear_depth: None, clear_stencil: None,
                 });
                 self.passes_begun.set(self.passes_begun.get()+1);
             }
@@ -2486,7 +2515,7 @@ impl WgpuBackend {
                 viewport: [v[0] as f32,v[1] as f32,v[2] as f32,v[3] as f32,f32::from_bits(v[4]),f32::from_bits(v[5])],
                 scissor: scissor.then(|| { let s=d.scissor; [s[0].max(0) as u32,s[1].max(0) as u32,(s[2]-s[0]).max(0) as u32,(s[3]-s[1]).max(0) as u32] }),
                 stencil: state(57), blend: clear_colour(state(193),wgpu::TextureFormat::Rgba32Float), first,count,
-                base: if fan {0} else {d.base_vertex}, instances,
+                base: if fan {0} else {d.base_vertex}, instances, first_instance: 0,
             });
             self.encode_profile.end(15, timing);
             self.draws_recorded.set(self.draws_recorded.get()+1);

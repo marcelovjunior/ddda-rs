@@ -760,17 +760,21 @@ impl Shadow {
             },
             None => true,
         });
-        // the last write of each word, where it changes the word
-        let mut last: Vec<(u32, u32)> = Vec::new();
-        for &(a, v) in &self.ctx {
-            match last.iter_mut().find(|w| w.0 == a) {
+        // the last write of each word, where it changes the word (in place:
+        // the first occurrence of a word takes its last value)
+        let mut kept = 0;
+        for i in 0..self.ctx.len() {
+            let (a, v) = self.ctx[i];
+            match self.ctx[..kept].iter_mut().find(|w| w.0 == a) {
                 Some(w) => w.1 = v,
-                None => last.push((a, v)),
+                None => {
+                    self.ctx[kept] = (a, v);
+                    kept += 1;
+                }
             }
         }
-        last.retain(|&(a, v)| g.u32(a) != v);
-        self.ctx.clear();
-        self.ctx.extend(last);
+        self.ctx.truncate(kept);
+        self.ctx.retain(|&(a, v)| g.u32(a) != v);
     }
 }
 

@@ -366,6 +366,8 @@ pub struct NativeJobStats {
     pub draws: u64,
     pub passes: u64,
     pub upload_bytes: u64,
+    /// Ordered queue batches handed to the finisher (not GPU completion).
+    pub submit_batches: u64,
     pub dirty_registers: u64,
     pub bundle_builds: u64,
     pub bundle_hits: u64,
@@ -469,9 +471,9 @@ impl WgpuBackend {
                 .unwrap_or_default();
             // These are worker outcomes, unlike the producer's enqueue totals.
             // Submitted does not mean GPU-complete or image-verified.
-            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} worker_instances={} resource_resets={} pipelines={pipelines} texture_sets={texture_sets}",
+            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} worker_instances={} resource_resets={} pipelines={pipelines} texture_sets={texture_sets} submit_batches={}",
                 s.accepted, s.rejected, s.rejected_draws, s.rejected_passes, s.draws, s.passes, s.upload_bytes,
-                s.dirty_registers, s.bundle_builds, s.bundle_hits, s.worker_instances, s.resource_resets);
+                s.dirty_registers, s.bundle_builds, s.bundle_hits, s.worker_instances, s.resource_resets, s.submit_batches);
             if !s.rejection_reasons.is_empty() {
                 eprintln!("native-worker refusal histogram: {:?}", s.rejection_reasons);
             }
@@ -601,8 +603,11 @@ impl Worker {
                 .ok_or("native target unavailable")?
         };
         let handle = *self.views.entry(view.clone()).or_insert_with(|| {
-            self.device
-                .retain_view(view, format, [target.width, target.height], 1)
+            let texture = view.texture();
+            let level = if shadow.is_none() && target.texture.is_some() { target.level % texture.mip_level_count() } else { 0 };
+            let layer = if shadow.is_none() && target.texture.is_some() && texture.depth_or_array_layers() > 1 { target.level / texture.mip_level_count() } else { 0 };
+            let desc = wgpu::TextureViewDescriptor { format:Some(format), dimension:Some(wgpu::TextureViewDimension::D2), base_mip_level:level, mip_level_count:Some(1), base_array_layer:layer, array_layer_count:Some(1), ..Default::default() };
+            self.device.retain_view(view, format, [target.width, target.height], 1, desc)
         });
         if shadow.is_none() {
             self.targets.insert((target.surface, srgb), (handle, format));
@@ -878,7 +883,7 @@ impl Worker {
                 } else {
                     gpu_format
                 };
-                let view = source.create_view(&wgpu::TextureViewDescriptor {
+                let desc = wgpu::TextureViewDescriptor {
                     format: Some(format),
                     dimension: Some(match expected {
                         TexKind::Flat => wgpu::TextureViewDimension::D2,
@@ -886,8 +891,9 @@ impl Worker {
                         TexKind::Volume => wgpu::TextureViewDimension::D3,
                     }),
                     ..Default::default()
-                });
-                let view = self.device.retain_view(view, format, [t.width, t.height], 1);
+                };
+                let view = source.create_view(&desc);
+                let view = self.device.retain_view(view, format, [t.width, t.height], 1, desc);
                 self.sampled.insert(key, view);
                 view
             };
@@ -895,7 +901,8 @@ impl Worker {
                 s
             } else {
                 let gpu = backend.sampler(&t.states)?;
-                let s = self.device.retain_sampler(gpu, f32::from_bits(t.states[8]));
+                let raw = backend.vk.as_ref().and_then(|vk| vk.samplers.get(&gpu)).cloned();
+                let s = self.device.retain_sampler(gpu, f32::from_bits(t.states[8]), raw);
                 self.samplers.insert(t.states, s);
                 s
             };
@@ -1225,9 +1232,14 @@ impl Worker {
             recorder.end_pass();
         }
         // L124 finisher owns the expensive encoder finish. Queue writes may
-        // only follow submission of the previous arena users. No GPU wait.
-        backend.wait_finisher();
-        let (scatter, encoder) = recorder.finish_parts();
+        // only follow submission of the batches that read what they write:
+        // with resident constants that is only the batch that last used the
+        // next scatter source (L141); otherwise every earlier batch.
+        match recorder.upload_gate() {
+            Some(ticket) => backend.wait_finisher_until(ticket),
+            None => backend.wait_finisher(),
+        }
+        let (scatter, mut chunks) = recorder.finish_chunks();
         let after = recorder.stats;
         self.recording = Some(recorder.into_state());
         backend.native_stats.upload_bytes += after.upload_bytes - before.upload_bytes;
@@ -1235,16 +1247,24 @@ impl Worker {
         backend.native_stats.bundle_builds += after.bundle_builds - before.bundle_builds;
         backend.native_stats.bundle_hits += after.bundle_hits - before.bundle_hits;
         if let Some(scatter) = scatter {
-            backend.queue.submit([scatter]);
-            backend.submissions.set(backend.submissions.get() + 1);
+            // The ordered finisher submits the scatter and its consumers in
+            // one batch. This removes a queue submit per dirty job without
+            // changing the wait-before-write or scatter-before-draw boundary.
+            chunks.insert(0, crate::vk::Chunk::Buffer(scatter));
         }
-        if let Some(encoder) = encoder {
+        if !chunks.is_empty() {
+            backend.native_stats.submit_batches += 1;
             if let Some(finisher) = &backend.finisher {
-                finisher.submit(encoder);
+                finisher.submit_batch(chunks);
             } else {
-                backend.queue.submit([encoder.finish()]);
+                crate::vk::submit(&backend.queue, chunks.into_iter().flat_map(crate::vk::finish).collect());
             }
             backend.submissions.set(backend.submissions.get() + 1);
+        }
+        // the scatter source this job wrote is free once its batch is in
+        let ticket = backend.finisher_ticket();
+        if let Some(state) = self.recording.as_mut() {
+            state.tag_upload(ticket);
         }
         Ok(())
     }

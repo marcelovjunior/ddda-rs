@@ -1321,3 +1321,27 @@ N=1/2/4 exact two-target images during and after warmup. Full light suite has
 inherited gamma and load-sensitive timing failures (timing passes alone).
 No original-game comparison or loading gain established; c25 timeline awaited.
 See [L151 evidence, controls and receipts](tasks/L151-load-parallel.md).
+## L152 native-job Vulkan bridge (2026-10-13)
+
+`DDGPU_VK=1` also selects the raw encoder for accepted `NativeJob`s.
+Native validation and compact constant snapshots feed the same `vk::Pass`
+and `Draw` representation as the D3D9 raw path. Device-owned raw pipeline
+templates survive guest resource releases without retaining old uniform
+arenas/textures; per-recorder bindings and submitted-pass keepalives retain
+resources through completion. First-use/unsupported raw passes fall back
+to wgpu-native encoding. The public `native::Device::from_backend` API
+stays the wgpu oracle, including bundles.
+
+Native scatter uploads and rendering now share one ordered queue batch,
+with prior-finisher submission still required before queue writes. The
+`native-worker` `submit_batches` counter counts these handoffs, not GPU
+completion. L150's late pending-upload flush must remain before the native
+wait/upload boundary when integrating that lane. Unchanged complete
+resident snapshots skip the dirty scan; changed snapshots keep the original
+scalar record order. Native constants still use resident scatter/staging.
+
+27 CPU and 53 GPU cases pass, including raw/wgpu images, D3D9-driver cases,
+comparison jobs, rejection recovery and resource release. Synthetic raw
+versus wgpu-native speed is mixed; no native gameplay/FPS acceptance yet.
+Full counts, hashes, timings and head's requested game A/B are in
+[tasks/L152-native-vk.md](tasks/L152-native-vk.md).
