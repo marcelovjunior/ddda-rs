@@ -99,6 +99,16 @@ class WakeTests(unittest.TestCase):
             records[0][1]["participants"] = count
             self.assertFalse(analyze(records)["batches"])
 
+    def test_batch_summary_counts_jobs_without_claiming_parallel_speedup(self):
+        result = analyze(fixture())["batch_summary"]
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["queued_histogram"], {1: 1})
+        self.assertEqual(result["participants_histogram"], {"None": 1})
+        self.assertEqual(result["batches_with_at_least_eight_jobs"], 0)
+        self.assertEqual(result["batches_with_jobs_at_least_participants"], 0)
+        self.assertEqual(result["last_job_solo_tail"]["p50_ns"], 20)
+        self.assertEqual(result["callback_gaps"]["p50_ns"], 50)
+
     def test_bad_join_does_not_generate_tail_attribution(self):
         records = fixture()
         records.append(("Join", dict(id=2, start=155, end=195, result=258)))

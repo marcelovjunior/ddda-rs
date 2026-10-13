@@ -169,6 +169,21 @@ def analyze(records, min_frame=0):
     metrics = ("signal_to_wait_ns", "signal_service_ns", "signal_return_to_wait_ns",
                "wait_to_first_job_ns", "signal_to_first_job_ns")
     return {"pairs": pairs, "batches": batches, "rejected": dict(rejected),
+            "batch_summary": {
+                "count": len(batches),
+                "queued_histogram": dict(sorted(Counter(b["queued"] for b in batches).items())),
+                "participants_histogram": dict(sorted(Counter(
+                    str(b["participants"]) for b in batches).items())),
+                "batches_with_jobs_at_least_participants": sum(
+                    b["participants"] is not None and b["queued"] >= b["participants"]
+                    for b in batches),
+                "batches_with_at_least_eight_jobs": sum(b["queued"] >= 8 for b in batches),
+                "last_job_solo_tail": distribution([b["last_job_solo_tail_ns"] for b in batches]),
+                "last_job_to_batch_end": distribution([b["last_job_to_batch_end_ns"] for b in batches
+                                                       if b["last_job_to_batch_end_ns"] is not None]),
+                "callback_gaps": distribution([g["ns"] for b in batches
+                    for g in b["no_callback_gaps_while_callbacks_unstarted"]]),
+            },
             "gap_definition": "No callback executing on worker after its signal while some callback has not started. Includes wake/dispatch/claim overhead; not proof worker was descheduled or queue remained unclaimed. Gaps overlap across workers; never sum as frame time.",
             "summary": {key: distribution([r[key] for r in pairs if r[key] is not None])
                         for key in metrics},
@@ -181,11 +196,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trace", type=Path)
     parser.add_argument("--min-frame", type=int, default=0)
+    parser.add_argument("--summary-only", action="store_true",
+                        help="omit individual pairs/batches from JSON; preserve aggregates")
     args = parser.parse_args()
     data = args.trace.read_bytes()
     result = analyze(parse(data.decode().splitlines()), args.min_frame)
     result["source_sha256"] = hashlib.sha256(data).hexdigest()
     result["source"] = str(args.trace)
+    if args.summary_only:
+        del result["pairs"], result["batches"]
     print(json.dumps(result, indent=2))
 
 
