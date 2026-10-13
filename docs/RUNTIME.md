@@ -887,3 +887,28 @@ round-trip tests pass; full light tests retain the independently reproduced
 fullscreen-gamma Reset failure. GPU tests/examples compile; execution gate
 is pending head's exclusive run. See the L90 brief for details and L97/L98
 merge notes.
+
+
+### L116 pipeline creation and startup warmup
+
+`DDGPU_PIPELINE_LOG=1` reports each ddgpu shader-module/pipeline creation,
+translation and exact-IR cache hit/miss, with backend Present number,
+operator-supplied phase and calling thread. `scripts/pipeline_summary.py`
+groups counts and milliseconds; phase boundaries are observed per run,
+not guessed from fixed thresholds. Driver per-pipeline hit status is not
+exposed by wgpu.
+
+The ddplay pipeline-cache startup hook also records complete pipeline recipes
+and precreates previous-run modules/pipelines on one background thread.
+The local manifest is versioned, checksummed and namespaced by executable
+BLAKE3, adapter/driver, device capabilities and translation/descriptor schema.
+Each adopted pipeline must match the current draw's generated shader digests.
+Draws poll ready objects without waiting; incomplete or invalid recipes use
+the normal validated worker path. `DDGPU_PIPELINE_WARMUP=0` records recipes
+without precompiling, enabling a driver-cache-warm baseline comparison.
+
+The synthetic Vulkan replay reused 12 pipelines/four modules with zero
+on-demand creations and byte-identical images; existing cache cases passed.
+The final source-variant guard replay also passes; ten CPU units and two
+parser regressions pass. The head's game-phase comparison remains pending. See [L116 results](tasks/L116-pipeline-warmup.md#results) for exact
+verification boundaries and the paired-run procedure.
