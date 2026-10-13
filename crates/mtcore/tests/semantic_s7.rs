@@ -264,3 +264,32 @@ fn semantic_segment_vs_box_matches_original() {
     let n = abi_cases_with_calls_ret(&path, mtcore::semantic_s7_collision::segment_vs_box, true);
     eprintln!("{n} ABI-level segment_vs_box cases passed");
 }
+
+// verifies 0x012f4d01 (the CRT expf): bit for bit on recorded inputs of every
+// magnitude class, reading the routine's tables from the recorded guest memory
+#[test]
+fn semantic_crt_expf_matches_original() {
+    let path = std::env::var("S7_EXP_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/crt_expf.json".into());
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let mut m = Memory::default();
+    for table in data["tables"].as_array().unwrap() {
+        let base = n(&table[0]);
+        for (k, b) in table[1].as_array().unwrap().iter().enumerate() {
+            m.bytes.insert(base + k as u32, n(b) as u8);
+        }
+    }
+    let pg = ddnative_base::mem::Pages::of(&m);
+    let cases = data["cases"].as_array().unwrap();
+    for (i, case) in cases.iter().enumerate() {
+        let (x, want) = (f32::from_bits(n(&case[0])), n(&case[1]));
+        let got = mtcore::semantic_s7_math::expf(&m, pg, x);
+        assert_eq!(got.to_bits(), want, "case {i}: x {x:e} ({:08x}): got {got:e} want {:e}", x.to_bits(), f32::from_bits(want));
+    }
+    eprintln!("{} expf cases passed", cases.len());
+}
+

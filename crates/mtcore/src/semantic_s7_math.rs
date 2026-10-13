@@ -326,3 +326,63 @@ pub fn asinf(m: &dyn Mem, pg: Pages, x: f32) -> f32 {
     }
     (fl(0) * fl(0x7f80_0000)).0
 }
+
+// ---------------------------------------------------------------------
+// expf (0x012F4D01)
+// ---------------------------------------------------------------------
+
+const EXP_COEFF_SCALE: u32 = 0x0145_5d10; // double: exp argument scale (64/ln 2)
+const EXP_COEFF_STEP: u32 = 0x0145_5d18; // double
+const EXP_TABLE_FINE: u32 = 0x0145_5c90; // 16 doubles
+const EXP_TABLE_MID: u32 = 0x0145_5b90; // 32 doubles
+const EXP_TABLE_COARSE: u32 = 0x0145_5a90; // 32 doubles
+const EXP_ONE: u32 = 0x0145_5d24; // float result for a tiny argument
+const EXP_INFINITY: u32 = 0x0145_5d20;
+const EXP_ZERO: u32 = 0x0145_5d28;
+
+#[inline(always)]
+fn rd64(pg: Pages, m: &dyn Mem, address: u32) -> f64 {
+    f64::from_bits(pg.u32(m, address) as u64 | (pg.u32(m, address.wrapping_add(4)) as u64) << 32)
+}
+
+/// The CRT `expf` (argument and result in XMM0). The argument is scaled
+/// to a count of 1/64 steps `k`; the result is assembled from three
+/// table entries (indexed by the bit fields of `k`) and a short
+/// correction in double precision, with the high bits of `k` added into
+/// the exponent field.
+pub fn expf(m: &dyn Mem, pg: Pages, x: f32) -> f32 {
+    let x = F(x);
+    let bits = x.to_bits();
+    let magnitude = (bits & 0x7fff_ffff).wrapping_sub(0x3180_0000);
+    if magnitude < 0x1200_0000 {
+        let k = (x * fl(0x46b8_aa3b)).0.round_ties_even() as i32;
+        let scaled = rd64(pg, m, EXP_COEFF_SCALE) * x.0 as f64;
+        let fine = rd64(pg, m, EXP_TABLE_FINE + (((k << 3) & 0x78) as u32));
+        let correction = rd64(pg, m, EXP_COEFF_STEP) * fine;
+        let mid = rd64(pg, m, EXP_TABLE_MID + (((k >> 1) & 0xf8) as u32));
+        let coarse = rd64(pg, m, EXP_TABLE_COARSE + (((k >> 6) & 0xf8) as u32));
+        let scale = mid * coarse;
+        let fraction = scaled - k as f64;
+        let correction = correction * fraction;
+        // the exponent adjustment: (k >> 14) << 20 added to the high word
+        let scale_bits = scale.to_bits();
+        let high = ((scale_bits >> 32) as u32).wrapping_add(((k >> 14) as u32) << 20);
+        let scale = f64::from_bits((scale_bits & 0xffff_ffff) | (high as u64) << 32);
+        return ((fine + correction) * scale) as f32;
+    }
+    let abs_bits = magnitude.wrapping_add(0x3180_0000);
+    if abs_bits <= 0x3180_0000 {
+        return f32::from_bits(pg.u32(m, EXP_ONE));
+    }
+    if abs_bits >= 0x7f80_0000 {
+        if abs_bits == 0x7f80_0000 {
+            return f32::from_bits(pg.u32(m, if bits == 0x7f80_0000 { EXP_INFINITY } else { EXP_ZERO }));
+        }
+        return (x + x).0;
+    }
+    if bits < 0x8000_0000 {
+        (fl(0x7f7f_ffff) * fl(0x7f7f_ffff)).0
+    } else {
+        (fl(0x0080_0000) * fl(0x0080_0000)).0
+    }
+}

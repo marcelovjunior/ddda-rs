@@ -11,7 +11,7 @@ from unicorn import Uc, UC_ARCH_X86, UC_MODE_32
 import unicorn.x86_const as x
 
 ENTRY = 0x012F161F if len(sys.argv) < 4 else int(sys.argv[3], 16)
-TABLES = [(0x0144DE60, 0x810), (0x0144E660, 0x400), (0x0144EA60, 0x30), (0x0144C640, 0x810), (0x0144CE40, 0x400), (0x0144D240, 0x60)]
+TABLES = [(0x0144DE60, 0x810), (0x0144E660, 0x400), (0x0144EA60, 0x30), (0x0144C640, 0x810), (0x0144CE40, 0x400), (0x0144D240, 0x60), (0x01455A90, 0x300), (0x01455D10, 0x20)]
 
 def main():
     out, n = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 30000
@@ -28,7 +28,9 @@ def main():
     cases = []
     for i in range(n):
         r = rng.random()
-        if r < 0.55:
+        if ENTRY == 0x012F4D01 and r < 0.6:
+            b = bits_of(rng.choice((rng.uniform(-110, 110), rng.uniform(-5, 5), rng.uniform(-1e-3, 1e-3), rng.uniform(80, 90), rng.uniform(-90, -80), rng.uniform(-1000, 1000))))
+        elif r < 0.55:
             b = bits_of(rng.uniform(-1.0, 1.0))
         elif r < 0.65:
             b = bits_of(rng.uniform(-0.1, 0.1))
