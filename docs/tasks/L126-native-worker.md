@@ -81,5 +81,6 @@ fullscreen gamma-reset failure / three ignored**. Log:
 `C:/ddda-targets/L126-runtime-all.log`.
 
 In-game image comparison and FPS remain with head; agent never ran the game. No game
+Worker, GPU correctness and in-game integration remain in progress. No game
 or shard build/run. Existing L123 target directory is reused per head #11137,
 incremental off and four cargo jobs maximum.

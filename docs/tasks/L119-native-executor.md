@@ -72,4 +72,51 @@ measure the per-draw cost.
   draw (oracle test). Also: RS15 for an alpha-test-off binding is 0 (the
   executor's context init sets 15/24/25 each frame, so the device holds
   what the last apply set), not the device's value.
+- combo15 (head run, step 2c, `drawcall`): 14.2 fps avg, 15.3-16.0 at the
+  end, equal to the default path; the render thread is no longer the
+  bound (65% busy, 90% of its waits on the start event).
+- `DDDRAW_NATIVE=verify`: the D3D9 path draws; every DrawCall it makes
+  for a scene draw the sink would take is compared field by field with
+  the decoded one (render states, the registers and samplers the shaders
+  read, streams, indices, shaders, declaration, viewport, scissor when on,
+  targets); the report counts comparisons, merged draws, and mismatches by
+  field (the first 20 printed). Hook: d3d9draw's DrawPrimitive and
+  DrawIndexedPrimitive services call `ndraw_native::observe` (one relaxed
+  atomic load when not verifying).
 - Not yet: the per-pass pixel comparison.
+
+## Frame threads (question from the head, 2026-10-13)
+
+Read-only reading of the executable (addresses as in docs/NDRAW.md) and
+the combo15 profile (E:/ddda-re/notes/runs/profile_c15b.txt):
+
+- 0x00DBE560 is not the render handshake. It is sMain's parallel-for:
+  it sets each participating worker's start event, runs jobs itself
+  (0x00DBD8D0: a shared counter taken with InterlockedIncrement over the
+  job array at sMain+0xB8), then WaitForMultipleObjects on the workers'
+  done events (wait-all, INFINITE). 0x00DBDF30 creates the seven workers
+  (ideal processors 1..7); their loop is sMain::vf20 0x00DBDC90 (same
+  job loop). Callers include sRender's scene functions (0x00DB63E0,
+  0x00DB7350, 0x00DB67B0), the command sort 0x00FEE130 and game
+  systems (0x004792C0, 0x004AA270, 0x0116BAB0, ...).
+- The render handshake is sRender+0xD0 (start) / +0xD4 (done). The main
+  thread kicks the render worker 0x00DAC090 in 0x00DA9CD0 (flip the
+  command slot, ResetEvent(+0xD4), SetEvent(+0xD0)) and, before Present,
+  0x00DAED10 only polls +0xD4 (WaitForSingleObject timeout 0) while the
+  frame-time budget lasts; if the render frame is not done it returns
+  without Present and keeps the frame pending (no new kick until done).
+  It blocks on +0xD4 only in 0x00DAECC0 (called from 0x00E10410 and
+  0x00E127D0, shader-table changes) and in the synchronous mode. So the
+  main thread already builds frame N+1 while the render thread runs N:
+  the original's overlap is in place in our runtime.
+- In combo15 the main thread's waits are 99% in 0x00DBE560's wait-all on
+  the job workers (0x1070..0x1084, each 33-46% busy), none on +0xD4; the
+  render thread waits on the main thread. The bound is the main thread's
+  lifted game code plus the job join.
+- Proposal (not implemented): measure per 0x00DBE560 call the job count,
+  the main thread's share, each worker's wake latency and job time, and
+  the join wait (a wrapper over the lifted function, as L111 does for the
+  executor), to tell a long tail job (only faster lifted code helps) from
+  wake latency (our event wait: the workers show 7-12% self time in
+  wait_for_single_object). Readable ports of the hottest jobs are the
+  other lever. No game-visible change is needed for either.
