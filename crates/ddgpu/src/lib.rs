@@ -799,6 +799,7 @@ impl WgpuBackend {
     pub fn set_async_submit(&mut self, on: bool) {
         self.wait_finisher();
         self.finisher = on.then(|| Finisher::new(self.queue.clone()));
+    }
 
     /// Backend queue submissions, including explicit readbacks and queries.
     /// Present sinks submit independently and are not included.
