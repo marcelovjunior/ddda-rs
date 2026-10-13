@@ -233,3 +233,75 @@ pub fn shader_lookup(m: &mut dyn Mem, c: &mut Cpu) {
     let r = call_from(m, c, pg, frame, this, &[key, sum], 0x00e1_3293, ext(0x00e0_f4b0));
     finish(c, r)
 }
+
+/// 0x01054700, `model->update_joints(indices, count, flags)` (thiscall,
+/// `ret 0xc`): run the model's joint-update routine over a list of joint
+/// indices. The routine is chosen once from the model's flags at +0x378
+/// (none, 0x0104EF10, 0x01051B60, 0x010533A0 or 0x01052330; some choices
+/// also set bit 6 of +0x108); joints are 0xA0-byte records from +0x364.
+/// A joint flagged 0x20 at +0x90 is skipped, and with `flags & 1` only
+/// joints with bit 0 of +0x96 are updated. Unless `flags & 2`, joints
+/// with an attachment (+4) also get its virtual +0x14 call when model
+/// byte +0x37B bit 0 is set. A pending reset (byte +0xE19) runs
+/// 0x01054690 first.
+pub fn update_joints(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let model = c.ecx;
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    // The index list is read only inside the loop, as the original does.
+    let count = arg(m, 1);
+    let flags = pg.u8(m, entry.wrapping_add(0xc)); // the original reads the byte only
+    let notify = if flags & 2 != 0 { false } else { pg.u8(m, model + 0x37b) & 1 != 0 };
+    let visible_only = flags & 1 != 0;
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    // The original's frames: four pushes, then ESI pushed for the loop.
+    let frame = entry.wrapping_sub(16);
+    let loop_frame = entry.wrapping_sub(20);
+    if pg.u8(m, model + 0xe19) != 0 {
+        call_from(m, c, pg, frame, model, &[], 0x0105_4738, guest(0x0105_4690));
+        pg.set_u8(m, model + 0xe19, 0);
+    }
+    let mode = pg.u32(m, model + 0x378);
+    let routine = if mode & 0x0800_0000 != 0 {
+        0
+    } else if mode & 0x0400_0000 != 0 {
+        0x0104_ef10
+    } else if mode & 0x40 == 0 {
+        0x0105_1b60
+    } else {
+        let routine = if mode & 0x10_0000 != 0 {
+            0x0105_1b60
+        } else if mode & 0x4000 != 0 {
+            0x0105_33a0
+        } else {
+            0x0105_2330
+        };
+        let marks = pg.u32(m, model + 0x108);
+        pg.set_u32(m, model + 0x108, marks | 0x40);
+        routine
+    };
+    let joints = model + 0x364;
+    for i in 0..count {
+        let indices = arg(m, 0);
+        let index = pg.u8(m, indices.wrapping_add(i)) as u32;
+        let joint = pg.u32(m, joints).wrapping_add(index * 0xa0);
+        if pg.u8(m, joint + 0x90) & 0x20 != 0 {
+            continue;
+        }
+        if visible_only && pg.u8(m, joint + 0x96) & 1 == 0 {
+            continue;
+        }
+        if routine != 0 {
+            call_from(m, c, pg, loop_frame, model, &[joint], 0x0105_47d6, guest(routine));
+        }
+        if notify {
+            let attachment = pg.u32(m, joint + 4);
+            if attachment != 0 {
+                let method = pg.u32(m, pg.u32(m, attachment) + 0x14);
+                call_from(m, c, pg, loop_frame, attachment, &[joint, model], 0x0105_47ef, guest(method));
+            }
+        }
+    }
+    c.esp = entry.wrapping_add(4 + 0xc);
+}
