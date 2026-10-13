@@ -6,6 +6,7 @@ runtime/dispatcher work and host scheduling, not just kernel wake latency.
 import argparse
 from collections import Counter, defaultdict
 import hashlib
+import gzip
 import json
 from pathlib import Path
 import re
@@ -52,9 +53,10 @@ def analyze_file(path, min_frame=0, max_frame=None, allow_truncated_tail=False):
     selected = set()
     hashes = []
     discarded = []
+    opener = gzip.open if path.suffix.lower() == ".gz" else open
     def rows(index_only=False):
         digest = hashlib.sha256()
-        with path.open("rb") as source:
+        with opener(path, "rb") as source:
             def lines():
                 for line in source:
                     digest.update(line)
@@ -85,6 +87,7 @@ def analyze_file(path, min_frame=0, max_frame=None, allow_truncated_tail=False):
     if hashes[0] != hashes[1]:
         raise ValueError("capture changed during analysis; wait for capture completion")
     result.update(source=str(path), source_sha256=hashes[0],
+                  source_hash_kind="decompressed-trace",
                   min_frame=min_frame, max_frame=max_frame,
                   discarded_tail_bytes=discarded[0] if discarded else 0)
     return result

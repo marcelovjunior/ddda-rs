@@ -95,7 +95,7 @@ Codex-7 authorized narrow dispatch/lib integration (#13162).
 
 ## Verification / remaining work
 
-- 16 offline parser tests pass, including overlapping tails, gap clipping,
+- 17 offline parser tests pass, including overlapping tails, gap clipping,
   missing wakes and bad joins; original seven pairing guards retained.
 - Initial light library run: 86 passed / one inherited Present throughput
   timing failure / five ignored. Both new ABI/configuration tests passed.
@@ -204,3 +204,9 @@ Example: `python scripts/job_wake.py PRIVATE.trace --min-frame 6600
 --max-frame 6749 --allow-truncated-tail > PRIVATE.json`. Add `--summary-only`
 for small output. Head authorized trace compression after both owners finish;
 codex-7 notified that L162 no longer needs uncompressed originals (#13432).
+Codex-7 completed compression and verified decompressed SHA/length before
+removing the two originals (#13466): `runs/L158_h0.trace.gz` **191,142,074 B**,
+`runs/L158_h1.trace.gz` **204,890,226 B**, net space recovered
+**3,121,002,352 B**. Receipt: private `native-L158/trace-compression.json`.
+The analyzer reads `.trace.gz` directly; `source_sha256` hashes the
+decompressed trace, preserving the original hashes above.

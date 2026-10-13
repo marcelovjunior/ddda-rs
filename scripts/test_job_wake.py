@@ -3,6 +3,7 @@ import unittest
 import tempfile
 from pathlib import Path
 import hashlib
+import gzip
 from job_wake import analyze, analyze_file, parse, SIGNAL, WAIT
 
 
@@ -19,6 +20,19 @@ def fixture():
 
 
 class WakeTests(unittest.TestCase):
+    def test_gzip_source_hash_is_original_trace(self):
+        text = "critical version=1\n" + "\n".join(
+            kind + " { " + ", ".join(f"{k}: {str(v).lower()}" for k, v in row.items()) + " }"
+            for kind, row in fixture()) + "\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trace.gz"
+            with gzip.open(path, "wb") as out:
+                out.write(text.encode())
+            result = analyze_file(path)
+            self.assertEqual(result["pairs"], analyze(fixture())["pairs"])
+            self.assertEqual(result["source_sha256"], hashlib.sha256(text.encode()).hexdigest())
+            self.assertEqual(result["source_hash_kind"], "decompressed-trace")
+
     def test_file_window_preserves_out_of_order_wait_pair_and_hash(self):
         records = fixture()
         other = copy.deepcopy(records)

@@ -48,7 +48,7 @@
   after construction; original CPU/eight clamp and frame activation remain.
   No cap patch. Intended head A/B: seven vs eight participants, main included.
 - Wake analyzer reports per-batch jobs/participants, callback gaps,
-  final-job solo tails and join overlaps; **16 parser tests pass**.
+  final-job solo tails and join overlaps; **17 parser tests pass**.
   Signaled lanes are distinct from active participation (one-job bypass).
 - Full light gate **234 reported passes / two inherited failures / seven
   ignored**; Present timing passes its isolated retry, gamma remains.
