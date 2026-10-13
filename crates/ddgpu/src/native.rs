@@ -1444,14 +1444,31 @@ impl<'a> Recorder<'a> {
         let c = &mut self.constants[handle.index as usize];
         let end = words.len().checked_mul(4).and_then(|n| n.checked_add(offset)).ok_or("constant range overflow")?;
         let dst = c.bytes.get_mut(offset..end).ok_or("constant range outside block")?;
-        let mut changed = false;
-        for (d, w) in dst.chunks_exact_mut(4).zip(words) {
-            let w = w.to_le_bytes();
-            if *d != w {
-                d.copy_from_slice(&w);
-                changed = true;
+        // the words' little-endian bytes: compared and copied as one range
+        #[cfg(target_endian = "little")]
+        let changed = {
+            // SAFETY: any u32 slice is readable as bytes (alignment 1, the
+            // same length in bytes); on a little-endian target those bytes
+            // are each word's to_le_bytes
+            let src = unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 4) };
+            let changed = dst != src;
+            if changed {
+                dst.copy_from_slice(src);
             }
-        }
+            changed
+        };
+        #[cfg(not(target_endian = "little"))]
+        let changed = {
+            let mut changed = false;
+            for (d, w) in dst.chunks_exact_mut(4).zip(words) {
+                let w = w.to_le_bytes();
+                if *d != w {
+                    d.copy_from_slice(&w);
+                    changed = true;
+                }
+            }
+            changed
+        };
         if changed {
             c.offset = None;
         }

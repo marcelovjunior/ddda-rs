@@ -596,15 +596,27 @@ fn bounded_indexed_strips_match_host_driver_with_start_base_and_culling() {
     }
     assert_eq!(backend.native_job_stats().accepted, 6);
     assert_eq!(backend.native_job_stats().rejected, 0);
-    // Retain rejection for a declared range that permits the u16 sentinel.
-    let mut unsafe_strip = draw(false, false, false, [1.0; 4]);
-    unsafe_strip.primitive = 5;
-    unsafe_strip.vertex_count = 65536;
-    assert!(backend.native(job(unsafe_strip, &native, None)).is_err());
-    assert_eq!(
-        backend.native_job_stats().rejection_reasons["native indexed strip range may include restart index"],
-        1
-    );
+    // L141: a declared vertex range reaching the u16 sentinel draws as the
+    // D3D9 path draws it (DrawIndexedPrimitive's NumVertices is a hint the
+    // D3D9 path does not use for strips; both give the pipeline the index
+    // format, so an index 0xFFFF would restart both: their shared limit)
+    let mut wide = draw(false, false, false, [1.0, 0.5, 0.25, 1.0]);
+    wide.primitive = 5;
+    wide.primitives = 1;
+    wide.vertex_count = 65536;
+    let mut call = legacy(&wide, &original, None);
+    call.vertices = Vertices::Streams(vec![(0, 10, 0, 16, 1)].into());
+    call.indices = Indices::Buffer(11, 102);
+    wide.indices.as_mut().unwrap().format = 102;
+    backend.clear(&clear(&original, None));
+    backend.draw(&call);
+    backend.present(&original);
+    let expected = backend.last_frame.as_ref().unwrap().rgba.clone();
+    backend.clear(&clear(&native, None));
+    assert!(backend.native(job(wide, &native, None)).is_ok());
+    backend.present(&native);
+    assert_eq!(backend.last_frame.as_ref().unwrap().rgba, expected, "a wide declared range");
+    assert_eq!(backend.native_job_stats().rejected, 0);
 }
 
 /// L141: a guest release keeps the native worker and its pipelines. A

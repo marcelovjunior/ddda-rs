@@ -1244,16 +1244,17 @@ fn native_strip_index(
     if primitive == 3 {
         return Err("native indexed line strip unsupported".into());
     }
-    let (format, restart) = match format {
-        101 => (wgpu::IndexFormat::Uint16, u16::MAX as u64),
-        102 => (wgpu::IndexFormat::Uint32, u32::MAX as u64),
-        _ => return Err("native index format unsupported".into()),
-    };
-    let end = u64::from(min_index) + u64::from(vertex_count);
-    if vertex_count == 0 || end > restart {
-        return Err("native indexed strip range may include restart index".into());
+    // As the D3D9 path (crates/ddgpu derive): the strip's index format on
+    // the pipeline whatever DrawIndexedPrimitive's MinIndex/NumVertices hint
+    // says (L141: refusing on the hint, 750 jobs in c24nat, drew the same
+    // strips through the D3D9 path anyway). wgpu restarts a strip at index
+    // 0xFFFF (0xFFFFFFFF) where D3D9 does not: a limit both paths share.
+    let _ = (min_index, vertex_count);
+    match format {
+        101 => Ok(Some(wgpu::IndexFormat::Uint16)),
+        102 => Ok(Some(wgpu::IndexFormat::Uint32)),
+        _ => Err("native index format unsupported".into()),
     }
-    Ok(Some(format))
 }
 fn validate_fixed(state: &NativeFixedState) -> Result<(), String> {
     if state.render_states.windows(2).any(|p| p[0].0 >= p[1].0) {
