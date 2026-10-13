@@ -39,6 +39,10 @@ pub enum Binding {
     /// memcpy/memset, the timers); in the serial mode it is an API call
     /// like any other (a time slice may end there).
     LockFree(LiftFn),
+    /// Audited integer-only lock-free service (L135): no guest callbacks,
+    /// floating-point operations, drivers, or host libraries that use x87.
+    /// Guest x87 and MXCSR stay live. Tracing/statistics use the full boundary.
+    Integer(LiftFn),
     /// A Direct3D 9 / D3DX method (L93): runs holding the D3D lock
     /// (crate::d3d9dev::D3dCell) for its whole call, so D3D calls stay
     /// atomic against each other; with `true` it also holds the guest lock
@@ -60,6 +64,7 @@ impl Binding {
             Binding::Service(_) => "service",
             Binding::ServiceTail(_) => "service with host-only tail",
             Binding::LockFree(_) => "lock-free service",
+            Binding::Integer(_) => "integer service",
             Binding::Device(..) => "D3D service",
             Binding::DeviceState(_) => "D3D state service",
         }
@@ -341,15 +346,32 @@ impl Registry {
     }
 
     #[inline]
-    fn run_binding(&self, binding: Binding, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+    pub(crate) fn run_binding(&self, binding: Binding, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         match binding {
             Binding::Service(f) => self.run_service(f, m, cpu, target, true, false),
             Binding::ServiceTail(f) => self.run_service(f, m, cpu, target, true, true),
             Binding::LockFree(f) => self.run_service(f, m, cpu, target, false, false),
+            Binding::Integer(f) => self.run_integer(f, m, cpu, target),
             Binding::Device(f, guest) => self.run_service_as(f, m, cpu, target, guest, false, true),
             Binding::DeviceState(f) => self.run_device_state(f, m, cpu, target),
             Binding::Lifted(f) => f(m, cpu),
         }
+    }
+
+    fn run_integer(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        // Only the audited x86-64 Windows runtime/allocator/scheduler path
+        // supports this contract. Diagnostics format floats and do host I/O.
+        if !cfg!(all(windows, target_arch = "x86_64")) || crate::threads::stats::on() || trace::on() {
+            return self.run_service(f, m, cpu, target, false, false);
+        }
+        // Keep the Cpu mirror current as for every other service, but the
+        // integer body and service lock/scope do not change the live register.
+        cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
+        let lock = crate::threads::service_lock_free();
+        let scope = crate::threads::ServiceScope::enter_with_tail(false);
+        f(m, cpu);
+        drop(scope);
+        drop(lock);
     }
 
     /// A [`Binding::DeviceState`] method: [`run_service_as`](Self::run_service_as)

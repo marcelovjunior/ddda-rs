@@ -1097,3 +1097,12 @@ recorder lifetime is one job, so L123 cross-job resident/bundle speedups are
 not yet active here. Four focused GPU tests and 14 CPU tests pass. Shadow
 comparison begin/end hooks are compiled; L127 end-to-end gate and head's
 DDDRAW_NATIVE=1 image/FPS run remain pending. Details: tasks/L126-native-worker.md.
+
+### L135 integer service FP boundaries (2026-10-13)
+
+Eight audited KERNEL32 integer imports use `Binding::Integer`, retaining
+live guest x87 and MXCSR on Windows x86-64. The lock-free service scope and
+scheduling points remain; tracing/statistics select the full FP boundary.
+The step executor also honors this and the existing DeviceState policy.
+All other services retain their existing FP policy. Source audit, sampled
+costs, exactness tests and measurement limits: [L135](tasks/L135-x87-switch.md).
