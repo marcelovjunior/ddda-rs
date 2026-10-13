@@ -206,7 +206,7 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     assert_eq!(draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap().call, native);
     // taken: its sampler section made, then the draw again from the caches
     let first = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap();
-    ddruntime::ndraw_native::commit(&mut s.mem, &info, &mut caches, first.shadow);
+    ddruntime::ndraw_native::commit(&mut s.mem, &info, &mut caches, first.shadow, &first.call.textures);
     assert_eq!(draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap().call, native);
     // what a taken draw costs from the caches (debug build: an upper bound)
     let n = 20_000;

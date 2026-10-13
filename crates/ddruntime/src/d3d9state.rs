@@ -360,8 +360,20 @@ pub fn set_sampler_state(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetSamplerState's effect, for host callers (the native path, L119).
 pub(crate) fn device_set_sampler_state(dev: u32, smp: u32, t: u32, v: u32) {
     state(dev, |s| {
-        if s.sampler.insert((smp, t), v) != Some(v) { s.draw_dirty |= groups::TEXTURES; }
+        if s.sampler.insert((smp, t), v) != Some(v) {
+            s.draw_dirty |= groups::TEXTURES;
+            SAMPLER_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     });
+}
+
+/// Bumped by every change of a sampler state or a texture binding
+/// (between Resets, which rebuild the state outside a frame): the native
+/// path's mirror of them is current while it is unchanged (L119).
+static SAMPLER_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn sampler_epoch() -> u64 {
+    SAMPLER_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
 }
 /// GetSamplerState(this, sampler, type, value*).
 pub fn get_sampler_state(m: &mut dyn Mem, cpu: &mut Cpu) {
@@ -417,7 +429,10 @@ pub(crate) fn device_set_texture(dev: u32, st: u32, tex: u32) -> bool {
                 Some(Object { kind: Kind::Device(d), .. }) => {
                     let s = &mut d.state;
                     let old = if tex == 0 { s.textures.remove(&st) } else { s.textures.insert(st, tex) }.unwrap_or(0);
-                    if old != tex { s.draw_dirty |= groups::TEXTURES; }
+                    if old != tex {
+                        s.draw_dirty |= groups::TEXTURES;
+                        SAMPLER_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     old
                 }
                 _ => panic!("{dev:#x} is not a live IDirect3DDevice9"),
