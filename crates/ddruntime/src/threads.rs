@@ -1464,7 +1464,7 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
             }
             std::hint::spin_loop();
             n += 1;
-            if n % 64 == 0 && (start.elapsed() >= CS_SPIN || deadline.is_some_and(|d| Instant::now() >= d)) {
+            if n % 64 == 0 && (start.elapsed() >= event_spin() || deadline.is_some_and(|d| Instant::now() >= d)) {
                 break;
             }
         }
@@ -1514,7 +1514,12 @@ mod address_wait {
     }
     pub(super) fn enabled() -> bool {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *ON.get_or_init(|| std::env::var("DDRUNTIME_SYNC_FUTEX").is_ok_and(|v| v == "1"))
+        // L185: on by default (DDRUNTIME_SYNC_FUTEX=0 turns it off): a parked
+        // waiter wakes ~15 us sooner than through the shared sleeper table's
+        // condition variable, with a far shorter tail (fork-join of 6 parked
+        // workers: p50 42 -> 26 us, p99 2,400 -> ~150 us), equal to raw
+        // Windows events
+        *ON.get_or_init(|| !std::env::var("DDRUNTIME_SYNC_FUTEX").is_ok_and(|v| v == "0"))
     }
     pub(super) fn wake(value: &std::sync::atomic::AtomicBool) {
         // SAFETY: EventCell lives in an Arc for the entire wait/signal.
@@ -1591,6 +1596,13 @@ static CS_WAITERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 /// How long a contended Enter spins before it waits (a section is held
 /// ~1 us; measured gameplay mean 0.64 us). Unmeasured guess, not tuned.
 const CS_SPIN: Duration = Duration::from_micros(20);
+
+/// How long a wait for one event spins before it parks (experiment knob
+/// DDRUNTIME_EVENT_SPIN_US; the default is the critical sections' 20 us).
+fn event_spin() -> Duration {
+    static SPIN: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *SPIN.get_or_init(|| std::env::var("DDRUNTIME_EVENT_SPIN_US").ok().and_then(|v| v.parse().ok()).map_or(CS_SPIN, Duration::from_micros))
+}
 
 /// The section's LockCount, RecursionCount and OwningThread as atomics;
 /// None if they are not aligned writable guest words.
@@ -2001,6 +2013,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     include!("sync_followup.rs");
     include!("sync_bench.rs");
+    include!("sync_latency.rs");
 
     #[test]
     fn event_cache_invalidates_closed_handles_and_runtime_identity() {
