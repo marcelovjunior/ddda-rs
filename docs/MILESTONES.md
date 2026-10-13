@@ -8,9 +8,9 @@
 - Wake analyzer reports per-batch jobs/participants, callback gaps,
   final-job solo tails and join overlaps; **13 parser tests pass**.
   Signaled lanes are distinct from active participation (one-job bypass).
-- Initial runtime library **86 pass / inherited Present timing failure /
-  five ignored**, including two new ABI/configuration tests passing.
-  Full light gate paused during head combo30; actual wake latency and
+- Full light gate **234 reported passes / two inherited failures / seven
+  ignored**; Present timing passes its isolated retry, gamma remains.
+  Both new ABI/configuration tests pass. Actual wake latency and
   performance/image acceptance pending. No speculative sync fix.
 - Next: head capture with L158 and this setter, exact env in
   `docs/tasks/L162-job-wake.md`; analyze matched 7/8 joins and hashes.

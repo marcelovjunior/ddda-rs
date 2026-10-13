@@ -89,9 +89,14 @@ Codex-7 authorized narrow dispatch/lib integration (#13162).
   missing wakes and bad joins; original seven pairing guards retained.
 - Initial light library run: 86 passed / one inherited Present throughput
   timing failure / five ignored. Both new ABI/configuration tests passed.
-- Full `cargo test -p ddruntime --no-default-features --no-fail-fast` launched
+- Full `cargo test -p ddruntime --no-default-features --no-fail-fast` completed
   with CARGO_BUILD_JOBS=4, CARGO_INCREMENTAL=0, target `C:/ddda-targets/L162`;
-  currently suspended by head's combo30 run. Final outcome to follow.
+  **234 reported pass results / two inherited failures / seven ignored**.
+  Failures: Present throughput timing and fullscreen gamma. Isolated Present
+  retry (`--lib ... --exact --test-threads=1`) passes. No gamma fix in scope.
+  Private logs: `E:/ddda-re/notes/L162-job-wake/light.log` and
+  `present-retry.log`. Full log SHA-256:
+  `4db8f6045c599e322a2c6e8aa796ef9f1ad925729b468900ae92d469ceaa87ef`.
 - No game, GPU, shard build or original-game image comparison by this agent.
 - **Pending:** head trace, actual per-join numbers, 7/8 activation comparison,
   and any measured >20 us wake fix coordinated with codex-10 (L153).
