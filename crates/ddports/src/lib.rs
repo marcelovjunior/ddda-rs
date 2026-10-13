@@ -29,7 +29,10 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
     if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
-        for (a, f) in [(0x00e0ec50u32, mtcore::semantic::expand_dependencies as LiftFn)] {
+        for (a, f) in [
+            (0x00e0ec50u32, mtcore::semantic::expand_dependencies as LiftFn),
+            (0x00e10fc0, mtcore::semantic::intern_dependency_keys),
+        ] {
             ports.retain(|p| p.0 != a);
             ports.push((a, f));
         }

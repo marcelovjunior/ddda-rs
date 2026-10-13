@@ -904,7 +904,7 @@ fn keys_cost() {
     ddnative_host::install();
     ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::Relaxed);
     let data = keys_vectors().unwrap();
-    let bodies: Vec<(&str, LiftFn)> = vec![("port", mtcore::hot::intern_dependency_keys)]; // L130_KEYS_COST
+    let bodies: Vec<(&str, LiftFn)> = vec![("port", mtcore::hot::intern_dependency_keys), ("semantic", |m, c| mtcore::semantic::intern_dependency_keys_with(m, c, mtcore::semantic::guest_expand))]; // L130_KEYS_COST
     let mut m = Paged::default();
     for index in [0, 3, 42, 45, 765] {
         let case = &data["cases"][index];
@@ -969,7 +969,7 @@ fn keys_cost() {
                     if iteration >= 20 {
                         elapsed += time;
                     }
-                    if iteration == 0 {
+                    if iteration == 0 && name == "port" {
                         check(&m, &c, &case["after"], "recording bench gate");
                     }
                 }
