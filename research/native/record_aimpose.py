@@ -163,6 +163,9 @@ class Oracle:
         kind = rng.choice((6, 10, 14, 18) * 8 + (0, 5, 7, 11, 17, 19, 100, 255))
         uc.mem_write(JOINT + 0x93, bytes([kind]))
         matrix = transform_matrix(rng)
+        tiny = rng.random() < 0.15  # partner at a distance around the epsilon, from the origin
+        if tiny:
+            matrix[12:15] = [0.0, 0.0, 0.0]
         self.put(JOINT + 0x10, matrix)
         angle = rng.choice((0.0, -0.0, 1e-9, 1e-5, 0.01, -0.01, 0.5, -0.5, 3.0, -3.0, 20.0, -20.0, 45.0, -45.0, 90.0,
                             179.0, 1000.0, -1000.0, math.nan, math.inf, rng.uniform(-60, 60), rng.uniform(-60, 60),
@@ -182,6 +185,8 @@ class Oracle:
             m = transform_matrix(rng)
             if rng.random() < 0.3:  # a partner at (nearly) the joint's own position
                 m[12:15] = matrix[12:15] if rng.random() < 0.5 else [matrix[12], matrix[13], matrix[14] + rng.choice((0.0, 1e-9, 1e-3))]
+            if tiny:
+                m[12:15] = [0.0, 0.0, rng.choice((1e-7, 1.1e-7, 1.19e-7, 1.2e-7, 1.3e-7, 8e-8, 2e-7))]
             self.put(JOINTS + 0xA0 * k + 0x10, m)
         self.initial, self.written, self.events = {}, set(), []
         entry = SP - 8 - 4 * rng.randrange(4)
