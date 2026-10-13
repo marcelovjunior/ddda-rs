@@ -71,7 +71,7 @@ pub fn set_byte_constant(m: &mut dyn Mem, c: &mut Cpu) {
             pg.set_u32(m, c.esp, size);
             c.esp = c.esp.wrapping_sub(4);
             pg.set_u32(m, c.esp, 0x00fe_500f);
-            (c.ecx, c.esi, c.edi, c.ebp) = (state, state, size, byte);
+            (c.eax, c.ecx, c.esi, c.edi, c.ebp) = (description, state, state, size, byte);
             call_ext(m, c, 0x00fe_d890);
             (c.esi, c.edi, c.ebp) = saved;
         }

@@ -133,6 +133,7 @@ fn cases(path: &str, body: x86::LiftFn, input_registers: fn(u32) -> &'static [us
 /// The registers each recorded callee takes inputs in.
 fn input_registers(target: u32) -> &'static [usize] {
     match target {
+        0x00fe_d890 => &[0, 1, 5, 6, 7],   // frame allocator: EAX = description, ECX = state, EBP = byte, ESI = state, EDI = size
         0x00cf_dc80 => &[0, 1],            // blend: EAX = &identity, ECX = &matrix
         0x0086_4660..=0x0086_d180 => &[0, 1, 6, 7], // matrix providers: EAX, ECX, ESI, EDI
         _ => &[0, 1],                       // the parent accessor (ECX = model)
@@ -275,4 +276,12 @@ fn semantic_blend_toward_matches_original() {
     ddnative_host::install();
     let count = cases("E:/ddda-re/notes/native-L184/cns_blend.json", mtcore::semantic_s5::blend_toward_provider, input_registers, false);
     eprintln!("{count} ABI-level 0x00cfdc80 cases passed");
+}
+
+// verifies 0x00fe4f30 (ABI level; void)
+#[test]
+fn semantic_set_byte_constant_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/state_byte.json", mtcore::semantic_s5_render::set_byte_constant, input_registers, false);
+    eprintln!("{count} ABI-level 0x00fe4f30 cases passed");
 }
