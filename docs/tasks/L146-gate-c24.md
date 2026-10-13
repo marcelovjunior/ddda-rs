@@ -36,7 +36,13 @@ All 150 render-state and 200 target-format cases run across four shards.
 Each GPU process checks the head's pause and has a hard 60-second timeout.
 The 120-frame long-lived cache test initially timed out; its isolated
 retry passed in **53.12 s**. No assertion failures or device skips.
-L143/L141 final acceptance still awaits the combined CPU/runtime suite.
+Renderer CPU: **37 passed** (13 d3d9cmd, 24 ddgpu). Runtime light,
+`--no-default-features --no-fail-fast -- --test-threads=1`: **202 top-level
+passed / one inherited fullscreen-gamma failure / five ignored**. Two
+nested x87-service subprocess summaries are excluded from the total.
+The native-sink oracle and unit tests pass. Thus L143 `e04b76ce` and L141
+`784f5a9c` / `83f9ad22` are also **GREEN** for the tested contracts; the
+entire light runtime suite is not an unqualified pass.
 
 Generation: **808 s**, 59,734 functions, 1,466 modules, 33 crates, 44 scoped
 step functions. All 33 shard libraries rebuilt; fingerprint-start to final
@@ -58,5 +64,24 @@ opt0, but m32 is slightly slower at opt1; no production adoption yet.
 The experiment preserves per-instruction polling and ordered dword
 accesses. Pair fusion is not justified by these measurements.
 
-Next: complete the frozen combo24 gate, then the separately pinned flat
-gate before promoting any helper/codegen change.
+### Separate flat gate: prepared
+
+L142 source pin `49764236`, feature `ddnative-base/flat-memory`, generated
+with `LIFT_FLAT_MEMORY=1`. The producer confirms its generated files are
+frozen (board #12459); gate3 will adopt those Rust files with every file
+verified against `C:/ddda-targets/L142o1/generated-receipt.json`, then
+compile and replay independently. This avoids repeating identical gen.
+
+Input SHA-256 values match the producer:
+
+- `patterns/lift.json`:
+  `fc10bf973d0254615c94cd4ff88f18bd9d36bbac0bc85c80de9ed1890d1e27e9`
+- Hot list:
+  `2c5e98caaa4806abe37defc36f457e64dc14bc4bb0ce01e71378d9605cb63a94`
+
+Opt-in generated source stays private. Head requested the final **default**
+regenerated shards as a separate commit after helpers/generator/tests
+(board #12406). No game/FPS acceptance is inferred from either gate.
+
+Next: separate flat replay, then promote and gate the typed x87/live-flag
+changes. Builds wait for head's combo24 gameplay pause.

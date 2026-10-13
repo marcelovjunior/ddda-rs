@@ -7,11 +7,13 @@
   `a2d0407e` / `0ce6de79` are GREEN. Inventory retains five existing gaps.
 - Combined L143/L141 renderer: **38 distinct GPU tests pass / three ignored**;
   all 150 state and 200 target cases run. A 60-second cache-test timeout
-  passes its isolated retry in 53.12 s. CPU/runtime checks remain pending.
+  passes its isolated retry in 53.12 s. CPU **37 pass**; runtime light
+  **202 pass / inherited gamma failure / five ignored**. L143 `e04b76ce`
+  and L141 `784f5a9c` / `83f9ad22` are GREEN for these tested contracts.
 - All 33 shards rebuilt, artifact wall span **225.51 s**, rlibs **434.81 MiB**.
   No game/FPS/image acceptance claim. Details: `docs/tasks/L146-gate-c24.md`.
-- Next: finish combined CPU/runtime checks, then separately gate L142 flat
-  memory before promoting the measured x87/flag codegen experiments.
+- Next: separately gate L142 flat memory before promoting the measured
+  x87/flag codegen experiments; builds wait for head's gameplay pause.
 
 ### L139 combo21 combined native gate (2026-10-13)
 
