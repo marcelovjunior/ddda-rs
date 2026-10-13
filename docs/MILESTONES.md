@@ -2,51 +2,25 @@
 
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
-- Capture v3 persists explicitly rejected diagnostic fixtures and retains
-  later bounded serial evidence. Rejected inputs can never pass the proof
-  gate, even if diagnostic replay matches;12 focused replay tests pass.
-  Head rerun queued behind train5; actual equality/publication still open.
-
-- Actual cap172 reaches sample300 but rejects capture at0. First-cause
-  stage/reason/seed/allocation diagnostics added;10replay tests pass.
-  Next: head rerun and source-backed capture correction; no equality yet.
-
-- Final default light with one test thread:281 passed/0 failed/7 ignored.
-  Concurrent-run inherited timing failures both pass; no checks skipped.
-  L172 focused10replay+11executor pass. Awaiting head actual capture.
-
-- Head corrected cap172 receipt: a build merge conflict prevented launch;
-  prior log was stale. Fixed by head; rebuild/capture pending. Added
-  installation and entry diagnostics.
-  Full feature-light before service addition277/0/7; final replay10PASS
-  with and without feature. Next: diagnose missing hook activation.
-
-- Publication preflight: 11 executor tests pass, including three new
-  all-before-store checks. Complete serialized synthetic replay and private
-  uncontended critical-section model: 10 replay tests pass, including
-  differential runtime service checks and allocator dependency refusal.
-  Still awaiting real capture; no live publication or speed claim.
-
-- Continuation: capture v2 preserves live outgoing MXCSR; replay compares
-  x87 and thread control state. Five focused replay tests pass; real
-  capture and production publication remain pending.
-
-- Private contiguous helper lanes, dependency-checked ordered merge, and
-  strict command/resource-byte comparison are implemented. Opt-in proof
-  runner captures the real serial traversal and replays raw serial/queued
-  bodies privately; unknown host services and incomplete inputs refuse.
-  Live output remains serial. No real-stream acceptance or speedup claimed.
-- TLS routing precedes global overrides and warmed caches only in the
-  `parallel-shadow` Cargo feature. The unconditional check measured slower
-  in 9/9 isolated pairs, so ordinary builds retain the old call path.
-- 17 focused runtime checks and two routing tests pass. Lane oracle:
-  12 tests, eight original FED3B0 returns and 227 shader fixtures reproducing
-  1,704 original uploads (29 conservative refusals). Default light: 271
-  passed / zero failures / seven ignored before final capture-file addition.
-  Final feature-enabled light: 272 passed / zero failures / seven ignored.
-- Next: head proof build and one nonempty private `.ddshadow` capture;
-  offline replay closes unsupported services/dependencies before candidate
-  publication and TRAIN READY. `docs/tasks/L172-parallel-shadow.md`.
+- Captured real outer-lane input privately:1,632 pages/13,226 write bytes.
+  FED200 gives child contexts a null secondary sort arena. Replay now
+  provides bounded private storage; FED3B0 output must not retain any
+  reference into it. All shared memory/resource/ABI gates remain strict.
+- Old-capture serial execution completes; parallel refuses an uncaptured
+  FED200 renderer header. Source-backed preseed added; head recapture next.
+  Serial/live proof is reported before trying parallel. Capture v3 retains
+  rejected diagnostic fixtures but can never accept them as proof.
+- 31 focused shadow tests pass. Earlier complete default light with one
+  test thread:281 passed/0 failed/7 ignored; inherited concurrent timing
+  failures passed the full serial-test rerun, with no skipped checks.
+  Private recursive lock model is differential-tested against runtime;
+  allocator dependencies and output references remain checked.
+- Prior lane oracle:8 original FED3B0 returns and227shader fixtures/1,704
+  uploads (29 conservative refusals). Feature-off call routing unchanged.
+- Live output remains serial. Real parallel equality, production publication
+  and FPS/job-time acceptance are OPEN. No production TRAIN READY. Next:
+  head capture with new metadata preseed, then close real replay refusals.
+  Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)
 
