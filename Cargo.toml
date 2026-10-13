@@ -688,3 +688,21 @@ opt-level = 1
 opt-level = 1
 incremental = false
 # END generated hot shards
+
+# Profiling the play builds (scripts/sample_profile.py): line tables for the
+# runtime-side crates, so internal functions are named instead of resolving
+# to the nearest public symbol. Not for the shards (their names are public).
+[profile.play.package.ddgpu]
+debug = "line-tables-only"
+[profile.play.package.ddruntime]
+debug = "line-tables-only"
+[profile.play.package.d3d9cmd]
+debug = "line-tables-only"
+[profile.play.package.ddaudio]
+debug = "line-tables-only"
+[profile.play.package.ddplay]
+debug = "line-tables-only"
+[profile.play.package.ddnative-base]
+debug = "line-tables-only"
+[profile.play.package.ddnative-host]
+debug = "line-tables-only"
