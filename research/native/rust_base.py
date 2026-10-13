@@ -10,6 +10,6 @@ def modules(root: Path) -> str:
     base = root / 'crates/ddnative-base/src'
     host = root / 'crates/ddnative-host/src/lib.rs'
     lines = ['extern crate self as ddnative_base;']
-    lines += [f'#[path="{(base / f"{m}.rs").as_posix()}"] mod {m};' for m in ('mem', 'x86', 'x87', 'hooks')]
+    lines += [f'#[path="{(base / f"{m}.rs").as_posix()}"] mod {m};' for m in ('mem', 'x86', 'x87', 'hooks', 'emit')]
     lines.append(f'#[path="{host.as_posix()}"] mod ddnative_host;')
     return '\n'.join(lines) + '\n'
