@@ -110,6 +110,16 @@ pub enum Mode {
     Verify,
 }
 
+/// `DDDRAW_NATIVE_TARGETS=all` (L179): offer the decoder the draws into every
+/// colour target, not only the scene's (the shadow maps, the soft-body and
+/// half-resolution passes: ~1,900 draws a frame that otherwise take the
+/// D3D9 path at ~3x the per-draw cost); the draws it refuses still take the
+/// D3D9 path. Check with `DDDRAW_NATIVE=verify` before relying on it.
+fn all_targets() -> bool {
+    static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALL.get_or_init(|| std::env::var("DDDRAW_NATIVE_TARGETS").as_deref() == Ok("all"))
+}
+
 pub fn mode() -> Mode {
     mode_of(std::env::var("DDDRAW_NATIVE").ok().as_deref())
 }
@@ -684,16 +694,21 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                 }
             }
         }
-        // every register the shaders read comes from here
+        // every register the shaders read comes from here (a refusal gives
+        // the banks back, so the next binding reuses their storage)
         let r = &meta.reads[stage];
-        if (0..4).any(|k| r.floats[k] & !w.0[k] != 0) {
-            return Err(Refusal::FloatsUncovered);
-        }
-        if r.ints & !w.1 != 0 {
-            return Err(Refusal::IntsUncovered);
-        }
-        if r.bools & !w.2 != 0 {
-            return Err(Refusal::BoolsUncovered);
+        let refusal = if (0..4).any(|k| r.floats[k] & !w.0[k] != 0) {
+            Some(Refusal::FloatsUncovered)
+        } else if r.ints & !w.1 != 0 {
+            Some(Refusal::IntsUncovered)
+        } else if r.bools & !w.2 != 0 {
+            Some(Refusal::BoolsUncovered)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            c.banks = banks;
+            return Err(refusal);
         }
     }
     // the same as the binding's part of an earlier frame: that part
@@ -836,16 +851,24 @@ impl Mirror {
     fn textures(&self, sh: &Shadow, c: &mut Caches) -> Arc<[TextureBinding]> {
         let mut m = self.clone();
         m.apply(sh);
-        let mut out = Vec::with_capacity(8);
-        for i in 0..21 {
+        let found: [Option<TextureBinding>; 21] = std::array::from_fn(|i| {
             let h = m.textures[i];
-            if h != 0 {
-                if let Some(info) = c.texture(h) {
-                    out.push(TextureBinding { sampler: stage_of(i), resource: h, states: m.rows[i], ..info });
-                }
+            (h != 0)
+                .then(|| c.texture(h))
+                .flatten()
+                .map(|info| TextureBinding { sampler: stage_of(i), resource: h, states: m.rows[i], ..info })
+        });
+        // the slots bound, in order: an exact-length iterator, so the slice
+        // is allocated once (no Vec first)
+        let mut at = [0u8; 21];
+        let mut n = 0;
+        for (i, t) in found.iter().enumerate() {
+            if t.is_some() {
+                at[n] = i as u8;
+                n += 1;
             }
         }
-        out.into()
+        at[..n].iter().map(|&i| found[i as usize].clone().unwrap()).collect()
     }
 }
 
@@ -907,7 +930,8 @@ pub struct StreamPart {
 }
 
 fn stream_part(g: &G, binding: u32) -> Result<StreamPart, Refusal> {
-    let mut streams = Vec::with_capacity(4);
+    let mut streams = [(0, 0, 0, 0, 0); 4];
+    let mut count = 0;
     let mut extent = 0u32;
     for k in 0..4u32 {
         let vb = g.u32(binding.wrapping_add(4 * k));
@@ -923,11 +947,12 @@ fn stream_part(g: &G, binding: u32) -> Result<StreamPart, Refusal> {
         let handle = g.u32(vb.wrapping_add(0x20));
         if handle != 0 {
             // non-instanced: frequency 1
-            streams.push((k, handle, offset, stride, 1));
+            streams[count] = (k, handle, offset, stride, 1);
+            count += 1;
         }
     }
     let ib = g.u32(binding.wrapping_add(0x28));
-    Ok(StreamPart { streams: streams.into(), indices: if ib == 0 { 0 } else { g.u32(ib.wrapping_add(0x20)) }, extent })
+    Ok(StreamPart { streams: streams[..count].into(), indices: if ib == 0 { 0 } else { g.u32(ib.wrapping_add(0x20)) }, extent })
 }
 
 /// A target binding of this frame (0x00DA6FE0 with nothing applied).
@@ -1798,7 +1823,7 @@ impl Native {
             f.shaders.insert(m.u32(record.wrapping_add(0xC)));
             f.streams.insert(m.u32(record.wrapping_add(0x10)));
         }
-        if size != g.scene || size == (0, 0) {
+        if size == (0, 0) || (size != g.scene && !all_targets()) {
             return Taken::Default;
         }
         let t = &mut g.totals;
@@ -2280,6 +2305,160 @@ mod tests {
         again.ctx.push((0x100, 7));
         again.prune(&g, &pruned);
         assert!(again.is_empty() && again.ctx.is_empty());
+    }
+
+    /// Pruning (in place) keeps each word once, where it was first
+    /// written, with its last value, drops what memory already holds, and
+    /// reads each word once (codex-11, L154).
+    #[test]
+    fn pruning_keeps_first_order_and_last_values_in_place() {
+        use std::cell::RefCell;
+        struct Trace {
+            reads: RefCell<Vec<u32>>,
+        }
+        impl Mem for Trace {
+            fn u8(&self, _: u32) -> u8 {
+                unreachable!()
+            }
+            fn set_u8(&mut self, _: u32, _: u8) {
+                unreachable!()
+            }
+            fn u32(&self, a: u32) -> u32 {
+                self.reads.borrow_mut().push(a);
+                a / 4
+            }
+        }
+        let mirror = Mirror { epoch: 0, rows: [[0; 14]; 21], textures: [0; 21] };
+        let mut seed = 17u32;
+        for len in 0..128 {
+            for _ in 0..32 {
+                let input: Vec<_> = (0..len)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 17;
+                        seed ^= seed << 5;
+                        ((seed % 32) * 4, (seed >> 16) % 32)
+                    })
+                    .collect();
+                // the words in first-write order, each with its last value
+                let mut order = Vec::new();
+                for &(a, _) in &input {
+                    if !order.contains(&a) {
+                        order.push(a);
+                    }
+                }
+                let expected: Vec<_> = order
+                    .iter()
+                    .filter_map(|&a| {
+                        let v = input.iter().rev().find(|w| w.0 == a).unwrap().1;
+                        (v != a / 4).then_some((a, v))
+                    })
+                    .collect();
+                let mut sh = Shadow { ctx: input, ..Default::default() };
+                let (ptr, capacity) = (sh.ctx.as_ptr(), sh.ctx.capacity());
+                let m = Trace { reads: RefCell::new(Vec::new()) };
+                sh.prune(&G::new(&m), &mirror);
+                assert_eq!(sh.ctx, expected);
+                assert_eq!(*m.reads.borrow(), order);
+                assert_eq!((sh.ctx.as_ptr(), sh.ctx.capacity()), (ptr, capacity));
+            }
+        }
+    }
+
+    /// Streams (a fixed array, no Vec): only those with a backend handle,
+    /// in slot order; every bound one counts for the extent.
+    #[test]
+    fn streams_keep_sparse_slots_the_extent_and_the_zero_stride_refusal() {
+        let mut m = TestMem::default();
+        let binding = 0x1000;
+        // slot 1 has no backend handle but still bounds the extent
+        for (slot, size, offset, stride, handle) in [(0, 100, 4, 8, 11), (1, 1000, 0, 4, 0), (3, 240, 16, 16, 33)] {
+            let vb = 0x2000 + slot * 0x100;
+            m.set_u32(binding + 4 * slot, vb);
+            m.set_u32(binding + 0x14 + 4 * slot, offset);
+            m.set_u8(binding + 0x10 + slot, stride as u8);
+            m.set_u32(vb + 0x14, size);
+            m.set_u32(vb + 0x20, handle);
+        }
+        m.set_u32(binding + 0x28, 0x3000);
+        m.set_u32(0x3020, 99);
+        let s = stream_part(&G::new(&m), binding).ok().unwrap();
+        assert_eq!(&*s.streams, &[(0, 11, 4, 8, 1), (3, 33, 16, 16, 1)]);
+        assert_eq!((s.extent, s.indices), (250, 99));
+        m.set_u8(binding + 0x13, 0);
+        assert!(matches!(stream_part(&G::new(&m), binding), Err(Refusal::ZeroStride)));
+        let s = stream_part(&G::new(&TestMem::default()), binding).ok().unwrap();
+        assert!(s.streams.is_empty());
+        assert_eq!((s.extent, s.indices), (0, 0));
+    }
+
+    /// The texture list: every bound slot the backend knows, in slot
+    /// order, with the shadow's overrides; earlier lists unchanged.
+    #[test]
+    fn texture_lists_keep_every_slot_and_the_shadow_overrides() {
+        let mut c = Caches::default();
+        let mut mirror = Mirror { epoch: 0, rows: [[0; 14]; 21], textures: [0; 21] };
+        for i in 0..21 {
+            let h = 0x1000 + i as u32;
+            mirror.textures[i] = h;
+            mirror.rows[i] = [i as u32; 14];
+            c.textures.insert(
+                h,
+                Some(TextureBinding {
+                    sampler: 0,
+                    resource: h,
+                    kind: d3d9cmd::TexKind::Flat,
+                    format: 21,
+                    width: 8,
+                    height: 8,
+                    depth: 1,
+                    levels: 1,
+                    usage: 0,
+                    states: [0; 14],
+                }),
+            );
+        }
+        let all = mirror.textures(&Shadow::default(), &mut c);
+        assert_eq!(all.len(), 21);
+        for (i, t) in all.iter().enumerate() {
+            assert_eq!((t.sampler, t.resource, t.states), (stage_of(i), 0x1000 + i as u32, [i as u32; 14]));
+        }
+        // slot 1 unknown to the backend, stage 0 unbound by the shadow,
+        // a vertex sampler state overridden
+        c.textures.insert(0x1001, None);
+        let sh = Shadow { textures: vec![(0, 0)], sampler_states: vec![(260, 3, 77)], ..Default::default() };
+        let sparse = mirror.textures(&sh, &mut c);
+        assert_eq!(sparse.len(), 19);
+        assert_eq!((sparse[0].sampler, sparse.last().unwrap().states[3]), (2, 77));
+        assert_eq!(all[20].states[3], 20);
+        mirror.textures.fill(0);
+        assert!(mirror.textures(&Shadow::default(), &mut c).is_empty());
+    }
+
+    /// A binding refused for registers its writes do not cover gives the
+    /// constant banks back: the next binding reuses their storage.
+    #[test]
+    fn refused_bindings_keep_the_constant_banks() {
+        for (kind, expected) in [(0, Refusal::FloatsUncovered), (1, Refusal::IntsUncovered), (2, Refusal::BoolsUncovered)] {
+            let mut m = TestMem::default();
+            m.set_u32(0x1008, 0x2000);
+            let mut b = binding_writing(0, 0, 0);
+            let meta = Arc::get_mut(&mut Arc::get_mut(&mut b).unwrap().meta).unwrap();
+            match kind {
+                0 => meta.reads[0].floats[0] = 1,
+                1 => meta.reads[0].ints = 1,
+                _ => meta.reads[0].bools = 1,
+            }
+            let mut c = Caches::default();
+            c.metas.insert(0x2000, b.meta.clone());
+            c.banks[0].f.reserve(256);
+            c.banks[1].f.reserve(224);
+            let storage = c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity()));
+            for _ in 0..3 {
+                assert!(matches!(binding_part(&G::new(&m), &mut c, 0x1000, None), Err(e) if e == expected));
+                assert_eq!(c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity())), storage);
+            }
+        }
     }
 
     /// A shader binding writing `vs` vertex and `ps` pixel float

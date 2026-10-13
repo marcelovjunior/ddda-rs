@@ -7,6 +7,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# L179: a faster general allocator than the Windows heap (the render
+# worker spent ~12% of its time allocating per draw); off with
+# --no-default-features
+mimalloc = { version = "0.1", default-features = false, optional = true }
 ddruntime = { path = "../ddruntime" }
 ddnative-base = { path = "../ddnative-base" }
 ddgpu = { path = "../ddgpu" }
@@ -17,6 +21,7 @@ winit = "0.30.13"
 windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_XboxController"] }
 
 [features]
+default = ["mimalloc"]
 # the diagnostic emulator fallback (ddruntime/src/emu.rs, L51); needs CMake on PATH
 emu = ["ddruntime/emu"]
 # L114: inlinable memory accessors and flag helpers in the shards

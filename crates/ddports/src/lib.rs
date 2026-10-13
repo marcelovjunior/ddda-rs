@@ -35,11 +35,32 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
         ports.push((0x00efd240, mtcore::shadow_pass::setup));
     }
-    // L176: the nDraw material's parameter lookup (semantic ports,
-    // crates/mtdraw/tests/material.rs).
+    // L176: the nDraw material's parameter binding, colour and update
+    // (semantic ports, crates/mtdraw/tests/material.rs). 0x01066590,
+    // 0x010655A0 and 0x00FEDD60 are ported in L176 too but registered from
+    // L170, L174 and L171.
     if std::env::var("DDRUNTIME_MATERIAL").as_deref() == Ok("1") {
-        ports.push((0x0106_6590, mtdraw::material::find_parameter));
         ports.push((0x0106_6b10, mtdraw::material::bind_parameter));
+        ports.push((0x0106_7790, mtdraw::material::material_colour));
+        ports.push((0x0106_2f20, mtdraw::material::update_material));
+    }
+    // L176: the draw context's render-target setter (semantic port,
+    // crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_SET_TARGET").as_deref() == Ok("1") {
+        ports.push((0x00fe_fb90, mtdraw::target::set_render_target));
+    }
+    // L176: the draw context's frustum tests (semantic ports,
+    // crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_CULL").as_deref() == Ok("1") {
+        ports.push((0x00ff_0780, mtdraw::cull::cull_sphere));
+        ports.push((0x00ff_0ad0, mtdraw::cull::cull_oriented));
+        ports.push((0x00ff_0d20, mtdraw::cull::cull_box));
+        ports.push((0x00ff_0e60, mtdraw::cull::cull_box_all));
+    }
+    // L176: sSceneExt::vf16, the draw's light setup (semantic port,
+    // crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_LIGHTS").as_deref() == Ok("1") {
+        ports.push((0x0049_b1a0, mtdraw::lights::scene_lights));
     }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
@@ -65,7 +86,13 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x01145bf0, mtcore::semantic_draw_c::apply_standard_material),
             (0x00ffc9f0, mtcore::semantic_draw_b::prepare_model_palette),
             (0x01140180, mtcore::semantic_draw_b::draw_culled_instances),
+            (0x010a35d0, mtcore::semantic_jobs::query_bounds_tree),
+            (0x00c24640, mtcore::semantic_instancing::draw_instanced_mesh),
+            (0x010658b0, mtcore::semantic_c2::apply_pass_state),
         ] {
+            if !semantic_selected(a) {
+                continue;
+            }
             ports.retain(|p| p.0 != a);
             ports.push((a, f));
         }
@@ -78,6 +105,23 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         }
     }
     ports
+}
+
+/// Whether the semantic rewrite at `address` is in use: every rewrite
+/// unless `DDRUNTIME_SEMANTIC_ONLY` lists the addresses to keep, or
+/// `DDRUNTIME_SEMANTIC_SKIP` the addresses to leave out (comma-separated
+/// hex, `0x` optional). One build can then bisect the rewrites in game.
+pub fn semantic_selected(address: u32) -> bool {
+    let listed = |name: &str| {
+        std::env::var(name).ok().map(|list| {
+            list.split(',').any(|item| {
+                let item = item.trim();
+                let hex = item.strip_prefix("0x").unwrap_or(item);
+                u32::from_str_radix(hex, 16) == Ok(address)
+            })
+        })
+    };
+    listed("DDRUNTIME_SEMANTIC_ONLY").unwrap_or(true) && !listed("DDRUNTIME_SEMANTIC_SKIP").unwrap_or(false)
 }
 
 /// The ports with `mods` over them: a mod at a ported address replaces the
@@ -160,6 +204,9 @@ mod tests {
             (0x00fee320, mtcore::semantic_draw_c::commit_primitive_state),
             (0x00ffc350, mtcore::semantic_draw_c::draw_model_mesh),
             (0x01145bf0, mtcore::semantic_draw_c::apply_standard_material),
+            (0x010a35d0, mtcore::semantic_jobs::query_bounds_tree),
+            (0x00c24640, mtcore::semantic_instancing::draw_instanced_mesh),
+            (0x010658b0, mtcore::semantic_c2::apply_pass_state),
         ] {
             assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)), semantic_enabled);
         }

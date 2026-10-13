@@ -74,7 +74,8 @@ fn tls_and_semaphore_imports_complete_while_another_thread_holds_service_lock() 
     }).collect();
     let mut registry = Registry::new();
     assert_eq!(crate::services::bind_apis(&mut registry, &imports).unwrap(), names.len());
-    for import in &imports { assert!(matches!(registry.get(import.token), Some(Binding::LockFree(_)))); }
+    // no service lock: LockFree, or Integer (L170: TLS and last error)
+    for import in &imports { assert!(matches!(registry.get(import.token), Some(Binding::LockFree(_) | Binding::Integer(_)))); }
     let (send, recv) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         runtime::enter(rt);

@@ -54,12 +54,16 @@ impl Session {
         mem.map_lazy(STACK_TOP - STACK_SIZE, STACK_SIZE, READ | WRITE).map_err(|e| format!("{e:?}"))?;
         crate::seh::initialize_teb(&mut mem, crate::services::MAIN_THREAD_ID, STACK_TOP - STACK_SIZE, STACK_TOP);
         let mut registry = Registry::with_lifted_program();
-        // guest memory only: no guest lock in parallel mode (L65)
-        registry.replace(crate::fastmem::MEMCPY, crate::dispatch::Binding::LockFree(crate::fastmem::memcpy));
-        registry.replace(crate::fastmem::MEMSET, crate::dispatch::Binding::LockFree(crate::fastmem::memset));
+        // guest memory only: no guest lock in parallel mode (L65); integer
+        // bodies (L170 audit, services::INTEGER_APIS's contract: integer
+        // guest reads and writes, host buffers, no floats, callbacks, waits
+        // or drivers; crtfast's lifted fallbacks are guest code, which runs
+        // under the guest's live MXCSR and x87 state anyway): no FPU boundary
+        registry.replace(crate::fastmem::MEMCPY, crate::dispatch::Binding::Integer(crate::fastmem::memcpy));
+        registry.replace(crate::fastmem::MEMSET, crate::dispatch::Binding::Integer(crate::fastmem::memset));
         // the CRT's string routines, ported (L67; guest memory only)
         for &(addr, f) in crate::crtfast::SERVICES {
-            registry.replace(addr, crate::dispatch::Binding::LockFree(f));
+            registry.replace(addr, crate::dispatch::Binding::Integer(f));
         }
         crate::services::install(&mut mem, &mut registry).map_err(|e| format!("{e:?}"))?;
         crate::services::set_exe_path(exe_path);

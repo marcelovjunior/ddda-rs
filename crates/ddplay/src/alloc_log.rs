@@ -1,6 +1,14 @@
-//! Opt-in ownership counters around Rust's unchanged System allocator.
+//! Opt-in ownership counters around the process allocator (mimalloc, or
+//! Rust's unchanged System allocator without the `mimalloc` feature).
 //! Driver/OS allocations and allocator bookkeeping are deliberately excluded.
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout};
+
+// The allocator the counters wrap: mimalloc by default (feature
+// `mimalloc`), Rust's System allocator (the Windows heap) otherwise.
+#[cfg(feature = "mimalloc")]
+use mimalloc::MiMalloc as Inner;
+#[cfg(not(feature = "mimalloc"))]
+use std::alloc::System as Inner;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
 
 static MODE: AtomicU8 = AtomicU8::new(0);
@@ -79,27 +87,27 @@ impl CountingAllocator {
 }
 
 // SAFETY: every operation forwards the original pointer/layout unchanged to
-// System. Accounting uses only atomics and is applied only after success.
+// the inner allocator. Accounting uses only atomics and is applied only after success.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc(layout) };
+        let pointer = unsafe { Inner.alloc(layout) };
         if enabled() && !pointer.is_null() { self.add(layout); }
         pointer
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let pointer = unsafe { System.alloc_zeroed(layout) };
+        let pointer = unsafe { Inner.alloc_zeroed(layout) };
         if enabled() && !pointer.is_null() { self.add(layout); }
         pointer
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
         if enabled() { self.remove(layout); }
-        unsafe { System.dealloc(pointer, layout); }
+        unsafe { Inner.dealloc(pointer, layout); }
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let result = unsafe { System.realloc(pointer, layout, size) };
+        let result = unsafe { Inner.realloc(pointer, layout, size) };
         if enabled() && !result.is_null() {
             self.remove(layout);
             // GlobalAlloc's caller guarantees a valid resized layout.
