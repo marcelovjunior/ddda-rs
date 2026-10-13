@@ -57,9 +57,83 @@ fallback call, address wrap and access order. No page-check coalescing or
 cross-access pointer cache. Public scalar helpers remain out of line;
 no `inline(always)` additions in generated-call interfaces.
 
-Private baseline/candidate copies and opt0/opt1 caller drivers prepared
-under `C:/ddda-targets/L139/emit-experiment`; no retained production change
-or performance claim yet. Candidate oracle compares 2,304 synthetic cases
-against the existing ordered scalar helpers, including fallback side effects.
+Private experiments and opt0/opt1 caller drivers are under
+`C:/ddda-targets/L139/emit-experiment`. The retained result follows.
 
-Next: measure the isolated helper experiment and gate any retained change.
+### Narrow store128 follow-up: GREEN
+
+The broad load64/load128/store64/store128 experiment is not retained:
+load64 regressed across the first opt1 pairs, and other cases were mixed.
+The narrow patch only changes `emit::store128` to an out-of-line base-crate
+helper and shares its existing scalar write implementation through a
+crate-private inline method. No access checks or stores are combined.
+No generated source or lifter emission changes are needed. The current
+generated tree contains 2,378 `emit::store128` call sites in 508 files;
+these are static counts, not measured execution frequencies.
+
+Initial separate-process timing favored store128 at opt0, but unchanged
+load128 controls varied substantially. Those timings are exploratory,
+not acceptance evidence. A longer same-process run timed out during a
+machine slowdown and is discarded. The reproducible benchmark driver uses
+shorter bounded runs, with alternating reference/new paths in one process,
+caller opt0/opt1, base opt3, and explicit logical-CPU affinity.
+
+The 2,304 ordered-access comparisons include 576 store128 cases and controls
+for the other unchanged multiword helpers. They cover wrapping addresses,
+page crossings, backing/permissions, atomic/serial modes, trait fallback,
+and fallback side effects that change following accesses. An additional
+fault test checks that the first two stores survive a third-lane fault
+and the fourth store never occurs.
+
+- Base debug: **36 passed** (including both new tests).
+- Runtime light, serial, no-fail-fast: **198 passed / one inherited
+  fullscreen-gamma failure / four ignored**. Nested subprocess summaries
+  are excluded from these top-level counts. No checks were weakened.
+- Expanded required-vector/play gate: **102 passed / zero failed / seven
+  timing benchmarks ignored**, all 33 generated crates rebuilt. Inventory
+  remains 59,450 / 59,469 with five existing gaps. Completed 08:04:14.
+- Frozen production/test sources match `gate2-source.json`; logs are
+  `base-debug.log`, `runtime.log`, `gate2.{out,err}.log`, and
+  `validate.out.log` under `C:/ddda-targets/L139`. Parent is `15c75516`.
+- Private compiled-code inspection confirms four distinct page-entry and
+  permission checks, in-order scalar stores, and no public accessor calls
+  on the successful fast path. No raw disassembly is committed.
+
+### Retained synthetic measurement
+
+Final same-process reference-loop/helper pairs use logical CPU 10,
+200,000 stores per sample, 10,000 warmup stores, 11 alternating AB/BA pairs,
+caller opt0 or opt1 and base opt3. `QueryThreadCycleTime` reports cycles
+spent by the thread, excluding unscheduled time; wall-time outliers remain
+in the logs. The reference loop is compiled at the selected caller level.
+Both paths include an indirect benchmark call and loop overhead. The
+working set is synthetic, with atomic guest accesses enabled.
+
+| Caller | Access | Reference cycles/store | Helper cycles/store | Median paired ratio |
+|---|---|---:|---:|---:|
+| opt0 | aligned | 153.486 | 61.833 | 0.4095 |
+| opt0 | unaligned | 156.404 | 65.226 | 0.4149 |
+| opt0 | page split | 155.550 | 61.170 | 0.4028 |
+| opt1 | aligned | 29.657 | 15.197 | 0.5527 |
+| opt1 | unaligned | 28.625 | 22.476 | 0.7868 |
+| opt1 | page split | 26.991 | 15.741 | 0.5818 |
+
+All 33 opt0 pairs improved; paired ratios range 0.3522–0.5246. Opt1
+aligned improves 11/11; unaligned 10/11, page split 9/11, with maxima
+1.0190/1.1091 for the latter two. This is a synthetic loop/helper
+comparison; gameplay FPS, loading and image comparison remain for head.
+
+Reproduce outside a game run, through `heavy.py` (no BIG/shards needed):
+set the usual dedicated target/incremental/build-jobs environment, then
+`python research/native/bench_emit_memory.py --caller-opt 0 --iterations
+200000 --cpu 10`, and repeat with `--caller-opt 1`. The final cycle-enabled
+benchmark was compiled and run in both caller modes from private source
+before copying it here; production/test source stayed frozen through gate2.
+Final logs: `cycles.{out,err}.log`, `emit-experiment/cycles-o{0,1}.txt`.
+
+L142 owns broader memory/flat-view work. Board #12051/#12058/#12064 agree
+that this narrow private-method split is disjoint; mem.rs/lift.py claims
+were released to that owner. No L142 implementation is in this branch.
+
+Next: head's same-scene image/FPS/loading run with this helper; combine
+with L142 only under a separately pinned gate.
