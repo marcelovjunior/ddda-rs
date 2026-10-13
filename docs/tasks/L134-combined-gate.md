@@ -54,6 +54,42 @@ Next: head assigned a second combined pin, `7aa2d159`, in board #11769,
 adding L132b packed memory entries, eight L130 ports and native-worker fixes.
 Merge and gate that tree separately; it requires another shard rebuild.
 
+### Second combined integration: GREEN
+
+Merged `7aa2d159` as `3ffa376b`, retaining both milestone sections. Commit
+`10a484e9` matches `crates/` exactly to that pin: the head's version still
+uses ordinary private evaluator inline annotations, so this pin does not
+carry the first gate's final-L132 annotation changes.
+
+All 33 shards rebuilt, same required-vector/play settings and target. The
+expanded script completed at 07:03:13 with **94 passed, zero failed, four
+benchmark tests ignored**. All corpus tests ran; only explicit timing
+benchmarks were ignored. Per suite:
+
+| Suite | Passed | Ignored | Result |
+|---|---:|---:|---|
+| ddnative (including lifted and units) | 32 | 0 | PASS |
+| ddnative-base | 31 | 0 | PASS |
+| mtcore (including eight L130 ports) | 11 | 4 | PASS |
+| mtmath | 5 | 0 | PASS |
+| mtframe | 5 | 0 | PASS |
+| mtdraw (L125 ABI/decoders and both frame checks) | 4 | 0 | PASS |
+| ddports registration | 1 | 0 | PASS |
+| mtstate | 5 | 0 | PASS |
+| Inventory declarations and summary | — | — | PASS |
+
+Lifted replay: **178,130 cases / 59,734 functions**, 29.93 s. Inventory:
+59,450 verified / 59,469 non-platform functions; five existing coverage
+gaps and 17 owner-credited fragments unchanged. Logs:
+`C:/ddda-targets/L134/gate2.{out,err}.log`; revision receipt:
+`gate2-revision.txt`. The 11m10s wall duration includes game-run pauses.
+Repository play defaults are opt-level 0 for the 32 address shards and
+opt-level 1 for the hot shard; this is not the head's all-shards-opt1 timing.
+
+This gate verifies L132b's packed page-table entries and the eight L130
+ports at the assigned integration revision. Later L130/L135 changes are
+not in this pin. The separate x87 experiment below was not included.
+
 ### Follow-up selection from L131 capture
 
 Head's private `profile_c17draw.json`/`.txt`: 1,756 rounds in 60 seconds

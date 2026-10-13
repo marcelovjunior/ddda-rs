@@ -1,5 +1,20 @@
 # Milestones
 
+### L134 second combined gate: L132b and L130 integration (2026-10-13)
+
+- Exact production pin `7aa2d159`, checked on L134 `10a484e9`: expanded
+  required-vector play gate **94 pass / 0 fail / 4 benchmarks ignored**.
+  All 33 shards rebuilt; **178,130 lifted cases** pass, as do every readable
+  port suite and inventory declaration checks. Five existing gaps remain.
+- L132b packed permission/backing entries (9 -> 8 MiB page table) pass
+  31 base tests and the full lifted replay. L130's eight new ports pass
+  the required core oracles, including six duration decoders replacing
+  the profiled emulator calls. No additional FPS claim from these tests.
+- The fixed shared-sink lock passes both 400-frame mtdraw comparisons.
+  Details and per-suite counts: `docs/tasks/L134-combined-gate.md`.
+- Next: measured x87 helper follow-up, then the next batched native gate
+  and head game comparison; x87 candidate is not part of this green pin.
+
 ### L134 combined native gate, first integration (2026-10-13)
 
 - FPS line `941f5d2c` plus final L132 `ff98640d`: expanded play-profile
