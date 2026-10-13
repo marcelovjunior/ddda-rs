@@ -70,6 +70,9 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
     let cases = data["cases"].as_array().unwrap();
     let mut made: BTreeMap<u32, usize> = BTreeMap::new();
     for (i, case) in cases.iter().enumerate() {
+        if std::env::var_os("S10_TRACE").is_some() {
+            eprintln!("case {i}");
+        }
         let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
         let before = regs(&case["before"]);
         let after = regs(&case["after"]);
@@ -219,4 +222,12 @@ fn semantic_bind_consumer_to_model_matches_original() {
     let callees = [Callee { target: 0x00fe_d890, reads: &[ECX], stack_args: 1 }];
     let (cases, made) = run_cases(&vectors("consumer_state.json"), mtcore::semantic_s10::bind_consumer_to_model, false, &callees, &[]);
     eprintln!("{cases} ABI-level consumer_state cases passed; calls {made:x?}");
+}
+
+// verifies 0x0049e920 (ABI level); the stub getters stand in for virtual +0x10
+#[test]
+fn semantic_find_nearest_object_matches_original() {
+    let callees: Vec<Callee> = (0..4).map(|k| Callee { target: 0x3000_0000 + 0x10 * k, reads: &[ECX], stack_args: 0 }).collect();
+    let (cases, made) = run_cases(&vectors("find_nearest.json"), mtcore::semantic_s10::find_nearest_object, true, &callees, &[]);
+    eprintln!("{cases} ABI-level find_nearest cases passed; calls {made:x?}");
 }

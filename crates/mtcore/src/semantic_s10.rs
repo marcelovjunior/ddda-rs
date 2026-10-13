@@ -726,3 +726,158 @@ pub fn bind_consumer_to_model(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4 + 8);
 }
+
+/// The original body of 0x0049E920, set by the runtime when it installs
+/// [`find_nearest_object`]; only used for the pathological case of more
+/// than 256 hits (the original keeps 256 and then sorts past its array).
+pub static FIND_NEAREST_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = std::sync::OnceLock::new();
+
+/// Class-id globals of 0x0049E920: objects of the first class are range
+/// tested, objects of the second or third class are skipped, any other
+/// object ends the search with no result.
+const CLASS_RANGED: u32 = 0x019a_5e30;
+const CLASS_SKIPPED_B: u32 = 0x019a_60b0;
+const CLASS_SKIPPED_C: u32 = 0x019a_60d0;
+
+// Translated from 0x0049e920 (DDDA.exe 2017-12-13 Steam).
+/// 0x0049E920, `find_nearest_object(list, exclude, owner_id, position,
+/// range_scale, max_dy, param)` (stdcall, `ret 0x1c`): the list's object
+/// (count +0x24, pointers +0x30) of the first class (descriptor chain
+/// containing the id at 0x019A5E30) nearest to `position` (three floats),
+/// or 0.
+///
+/// An object is a candidate when it is not `exclude`, its flags (+4) have
+/// kind 2 (low three bits) and bit 0x400, it is of the first class with
+/// `owner_id` at +0x2574 (and `param` at +0x2534 when `param` is set), the
+/// planar distance (x, z at +0x40 / +0x48) is within `range_scale *
+/// [0x014F9E04]` (and `range_scale > 0`) and the height difference (y at
+/// +0x44, absolute value through the mask at 0x0161C330) does not exceed
+/// `max_dy`. An object of neither the first, the second (0x019A60B0) nor
+/// the third (0x019A60D0) class makes the whole search return 0 at once.
+///
+/// The original bubble-sorts the hits by distance and returns the first;
+/// that is the first hit of the smallest distance, found here by a scan
+/// (the sort itself when a distance is a NaN, whose order the sort defines).
+/// The class descriptor comes from virtual +0x10, called three times per
+/// object by the original; a plain `mov eax, imm; ret` getter is read from
+/// its code once instead, any other is called three times.
+pub fn find_nearest_object(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // The original's frame: EBP = entry - 4, ESP aligned to 8, 0x80c locals,
+    // EBX, ESI, EDI pushed.
+    let ebp = entry.wrapping_sub(4);
+    let frame = (ebp & !7).wrapping_sub(0x80c).wrapping_sub(12);
+    let list = arg(m, 0);
+    let total = pg.u32(m, list.wrapping_add(0x24));
+    let mut hits: Vec<(u32, f32)> = Vec::new();
+    let finish = |c: &mut Cpu, result: u32| {
+        (c.ebx, c.ebp, c.esi, c.edi) = saved;
+        c.eax = result;
+        c.esp = entry.wrapping_add(4 + 0x1c);
+    };
+    let mut index = 0u32;
+    while index < total {
+        let object = pg.u32(m, pg.u32(m, arg(m, 0).wrapping_add(0x30)).wrapping_add(index.wrapping_mul(4)));
+        index += 1;
+        if object == arg(m, 1) {
+            continue;
+        }
+        let flags = pg.u32(m, object.wrapping_add(4));
+        if flags & 7 != 2 || flags & 0x400 == 0 {
+            continue;
+        }
+        // the object's class descriptor (virtual +0x10, resume addresses of its three calls)
+        let vtable = pg.u32(m, object);
+        let method = pg.u32(m, vtable.wrapping_add(0x10));
+        let constant = constant_getter(m, pg, method);
+        c.esi = object;
+        let descriptor = |m: &mut dyn Mem, c: &mut Cpu, resume: u32| -> u32 {
+            if let Some(dti) = constant {
+                return dti;
+            }
+            let vtable = pg.u32(m, object);
+            let method = pg.u32(m, vtable.wrapping_add(0x10));
+            c.eax = method;
+            c.edx = vtable;
+            call_from(m, c, pg, frame, object, &[], resume, guest(method))
+        };
+        let dti = descriptor(m, c, 0x0049_e9a1);
+        let class = pg.u32(m, CLASS_RANGED);
+        let ranged = chain_has(m, pg, dti, class);
+        let dti = descriptor(m, c, 0x0049_e9d2);
+        let class = pg.u32(m, CLASS_SKIPPED_B);
+        let skipped_b = chain_has(m, pg, dti, class);
+        let dti = descriptor(m, c, 0x0049_ea0b);
+        let class = pg.u32(m, CLASS_SKIPPED_C);
+        let skipped_c = chain_has(m, pg, dti, class);
+        if !ranged {
+            if skipped_b {
+                continue;
+            }
+            if !skipped_c {
+                return finish(c, 0);
+            }
+            continue;
+        }
+        if pg.u32(m, object.wrapping_add(0x2574)) != arg(m, 2) {
+            continue;
+        }
+        let param = arg(m, 6);
+        if param != 0 && pg.u32(m, object.wrapping_add(0x2534)) != param {
+            continue;
+        }
+        let f = |m: &dyn Mem, a: u32| f32::from_bits(pg.u32(m, a));
+        let position = arg(m, 3);
+        let dx = f(m, position) - f(m, object.wrapping_add(0x40));
+        let dz = f(m, position.wrapping_add(8)) - f(m, object.wrapping_add(0x48));
+        let distance = (dz * dz + dx * dx).sqrt();
+        let scale = f32::from_bits(arg(m, 4));
+        if 0.0 >= scale {
+            continue;
+        }
+        let limit = scale * f32::from_bits(pg.u32(m, 0x014f_9e04));
+        if distance > limit {
+            continue;
+        }
+        let dy = f(m, position.wrapping_add(4)) - f(m, object.wrapping_add(0x44));
+        let dy = f32::from_bits(dy.to_bits() & pg.u32(m, 0x0161_c330));
+        if dy > f32::from_bits(arg(m, 5)) {
+            continue;
+        }
+        if hits.len() >= 0x100 {
+            // more hits than the original's array: it sorts past it
+            let original = FIND_NEAREST_ORIGINAL.get().expect("0x0049E920 original body");
+            (c.ebx, c.ebp, c.esi, c.edi) = saved;
+            c.esp = entry;
+            return original(m, c);
+        }
+        hits.push((object, distance));
+    }
+    // the first hit of the smallest distance; with a NaN distance the
+    // original's bubble sort decides
+    let nearest = if hits.iter().any(|h| h.1.is_nan()) {
+        let mut sorted = hits;
+        let mut passes = sorted.len().saturating_sub(1);
+        while passes > 0 {
+            for j in 0..passes {
+                if sorted[j].1 > sorted[j + 1].1 {
+                    sorted.swap(j, j + 1);
+                }
+            }
+            passes -= 1;
+        }
+        sorted.first().map_or(0, |h| h.0)
+    } else {
+        let mut best: Option<(u32, f32)> = None;
+        for &(object, distance) in &hits {
+            if best.map_or(true, |b| distance < b.1) {
+                best = Some((object, distance));
+            }
+        }
+        best.map_or(0, |b| b.0)
+    };
+    finish(c, nearest);
+}

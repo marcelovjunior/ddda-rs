@@ -117,8 +117,12 @@ class Oracle:
             self.remember(a, n)
         before = dict(regs=self.regs())
         uc.emu_start(self.entry, h.RET, count=2000000)
-        after = dict(regs=self.regs(), memory=[(a, uc.mem_read(a, 1)[0]) for a in sorted(self.written)])
-        return dict(seed=seed, before=before, initial=sorted(self.initial.items()), events=self.events, after=after)
+        esp_after = uc.reg_read(x.UC_X86_REG_ESP)
+        # stack scratch below the returned ESP is not part of the ABI
+        scratch = lambda a: 0x0F000000 <= a < esp  # below the entry frame
+        after = dict(regs=self.regs(), memory=[(a, uc.mem_read(a, 1)[0]) for a in sorted(self.written) if not scratch(a)])
+        initial = sorted((a, b) for a, b in self.initial.items() if not scratch(a))
+        return dict(seed=seed, before=before, initial=initial, events=self.events, after=after)
 
 
 def finish(out, function, cases):
