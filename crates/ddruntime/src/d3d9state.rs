@@ -353,11 +353,15 @@ pub fn get_render_state(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetSamplerState(this, sampler, type, value).
 pub fn set_sampler_state(m: &mut dyn Mem, cpu: &mut Cpu) {
     let [dev, smp, t, v] = args(m, cpu);
+    device_set_sampler_state(dev, smp, t, v);
+    cpu.eax = D3D_OK;
+    ret(m, cpu, 16);
+}
+/// SetSamplerState's effect, for host callers (the native path, L119).
+pub(crate) fn device_set_sampler_state(dev: u32, smp: u32, t: u32, v: u32) {
     state(dev, |s| {
         if s.sampler.insert((smp, t), v) != Some(v) { s.draw_dirty |= groups::TEXTURES; }
     });
-    cpu.eax = D3D_OK;
-    ret(m, cpu, 16);
 }
 /// GetSamplerState(this, sampler, type, value*).
 pub fn get_sampler_state(m: &mut dyn Mem, cpu: &mut Cpu) {
@@ -398,7 +402,13 @@ pub fn get_texture_stage_state(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// 0x00DA6EA0) and the vertex samplers 257..260.
 pub fn set_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
     let [dev, st, tex] = args(m, cpu);
-    cpu.eax = if st < 16 || (256..261).contains(&st) {
+    cpu.eax = if device_set_texture(dev, st, tex) { D3D_OK } else { D3DERR_INVALIDCALL };
+    ret(m, cpu, 12);
+}
+/// SetTexture's effect, for host callers too (the native path, L119):
+/// false for a stage D3D9 refuses.
+pub(crate) fn device_set_texture(dev: u32, st: u32, tex: u32) -> bool {
+    if st < 16 || (256..261).contains(&st) {
         // L101: the binding and both reference counts in one access to the
         // objects; a release to zero goes through release_of (destroyed, or
         // deferred without the guest lock), as before
@@ -437,11 +447,10 @@ pub fn set_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
         if let Some(old) = last {
             release_of(old);
         }
-        D3D_OK
+        true
     } else {
-        D3DERR_INVALIDCALL
-    };
-    ret(m, cpu, 12);
+        false
+    }
 }
 /// GetTexture(this, stage, IDirect3DBaseTexture9**).
 pub fn get_texture(m: &mut dyn Mem, cpu: &mut Cpu) {

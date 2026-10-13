@@ -44,14 +44,25 @@
 //! - the viewport is not the "invalid" one at 0x018D04E4 (then the apply
 //!   makes no SetViewport call).
 //!
-//! The sampler filtering option at [0x018D1D20]+0x34 overrides filters of
-//! anisotropic samplers only when a previous sampler was applied on the
-//! stage (0x00DA7250's non-null branch); a taken draw assumes that branch
-//! (every use of a stage but the first in a frame). Unresolved: the first
-//! use of a stage in a frame with option 1..5; `census` reports the option.
+//! Samplers and textures depend on what ran before (combo17's verify run:
+//! nearly every draw differed): 0x00DAA8B0 applies a stage's SamplerState
+//! only when the context's cached object changes, the filtering option at
+//! [0x018D1D20]+0x34 overrides anisotropic samplers only when an old one
+//! was cached (0x00DA7250's non-null branch), fields are emitted only where
+//! they differ from the old object's raw ones, and a texture is set by its
+//! object (a new D3D texture under the same object is not). So a taken
+//! draw runs that part of the apply itself, on the executor's context and
+//! the runtime's device (`shadow_samplers`, a port of 0x00DAA8B0's sampler
+//! section), and takes its textures and sampler states from the device, as
+//! the D3D9 path's snapshot does.
 //!
-//! A taken command changes neither the D3D9 device nor the executor
-//! context (mtdraw::sink), so the default path stays consistent.
+//! Otherwise a taken command changes neither the device nor the context.
+//! When the default path takes over again, the context's last fixed-state
+//! and shader bindings and their objects are cleared (`invalidate`), so the
+//! next applies run in full instead of comparing against bindings the taken
+//! draws went past, and the constant registers the taken draws uploaded
+//! are written to the device: the default path then sees the device the
+//! D3D9 path would have left.
 //!
 //! Layouts read (docs/NDRAW.md, sections 2, 3 and 9): a draw record's +4 is
 //! its target binding, +8 its fixed-state binding, +0xC its shader binding,
@@ -430,6 +441,8 @@ fn fixed_part(g: &G, id: &NativeStateIdentity) -> FixedPart {
 /// holding the SamplerState and the Texture.
 #[derive(Clone, Copy, Debug)]
 struct SamplerSlot {
+    /// the descriptor's low 12 bits (the context cache slot)
+    index: u32,
     stage: u32,
     sampler: u32,
     texture: u32,
@@ -499,7 +512,16 @@ fn meta_part(g: &G, metadata: u32, reads_cache: &mut FxMap<usize, (Arc<[u32]>, R
             }
         };
     }
-    // the descriptors, in 0x00DAA8B0's order (mtstate::shader)
+    let (samplers, uploads) = descriptors(g, metadata)?;
+    Ok(MetaPart {
+        handles, vs, ps, declaration, floats: [vs_floats, ps_floats], reads: shader_reads, samplers, uploads,
+        checked: frame.into(),
+    })
+}
+
+/// A shader metadata object's sampler and constant descriptors, in
+/// 0x00DAA8B0's order (mtstate::shader).
+fn descriptors(g: &G, metadata: u32) -> Result<([Vec<SamplerSlot>; 2], [Vec<Upload>; 2]), Refusal> {
     let descriptors = g.u32(metadata.wrapping_add(4));
     let mut samplers: [Vec<SamplerSlot>; 2] = Default::default();
     let mut uploads: [Vec<Upload>; 2] = Default::default();
@@ -510,7 +532,7 @@ fn meta_part(g: &G, metadata: u32, reads_cache: &mut FxMap<usize, (Arc<[u32]>, R
         for _ in 0..(summary >> 8 & 15) {
             let d = g.u32(desc);
             desc = desc.wrapping_add(4);
-            samplers[stage].push(SamplerSlot { stage: (d & 4095) + if pixel { 0 } else { 257 }, sampler: d >> 12 & 1023, texture: d >> 22 });
+            samplers[stage].push(SamplerSlot { index: d & 4095, stage: (d & 4095) + if pixel { 0 } else { 257 }, sampler: d >> 12 & 1023, texture: d >> 22 });
         }
         for (section, count) in [(0u8, summary >> 12 & 127), (1, summary >> 19 & 15), (2, summary >> 23 & 31), (3, summary >> 28)] {
             for _ in 0..count {
@@ -533,25 +555,23 @@ fn meta_part(g: &G, metadata: u32, reads_cache: &mut FxMap<usize, (Arc<[u32]>, R
             }
         }
     }
-    Ok(MetaPart {
-        handles, vs, ps, declaration, floats: [vs_floats, ps_floats], reads: shader_reads, samplers, uploads,
-        checked: frame.into(),
-    })
+    Ok((samplers, uploads))
 }
 
-/// A shader binding of this frame: its metadata, the alpha test, the
-/// textures with their sampler states and the constant banks.
+/// A shader binding of this frame: its metadata, the alpha test and the
+/// constant banks (with the registers they write).
 pub struct BindingPart {
     meta: Arc<MetaPart>,
     /// (ALPHAFUNC, ALPHAREF) when the binding enables the alpha test
     alpha: Option<(u32, u32)>,
-    textures: Arc<[TextureBinding]>,
     constants: [Arc<Constants>; 2],
+    /// per stage: float, int and bool registers written
+    written: [([u64; 4], u16, u16); 2],
 }
 
 /// A shader binding's state as the full apply sets it (0x00DAA8B0 with
 /// nothing applied: every sampler, texture and upload).
-fn binding_part(g: &G, c: &mut Caches, info: &FrameInfo, binding: u32) -> Result<BindingPart, Refusal> {
+fn binding_part(g: &G, c: &mut Caches, binding: u32) -> Result<BindingPart, Refusal> {
     let flags = g.u32(binding);
     let alpha = if flags & 0x18_0000 == 0x18_0000 {
         let comparison = flags >> 3 & 255;
@@ -569,42 +589,11 @@ fn binding_part(g: &G, c: &mut Caches, info: &FrameInfo, binding: u32) -> Result
     }
     let meta = c.meta(g, metadata)?;
     let value = |n: u32| g.u32(binding.wrapping_add(12 + 4 * n));
-    // textures and sampler states (a later descriptor on a stage wins)
-    let mut bound: Vec<(u32, u32, [u32; 14])> = Vec::new();
+    // the sampler and texture objects must exist (0x00DAA8B0 reads them)
     for slot in meta.samplers.iter().flatten() {
-        let (sampler, texture) = (value(slot.sampler), value(slot.texture));
-        if sampler == 0 || texture == 0 {
+        if value(slot.sampler) == 0 || value(slot.texture) == 0 {
             return Err(Refusal::Missing);
         }
-        let mut row = c.frame_row(slot.stage);
-        for (ty, v) in c.sampler(g, sampler) {
-            row[ty as usize] = v;
-        }
-        if (1..=5).contains(&info.filtering) && row[6] == 3 {
-            // 0x00DA7250's non-null branch (see the module notes)
-            if info.filtering == 1 {
-                row[5] = 2;
-                row[6] = 2;
-                row[7] = 2;
-            } else {
-                row[10] = 1 << (info.filtering - 1);
-            }
-        }
-        if slot.stage < 16 && info.srgb {
-            row[11] = (g.u32(texture.wrapping_add(0x20)) & 0x4000_0000 != 0 && g.u32(texture.wrapping_add(0x2C)) & 0x8_0000 == 0) as u32;
-        }
-        let handle = g.u32(texture.wrapping_add(0x34));
-        match bound.iter_mut().find(|b| b.0 == slot.stage) {
-            Some(b) => *b = (slot.stage, handle, row),
-            None => bound.push((slot.stage, handle, row)),
-        }
-    }
-    bound.retain(|b| b.1 != 0);
-    bound.sort_unstable_by_key(|b| b.0);
-    let mut textures = Vec::with_capacity(bound.len());
-    for &(stage, handle, states) in &bound {
-        let t = c.texture(handle).ok_or(Refusal::Missing)?;
-        textures.push(TextureBinding { sampler: stage, resource: handle, states, ..t });
     }
     // constants: the binding's registers over zeros
     let mut banks = [
@@ -660,7 +649,7 @@ fn binding_part(g: &G, c: &mut Caches, info: &FrameInfo, binding: u32) -> Result
                 }
             }
         }
-        // every register and sampler the shaders read comes from here
+        // every register the shaders read comes from here
         let r = &meta.reads[stage];
         if (0..4).any(|k| r.floats[k] & !w.0[k] != 0) {
             return Err(Refusal::FloatsUncovered);
@@ -671,13 +660,9 @@ fn binding_part(g: &G, c: &mut Caches, info: &FrameInfo, binding: u32) -> Result
         if r.bools & !w.2 != 0 {
             return Err(Refusal::BoolsUncovered);
         }
-        let base = if stage == 0 { 257 } else { 0 };
-        if (0..16).any(|s| r.samplers >> s & 1 != 0 && !bound.iter().any(|b| b.0 == base + s)) {
-            return Err(Refusal::SamplersUncovered);
-        }
     }
     let [vs, ps] = banks;
-    Ok(BindingPart { meta, alpha, textures: textures.into(), constants: [Arc::new(vs), Arc::new(ps)] })
+    Ok(BindingPart { meta, alpha, constants: [Arc::new(vs), Arc::new(ps)], written })
 }
 
 fn set_float(bank: &mut Constants, written: &mut ([u64; 4], u16, u16), n: u32, r: [u32; 4]) {
@@ -687,6 +672,114 @@ fn set_float(bank: &mut Constants, written: &mut ([u64; 4], u16, u16), n: u32, r
     if let Some(x) = bank.f.get_mut(n as usize) {
         *x = r;
     }
+}
+
+/// What the sampler section of 0x00DAA8B0 does for a draw: context words
+/// written, SetSamplerState and SetTexture calls (made on the device for a
+/// taken draw; for `verify` only predicted).
+#[derive(Default)]
+pub struct Shadow {
+    ctx: Vec<(u32, u32)>,
+    sampler_states: Vec<(u32, u32, u32)>,
+    textures: Vec<(u32, u32)>,
+}
+
+impl Shadow {
+    fn read(&self, g: &G, a: u32) -> u32 {
+        self.ctx.iter().rev().find(|w| w.0 == a).map_or_else(|| g.u32(a), |w| w.1)
+    }
+    fn write(&mut self, a: u32, v: u32) {
+        self.ctx.push((a, v));
+    }
+    fn is_empty(&self) -> bool {
+        self.sampler_states.is_empty() && self.textures.is_empty()
+    }
+}
+
+// Translated from 0x00DAA8B0 (DDDA.exe 2017-12-13 Steam): its sampler and
+// texture section, as mtstate::shader decodes it (verified against the
+// original), on the executor context `ctx`.
+fn shadow_samplers(g: &G, ctx: u32, binding: u32, meta: &MetaPart, info: &FrameInfo, sh: &mut Shadow) {
+    let value = |n: u32| g.u32(binding.wrapping_add(12 + 4 * n));
+    for stage in 0..2 {
+        let pixel = stage == 1;
+        let mut used = [false; 4];
+        for slot in &meta.samplers[stage] {
+            let (sampler, texture) = (value(slot.sampler), value(slot.texture));
+            let cache = ctx.wrapping_add(if pixel { 0xD8 } else { 0x98 } + slot.index * 4);
+            let old = sh.read(g, cache);
+            if sampler != old {
+                if old == 0 || g.u32(old.wrapping_add(12)) != g.u32(sampler.wrapping_add(12)) {
+                    let words = |o: u32| -> Vec<u32> { (0..3).map(|k| g.u32(o.wrapping_add(0x30 + 4 * k))).collect() };
+                    let new = words(sampler);
+                    let old_words = (old != 0).then(|| words(old));
+                    for c in mtstate::packed(mtstate::SAMPLER, &new, old_words.as_deref(), Some(slot.stage), info.filtering) {
+                        sh.sampler_states.push((c.args[0], c.args[1], c.args[2]));
+                    }
+                }
+                sh.write(cache, sampler);
+            }
+            if sh.read(g, cache.wrapping_add(0x80)) != texture {
+                sh.write(cache.wrapping_add(0x80), texture);
+                sh.textures.push((slot.stage, g.u32(texture.wrapping_add(0x34))));
+            }
+            if pixel && info.srgb {
+                let v = (g.u32(texture.wrapping_add(0x20)) & 0x4000_0000 != 0 && g.u32(texture.wrapping_add(0x2C)) & 0x8_0000 == 0) as u32;
+                sh.sampler_states.push((slot.stage, 11, v));
+                let mask = 1u32 << (slot.index & 31);
+                let bits = sh.read(g, ctx.wrapping_add(0x198));
+                sh.write(ctx.wrapping_add(0x198), if v != 0 { bits | mask } else { bits & !mask });
+            }
+            if !pixel && slot.index < 4 {
+                used[slot.index as usize] = sh.read(g, cache.wrapping_add(0x80)) != 0;
+            }
+        }
+        if !pixel {
+            // vertex stages this binding does not use, with a sampler cached
+            for index in 0..4u32 {
+                if !used[index as usize] && sh.read(g, ctx.wrapping_add(0x98 + index * 4)) != 0 {
+                    sh.write(ctx.wrapping_add(0x118 + index * 4), 0);
+                    sh.textures.push((index + 257, 0));
+                }
+            }
+        }
+    }
+}
+
+/// The textures the device holds after `sh`, with their sampler states,
+/// as the D3D9 path's snapshot builds them (objects that are not live
+/// textures left out).
+fn device_textures(device: u32, sh: &Shadow, c: &mut Caches) -> Option<Arc<[TextureBinding]>> {
+    let mut bound: Vec<(u32, u32, [u32; 14])> = objects(|o| match o.live.get(&device).map(|x| &x.kind) {
+        Some(Kind::Device(d)) => {
+            let s = &d.state;
+            let mut v: Vec<(u32, u32, [u32; 14])> = s.textures.iter().map(|(&t, &h)| (t, h, s.sampler.row(t))).collect();
+            for &(t, h) in &sh.textures {
+                match v.iter_mut().find(|e| e.0 == t) {
+                    Some(e) => e.1 = h,
+                    None => v.push((t, h, s.sampler.row(t))),
+                }
+            }
+            Some(v)
+        }
+        _ => None,
+    })?;
+    for &(t, ty, value) in &sh.sampler_states {
+        if let Some(e) = bound.iter_mut().find(|e| e.0 == t) {
+            if let Some(x) = e.2.get_mut(ty as usize) {
+                *x = value;
+            }
+        }
+    }
+    bound.retain(|e| e.1 != 0);
+    bound.sort_unstable_by_key(|e| e.0);
+    let mut out = Vec::with_capacity(bound.len());
+    for (t, h, states) in bound {
+        if let Some(info) = c.texture(h) {
+            out.push(TextureBinding { sampler: t, resource: h, states, ..info });
+        }
+    }
+    Some(out.into())
 }
 
 /// A stream binding of this frame (0x00DAA7C0 with nothing applied).
@@ -791,8 +884,6 @@ struct DeviceFrame {
     usable: bool,
     /// DEVICE_STATES, then ALPHAREF (24) and ALPHAFUNC (25), as present
     states: Vec<(u32, u32)>,
-    /// sampler rows of stages 0..15 and 257..260
-    rows: FxMap<u32, [u32; 14]>,
 }
 
 /// A render-state list: the fixed part, stencil reference, blend factor,
@@ -816,7 +907,6 @@ pub struct Caches {
     reads: FxMap<usize, (Arc<[u32]>, Reads)>,
     fixed: FxMap<NativeStateIdentity, Arc<FixedPart>>,
     metas: FxMap<u32, Arc<MetaPart>>,
-    samplers: FxMap<(u32, u32), Vec<(u32, u32)>>,
     states: FxMap<StatesKey, RenderStateList>,
     /// native fixed state by identity and render-state list (its address:
     /// the list is held in `states`)
@@ -828,6 +918,10 @@ pub struct Caches {
     targets: FxMap<u32, Option<Target>>,
     textures: FxMap<u32, Option<TextureBinding>>,
     index_formats: FxMap<u32, Option<u32>>,
+    /// the device's texture list, valid while `texture_generation` is
+    /// unchanged (it changes with every sampler or texture call)
+    texture_list: Option<(u64, Arc<[TextureBinding]>)>,
+    pub(crate) texture_generation: u64,
 }
 
 impl Caches {
@@ -841,15 +935,15 @@ impl Caches {
         self.targets.clear();
         self.textures.clear();
         self.index_formats.clear();
+        self.texture_generation += 1;
         let device = objects(|o| match o.live.get(&info.device).map(|x| &x.kind) {
             Some(Kind::Device(d)) => {
                 let s = &d.state;
                 let states: Vec<(u32, u32)> =
                     DEVICE_STATES.iter().chain(&[24, 25]).filter_map(|&k| s.render.get(&k).map(|&v| (k, v))).collect();
-                let rows = (0..16).chain(257..261).map(|t| (t, s.sampler.row(t))).collect();
                 // a taken draw carries streams 0..3 only
                 let usable = s.in_scene && s.streams[4..].iter().all(|x| x.0 == 0);
-                Some(DeviceFrame { usable, states, rows })
+                Some(DeviceFrame { usable, states })
             }
             _ => None,
         })
@@ -864,10 +958,6 @@ impl Caches {
         }
     }
 
-    fn frame_row(&self, stage: u32) -> [u32; 14] {
-        self.device.rows.get(&stage).copied().unwrap_or([0; 14])
-    }
-
     fn target(&mut self, surface: u32) -> Option<Target> {
         if surface == 0 {
             return None;
@@ -879,18 +969,6 @@ impl Caches {
         self.textures.entry(handle).or_insert_with(|| texture_info(handle)).clone()
     }
 
-    /// A SamplerState's (type, value) pairs (0x00DA7250, null old payload).
-    fn sampler(&mut self, g: &G, sampler: u32) -> Vec<(u32, u32)> {
-        let key = (sampler, g.u32(sampler.wrapping_add(0xC)));
-        if let Some(v) = self.samplers.get(&key) {
-            return v.clone();
-        }
-        let words: Vec<u32> = (0..3).map(|k| g.u32(sampler.wrapping_add(0x30 + 4 * k))).collect();
-        let v: Vec<(u32, u32)> =
-            mtstate::packed(mtstate::SAMPLER, &words, None, Some(0), 0).iter().map(|c| (c.args[1], c.args[2])).collect();
-        self.samplers.insert(key, v.clone());
-        v
-    }
 
     fn meta(&mut self, g: &G, metadata: u32) -> Result<Arc<MetaPart>, Refusal> {
         if let Some(m) = self.metas.get(&metadata) {
@@ -946,9 +1024,11 @@ fn part<T>(map: &mut FxMap<u32, Result<Arc<T>, Refusal>>, key: u32, build: impl 
 }
 
 /// The DrawCall the D3D9 path makes for draw record `record` (type 0 or
-/// 1), with the D3D lock held and `caches.begin_frame` called for this
-/// frame. The resources it reads are `reads_of` it.
-pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, record: u32, kind: u32) -> Result<DrawCall, Refusal> {
+/// 1) with the executor context `context`, with the D3D lock held and
+/// `caches.begin_frame` called for this frame; and the sampler section's
+/// effects, to `commit` if the draw is taken. The resources it reads are
+/// `reads_of` it.
+pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, record: u32, kind: u32) -> Result<Decoded, Refusal> {
     if !c.device.usable {
         return Err(Refusal::Device);
     }
@@ -966,7 +1046,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, record: u32, kin
     let s = part(&mut c.streams, streams, || stream_part(&g, streams))?;
     let b = {
         let mut map = std::mem::take(&mut c.bindings);
-        let r = part(&mut map, shader, || binding_part(&g, c, info, shader));
+        let r = part(&mut map, shader, || binding_part(&g, c, shader));
         c.bindings = map;
         r?
     };
@@ -1026,6 +1106,19 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, record: u32, kin
             l
         }
     };
+    // samplers and textures: what the apply would do on this context
+    let mut sh = Shadow::default();
+    shadow_samplers(&g, context, shader, &b.meta, info, &mut sh);
+    let textures = match &c.texture_list {
+        Some((generation, list)) if *generation == c.texture_generation && sh.is_empty() => list.clone(),
+        _ => {
+            let list = device_textures(info.device, &sh, c).ok_or(Refusal::Device)?;
+            if sh.is_empty() {
+                c.texture_list = Some((c.texture_generation, list.clone()));
+            }
+            list
+        }
+    };
     // the draw
     if kind == 1 && s.indices == 0 {
         return Err(Refusal::NoIndices);
@@ -1041,7 +1134,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, record: u32, kin
     } else {
         Indices::None
     };
-    Ok(DrawCall {
+    let call = DrawCall {
         primitive, primitives, start, base_vertex, min_index: 0, vertex_count,
         vertices: Vertices::Streams(s.streams.clone()),
         indices,
@@ -1050,13 +1143,116 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, record: u32, kin
         // the runtime's FVF stays 0 once declarations are used
         fvf: 0,
         vs_constants: b.constants[0].clone(), ps_constants: b.constants[1].clone(),
-        textures: b.textures.clone(),
+        textures,
         render_states,
         viewport: t.viewport,
         scissor: t.scissor,
         targets: t.targets.clone(),
         depth: t.depth.clone(),
-    })
+    };
+    Ok(Decoded { call, shadow: sh, binding: b })
+}
+
+/// A decoded draw: its DrawCall, the sampler section's effects and the
+/// shader binding (its constant uploads).
+pub struct Decoded {
+    pub call: DrawCall,
+    pub shadow: Shadow,
+    pub binding: Arc<BindingPart>,
+}
+
+/// Make a taken draw's sampler section effects: the context words and the
+/// device calls.
+pub fn commit(m: &mut dyn Mem, info: &FrameInfo, c: &mut Caches, sh: Shadow) {
+    for (a, v) in sh.ctx {
+        m.set_u32(a, v);
+    }
+    if !sh.sampler_states.is_empty() || !sh.textures.is_empty() {
+        c.texture_generation += 1;
+    }
+    for (t, ty, v) in sh.sampler_states {
+        crate::d3d9state::device_set_sampler_state(info.device, t, ty, v);
+    }
+    for (t, h) in sh.textures {
+        crate::d3d9state::device_set_texture(info.device, t, h);
+    }
+}
+
+/// The constant registers taken draws wrote since the default path last
+/// ran, per stage: the last value of each.
+#[derive(Default)]
+pub struct Uploads {
+    floats: [FxMap<u32, [u32; 4]>; 2],
+    ints: [FxMap<u32, [i32; 4]>; 2],
+    bools: [FxMap<u32, u32>; 2],
+}
+
+impl Uploads {
+    fn add(&mut self, b: &BindingPart) {
+        for stage in 0..2 {
+            let (f, i, bo) = b.written[stage];
+            let bank = &b.constants[stage];
+            for n in 0..256usize {
+                if f[n / 64] >> (n % 64) & 1 != 0 {
+                    if let Some(r) = bank.f.get(n) {
+                        self.floats[stage].insert(n as u32, *r);
+                    }
+                }
+            }
+            for n in 0..16usize {
+                if i >> n & 1 != 0 {
+                    self.ints[stage].insert(n as u32, bank.i[n]);
+                }
+                if bo >> n & 1 != 0 {
+                    self.bools[stage].insert(n as u32, bank.b[n]);
+                }
+            }
+        }
+    }
+    fn is_empty(&self) -> bool {
+        (0..2).all(|k| self.floats[k].is_empty() && self.ints[k].is_empty() && self.bools[k].is_empty())
+    }
+}
+
+/// The default path takes over after taken draws: the device gets the
+/// registers they uploaded, and the context forgets its last fixed-state
+/// binding (+0xC) and objects (+0x18, +0x1C, +0x20), its last shader
+/// binding (+0x10) and vertex shader (+0x24), so the next applies run in
+/// full (docs/NDRAW.md section 3, the context layout).
+pub fn invalidate(m: &mut dyn Mem, device: u32, context: u32, uploads: &mut Uploads) {
+    for off in [0xC, 0x10, 0x18, 0x1C, 0x20, 0x24] {
+        m.set_u32(context.wrapping_add(off), 0);
+    }
+    flush_uploads(device, uploads);
+}
+
+/// Write the registers taken draws uploaded to the device.
+pub fn flush_uploads(device: u32, uploads: &mut Uploads) {
+    if uploads.is_empty() {
+        return;
+    }
+    let u = std::mem::take(uploads);
+    objects(|o| {
+        if let Some(Kind::Device(d)) = o.live.get_mut(&device).map(|x| &mut x.kind) {
+            let s = &mut d.state;
+            for (stage, bank) in [&mut s.vs, &mut s.ps].into_iter().enumerate() {
+                let c = Arc::make_mut(bank);
+                for (&n, &v) in &u.floats[stage] {
+                    if let Some(r) = c.f.get_mut(n as usize) {
+                        *r = v;
+                    }
+                }
+                for (&n, &v) in &u.ints[stage] {
+                    c.i[n as usize] = v;
+                }
+                for (&n, &v) in &u.bools[stage] {
+                    c.b[n as usize] = v;
+                }
+            }
+            s.constant_snapshots[0].dirty = true;
+            s.constant_snapshots[1].dirty = true;
+        }
+    });
 }
 
 /// The resources a DrawCall reads, as the D3D9 path flushes them:
@@ -1251,6 +1447,9 @@ struct Inner {
     scene: (u32, u32),
     caches: Caches,
     pending: Pending,
+    /// draws taken since the default path last ran, and their uploads
+    handled: bool,
+    uploads: Uploads,
     /// the backend takes native jobs (`1`; otherwise those draws go as
     /// DrawCalls, as `drawcall`)
     native: bool,
@@ -1269,6 +1468,7 @@ impl Native {
             inner: Mutex::new(Inner {
                 frame: Frame::default(), totals: Totals::default(), since: Instant::now(),
                 info: FrameInfo::default(), scene: (0, 0), caches: Caches::default(), pending: Pending::default(), native: false,
+                handled: false, uploads: Uploads::default(),
             }),
             every,
         }
@@ -1295,6 +1495,7 @@ impl CommandSink for Native {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let g = &mut *g;
         g.info = FrameInfo::read(m, render);
+        g.handled = false;
         if self.mode != Mode::Off {
             let _lock = crate::d3d9dev::device_lock();
             g.caches.begin_frame(&g.info);
@@ -1305,13 +1506,20 @@ impl CommandSink for Native {
         }
     }
 
-    fn command(&self, m: &mut dyn Mem, _context: u32, record: u32, kind: u32) -> Taken {
+    fn command(&self, m: &mut dyn Mem, context: u32, record: u32, kind: u32) -> Taken {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let g = &mut *g;
-        let taken = self.decide(g, m, record, kind);
+        let taken = self.decide(g, m, context, record, kind);
         if taken == Taken::Default {
             // what the native path took goes before this command
             g.send();
+            if g.handled {
+                let _lock = crate::d3d9dev::device_lock();
+                invalidate(m, g.info.device, context, &mut g.uploads);
+                g.handled = false;
+            }
+            // the default path may set samplers and textures
+            g.caches.texture_generation += 1;
         }
         taken
     }
@@ -1320,6 +1528,12 @@ impl CommandSink for Native {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let g = &mut *g;
         g.send();
+        if g.handled {
+            // the next frame's default path sees the registers too
+            let _lock = crate::d3d9dev::device_lock();
+            flush_uploads(g.info.device, &mut g.uploads);
+            g.handled = false;
+        }
         g.end_frame(self.mode, self.every);
     }
 }
@@ -1338,7 +1552,7 @@ impl Inner {
 }
 
 impl Native {
-    fn decide(&self, g: &mut Inner, m: &mut dyn Mem, record: u32, kind: u32) -> Taken {
+    fn decide(&self, g: &mut Inner, m: &mut dyn Mem, context: u32, record: u32, kind: u32) -> Taken {
         let f = &mut g.frame;
         f.kinds[kind as usize & 15] += 1;
         if kind > 3 {
@@ -1362,13 +1576,13 @@ impl Native {
         }
         let started = Instant::now();
         let lock = crate::d3d9dev::device_lock();
-        let decoded = draw_call(m, &g.info, &mut g.caches, record, kind);
+        let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind);
         let taken = match decoded {
             Err(r) => {
                 *t.refused.entry(r).or_default() += 1;
                 Taken::Default
             }
-            Ok(d) if self.mode == Mode::Verify => {
+            Ok(Decoded { call: d, .. }) if self.mode == Mode::Verify => {
                 let reads = [&d.vertex_shader, &d.pixel_shader].map(|t| {
                     let key = t.as_ref().map_or(0, |t| Arc::as_ptr(t) as *const u32 as usize);
                     g.caches.reads.get(&key).map(|r| r.1).unwrap_or_default()
@@ -1381,19 +1595,25 @@ impl Native {
                 t.taken += 1;
                 Taken::Default
             }
-            Ok(d) if self.mode == Mode::DrawCall || !g.native => {
+            Ok(Decoded { call: d, shadow, binding }) if self.mode == Mode::DrawCall || !g.native => {
+                commit(m, &g.info, &mut g.caches, shadow);
+                g.uploads.add(&binding);
+                g.handled = true;
                 crate::d3d9draw::flush_reads(m, reads_of(&d));
                 crate::d3d9draw::backend_unlocked(|b| b.draw(&d));
                 crate::d3d9draw::count_draws(1);
                 t.taken += 1;
                 Taken::Handled
             }
-            Ok(d) => match native_draw(&d, identity(m, record), &mut g.caches) {
+            Ok(Decoded { call: d, shadow, binding }) => match native_draw(&d, identity(m, record), &mut g.caches) {
                 Err(r) => {
                     *t.refused.entry(r).or_default() += 1;
                     Taken::Default
                 }
                 Ok(native) => {
+                    commit(m, &g.info, &mut g.caches, shadow);
+                    g.uploads.add(&binding);
+                    g.handled = true;
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
                     g.pending.push(native, d);
                     t.taken += 1;
@@ -1625,6 +1845,99 @@ mod tests {
         record
     }
 
+    /// mtstate's view of the test memory.
+    struct Words<'a>(&'a mut TestMem);
+    impl mtstate::Memory for Words<'_> {
+        fn read32(&self, a: u32) -> u32 {
+            self.0.u32(a)
+        }
+        fn write32(&mut self, a: u32, v: u32) {
+            self.0.set_u32(a, v)
+        }
+    }
+
+    /// The sampler section of a taken draw against mtstate::shader (the
+    /// apply verified against the original): the same SetSamplerState and
+    /// SetTexture calls in order, the same context words, on random
+    /// contexts, bindings, objects, sRGB and filtering options.
+    #[test]
+    fn the_sampler_section_does_what_the_apply_does() {
+        let mut seed = 0x1234_5678u32;
+        let mut rnd = move |n: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % n.max(1)
+        };
+        let (ctx, binding, meta, descs) = (0x5_0000u32, 0x6_0000u32, 0x6_1000u32, 0x6_2000u32);
+        let samplers: Vec<u32> = (0..4).map(|k| 0x7_0000 + 0x100 * k).collect();
+        let textures: Vec<u32> = (0..4).map(|k| 0x8_0000 + 0x100 * k).collect();
+        for case in 0..3000 {
+            let mut m = TestMem::default();
+            // objects: sampler payloads (address, filters, anisotropy, mip
+            // level) and hashes, texture flags and handles
+            for &o in &samplers {
+                let w0 = rnd(512) | (1 + rnd(3)) << 9 | (1 + rnd(3)) << 13 | rnd(3) << 17 | rnd(32) << 21 | rnd(16) << 26;
+                m.set_u32(o + 12, rnd(3));
+                m.set_u32(o + 0x30, w0);
+                m.set_u32(o + 0x34, rnd(2) * 0xFF00_0000);
+                m.set_u32(o + 0x38, rnd(4) * 0x3F00_0000);
+            }
+            for &o in &textures {
+                m.set_u32(o + 0x20, rnd(2) << 30);
+                m.set_u32(o + 0x2C, rnd(2) << 19);
+                m.set_u32(o + 0x34, 0xD000 + rnd(3));
+            }
+            // a binding: up to 3 vertex and 4 pixel samplers on random stages
+            let (nv, np) = (rnd(4), rnd(5));
+            m.set_u32(binding, 0);
+            m.set_u32(binding + 8, meta);
+            for k in 0..8 {
+                m.set_u32(binding + 12 + 4 * k, if k < 4 { samplers[rnd(4) as usize] } else { textures[rnd(4) as usize] });
+            }
+            m.set_u32(meta + 4, descs);
+            m.set_u32(meta + 8, nv | nv << 8);
+            m.set_u32(meta + 12, np | np << 8);
+            m.set_u32(meta + 0x10, 0xC000);
+            m.set_u32(meta + 0x14, 0xC100);
+            for k in 0..nv + np {
+                let index = if k < nv { rnd(4) } else { rnd(16) };
+                m.set_u32(descs + 4 * k, index | rnd(4) << 12 | (4 + rnd(4)) << 22);
+            }
+            // a context left by earlier applies
+            for k in 0..4 {
+                m.set_u32(ctx + 0x98 + 4 * k, [0, samplers[rnd(4) as usize]][rnd(2) as usize]);
+                m.set_u32(ctx + 0x118 + 4 * k, [0, textures[rnd(4) as usize]][rnd(2) as usize]);
+            }
+            for k in 0..16 {
+                m.set_u32(ctx + 0xD8 + 4 * k, [0, samplers[rnd(4) as usize]][rnd(2) as usize]);
+                m.set_u32(ctx + 0x158 + 4 * k, [0, textures[rnd(4) as usize]][rnd(2) as usize]);
+            }
+            m.set_u32(ctx + 0x198, rnd(0x1_0000));
+            let info = FrameInfo { device: 0, srgb: rnd(2) == 1, filtering: rnd(7), invalid_viewport: [0; 4] };
+            let region = |m: &TestMem| (0x98..0x19C).step_by(4).map(|o| m.u32(ctx + o)).collect::<Vec<_>>();
+            // the apply
+            let mut a = TestMem(m.0.clone());
+            let calls = mtstate::shader(&mut Words(&mut a), ctx, binding, info.srgb, info.filtering).expect("decodes");
+            let states: Vec<(u32, u32, u32)> = calls.iter().filter(|c| c.slot == 69).map(|c| (c.args[0], c.args[1], c.args[2])).collect();
+            let set: Vec<(u32, u32)> = calls.iter().filter(|c| c.slot == 65).map(|c| (c.args[0], c.args[1])).collect();
+            // the section
+            let g = G::new(&m);
+            let (slots, uploads) = descriptors(&g, meta).unwrap();
+            let part = MetaPart {
+                handles: [0; 3], vs: Arc::from(vec![]), ps: Arc::from(vec![]), declaration: Arc::from(vec![]),
+                floats: [0; 2], reads: Default::default(), samplers: slots, uploads, checked: 0.into(),
+            };
+            let mut sh = Shadow::default();
+            shadow_samplers(&g, ctx, binding, &part, &info, &mut sh);
+            assert_eq!(sh.sampler_states, states, "case {case}: sampler states");
+            assert_eq!(sh.textures, set, "case {case}: textures");
+            let mut b = TestMem(m.0.clone());
+            for (at, v) in sh.ctx {
+                b.set_u32(at, v);
+            }
+            assert_eq!(region(&b), region(&a), "case {case}: context");
+        }
+    }
+
     #[test]
     fn a_record_decodes_to_the_state_its_bindings_set() {
         let mut m = TestMem::default();
@@ -1674,7 +1987,7 @@ struct VerifyStats {
     /// expected draws the D3D9 path did not make
     missed: u64,
     fields: FxMap<&'static str, u64>,
-    printed: u32,
+    printed: FxMap<&'static str, u32>,
 }
 static VERIFY: Mutex<Option<VerifyStats>> = Mutex::new(None);
 
@@ -1707,8 +2020,9 @@ pub(crate) fn observe(d: &DrawCall) {
     }
     for (field, detail) in &wrong {
         *v.fields.entry(field).or_default() += 1;
-        if v.printed < 20 {
-            v.printed += 1;
+        let printed = v.printed.entry(field).or_default();
+        if *printed < 5 {
+            *printed += 1;
             eprintln!("ndraw native verify: {field} differs: {detail}");
         }
     }
@@ -1739,10 +2053,13 @@ fn compare(e: &Expected, d: &DrawCall, wrong: &mut Vec<(&'static str, String)>) 
     check("indices", x.indices == d.indices, &|| format!("{:?} vs {:?}", x.indices, d.indices));
     check("shaders", x.vertex_shader == d.vertex_shader && x.pixel_shader == d.pixel_shader, &|| "bytecode".into());
     check("declaration", x.declaration == d.declaration, &|| format!("{:?} vs {:?}", x.declaration, d.declaration));
-    let alpha_on = x.render_states.iter().any(|&(s, v)| s == 15 && v != 0);
+    let state = |s: u32| x.render_states.iter().find(|e| e.0 == s).map(|e| e.1);
+    let alpha_on = state(15).is_some_and(|v| v != 0);
+    let factor_used = state(27) == Some(1) && [19, 20, 207, 208].iter().any(|&s| matches!(state(s), Some(14 | 15)));
     for &(s, v) in x.render_states.iter() {
-        // the alpha function and reference only count with the test on
-        if (s == 24 || s == 25) && !alpha_on {
+        // the alpha function and reference only count with the test on,
+        // the blend factor only with blend-factor blending
+        if ((s == 24 || s == 25) && !alpha_on) || (s == 193 && !factor_used) {
             continue;
         }
         let on_device = d.render_states.binary_search_by_key(&s, |e| e.0).ok().map(|i| d.render_states[i].1);
