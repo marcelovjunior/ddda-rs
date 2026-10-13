@@ -1,5 +1,17 @@
 # Milestones
 
+### L119 native sink, step 2b (2026-10-13)
+
+- `DDDRAW_NATIVE=drawcall|1|census` (crates/ddruntime/src/ndraw_native.rs):
+  scene-pass draw records decoded through mtstate into the D3D9 path's
+  DrawCall (drawcall) or a d3d9cmd::NativeJob (1, rejected jobs go out as
+  their DrawCalls); refusals counted by reason.
+- Tested: the sink's DrawCall equals the runtime D3D9 path's for the same
+  record (tests/ndraw_native.rs, real D3D9 objects); decode unit tests.
+- Blockers: the L126 worker; `native()` waits for the worker per job
+  (board #11174). Next: a head run with `DDDRAW_NATIVE=drawcall`
+  (eligibility, fps, decode cost). Details: docs/tasks/L119-native-executor.md.
+
 ### L126 native job transport checkpoint (2026-10-13)
 
 - Owned NativeJob/Pass/Draw transport with effective D3D9 values, identity

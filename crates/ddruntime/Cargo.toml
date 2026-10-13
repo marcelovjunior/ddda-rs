@@ -14,6 +14,7 @@ ddnative = { path = "../ddnative", optional = true }
 ddports = { path = "../ddports", optional = true }
 # L119: the native path through the nDraw executor port
 mtdraw = { path = "../mtdraw" }
+mtstate = { path = "../mtstate" }
 # `crt-check` (L67): only the two shards holding the CRT routines, for
 # tests/crtfast.rs against their lifted originals without building all 32
 ddlift-05 = { path = "../ddlift/lift_05", optional = true }

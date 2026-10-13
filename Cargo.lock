@@ -3024,6 +3024,7 @@ dependencies = [
  "hostdisplay",
  "mtarc",
  "mtdraw",
+ "mtstate",
  "unicorn-engine",
  "windows",
  "windows-core",
