@@ -1247,8 +1247,9 @@ fn compare_replays(
             ));
         }
         // the stage's shader handle: metadata (+0x10 vertex, +0x14 pixel),
-        // encoded after the binding's 12 header bytes, equal on both sides
-        let handle_at = 12 + 0x10 + 4 * ca.stage as usize;
+        // encoded after the binding's 12 header bytes (each block after its
+        // size word), equal on both sides
+        let handle_at = 4 + 12 + 4 + 0x10 + 4 * ca.stage as usize;
         let handle = |x: &mtcore::shadow_lanes::Binding| {
             x.bytes.get(handle_at..handle_at + 4).map(|w| u32::from_le_bytes(w.try_into().unwrap()))
         };
