@@ -36,6 +36,8 @@ pub use native_job::NativeJobStats;
 mod pipelines;
 mod shader_cache;
 mod pipeline_log;
+mod load_texture;
+pub use load_texture::snapshot as texture_load_snapshot;
 mod warmup;
 pub mod present;
 pub use pipelines::{default_cache_dir, pipeline_stats, report_pipeline_stats_every, save_pipeline_caches, PipelineStats};
@@ -1219,6 +1221,7 @@ impl WgpuBackend {
         // sRGB view
         let srgb = format.add_srgb_suffix();
         let views: &[wgpu::TextureFormat] = if srgb != format { &[srgb] } else { &[] };
+        let texture_load_start = load_texture::begin();
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -1231,8 +1234,10 @@ impl WgpuBackend {
             view_formats: views,
         });
         if block_on(scope.pop()).is_some() {
+            load_texture::created(texture_load_start, false);
             return None;
         }
+        load_texture::created(texture_load_start, true);
         self.textures.insert(t.resource, Tex {
             texture, kind: t.kind, format: d3d_format, gpu_format: format, levels: t.levels,
             width: t.width, height: t.height, depth: t.depth, target,
@@ -1253,6 +1258,7 @@ impl WgpuBackend {
             self.errors.push(format!("an image upload into render-target texture {resource:#x} of format {format} is not implemented"));
             return;
         }
+        let mut texture_write = load_texture::Write::begin();
         let (face, level) = match t.kind {
             TexKind::Cube => (index / t.levels, index % t.levels),
             _ => (0, *index),
@@ -1277,7 +1283,9 @@ impl WgpuBackend {
             std::borrow::Cow::Owned(data)
         };
         let physical = wgpu::Extent3d { width: width.next_multiple_of(block), height: height.next_multiple_of(block), depth_or_array_layers: *depth };
+        texture_write.prepared();
         self.wait_finisher();
+        texture_write.waited();
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &t.texture,
@@ -1289,6 +1297,7 @@ impl WgpuBackend {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(gpu_row), rows_per_image: Some(rows) },
             physical,
         );
+        texture_write.finish(data.len());
     }
 
     /// The texture, mip level, array layer, format and size behind a target.

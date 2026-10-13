@@ -371,6 +371,7 @@ impl ApplicationHandler<GameEvent> for App {
 }
 
 fn main() {
+    ddruntime::load_log::timeline::set_gpu_texture_snapshot(ddgpu::texture_load_snapshot);
     ddruntime::load_log::timeline::set_gpu_snapshot(|| {
         let p = ddgpu::pipeline_stats();
         [p.modules, p.module_time.as_nanos() as u64, p.translate_time.as_nanos() as u64,

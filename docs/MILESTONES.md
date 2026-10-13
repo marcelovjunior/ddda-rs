@@ -9,6 +9,11 @@
 - No-shard real frontend compile and key-edge regression pass. Head's
   route/boot acceptance and combo32 loader ranking remain pending;
   details: `docs/tasks/L165-load-next.md`.
+- Optional backend texture intervals separate creation, image preparation,
+  finisher waits and queue writes from producer enqueue. CPU phase test
+  passes; final library 100 pass/5 ignored, focused diagnostics 10 pass.
+  Earlier full light reported 249 pass/1 Present timing failure/7 ignored;
+  both timing failures from earlier runs pass in final serial library.
 - Next: head reviews isolated autoplay commit and runs BOOT_DETAIL once;
   consume combo32 skip A/B and loader/backend raw stacks when available.
 

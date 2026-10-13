@@ -1,5 +1,16 @@
 # Phase 1 runtime proposal (R01)
 
+## L165 backend texture loading telemetry
+
+`DDRUNTIME_LOAD_LOG=1` in ddplay now appends optional `gpu_texture_*`
+transition deltas: device creation attempts/failures/time, completed image
+write count/prepared bytes, preparation/finisher-wait/queue-write times and
+inclusive write time. These measure backend host durations; the existing
+`texture_enqueue_ns` measures producer shadow copy/enqueue. GPU execution,
+input/display readiness and speedup are not inferred. Old frontends without
+the new snapshot provider omit its fields. Semantics, tests and head run
+request: [L165](tasks/L165-load-next.md).
+
 ## L160 job CPU sizing and wake diagnostics
 
 Parallel `GetSystemInfo` reports host logical processors capped at 32;

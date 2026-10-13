@@ -8,6 +8,10 @@ use std::sync::Mutex;
 pub type GpuSnapshot = fn() -> [u64; 5];
 static GPU: OnceLock<GpuSnapshot> = OnceLock::new();
 pub fn set_gpu_snapshot(snapshot: GpuSnapshot) { let _ = GPU.set(snapshot); }
+/// Backend creation/write durations; separate from producer shadow copy/enqueue.
+pub type GpuTextureSnapshot = fn() -> [u64; 9];
+static GPU_TEXTURE: OnceLock<GpuTextureSnapshot> = OnceLock::new();
+pub fn set_gpu_texture_snapshot(snapshot: GpuTextureSnapshot) { let _ = GPU_TEXTURE.set(snapshot); }
 pub fn register_main_thread() { register_thread("main"); }
 static STAGE_STARTED: AtomicBool = AtomicBool::new(false);
 static STAGE_PRESENTED: AtomicBool = AtomicBool::new(false);
@@ -66,7 +70,7 @@ pub(crate) fn texture_upload(start: Option<Instant>, bytes: u64) {
 }
 
 #[derive(Default)]
-struct Interval { time: f64, name: String, counters: [u64; 30], cpu: [u64; 7] }
+struct Interval { time: f64, name: String, counters: [u64; 30], cpu: [u64; 7], textures: [u64; 9] }
 static INTERVAL: Mutex<Option<Interval>> = Mutex::new(None);
 const NAMES: [&str; 30] = ["reads", "bytes", "read_ns", "archive_reads", "archive_ns",
     "inflates", "inflate_ns", "zlib_calls", "zlib_ns", "zlib_fast_ns", "adler_ns",
@@ -97,6 +101,7 @@ pub fn transition(name: &str, details: std::fmt::Arguments<'_>) {
     for i in 0..3 { counters[20+i] = UPLOADS[i].load(Relaxed); }
     for i in 0..6 { counters[23+i] = EXTRA[i].load(Relaxed); }
     counters[29] = ZLIB_HELPER_NS[4].load(Relaxed);
+    let textures = GPU_TEXTURE.get().map(|snapshot| snapshot());
     let cpu = cpu_snapshot(name == "first_present");
     let now = seconds();
     let old = previous.take().unwrap_or_default();
@@ -108,10 +113,18 @@ pub fn transition(name: &str, details: std::fmt::Arguments<'_>) {
     for (key, value) in CLASSES.iter().zip(delta(cpu, old.cpu)) {
         let _ = write!(fields, " cpu_{key}_ns={value}");
     }
+    // Use a separate optional provider so existing frontends retain their ABI.
+    if let Some(textures) = textures {
+        for (key, value) in ["gpu_texture_creates", "gpu_texture_create_failures", "gpu_texture_create_ns",
+            "gpu_texture_writes", "gpu_texture_bytes", "gpu_texture_prepare_ns", "gpu_texture_wait_ns",
+            "gpu_texture_queue_ns", "gpu_texture_write_ns"].iter().zip(delta(textures, old.textures)) {
+            let _ = write!(fields, " {key}={value}");
+        }
+    }
     eprintln!("load-log t={now:.6} event=interval from={} to={name} wall_ns={} gpu_available={} cpu_available={} emu_available={} costs=inclusive service_sample_stride=256 lifted_ns=unavailable {details}{fields}",
         if old.name.is_empty() { "process_start" } else { &old.name },
         ((now-old.time).max(0.0)*1e9) as u64, GPU.get().is_some(), cfg!(windows), cfg!(feature = "emu"));
-    *previous = Some(Interval { time: now, name: name.into(), counters, cpu });
+    *previous = Some(Interval { time: now, name: name.into(), counters, cpu, textures: textures.unwrap_or_default() });
 }
 
 // Sources: CreateThread sites recorded in docs/RUNTIME.md, DDDA.exe
@@ -278,11 +291,16 @@ mod tests {
     }
     #[test]
     fn transition_preserves_guest_mxcsr() {
+        set_gpu_texture_snapshot(|| [2, 1, 30, 4, 4096, 11, 7, 13, 31]);
         let original = ddnative_base::x86::stmxcsr();
         ddnative_base::x86::ldmxcsr(0x3fa1); // non-default rounding and sticky bits
         transition("test_marker", format_args!(""));
         let after = ddnative_base::x86::stmxcsr();
         ddnative_base::x86::ldmxcsr(original);
         assert_eq!(after, 0x3fa1);
+        if enabled() {
+            assert_eq!(INTERVAL.lock().unwrap().as_ref().unwrap().textures,
+                [2, 1, 30, 4, 4096, 11, 7, 13, 31]);
+        }
     }
 }
