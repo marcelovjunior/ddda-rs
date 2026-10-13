@@ -196,6 +196,7 @@ def resolve_capture(capture, search_path=None, fetch_modules='', cache=None):
             print(f'image unavailable for {module["path"]}: {error}', file=sys.stderr)
     # A private DbgHelp session loads only on-disk images at captured bases.
     handle = wt.HANDLE(0x147)
+    dbg.SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_FAIL_CRITICAL_ERRORS)
     if not dbg.SymInitializeW(handle, ';'.join(dict.fromkeys(paths)), False):
         raise ctypes.WinError(ctypes.get_last_error())
     try:

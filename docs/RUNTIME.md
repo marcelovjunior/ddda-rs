@@ -1185,3 +1185,19 @@ ownership and wgpu/driver work can still allocate. Tests, synthetic release
 measurements and the unresolved `_NLG_Return2` attribution are recorded in
 [L143 results](tasks/L143-backend-thread.md); gameplay image/FPS validation
 remains with head.
+## L147 upload preparation ownership (2026-10-13)
+
+The wgpu backend pads an already-owned buffer upload in place, and borrows
+tightly packed Direct-format image rows until Queue::write_texture has
+copied them into staging. This removes a second host buffer clone and a
+second full image packing allocation. Padded/converted images preserve
+their prior paths, and pending uploads, flush-before-write ordering,
+finisher waits and small-buffer mirrors keep their existing semantics.
+
+22 ddgpu CPU tests and 12 focused GPU upload/copy/draw/texture tests pass;
+runtime light has 202 distinct passes, five ignored and the inherited
+fullscreen-gamma failure after an isolated contention-timing retry. The
+CPU preparation benchmark's tight 64 KiB image median is 2.718 -> 0.006 us
+(7 -> 0 allocations/reallocations); GPU staging still copies the data.
+Evidence, symbolization correction, benchmark limits and head's pending
+game capture are recorded in `tasks/L147-nlg.md`.

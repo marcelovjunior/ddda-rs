@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod cache;
+mod upload_data;
 mod compute_quads;
 mod backend_data;
 mod encode;
@@ -1212,18 +1213,16 @@ impl WgpuBackend {
                 (width * out_bpp, bpp)
             }
         };
-        let mut data = Vec::new();
-        for z in 0..*depth {
-            let slice = &bytes[(z * pitch * rows) as usize..];
-            if conv == Conversion::Direct {
-                for y in 0..rows {
-                    let s = (y * pitch) as usize;
-                    data.extend_from_slice(&slice[s..s + (blocks_w * bpp) as usize]);
-                }
-            } else {
+        let data = if conv == Conversion::Direct {
+            upload_data::direct_image(bytes, gpu_row, rows, *depth, *pitch)
+        } else {
+            let mut data = Vec::new();
+            for z in 0..*depth {
+                let slice = &bytes[(z * pitch * rows) as usize..];
                 data.extend(convert(conv, slice, *width, rows, *pitch, src_bpp));
             }
-        }
+            std::borrow::Cow::Owned(data)
+        };
         let physical = wgpu::Extent3d { width: width.next_multiple_of(block), height: height.next_multiple_of(block), depth_or_array_layers: *depth };
         self.wait_finisher();
         self.queue.write_texture(
@@ -2860,7 +2859,7 @@ impl GraphicsBackend for WgpuBackend {
         Some(out)
     }
 
-    fn upload(&mut self, upload: Upload) {
+    fn upload(&mut self, mut upload: Upload) {
         // recorded draws read the old contents: submit them first
         let resource = match &upload {
             Upload::Buffer { resource, .. } | Upload::Image { resource, .. } => *resource,
@@ -2868,7 +2867,7 @@ impl GraphicsBackend for WgpuBackend {
         if self.open_uses.borrow().contains(&resource) {
             self.flush();
         }
-        match &upload {
+        match &mut upload {
             Upload::Buffer { resource, bytes } => {
                 if self.native_sim {
                     if bytes.len() <= 512 {
@@ -2881,10 +2880,9 @@ impl GraphicsBackend for WgpuBackend {
                 let size = (bytes.len() as u64).next_multiple_of(4).max(4);
                 match self.buffers.get(resource) {
                     Some(b) if b.size() == size => {
-                        let mut padded = bytes.clone();
-                        padded.resize(size as usize, 0);
+                        upload_data::pad_buffer(bytes);
                         self.wait_finisher();
-                        self.queue.write_buffer(b, 0, &padded);
+                        self.queue.write_buffer(b, 0, bytes);
                     }
                     _ => {
                         let b = self.inline_buffer(bytes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX);
