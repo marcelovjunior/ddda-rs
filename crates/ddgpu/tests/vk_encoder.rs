@@ -593,6 +593,7 @@ fn production_cost() {
                 }
             }
             let mut samples = vec![];
+            let mut frontend = vec![];
             let mut pixels = vec![];
             let before = ddgpu::vk::stats();
             for frame in 0..12 {
@@ -600,10 +601,12 @@ fn production_cost() {
                 for d in &draws {
                     gpu.draw(d);
                 }
+                let prepared = start.elapsed().as_secs_f64() * 1e6 / count as f64;
                 gpu.present(&targets[0]);
                 let elapsed = start.elapsed().as_secs_f64() * 1e6 / count as f64;
                 if frame >= 3 {
                     samples.push(elapsed);
+                    frontend.push(prepared);
                 }
                 pixels = gpu.read_back(&targets[0]).unwrap();
             }
@@ -619,7 +622,107 @@ fn production_cost() {
                 reference = Some(pixels.clone());
             }
             samples.sort_by(f64::total_cmp);
+            frontend.sort_by(f64::total_cmp);
+            eprintln!("L148 frontend draws={count} passes={passes} vk={vk} median={:.3}us/draw", frontend[4]);
             eprintln!("L138 production draws={count} passes={passes} pipelines={pipelines} sampled_sets={} vk={vk} median={:.3}us/unit range={:.3}..{:.3} hash={}",if textured {200} else {0},samples[4],samples[0],samples[8],blake3::hash(&pixels));
         }
+    }
+}
+
+/// Force multiple mapped-ring wraps across asynchronous chunk submissions.
+/// Every draw changes constants, with readbacks before and after the wrap.
+#[test]
+fn mapped_constants_wrap_and_reuse_are_byte_exact() {
+    let _lock = SERIAL.lock().unwrap();
+    let mut reference = None;
+    for vk in [false, true] {
+        let before = ddgpu::vk::stats();
+        let mut gpu = backend(vk);
+        gpu.set_encode_threads(4);
+        gpu.draws_per_submit = 511;
+        let t = target(0x100, 116);
+        gpu.upload(d3d9cmd::Upload::Buffer { resource: 0x300, bytes: triangle(0.0) });
+        gpu.clear(&clear_of(&[t.clone()], 0));
+        // Add every draw into float32 storage: an earlier draw observing
+        // overwritten mapped bytes cannot be hidden by a later opaque draw.
+        let mut d = draw(&[[0.0; 4]], [Some(t.clone()), None, None, None], 0.0,
+            &[(27, 1), (19, 2), (20, 2)]);
+        d.vertices = Vertices::Streams(vec![(0, 0x300, 0, 16, 1)].into());
+        let mut images = vec![];
+        for frame in 0..9 {
+            for n in 0..16000 {
+                d.ps_constants = Constants {
+                    f: vec![[((n + frame) % 97) as f32 / 128.0, frame as f32 / 16.0, 0.75, 1.0].map(f32::to_bits)],
+                    ..Default::default()
+                }.into();
+                gpu.draw(&d);
+            }
+            images.extend(gpu.read_back(&t).unwrap());
+        }
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+        if vk {
+            let after = ddgpu::vk::stats();
+            assert!(after.mapped_rings > before.mapped_rings, "test requires coherent Vulkan memory");
+            assert!(after.mapped_restarts >= before.mapped_restarts + 2);
+            assert!(after.draws > before.draws);
+            assert_eq!(after.encode_errors, before.encode_errors);
+        }
+        eprintln!("mapped wraps vk={vk} hash={}", blake3::hash(&images));
+        if let Some(expected) = &reference { assert_eq!(&images, expected); }
+        else { reference = Some(images); }
+    }
+}
+
+/// Fresh feedback snapshots must not accumulate in a process-wide
+/// initialization set or the raw context's view table (c24vk regression).
+#[test]
+fn feedback_views_retire_after_submission() {
+    let _lock = SERIAL.lock().unwrap();
+    let mut reference = None;
+    for vk in [false, true] {
+        let before = ddgpu::vk::stats();
+        let mut gpu = backend(vk);
+        gpu.set_encode_threads(4);
+        gpu.draws_per_submit = 31;
+        let mut t = target(0x100, 116);
+        t.texture = Some(d3d9cmd::TargetTexture {
+            resource: 0x200, kind: d3d9cmd::TexKind::Flat,
+            width: 4, height: 4, depth: 1, levels: 1, usage: 1,
+        });
+        gpu.clear(&clear_of(&[t.clone()], 0xff204080));
+        let mut sampler = [0; 14];
+        for n in [1, 2, 3] { sampler[n] = 3; }
+        for n in [5, 6] { sampler[n] = 1; }
+        let mut d = draw(&[[0.0; 4]], [Some(t.clone()), None, None, None], 0.0, &[]);
+        d.pixel_shader = Some(vec![
+            0xffff0300, 0x0200001f, 0x90000000, 0xa00f0800,
+            0x03000042, 0x800f0000, 0xa0e40000, 0xa0e40800,
+            0x04000004, 0x800f0800, 0x80e40000, 0xa0e40001, 0xa0e40002, 0xffff,
+        ].into());
+        d.textures = vec![d3d9cmd::TextureBinding {
+            sampler: 0, resource: 0x200, kind: d3d9cmd::TexKind::Flat, format: 116,
+            width: 4, height: 4, depth: 1, levels: 1, usage: 1, states: sampler,
+        }].into();
+        let mut images = vec![];
+        for frame in 0..10 {
+            for n in 0..64 {
+                d.ps_constants = Constants { f: vec![
+                    [0.5f32; 4].map(f32::to_bits),
+                    [0.5f32, 0.25, 0.75, 0.5].map(f32::to_bits),
+                    [(n % 7) as f32 / 16.0, frame as f32 / 32.0, 0.0625, 0.5].map(f32::to_bits),
+                ], ..Default::default() }.into();
+                gpu.draw(&d);
+            }
+            images.extend(gpu.read_back(&t).unwrap());
+            if vk {
+                assert_eq!(ddgpu::vk::stats().live_views, before.live_views + 1,
+                    "only the persistent attachment view survives the queue drain");
+            }
+        }
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+        if vk { assert_eq!(ddgpu::vk::stats().encode_errors, before.encode_errors); }
+        eprintln!("feedback retirement vk={vk} hash={}", blake3::hash(&images));
+        if let Some(expected) = &reference { assert_eq!(&images, expected); }
+        else { reference = Some(images); }
     }
 }

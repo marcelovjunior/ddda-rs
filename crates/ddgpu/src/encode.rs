@@ -6,14 +6,16 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
-pub(crate) const STAGES: [&str; 10] = [
+pub(crate) const STAGES: [&str; 16] = [
     "record_begin", "record_end", "record_pipeline", "record_groups",
     "record_vertex", "record_draw_index", "record_dynamic", "finish_cpu",
     "submit", "finish_wall",
+    "frontend_derive", "frontend_feedback", "frontend_groups",
+    "frontend_geometry", "frontend_constants", "frontend_raw_record",
 ];
 
 #[derive(Clone, Default)]
-pub(crate) struct Profile(Option<Arc<Mutex<[Histogram; 10]>>>);
+pub(crate) struct Profile(Option<Arc<Mutex<[Histogram; 16]>>>);
 
 #[derive(Clone, Copy, Default)]
 struct Histogram {
@@ -46,7 +48,7 @@ impl Histogram {
 impl Profile {
     pub(crate) fn from_env() -> Self {
         Self((std::env::var("DDGPU_ENCODE_PROFILE").as_deref() == Ok("1"))
-            .then(|| Arc::new(Mutex::new([Histogram::default(); 10]))))
+            .then(|| Arc::new(Mutex::new([Histogram::default(); 16]))))
     }
 
     #[inline]

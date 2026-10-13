@@ -1257,3 +1257,19 @@ pipeline creation. The adopted exact optimization is the independently
 opt-in L145 `DDRUNTIME_ZLIB_FAST=1`; outer `DDRUNTIME_ZLIB_PORT` stays off
 for the requested A/B. Full definitions, caveats, source evidence and head
 run environment: `docs/tasks/L149-load-timeline.md`.
+
+
+### L148 Vulkan frontend (checkpoint, opt-in)
+
+DDGPU_VK=1 memoizes raw/fallback binding records by retained derived-state
+and texture-list identities, skips memoization for feedback snapshots, and
+clears on resource release. Raw draws retain shared records; buffer ownership
+and descriptor resource sets are collected per pass. The common one-stream
+record requires no separate vertex-list allocation.
+
+Uniform constants use cached coherent host-visible Vulkan memory where
+available. Managed wgpu import owns allocation lifetime; fresh ranges may
+be written while older disjoint ranges are executing. Ring reuse waits for
+ordered submission and GPU completion. Other devices retain staged uploads.
+This remains opt-in: host-memory GPU cost and ring-wrap stalls need head's
+game acceptance. Final validation status: `docs/tasks/L148-vk-frontend.md`.
