@@ -100,13 +100,18 @@ fn call(t: &Target, indexed: bool, blended: bool, scissor: bool, colour: [f32; 4
 }
 #[test]
 fn native_matches_d3d9_backend_and_driver() {
-    compare_constant_draws(false);
+    compare_constant_draws(false, false);
 }
 #[test]
 fn native_compact_matches_d3d9_backend_and_driver() {
-    compare_constant_draws(true);
+    compare_constant_draws(true, false);
 }
-fn compare_constant_draws(compact: bool) {
+#[test]
+fn native_resident_bundles_match_d3d9_backend_and_driver() {
+    compare_constant_draws(false, true);
+    compare_constant_draws(true, true);
+}
+fn compare_constant_draws(compact: bool, resident: bool) {
     let Some(mut gpu) = ddgpu::WgpuBackend::headless() else {
         eprintln!("SKIP no GPU");
         return;
@@ -188,7 +193,8 @@ fn compare_constant_draws(compact: bool) {
         2,
         "empty sets shared across pipeline states"
     );
-    let mut recorder = Recorder::new(&device, 128 * 1024);
+    let mut recorder = Recorder::with_resident_constants(&device, 128 * 1024, resident);
+    recorder.enable_bundles(resident);
     let pc = recorder.create_constant_buffer_for_shader(pixel_shader);
     let vc = recorder.create_constant_buffer_for_shader(vertex_shader);
     let mut vs_bytes = vec![0; vl.byte_len];
@@ -274,17 +280,102 @@ fn compare_constant_draws(compact: bool) {
     }
     assert_eq!(recorder.stats.draws, 8);
     assert_eq!(recorder.stats.uniform_writes, 16);
+    if resident {
+        // Distinct snapshots inside one pass, dynamic-state splits, then an
+        // exact repeated sequence with new bytes at unchanged offsets.
+        let builds = recorder.stats.bundle_builds;
+        let hits = recorder.stats.bundle_hits;
+        for frame in 0..4 {
+            let mut draws = vec![
+                call(
+                    &legacy_target,
+                    true,
+                    false,
+                    true,
+                    [0.2 + frame as f32 * 0.1, 0.0, 0.0, 1.0],
+                ),
+                call(
+                    &legacy_target,
+                    false,
+                    false,
+                    true,
+                    [0.0, 0.3 + frame as f32 * 0.1, 0.0, 1.0],
+                ),
+                call(&legacy_target, true, true, false, [0.0, 0.0, 0.8, 0.5]),
+            ];
+            draws[0].scissor = [0, 0, 4, 8];
+            draws[1].scissor = [4, 0, 8, 8];
+            // A changed draw range must invalidate the cached packet.
+            if frame == 3 {
+                draws[1].primitives = 0;
+            }
+            let reference = oracle
+                .render(&[], Some(&clear(&legacy_target)), &draws, &legacy_target)
+                .unwrap();
+            recorder.update_constants(vc, &vs_bytes).unwrap();
+            recorder
+                .begin_pass(PassDesc {
+                    colours: [Some(view), None, None, None],
+                    depth: None,
+                    clear_colour: Some(wgpu::Color::BLUE),
+                    clear_depth: None,
+                    clear_stencil: None,
+                })
+                .unwrap();
+            for (n, draw) in draws.iter().enumerate() {
+                let (pipeline, sets) = pipelines[if n == 2 { 2 } else { 1 }];
+                recorder.set_pipeline(pipeline);
+                for set in sets {
+                    recorder.set_texture_set(set);
+                }
+                let [x, y, right, bottom] = draw.scissor;
+                recorder.set_scissor([x as u32, y as u32, (right - x) as u32, (bottom - y) as u32]);
+                let mut block = vec![0; pl.byte_len];
+                for (word, value) in block[..16].chunks_exact_mut(4).zip(draw.ps_constants.f[0]) {
+                    word.copy_from_slice(&value.to_le_bytes());
+                }
+                recorder.update_constants(pc, &block).unwrap();
+                if n == 1 {
+                    recorder.draw(0..draw.primitives * 3, 0..1).unwrap();
+                } else {
+                    recorder.draw_indexed(0..3, 0, 0..1).unwrap();
+                }
+            }
+            recorder.submit();
+            gpu.present(&native_target);
+            assert_eq!(
+                gpu.last_frame.as_ref().unwrap().rgba,
+                reference.rgba,
+                "resident multi-snapshot frame {frame}"
+            );
+        }
+        assert_eq!(
+            recorder.stats.bundle_builds - builds,
+            4,
+            "three chunks plus one changed draw"
+        );
+        assert_eq!(
+            recorder.stats.bundle_hits - hits,
+            8,
+            "unchanged exact sequences reused"
+        );
+    }
 }
 
 #[test]
 fn native_imported_texture_and_constant_generations() {
-    compare_texture_constants(false);
+    compare_texture_constants(false, false);
 }
 #[test]
 fn native_compact_texture_and_constant_generations() {
-    compare_texture_constants(true);
+    compare_texture_constants(true, false);
 }
-fn compare_texture_constants(compact: bool) {
+#[test]
+fn native_resident_bundle_texture_generations() {
+    compare_texture_constants(false, true);
+    compare_texture_constants(true, true);
+}
+fn compare_texture_constants(compact: bool, resident: bool) {
     use d3d9cmd::{TexKind, TextureBinding as LegacyTexture, Upload};
     let Some(mut gpu) = ddgpu::WgpuBackend::headless() else {
         eprintln!("SKIP no GPU");
@@ -347,12 +438,14 @@ fn compare_texture_constants(compact: bool) {
     let texture = device.import_texture(&mut gpu, &texture).unwrap();
     let view = device.create_view(texture, &Default::default());
     let sampler = device.create_sampler(&Default::default()).unwrap();
-    assert!(device
-        .create_sampler(&SamplerDesc {
-            lod_bias: 1.0,
-            ..Default::default()
-        })
-        .is_ok());
+    assert!(
+        device
+            .create_sampler(&SamplerDesc {
+                lod_bias: 1.0,
+                ..Default::default()
+            })
+            .is_ok()
+    );
     let make_shader = if compact {
         Device::create_compact_shader
     } else {
@@ -408,7 +501,8 @@ fn compare_texture_constants(compact: bool) {
     );
     let empty = device.create_texture_set(p, Stage::Vertex, &[]).unwrap();
     let vb = device.create_buffer(&vertices(), wgpu::BufferUsages::VERTEX);
-    let mut r = Recorder::new(&device, 16384);
+    let mut r = Recorder::with_resident_constants(&device, 16384, resident);
+    r.enable_bundles(resident);
     r.set_pipeline(p);
     r.set_texture_set(tex);
     r.set_texture_set(empty);
@@ -447,7 +541,7 @@ fn compare_texture_constants(compact: bool) {
         }
         assert_eq!(
             r.stats.pipeline_sets,
-            frame + 1,
+            if resident { 0 } else { frame + 1 },
             "unchanged draw pipeline filtered"
         );
         assert_eq!(
@@ -458,6 +552,14 @@ fn compare_texture_constants(compact: bool) {
         r.submit();
         gpu.present(&t);
         assert_eq!(gpu.last_frame.as_ref().unwrap().rgba, expected.rgba);
+    }
+    if resident {
+        assert_eq!(r.stats.bundle_builds, 1);
+        assert_eq!(r.stats.bundle_hits, 1);
+        assert!(
+            r.stats.upload_bytes < 1024,
+            "only initially nonzero registers uploaded"
+        );
     }
     let mut last = 0.25f32;
     let mut exhausted = false;

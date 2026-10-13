@@ -231,9 +231,12 @@ pub trait GraphicsBackend: Send + std::any::Any {
     /// execute as they record: every mark has passed.
     fn mark(&mut self) -> u64 { 0 }
     fn passed(&self, _mark: u64) -> bool { true }
-    /// Ordered native job. Err returns the original job without native target
-    /// writes; the sender must fall back. DeferredBackend acknowledges once per
-    /// job, never once per draw, so unsupported work cannot vanish on a worker.
+    /// Capability is stable for this backend's lifetime. Producers must also
+    /// meet the native adapter's eligibility contract before sending a job.
+    fn native_supported(&self) -> bool { false }
+    /// Ordered native job. Immediate backends return Err before native target
+    /// writes. A supported DeferredBackend returns Ok after enqueue; unexpected
+    /// worker rejection is logged loudly and cannot trigger producer fallback.
     fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> { Err(job) }
     /// Comparison markers default to unsupported, without side effects.
     fn native_compare_begin(&mut self, _begin: NativeCompareBegin) -> bool { false }
