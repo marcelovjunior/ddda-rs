@@ -267,8 +267,23 @@ fn pointer_reuse_and_first_mismatch_path_are_preserved() {
     }
     let before = snap(&m, c);
     assert_eq!(before.first_difference(&before), None);
+    // targets and fixed state compare by content (their applies are
+    // pointer-independent for equal bytes): a copy elsewhere is equal
     m.zero(0x6000, 0x5c);
-    m.set_u32(0x3044, 0x6000); // same bytes, different reuse pattern
+    m.set_u32(0x3044, 0x6000);
+    m.zero(0x6100, 0x14);
+    m.set_u32(0x3048, 0x6100);
+    assert_eq!(before.first_difference(&snap(&m, c)), None);
+    // ... but not when a byte differs
+    let mut changed = m.clone();
+    changed.set_u8(0x6110, 1);
+    assert_eq!(
+        before.first_difference(&snap(&changed, c)),
+        Some(Difference { path: vec![1], field: "bindings" })
+    );
+    // stream bindings keep pointer identity
+    m.zero(0x6200, 0x30);
+    m.set_u32(0x3050, 0x6200); // same bytes, different reuse pattern
     let after = snap(&m, c);
     assert_eq!(
         before.first_difference(&after),

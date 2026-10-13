@@ -476,9 +476,16 @@ impl Capture<'_> {
         // values, calling the device only on a change, then caches the
         // pointer (+8). Two bindings with equal bytes (all fields it reads lie
         // in the 0x5C captured) therefore apply identically wherever they sit,
-        // so lane-local copies of a serial binding are equivalent. Other
-        // kinds keep pointer identity until their consumers are shown alike.
-        let identity = if kind == BindingKind::Targets {
+        // so lane-local copies of a serial binding are equivalent.
+        // Fixed state likewise: 0x00DAA5F0 returns for the current pointer
+        // (+0xC); otherwise it compares the blend, depth-stencil and raster
+        // objects (+8, +0xC, +0x10) with the context's cached ones (+0x18,
+        // +0x20, +0x1C) and the factor (+0), stencil reference (+4 low byte)
+        // and raster flip (+4 bit 8) with the previous binding's bytes,
+        // calling the device only on a change, then caches the pointer.
+        // Shader and stream bindings keep pointer identity until their
+        // consumers are shown alike.
+        let identity = if matches!(kind, BindingKind::Targets | BindingKind::Fixed) {
             usize::MAX
         } else {
             let next = self.identities.len();
