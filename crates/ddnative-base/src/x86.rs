@@ -252,36 +252,47 @@ fn call_overridden(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32, f: L
     override_of(target).unwrap_or(f)(m, cpu)
 }
 
+/// This thread's `call_ext` handler: owned here; `EXT_FAST` points at it
+/// (cleared when the owner goes, at thread exit too).
+struct ExtOwner(Option<std::rc::Rc<ExtCall>>);
+impl Drop for ExtOwner {
+    fn drop(&mut self) {
+        EXT_FAST.with(|f| f.set(None));
+    }
+}
+
 thread_local! {
-    static EXT: std::cell::RefCell<Option<std::rc::Rc<ExtCall>>> = std::cell::RefCell::new(None);
-    /// The installed handler, for `call_ext`'s fast path: a plain pointer
-    /// read instead of a RefCell borrow and a reference-count round trip
-    /// per call (L171). Kept valid by EXT and, for a handler replaced while
-    /// a call through it is still running, by RETIRED.
-    static EXT_PTR: std::cell::Cell<Option<std::ptr::NonNull<ExtCall>>> = const { std::cell::Cell::new(None) };
-    /// `call_ext` calls in progress on this thread.
+    static EXT: std::cell::RefCell<ExtOwner> = const { std::cell::RefCell::new(ExtOwner(None)) };
+    /// The installed handler, read by `call_ext` without a reference count
+    /// or a borrow (L170: a destructor-free thread-local).
+    static EXT_FAST: std::cell::Cell<Option<std::ptr::NonNull<ExtCall>>> = const { std::cell::Cell::new(None) };
+    /// `call_ext` calls running on this thread.
     static EXT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-    /// Handlers replaced while calls were in progress, kept until none is.
-    static RETIRED: std::cell::RefCell<Vec<std::rc::Rc<ExtCall>>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Handlers replaced while a call ran (one may still be running): kept
+    /// until a replacement made with no call running.
+    static EXT_RETIRED: std::cell::RefCell<Vec<std::rc::Rc<ExtCall>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Install the handler for `call_ext` on this thread; returns the old one.
 pub fn set_ext_calls(f: Option<Box<ExtCall>>) -> Option<std::rc::Rc<ExtCall>> {
     let new: Option<std::rc::Rc<ExtCall>> = f.map(std::rc::Rc::from);
-    EXT_PTR.with(|p| p.set(new.as_ref().map(|r| std::ptr::NonNull::from(&**r))));
-    let old = EXT.with(|e| std::mem::replace(&mut *e.borrow_mut(), new));
-    if EXT_DEPTH.with(|d| d.get()) == 0 {
-        RETIRED.with(|r| r.borrow_mut().clear());
-    } else if let Some(old) = &old {
-        // a call through `old` may still be running below us
-        RETIRED.with(|r| r.borrow_mut().push(std::rc::Rc::clone(old)));
-    }
+    EXT_FAST.with(|p| p.set(new.as_ref().map(|r| std::ptr::NonNull::from(&**r))));
+    let old = EXT.with(|e| std::mem::replace(&mut e.borrow_mut().0, new));
+    EXT_RETIRED.with(|r| {
+        let mut r = r.borrow_mut();
+        if EXT_DEPTH.with(|d| d.get()) == 0 {
+            r.clear();
+        } else if let Some(old) = &old {
+            r.push(old.clone());
+        }
+    });
     old
 }
 
-/// Restores the call depth even when the handler unwinds.
-struct ExtDepth;
-impl Drop for ExtDepth {
+/// Ends a `call_ext` call (also when its handler panics).
+struct ExtCallDepth;
+impl Drop for ExtCallDepth {
+    #[inline]
     fn drop(&mut self) {
         EXT_DEPTH.with(|d| d.set(d.get() - 1));
     }
@@ -289,19 +300,20 @@ impl Drop for ExtDepth {
 
 /// A call from lifted code to `target`, which is not lifted. A handler that
 /// dispatches into lifted code which calls `call_ext` again (nested calls,
-/// callbacks, recursion) finds itself installed; a handler replaced during
-/// a call stays alive until the outermost call returns, and a panic inside
-/// the handler leaves it in place.
+/// callbacks, recursion) finds itself installed; one replaced meanwhile
+/// stays alive until no call runs (`EXT_RETIRED`), and a panic inside the
+/// handler leaves it in place.
 #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
 pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
-    let f = EXT_PTR.with(|p| p.get())
-        .unwrap_or_else(|| panic!("call to {target:#010x}: no handler for untranslated code"));
+    let Some(f) = EXT_FAST.with(|f| f.get()) else {
+        panic!("call to {target:#010x}: no handler for untranslated code")
+    };
     EXT_DEPTH.with(|d| d.set(d.get() + 1));
-    let _depth = ExtDepth;
-    // SAFETY: EXT (or RETIRED while this call is in progress) owns the
-    // handler `f` points at: set_ext_calls retires a replaced handler
-    // whenever a call is in progress, and frees retired ones only at depth 0.
-    unsafe { (*f.as_ptr())(m, cpu, target) }
+    let _depth = ExtCallDepth;
+    // SAFETY: `f` points into a handler that EXT, or EXT_RETIRED while this
+    // call runs, holds: set_ext_calls retires a replaced handler while any
+    // call runs, and the owner's drop clears EXT_FAST.
+    unsafe { f.as_ref()(m, cpu, target) }
 }
 
 impl Flags {

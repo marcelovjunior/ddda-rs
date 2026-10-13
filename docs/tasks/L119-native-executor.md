@@ -133,3 +133,34 @@ the combo15 profile (E:/ddda-re/notes/runs/profile_c15b.txt):
   wake latency (our event wait: the workers show 7-12% self time in
   wait_for_single_object). Readable ports of the hottest jobs are the
   other lever. No game-visible change is needed for either.
+
+## L141: instanced draws in the sink (2026-10-13)
+
+- The sink takes executor types 2 and 3 (51f5cc0c): types 0 and 1's
+  DrawCall with the streams 0x00DAB480's frequency loops leave on the
+  device (instance data 0x80000001 at step * stride + offset, geometry
+  0x40000000 | instances). Oracle test: a type 3 DrawCall equals the
+  runtime D3D9 path's after the stream apply and those calls.
+- A taken one changes nothing on the device: the executor sets every
+  frequency back to 1 and the instance sources back to the stream apply's
+  after the draw. That holds only if nothing else sets frequencies. Static
+  check (DDDA.exe analysis copy): the only code with an instancing
+  immediate (0x80000001, or OR 0x40000000) within 256 bytes of a vtable
+  +0x198 (SetStreamSourceFreq) load is 0x00DAB875..0x00DABAB0, the
+  executor's own; 19 other sites have one without the other. A heuristic,
+  not a proof.
+- Not yet compared in game: needs `DDDRAW_NATIVE=verify` (0 mismatches).
+
+## L141: float registers a binding does not write (2026-10-13)
+
+- eb71284f: a draw whose shaders read float registers its binding does not
+  write is taken. The D3D9 path draws with what the device holds there,
+  and the binding's own apply does not touch those registers. So the
+  value at decide time is the value at the draw: the newest pending upload
+  of the taken draws writing it (flush_uploads's rule), else the device's
+  register. Such a draw gets constant banks of its own.
+- Oracle test on the runtime device: a VS reading c0..c7 whose binding
+  writes c0..c5 gets the device's c6/c7, equal to the D3D9 path's
+  DrawCall. Integer and boolean registers left unwritten are still
+  refused (none seen in c29nat1).
+- Not yet compared in game: needs `DDDRAW_NATIVE=verify`.

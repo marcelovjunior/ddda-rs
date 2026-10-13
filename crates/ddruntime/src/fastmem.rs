@@ -8,7 +8,7 @@
 //! memmove (the source is read whole first), a page that is not writable
 //! takes the per-byte path and faults where the original would.
 
-use ddnative_base::mem::{store_at, Mem, ATOMIC_ACCESSES, PAGE, WRITE};
+use ddnative_base::mem::{Mem, ATOMIC_ACCESSES, PAGE, WRITE};
 use ddnative_base::x86::Cpu;
 use std::sync::atomic::Ordering;
 
@@ -39,8 +39,54 @@ pub const MEMSET: u32 = 0x012E_FE20;
 /// 0x012EFEA0: memcpy(dst, src, n), cdecl, eax = dst (overlap as memmove).
 pub const MEMCPY: u32 = 0x012E_FEA0;
 
+/// Copies and fills up to this size use a stack buffer (L170: most of the
+/// game's are small, and a heap buffer each cost more than the copy).
+const SMALL: usize = 256;
+
 fn arg(m: &dyn Mem, cpu: &Cpu, k: u32) -> u32 {
     m.u32(cpu.esp.wrapping_add(4 + 4 * k))
+}
+
+/// Store `src` at `dst` as parallel mode writes guest memory: every
+/// aligned 4-byte word in one atomic store (Release, like every guest
+/// store), so no other guest thread sees one torn; bytes at the unaligned
+/// ends. The middle goes as aligned 8-byte atomic stores, one access on
+/// x86-64 (Intel SDM vol. 3 8.1.1), so each word inside is written whole
+/// too: the mirror of memory.rs `copy_words` (L179: byte-wise stores, one
+/// per byte, carried the draw recordings' 212 KB copies on the main thread).
+///
+/// # Safety
+/// `dst..dst + src.len()` lies inside one backed guest page.
+unsafe fn store_words(dst: *mut u8, src: &[u8]) {
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering::Release};
+    let n = src.len();
+    let from = src.as_ptr();
+    let mut j = 0;
+    unsafe {
+        while j < n && (dst as usize + j) % 4 != 0 {
+            (*(dst.add(j) as *const AtomicU8)).store(*from.add(j), Release);
+            j += 1;
+        }
+        if j + 4 <= n && (dst as usize + j) % 8 == 4 {
+            let w = std::ptr::read_unaligned(from.add(j) as *const u32);
+            (*(dst.add(j) as *const AtomicU32)).store(w, Release);
+            j += 4;
+        }
+        while j + 8 <= n {
+            let w = std::ptr::read_unaligned(from.add(j) as *const u64);
+            (*(dst.add(j) as *const AtomicU64)).store(w, Release);
+            j += 8;
+        }
+        if j + 4 <= n {
+            let w = std::ptr::read_unaligned(from.add(j) as *const u32);
+            (*(dst.add(j) as *const AtomicU32)).store(w, Release);
+            j += 4;
+        }
+        while j < n {
+            (*(dst.add(j) as *const AtomicU8)).store(*from.add(j), Release);
+            j += 1;
+        }
+    }
 }
 
 /// `data` at `addr`, page by page.
@@ -63,10 +109,8 @@ pub fn write_bulk(m: &mut dyn Mem, addr: u32, data: &[u8]) {
             // lazy page with zeros first, as a store would)
             let page = unsafe { table.unwrap().as_ref() }.backed_page(p);
             if atomic {
-                for j in 0..n {
-                    // SAFETY: inside the page
-                    unsafe { store_at(page.add(off + j), 1, data[k + j] as u32) };
-                }
+                // SAFETY: off + n <= PAGE inside a backed page
+                unsafe { store_words(page.add(off), &data[k..k + n]) };
             } else {
                 // SAFETY: off + n <= PAGE inside a backed page
                 unsafe { std::ptr::copy_nonoverlapping(data[k..].as_ptr(), page.add(off), n) };
@@ -82,7 +126,8 @@ pub fn memcpy(m: &mut dyn Mem, cpu: &mut Cpu) {
         m.read_bytes(src, bytes);
         write_bulk(m, dst, bytes);
     };
-    if reuse_scratch() { with_scratch(n as usize, copy); }
+    if n as usize <= SMALL { copy(&mut [0u8; SMALL][..n as usize]); }
+    else if reuse_scratch() { with_scratch(n as usize, copy); }
     else { copy(&mut vec![0u8; n as usize]); }
     cpu.eax = dst;
     let _ = m.u32(cpu.esp); // the return address
@@ -91,7 +136,9 @@ pub fn memcpy(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 pub fn memset(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dst, c, n) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    if reuse_scratch() {
+    if n as usize <= SMALL {
+        write_bulk(m, dst, &[c as u8; SMALL][..n as usize]);
+    } else if reuse_scratch() {
         let bytes = [c as u8; PAGE as usize];
         let mut offset = 0;
         while offset < n {
@@ -121,5 +168,24 @@ mod scratch_tests {
         let pointer = with_scratch(4096, |b| b.as_ptr());
         with_scratch((2 << 20) + 1, |b| b.fill(9));
         assert_eq!(with_scratch(4096, |b| b.as_ptr()), pointer);
+    }
+}
+
+#[cfg(test)]
+mod store_words_tests {
+    use super::*;
+    #[test]
+    fn word_stores_write_exactly_the_bytes_of_a_plain_copy() {
+        let data: Vec<u8> = (0..300u32).map(|k| (k.wrapping_mul(0x9E37_79B1) >> 11) as u8).collect();
+        for start in 0..16 {
+            for len in 0..64usize.min(data.len()) {
+                let mut page = vec![0xEEu8; 128];
+                // SAFETY: start + len <= 80 < 128
+                unsafe { store_words(page.as_mut_ptr().add(start), &data[..len]) };
+                let mut want = vec![0xEEu8; 128];
+                want[start..start + len].copy_from_slice(&data[..len]);
+                assert_eq!(page, want, "start {start} len {len}");
+            }
+        }
     }
 }

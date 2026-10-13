@@ -52,6 +52,7 @@ constant blocks from them again. That re-derivation is the cost:
 | combo25 default (+L146 gated pin, L143 backend, L147, L145 zlib fast, L144, L149 timeline, L148 VK frontend) | 21.4 / 22.7-24.0 (same-session combo24: 19.9) | 3.98 us/decided draw; DDGPU_VK=1 22.2 / 24-24.7, 3.77 us |
 | combo26 (+L144 Pages host reads, L153 sync, L151 pipeline threads) | 21.0 default, 22.3 DDGPU_VK=1 (24.7-26 end) | no thread saturated: render worker busy 49%, main 22%: the frame is a wait chain (render worker waits ~7 ms/frame for main at 0x00DAC0B4; main waits ~4.7 ms/frame at the job join 0x00DBE66D) |
 | combo27 (+L146 typed x87 / live flag predicates, regenerated shards) | 22.6 default, 22.5 VK (25-27.3 end); same-session combo26 21.6 / 22.3 | L142 flat memory measured separately: no game gain, not accepted |
+| combo37 (o2; all semantic ports L171/L173/L174/L177, draw_mesh, fast call_ext) | 25.4 off / 22.6 on (single runs, noisy); sync-profile runs before the census dump: 18-21 off, 22-24 on | rewrites cut the unit-draw job 0xDB7620 202 -> 150 us mean, 0xFEE0F0 32 -> 4 us; the bound moved to the render worker 0x1034 (main spins in the present limiter 0xDAED10): 3,440 native scene draws/frame at 3.94 us each, ~1,930 non-scene draws (shadow 512x1536, soft-body 64x8/64x16, 960x540) still on the D3D9 path at ~3x the cost; next: all draws native (DDDRAW_NATIVE_TARGETS=all) |
 
 (average / end of the run; L114, inlining the memory and flag helpers into
 the shards, gave no gain for 2.5x the compile time and was dropped.)

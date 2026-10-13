@@ -351,6 +351,9 @@ pub const INTEGER_APIS: &[&str] = &[
     "EncodePointer", "DecodePointer", "GetCurrentThreadId",
     "InterlockedIncrement", "InterlockedDecrement", "InterlockedExchange",
     "InterlockedExchangeAdd", "InterlockedCompareExchange",
+    // L170 audit: the calling thread's values (runtime::with_thread) and the
+    // TLS slots' SeqCst allocation generations; integer only
+    "TlsGetValue", "TlsSetValue", "GetLastError", "SetLastError",
 ];
 
 /// Imports that require no guest service lock: guest memory, atomics,

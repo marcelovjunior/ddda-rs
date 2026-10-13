@@ -189,6 +189,18 @@
 - Next: head combined native gate and independent same-route port A/B;
   retain opt-ins until image/job-time acceptance. Evidence and divisibility
   limits: `docs/tasks/L169-shadow.md`.
+### L170 game-thread service-call overhead (2026-10-13)
+
+- Sizing (c31def, game threads): out-of-line guest memory accessors ~40%
+  of busy samples (Team A), `call_ext` dispatch ~6%, real service work ~4%
+  (`run_service_as` 11.2%, of which waits 7.1%).
+- Implemented and tested, not yet run in game: `call_ext` without an Rc
+  clone per call; an opt-in service census (`DDRUNTIME_SERVICE_CENSUS=1`);
+  memcpy/memset without a heap buffer up to 256 bytes; the CRT memory and
+  string routines and TLS/last-error imports on the Integer service path.
+  memcpy 32 B through the dispatch: 100.8 -> 48.1 ns.
+- Next: a census run in game to rank the remaining services and call sites.
+  Details: docs/tasks/L170-service-calls.md.
 
 ### L162c job distribution and host scheduling (2026-10-13)
 
@@ -769,6 +781,26 @@
   generated source **+0.2194%**. No comparative compile-speed/FPS claim.
 - Next: head's same-scene loading/image/FPS measurement. Details and
   timing/profile limits: `docs/tasks/L129-dead-flags.md`.
+
+### L141 native jobs (`DDDRAW_NATIVE=1`) viable (2026-10-13)
+
+- Implemented (task/L141-native-viable, merged up to 32f6792f in combo29):
+  one native worker kept across releases (only what the guest released is
+  forgotten), render-target channel fill and D3D9 depth bias in the pixel
+  shader as the D3D9 path does, strips by the D3D9 path's rule, draws that
+  sample their own target through a snapshot copy, draws inside a query
+  span left to the D3D9 path, and no per-job finisher wait (a ring of
+  scatter sources with submission tickets).
+- **Compared with the D3D9 path in game**: combo29 `compare` with
+  DDGPU_VK=1, 143,744 passes matched, 0 mismatched. combo29 native VK1:
+  20.6 fps (combo28 17.0), worker_instances 1, 6 jobs refused (indexed
+  line strips); sink refusals per frame: Instanced 90, FloatsUncovered 44,
+  Query 6.
+- After combo29, tested but not yet run in game: 58093ee0 (codex-11's L154
+  sink allocation fixes, reviewed), ef80de30 (NativeDraw constants as
+  Arc<NativeConstants>, made once per bank: c29nat1's render thread spent
+  15% in native_draw's per-draw constants), c49461f6 (a test race).
+- Next: the head's native VK1, compare VK1 and default runs of ef80de30.
 
 ### L119 native sink: drawcall is the default (2026-10-13)
 
