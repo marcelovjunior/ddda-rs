@@ -358,6 +358,7 @@ fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, 
         scissor: [i32; 4],
     }
     let r = with_device(dev, |d| {
+        let [vs, ps] = d.state.draw_constants(d.state.shader_float_counts);
         let state = &d.state;
         let mut textures: Vec<(u32, u32, [u32; 14])> = state.textures.iter().map(|(&smp, &res)| {
             (smp, res, std::array::from_fn(|t| state.sampler.get(&(smp, t as u32)).copied().unwrap_or(0)))
@@ -375,8 +376,8 @@ fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, 
             shaders: (state.vertex_shader, state.pixel_shader),
             declaration: state.declaration,
             fvf: state.fvf,
-            vs: state.vs.clone(),
-            ps: state.ps.clone(),
+            vs,
+            ps,
             viewport: state.viewport,
             scissor: state.scissor,
         }

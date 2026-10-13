@@ -1990,3 +1990,16 @@ opening (codex-31), route perf (codex-29).
 - Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+### L90 compact constants (2026-10-13)
+
+- Implemented bytecode-bounded constant snapshots and matching WGSL uniform
+  layouts, little-endian bulk float copying, and valid dynamic binding
+  ranges across ring rollover. Relative addressing retains full banks.
+- Fixture float bytes: **7,680 -> 2,912**. Light suite **151 pass / 1 fail /
+  1 ignored**; failure is the baseline fullscreen-gamma Reset issue also
+  reproduced by L98. Prefix/rebinding and byte-packing regressions pass.
+- GPU compact-layout/ring-rollover regression: **4,096 draws, exact driver
+  pixel match**. Full 150-case texture/state matrix and completed draw
+  comparisons pass. Next: remaining serialized GPU gate/timings after
+  L96's independent WGL teardown fix; snapshot groups stay separate.

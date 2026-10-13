@@ -156,6 +156,46 @@ fn blue_clear() -> ClearCall {
     ClearCall { rects: vec![], flags: 1, colour: 0xFF00_00FF, z: 1.0, stencil: 0, targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0], scissor: None, srgb: false }
 }
 
+/// Keep every draw visible, including both sides of uniform-ring rollover.
+/// Alternating c0/c223 also moves the integer/bool/alpha uniform offsets.
+#[test]
+fn compact_constant_layouts_and_ring_rollover_match_the_driver() {
+    let (Some(mut reference), Some(mut gpu)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else { return; };
+    let target = Target { width: 64, height: 64, ..back_buffer() };
+    let mut clear = blue_clear();
+    clear.targets[0] = Some(target.clone());
+    clear.viewport = [0, 0, 64, 64, 0, 0];
+    let mut shaders = [ps_constant(), ps_constant()];
+    shaders[1][3] |= 223;
+    let shaders = shaders.map(std::sync::Arc::<[u32]>::from);
+    let mut template = draw(ps_constant(), Constants::default(), vec![]);
+    template.targets[0] = Some(target.clone());
+    template.viewport = [0, 0, 64, 64, 0, 1f32.to_bits()];
+    template.render_states.extend([(174, 1), (15, 1), (24, 127), (25, 5)]);
+    // Alpha test GREATER than 127: incorrect compact tail offsets discard
+    // pixels. SetRenderState ordering remains unique and sorted.
+    template.render_states.retain(|&(s, v)| s != 15 || v == 1);
+    template.render_states.sort();
+    let mut draws = Vec::with_capacity(4096);
+    for pixel in 0..4096 {
+        let reg = if pixel % 2 == 0 { 0 } else { 223 };
+        let mut d = template.clone();
+        d.pixel_shader = Some(shaders[pixel % 2].clone());
+        let mut c = Constants { f: vec![[0; 4]; reg + 1], ..Default::default() };
+        c.f[reg] = [(pixel % 7) as f32 / 6.0, (pixel % 11) as f32 / 10.0, (pixel % 3) as f32 / 2.0, 1.0].map(f32::to_bits);
+        d.ps_constants = c.into();
+        let (x, y) = ((pixel % 64) as i32, (pixel / 64) as i32);
+        d.scissor = [x, y, x + 1, y + 1];
+        draws.push(d);
+    }
+    let expected = reference.render(&[], Some(&clear), &draws, &target).expect("D3D9 render");
+    gpu.clear(&clear);
+    for d in &draws { gpu.draw(d); }
+    gpu.present(&target);
+    assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    assert_eq!(gpu.last_frame.unwrap().rgba, expected.rgba);
+}
+
 #[test]
 fn frames_match_the_d3d9_driver() {
     if d3d9ref::Oracle::new().is_none() || ddgpu::WgpuBackend::headless().is_none() {

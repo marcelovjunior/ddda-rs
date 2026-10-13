@@ -232,6 +232,8 @@ fn draws_share_immutable_payloads_and_detach_changed_constants() {
     ddruntime::d3d9draw::recorded(|r| {
         let (a, b, c) = (&r.draws[0], &r.draws[1], &r.draws[2]);
         assert_eq!(a, b);
+        assert_eq!(a.vs_constants.f.len(), 8);
+        assert_eq!(a.ps_constants.f.len(), 8);
         assert!(Arc::ptr_eq(a.vertex_shader.as_ref().unwrap(), c.vertex_shader.as_ref().unwrap()));
         assert!(Arc::ptr_eq(a.pixel_shader.as_ref().unwrap(), c.pixel_shader.as_ref().unwrap()));
         assert_eq!(a.vertex_shader.as_deref().unwrap(), vertex_shader(8));
@@ -248,5 +250,34 @@ fn draws_share_immutable_payloads_and_detach_changed_constants() {
         assert_eq!(d.ps_constants.i[0], [5, 6, 7, 8]);
         assert_eq!(d.ps_constants.b[0], 5);
         assert!(Arc::ptr_eq(&c.vs_constants, &d.vs_constants));
+    }).unwrap();
+}
+
+#[test]
+fn shader_rebinding_preserves_registers_outside_the_previous_extent() {
+    use std::sync::Arc;
+    let Some((mut s, dev)) = device_session() else { return; };
+    put(&mut s, DATA, &vertex_shader(8));
+    let short = out(&mut s, dev, 91, &[DATA, OUT]);
+    put(&mut s, DATA, &vertex_shader(201));
+    let long = out(&mut s, dev, 91, &[DATA, OUT]);
+    put(&mut s, DATA, &[7; 4]);
+    assert_eq!(com(&mut s, dev, 94, &[200, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 41, &[]), 0);
+    for shader in [short, long, short] {
+        assert_eq!(com(&mut s, dev, 92, &[shader]), 0);
+        assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    }
+    put(&mut s, DATA, &[8; 4]);
+    assert_eq!(com(&mut s, dev, 94, &[200, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    assert_eq!(com(&mut s, dev, 92, &[long]), 0);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    ddruntime::d3d9draw::recorded(|r| {
+        assert_eq!(r.draws[0].vs_constants.f.len(), 8);
+        assert_eq!(r.draws[1].vs_constants.f.len(), 201);
+        assert_eq!(r.draws[1].vs_constants.f[200], [7; 4]);
+        assert!(Arc::ptr_eq(&r.draws[2].vs_constants, &r.draws[3].vs_constants));
+        assert_eq!(r.draws[4].vs_constants.f[200], [8; 4]);
     }).unwrap();
 }

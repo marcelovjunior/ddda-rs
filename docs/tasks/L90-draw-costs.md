@@ -17,7 +17,8 @@ No game runs, game data changes, or lifted shard builds.
 Use `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`, and
 `CARGO_TARGET_DIR=C:/ddda-targets/L90`. Runtime light suite and D3D9 tests;
 ddgpu driver-equivalence tests only while pause status permits, with a
-60-second hard timeout per executable. Measure `draw_path` and
+60-second hard timeout per test (head permits 300 seconds for cache.rs).
+Serialize GPU suites through HEAVY_BIG=1/heavy.py. Measure `draw_path` and
 `draw_cost_game` before/after. Only head measures gameplay.
 
 ## Results: first isolated batch (Arc payloads)
@@ -54,3 +55,31 @@ ddgpu driver-equivalence tests only while pause status permits, with a
   load limits timing attribution. Logs are private under `C:/ddda-targets/L90-*`.
 - Next: head integrates/measures the Arc-only commit; compact constants
   and dirty snapshot groups remain separate follow-up commits.
+
+## Results: compact constants
+
+- Shader creation records the bytecode's highest float register read,
+  including matrix rows. Relative reads retain the full stage register
+  file. Device banks remain complete for later shader rebinding/Get*;
+  immutable draw prefixes reuse unchanged data, including writes outside
+  the bound shader's extent.
+- Backend WGSL float arrays use that extent (one zero slot when unused),
+  with the integer/bool/extra fields packed at the matching offsets.
+  Float bits are copied as one byte slice on little-endian hosts. Dynamic
+  offsets keep 256-byte alignment; maximum binding ranges remain valid,
+  and both stages are preflighted before a ring restart.
+- The VS150/PS32 fixture float payload is **7,680 -> 2,912 bytes** (62.1%
+  smaller). Paired debug CPU medians: Arc **28.82** vs compact **28.76
+  us/draw** (ranges 28.50–29.24 and 28.13–30.21); both 10 allocations/draw.
+  This unchanged-draw fixture does not demonstrate a CPU timing gain.
+- Runtime light suite: **151 passed, 1 failed, 1 existing ignored**. The
+  failure is fullscreen-gamma Reset at d3d9_device.rs:135, independently
+  reproduced on untouched runtime code by L98 (#10482 on the board).
+  New compact prefix/rebinding regressions pass. Frame serialization 5,
+  shader extent 1, backend identity/byte packing 2 unit tests pass.
+- The new GPU driver regression **passed with exact RGBA equality**:
+  4,096 independently visible draws alternate c0/c223 across uniform-ring
+  rollover and check alpha-test tail offsets. The full 150-case texture/
+  state comparison and completed draw cases also passed. The serialized
+  gate was yielded for L96's independent WGL teardown fix; remaining
+  cases and paired GPU timings are still pending. No checks were weakened.

@@ -845,3 +845,24 @@ Dropping/replacing the deferred backend drains accepted commands and joins the
 worker. A worker panic disconnects producers/results rather than leaving them
 waiting indefinitely. Test coverage and measurement limits are recorded in
 `tasks/L89-backend-worker.md`; gameplay FPS must be measured by the head.
+
+
+
+### L90 compact shader constants (2026-10-13)
+
+The runtime retains complete VS/PS register banks but draws share immutable
+prefixes sized from bytecode reads. Matrix opcodes include implicit rows;
+relative addressing conservatively retains all registers. Setters preserve
+prior draws and update the full bank for a later shader with a larger extent.
+The backend translates matching compact WGSL uniform layouts and bulk-copies
+float bits into the ring. Integer/bool/extra offsets follow the compact float
+array. Dynamic offsets stay aligned to 256 bytes and fixed maximum binding
+ranges fit in the buffer even near rollover; a two-stage preflight prevents
+restarting between the pixel and vertex allocations.
+
+The synthetic VS150/PS32 float payload falls from 7,680 to 2,912 bytes.
+CPU-only repeated-draw timings are unchanged within noise. A 4,096-draw
+ring-rollover driver regression and the full 150-case texture/state matrix
+pass; the remaining GPU gate/timings await the shared slot and L96 driver
+teardown fix. See the L90 brief for the light-suite result and independently
+reproduced fullscreen-gamma failure.
