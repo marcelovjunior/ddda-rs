@@ -36,6 +36,21 @@
   changes, game/GPU/shard runs, image-equivalence or FPS claim.
 - Next: head's same-run capture with producer tags; existing L111 stats alone
   lack caller/class identities. L113 retains SoftBody replacement ownership.
+### L109c boot attribution and inflate default (2026-10-13)
+
+- Head combo6: boot archive inflate **4.85 -> 1.39 s**, first Present still
+  **5.84–5.86 s**. Cold run has zero shader modules/pipelines through 5.02 s.
+- **632 exact inflate cases** pass again; default-on and explicit-off
+  registration tested. Read-ahead remains default-off. Per head's updated
+  brief, no fast-boot option: original timing/input paths remain unchanged.
+- Boot profile implicates scene/geometry setup; a nested Vorbis symbol is
+  inconsistent with original callers. Exact opt-in FE9580/12EB690 counters
+  added; wrapper-effects regression and eight parser tests pass.
+- Float compare/LAHF/TEST/Jcc fusion covers **1,537 sites / 701 functions**,
+  nine in FE9580. Three tests pass, including **401,408 native oracle
+  cases** preserving AH, flags and MXCSR. Whole geometry port is WIP.
+  Next: head integration regeneration/gate and counter run; UI timings
+  need head marks. No measured geometry or first-Present speedup yet.
 
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 
