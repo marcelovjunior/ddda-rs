@@ -1082,3 +1082,147 @@ pub fn sphere_touches_box(m: &mut dyn Mem, c: &mut Cpu) {
     c.eax = (!below) as u32;
     c.esp = entry.wrapping_add(4);
 }
+
+// ---------------------------------------------------------------------------
+// Small leaves of the shadow job
+
+// Translated from 0x00ea1eb0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA1EB0, `object->copy_position(out) -> bool` (thiscall, `ret 4`): when
+/// the object has its resource (`+0xf0`), copy its 16-byte position block
+/// (`+0x160`) to `out` and return true. The original sets only AL, so the
+/// rest of EAX is `out` (true) or the caller's EAX (false).
+pub fn copy_position(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (object, entry) = (c.ecx, c.esp);
+    if pg.u32(m, object.wrapping_add(0xf0)) == 0 {
+        c.eax &= !0xff;
+    } else {
+        let out = pg.u32(m, entry.wrapping_add(4));
+        for offset in [0u32, 4, 8, 12] {
+            let word = pg.u32(m, object.wrapping_add(0x160 + offset));
+            pg.set_u32(m, out.wrapping_add(offset), word);
+        }
+        c.eax = (out & !0xff) | 1;
+    }
+    c.esp = entry.wrapping_add(8);
+}
+
+// Translated from 0x00ea1f40 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA1F40, `object->world_position(out) -> out` (thiscall, `ret 4`):
+/// write the object's local position (`+0x160..+0x168`, passed through the
+/// x87 like the original) and 0.0 to `out[0..4]`; then, if the object has a
+/// parent (`+0x30`), walk to the root of the parent chain and call its
+/// virtual `+0x30` with a scratch vector; when that returns true the
+/// vector replaces `out[0..3]`. Returns `out`.
+pub fn world_position(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (object, entry) = (c.ecx, c.esp);
+    let out = pg.u32(m, entry.wrapping_add(4));
+    for axis in 0..3u32 {
+        let bits = pg.u32(m, object.wrapping_add(0x160 + 4 * axis));
+        pg.set_u32(m, out.wrapping_add(4 * axis), through_x87(bits));
+    }
+    pg.set_u32(m, out.wrapping_add(12), 0);
+    c.eax = out;
+    let mut root = pg.u32(m, object.wrapping_add(0x30));
+    if root != 0 {
+        loop {
+            let parent = pg.u32(m, root.wrapping_add(0x30));
+            if parent == 0 {
+                break;
+            }
+            root = parent;
+        }
+        // the original's frame: `push ebp` / 16-byte alignment, 0x1c locals, push esi;
+        // the scratch vector is at +0x10 of the call frame
+        let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x1c + 4);
+        let local = frame.wrapping_add(0x10);
+        let method = pg.u32(m, pg.u32(m, root).wrapping_add(0x30));
+        let found = call_from(m, c, pg, frame, root, &[local], 0x00ea_1f8d, |m, c| call_ext(m, c, method)) & 0xff != 0;
+        c.eax = out;
+        if found {
+            for axis in 0..3u32 {
+                let bits = pg.u32(m, local.wrapping_add(4 * axis));
+                pg.set_u32(m, out.wrapping_add(4 * axis), bits);
+            }
+            pg.set_u32(m, out.wrapping_add(12), 0);
+        }
+    }
+    c.esp = entry.wrapping_add(8);
+}
+
+// Translated from 0x00ea1ee0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA1EE0, `object->classify(other) -> mask` (thiscall, `ret 4`): with
+/// none of the low six bits of `+0x108` set the answer is 0x3f. Otherwise
+/// `other->test_a(object + 0x160)` (0x00FF0780) is the answer if it is not
+/// positive; if it is not 0x3f, `other->test_b(object + 0x170, answer)`
+/// (0x00FF0AD0) refines it; a still-positive answer becomes 0x3f when
+/// those bits of `+0x108` equal 1.
+pub fn classify_overlap(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (object, entry) = (c.ecx, c.esp);
+    let (saved_esi, saved_edi) = (c.esi, c.edi);
+    let finish = |c: &mut Cpu| {
+        (c.esi, c.edi) = (saved_esi, saved_edi);
+        c.esp = entry.wrapping_add(8);
+    };
+    if pg.u8(m, object.wrapping_add(0x108)) & 0x3f == 0 {
+        c.eax = 0x3f;
+        return finish(c);
+    }
+    let other = pg.u32(m, entry.wrapping_add(4));
+    // the original's frame at its calls: esi and edi pushed
+    let frame = entry.wrapping_sub(8);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let mut answer = call_from(m, c, pg, frame, other, &[object.wrapping_add(0x160)], 0x00ea_1f08, guest(0x00ff_0780));
+    if answer as i32 > 0 {
+        if answer != 0x3f {
+            answer = call_from(m, c, pg, frame, other, &[object.wrapping_add(0x170), answer], 0x00ea_1f20, guest(0x00ff_0ad0));
+        }
+        if answer as i32 > 0 && pg.u8(m, object.wrapping_add(0x108)) & 0x3f == 1 {
+            answer = 0x3f;
+        }
+    }
+    c.eax = answer;
+    finish(c)
+}
+
+// Translated from 0x00e61010 (DDDA.exe 2017-12-13 Steam).
+/// 0x00E61010, `set->test(a, b, single, value) -> bool` (thiscall, `ret
+/// 0x10`): a fan-out over the object's `+0xd0` members (`+0x30` array),
+/// each asked 0x0111D610 with `value`. With `single` clear only the member
+/// at index `a[+0x58]` is asked and its answer returned as is; otherwise
+/// the result is true when any member answered non-zero.
+pub fn any_member_test(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (object, entry) = (c.ecx, c.esp);
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    if arg(m, 2) == 0 {
+        let index = pg.u32(m, arg(m, 0).wrapping_add(0x58));
+        let member = pg.u32(m, object.wrapping_add(index.wrapping_mul(4)).wrapping_add(0x30));
+        let value = arg(m, 3);
+        call_from(m, c, pg, entry.wrapping_sub(4), member, &[value], 0x00e6_102f, guest(0x0111_d610));
+    } else {
+        // the original's frame: ebp, ebx, edi, esi pushed
+        let frame = entry.wrapping_sub(16);
+        let mut none_answered = true;
+        let mut i = 0u32;
+        if pg.u32(m, object.wrapping_add(0xd0)) != 0 {
+            loop {
+                let member = pg.u32(m, object.wrapping_add(0x30 + 4 * i));
+                let value = arg(m, 3);
+                let answer = call_from(m, c, pg, frame, member, &[value], 0x00e6_1051, guest(0x0111_d610));
+                none_answered = none_answered && answer == 0;
+                i += 1;
+                if i >= pg.u32(m, object.wrapping_add(0xd0)) {
+                    break;
+                }
+            }
+        }
+        c.eax = !none_answered as u32;
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 0x10);
+}

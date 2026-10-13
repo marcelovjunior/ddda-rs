@@ -441,3 +441,45 @@ fn software_extended_squared_distance_matches_x87() {
     }
     assert!(compared > 100_000);
 }
+
+fn leaf_callee(target: u32) -> Callee {
+    match target {
+        // the virtual +0x30 of the root: thiscall with the out vector
+        0x3000_0030 => Callee { stack_words: 1, registers: &[ECX] },
+        0x00ff_0780 | 0x0111_d610 => Callee { stack_words: 1, registers: &[ECX] },
+        0x00ff_0ad0 => Callee { stack_words: 2, registers: &[ECX] },
+        _ => panic!("unexpected callee {target:x}"),
+    }
+}
+
+// verifies 0x00ea1eb0 (ABI level; only AL is the answer, the rest of EAX is compared too)
+#[test]
+fn semantic_copy_position_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_copy16.json", mtcore::semantic_s3::copy_position, true, leaf_callee);
+    eprintln!("{n} ABI-level copy_position cases passed");
+}
+
+// verifies 0x00ea1f40 (ABI level)
+#[test]
+fn semantic_world_position_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_origin.json", mtcore::semantic_s3::world_position, true, leaf_callee);
+    eprintln!("{n} ABI-level world_position cases passed");
+}
+
+// verifies 0x00ea1ee0 (ABI level)
+#[test]
+fn semantic_classify_overlap_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_flags.json", mtcore::semantic_s3::classify_overlap, true, leaf_callee);
+    eprintln!("{n} ABI-level classify_overlap cases passed");
+}
+
+// verifies 0x00e61010 (ABI level)
+#[test]
+fn semantic_any_member_test_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_any.json", mtcore::semantic_s3::any_member_test, true, leaf_callee);
+    eprintln!("{n} ABI-level any_member_test cases passed");
+}
