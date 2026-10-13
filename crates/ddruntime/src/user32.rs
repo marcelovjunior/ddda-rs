@@ -858,10 +858,14 @@ pub fn clip_cursor(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 // --- WINMM timers -----------------------------------------------------------------
 
-/// timeBeginPeriod / timeEndPeriod(ms): TIMERR_NOERROR; the runtime's
-/// clock already has better than 1 ms resolution.
+/// timeBeginPeriod / timeEndPeriod(ms): TIMERR_NOERROR. L85: forwarded to
+/// the host. The runtime's clock reads better than 1 ms, but its sleeps and
+/// timed waits run on the host's timer, and since Windows 10 2004 the timer
+/// resolution is per process: without this every Sleep(1) or short timed
+/// wait of the game's threads took up to 15.6 ms.
 pub fn time_begin_period(m: &mut dyn Mem, cpu: &mut Cpu) {
     let ms = arg(m, cpu, 0);
+    host_timer::begin(ms);
     desk(|d| d.period_ms.push(ms));
     cpu.eax = 0;
     ret(m, cpu, 4);
@@ -871,6 +875,7 @@ pub fn time_end_period(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = desk(|d| match d.period_ms.iter().position(|&p| p == ms) {
         Some(k) => {
             d.period_ms.remove(k);
+            host_timer::end(ms);
             0
         }
         None => 97, // TIMERR_NOCANDO
@@ -1137,3 +1142,23 @@ pub const APIS: &[(&str, &str, Api)] = &[
     // ImmGetVirtualKey is crate::input's (VK_PROCESSKEY 0xE5, the measured
     // answer with and without a translated key message)
 ];
+
+/// The host's timer resolution (WINMM; per process since Windows 10 2004).
+pub mod host_timer {
+    #[cfg(windows)]
+    #[link(name = "winmm")]
+    extern "system" {
+        fn timeBeginPeriod(ms: u32) -> u32;
+        fn timeEndPeriod(ms: u32) -> u32;
+    }
+    /// Request `ms` milliseconds of timer resolution for this process.
+    pub fn begin(ms: u32) {
+        // SAFETY: plain Win32 calls; each begin is paired with an end
+        #[cfg(windows)]
+        unsafe { timeBeginPeriod(ms) };
+    }
+    pub fn end(ms: u32) {
+        #[cfg(windows)]
+        unsafe { timeEndPeriod(ms) };
+    }
+}

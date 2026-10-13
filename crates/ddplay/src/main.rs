@@ -354,6 +354,9 @@ impl ApplicationHandler<GameEvent> for App {
 }
 
 fn main() {
+    // L85: 1 ms host timer resolution for the whole run (per process since
+    // Windows 10 2004): the guest's sleeps and timed waits run on it
+    ddruntime::user32::host_timer::begin(1);
     let args: Vec<String> = std::env::args().skip(1).collect();
     let vsync = !args.iter().any(|a| a == "--no-vsync");
     let test_pattern = args.iter().any(|a| a == "--test-pattern");
