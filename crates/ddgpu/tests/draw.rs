@@ -693,6 +693,8 @@ fn level_texels(rng: &mut Rng, format: u32, w: u32, h: u32) -> (Vec<u8>, u32) {
 /// two-sided) states over a D24S8 target, then a probe draw whose depth
 /// and stencil tests show what the first draw left in that target.
 /// DDGPU_FUZZ sets the number of cases.
+/// DDGPU_STATE_SHARD=i/n partitions the same generated cases; run all shards
+/// to preserve coverage when each test process has a hard time limit.
 #[test]
 fn render_states_match_the_d3d9_driver() {
     let (Some(mut d3d9), Some(probe_gpu)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else {
@@ -701,6 +703,14 @@ fn render_states_match_the_d3d9_driver() {
     };
     drop(probe_gpu);
     let cases: usize = std::env::var("DDGPU_FUZZ").ok().and_then(|v| v.parse().ok()).unwrap_or(150);
+    let (shard, shards) = match std::env::var("DDGPU_STATE_SHARD") {
+        Ok(value) => {
+            let (i, n) = value.split_once('/').expect("DDGPU_STATE_SHARD must be i/n");
+            (i.parse::<usize>().expect("shard index"), n.parse::<usize>().expect("shard count"))
+        }
+        Err(_) => (0, 1),
+    };
+    assert!(shards > 0 && shard < shards);
     let fourcc = |s: &[u8; 4]| u32::from_le_bytes(*s);
     let formats = [21u32, 22, 23, 24, 25, 26, 28, 31, 32, 33, 34, 36, 50, 51, 63, 64, 81, 110, 111, 112, 113, 114, 115, 116,
                    fourcc(b"DXT1"), fourcc(b"DXT3"), fourcc(b"DXT5")];
@@ -852,6 +862,8 @@ fn render_states_match_the_d3d9_driver() {
             flags: 7, colour: rng.next(), z: rng.pick(&[0.35f32, 0.65]), stencil: rng.next() % 256,
             depth: Some(depth_target()), ..blue_clear()
         };
+        // Generate every case before selecting, preserving the RNG stream.
+        if case % shards != shard { continue; }
         let draws = [d.clone(), probe];
         let theirs = match d3d9.render(&uploads, Some(&clear), &draws, &back_buffer()) {
             Ok(f) => f.rgba,
