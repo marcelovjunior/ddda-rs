@@ -940,3 +940,128 @@ pub fn count_active_children(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4);
 }
+
+// Translated from 0x007781a0 (DDDA.exe 2017-12-13 Steam).
+/// 0x007781A0, `object->tick()` (register convention: EAX = object, plain
+/// `ret`): the per-frame timer update of a 0x1E4-byte gauge object. The time
+/// step is `dt` = `[[obj + 0x1B4] + 0x14]` (or 1.0 without that owner).
+/// - two gauges grow by rate times `dt` and stop at their limit: `obj[0x10]`
+///   (rate +0x18, limit +0x14) and `obj[0x1C]` (rate +0x24, limit +0x20);
+/// - two hold timers (flag bytes +0x34 / +0x40, elapsed +0x38 / +0x44,
+///   duration +0x3C / +0x48) reset their gauge to its limit and stop when
+///   the duration is exceeded;
+/// - the step index `obj[0x1C0]` follows the owner's mode (`[owner + 0xD14]`)
+///   and `obj[0x1BC]`, advances by `obj[0x1E0]` and wraps (to 0 or 4);
+/// - cooldowns `obj[0x1C4]`, `obj[0x1C8]` count down to 0;
+/// - the 20 timers `obj[0x114 + 4 i]` count up to `obj[0x1D0]`; the matching
+///   charge `obj[0x70 + 4 i]` drains by `dt` times `obj[0x1D8]` once a timer
+///   passed that limit, `obj[0x1D4]` once past `obj[0x1CC]`, never below 0;
+/// - `obj[0x1E0]` is cleared.
+pub fn tick_gauges(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let obj = c.eax;
+    let at = |o: u32| obj.wrapping_add(o);
+    let one = float(pg, m, 0x0153_19b8);
+    let owner = pg.u32(m, at(0x1b4));
+    let dt = if owner != 0 { float(pg, m, owner.wrapping_add(0x14)) } else { one };
+    // a gauge grows by rate * dt up to its limit
+    let limit_a = float(pg, m, at(0x14));
+    let a = float(pg, m, at(0x18)) * dt + float(pg, m, at(0x10));
+    set_float(pg, m, at(0x10), if a >= limit_a { limit_a } else { a });
+    let limit_b = float(pg, m, at(0x20));
+    let b = float(pg, m, at(0x24)) * dt + float(pg, m, at(0x1c));
+    set_float(pg, m, at(0x1c), if b >= limit_b { limit_b } else { b });
+    // hold timers
+    if pg.u8(m, at(0x34)) == 1 {
+        let t = float(pg, m, at(0x38)) + dt;
+        set_float(pg, m, at(0x38), t);
+        if t > float(pg, m, at(0x3c)) {
+            set_float(pg, m, at(0x10), limit_a);
+            set_float(pg, m, at(0x38), 0.0);
+            pg.set_u8(m, at(0x34), 0);
+        }
+    }
+    if pg.u8(m, at(0x40)) == 1 {
+        let t = float(pg, m, at(0x44)) + dt;
+        set_float(pg, m, at(0x44), t);
+        if t > float(pg, m, at(0x48)) {
+            set_float(pg, m, at(0x1c), limit_b);
+            set_float(pg, m, at(0x44), 0.0);
+            pg.set_u8(m, at(0x40), 0);
+        }
+    }
+    // step index
+    let source = pg.u32(m, at(0x1b8));
+    if source != 0 {
+        match pg.u32(m, source.wrapping_add(0xd14)) {
+            0 => {
+                let v = pg.u32(m, at(0x1bc));
+                pg.set_u32(m, at(0x1c0), v);
+            }
+            1 => match pg.u32(m, at(0x1bc)) {
+                1 => pg.set_u32(m, at(0x1c0), 0),
+                2 => pg.set_u32(m, at(0x1c0), 1),
+                3 => pg.set_u32(m, at(0x1c0), 2),
+                _ => {}
+            },
+            _ => {}
+        }
+        let advance = pg.u32(m, at(0x1e0));
+        let step = pg.u32(m, at(0x1c0)).wrapping_add(advance);
+        pg.set_u32(m, at(0x1c0), step);
+        if step > 4 {
+            pg.set_u32(m, at(0x1c0), if (advance as i32) < 0 { 0 } else { 4 });
+        }
+    }
+    // cooldowns
+    for offset in [0x1c4, 0x1c8] {
+        let v = float(pg, m, at(offset)) - dt;
+        set_float(pg, m, at(offset), if 0.0 > v { 0.0 } else { v });
+    }
+    // the 20 timers and their charges
+    let limit = float(pg, m, at(0x1d0));
+    for i in 0..20u32 {
+        let timer = at(0x114 + 4 * i);
+        let t = dt + float(pg, m, timer);
+        let drain = if t > limit {
+            set_float(pg, m, timer, limit);
+            float(pg, m, at(0x1d8))
+        } else {
+            set_float(pg, m, timer, t);
+            if t > float(pg, m, at(0x1cc)) { float(pg, m, at(0x1d4)) } else { 0.0 }
+        };
+        let charge = at(0x70 + 4 * i);
+        let v = float(pg, m, charge) - drain * dt;
+        set_float(pg, m, charge, if 0.0 > v { 0.0 } else { v });
+    }
+    pg.set_u32(m, at(0x1e0), 0);
+    c.esp = entry.wrapping_add(4);
+}
+
+// Translated from 0x00de50b0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00DE50B0, `this->get_triangle(out0, out1, out2)` (thiscall, `ret 0xc`):
+/// copies three 16-byte-aligned vertices out of `this[0x3c]` (an array of
+/// 16-byte vectors) as 4-float vectors `(x, y, z, 0.0)`; their indices are
+/// the u16 values at `this[0x38] + 0xC / 0xE / 0x10`. The original copies
+/// the floats through the x87 stack, so a signalling NaN comes out quiet.
+pub fn load_triangle_vertices(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let header = pg.u32(m, this.wrapping_add(0x38));
+    let vertices = pg.u32(m, this.wrapping_add(0x3c));
+    for k in 0..3u32 {
+        let out = pg.u32(m, entry.wrapping_add(4 + 4 * k));
+        let index = pg.u16(m, header.wrapping_add(0xc + 2 * k)) as u32;
+        let from = vertices.wrapping_add(index.wrapping_mul(16));
+        for j in 0..3u32 {
+            let v = through_x87(pg.u32(m, from.wrapping_add(4 * j)));
+            if j == 2 {
+                pg.set_u32(m, out.wrapping_add(12), 0);
+            }
+            pg.set_u32(m, out.wrapping_add(4 * j), v);
+        }
+    }
+    c.esp = entry.wrapping_add(16);
+}

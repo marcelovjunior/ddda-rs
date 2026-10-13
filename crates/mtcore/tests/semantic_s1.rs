@@ -238,3 +238,21 @@ fn semantic_child_count_matches_original() {
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
     eprintln!("{n} ABI-level child-count cases passed");
 }
+
+// verifies 0x007781a0 (ABI level; void, a leaf)
+#[test]
+fn semantic_gauge_tick_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L184/gauge_tick.json", mtcore::semantic_s1::tick_gauges, false, &[]);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
+    eprintln!("{n} ABI-level gauge-tick cases passed");
+}
+
+// verifies 0x00de50b0 (ABI level; void, a leaf)
+#[test]
+fn semantic_triangle_vertices_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L184/triangle_vertices.json", mtcore::semantic_s1::load_triangle_vertices, false, &[]);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
+    eprintln!("{n} ABI-level triangle-vertex cases passed");
+}
