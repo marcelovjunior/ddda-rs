@@ -510,3 +510,12 @@ fn semantic_any_member_test_matches_original() {
     let n = abi_cases("E:/ddda-re/notes/native-L184/leaf_any_real.json", mtcore::semantic_s3::any_member_test, true, no_callees);
     eprintln!("{n} ABI-level any_member_test cases passed");
 }
+
+// verifies 0x00e12a20 (ABI level, common branch): every callee ran as
+// original code in the recording, the port makes no guest call
+#[test]
+fn semantic_shader_lookup_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases("E:/ddda-re/notes/native-L184/shader_lookup.json", mtcore::semantic_s3::shader_lookup, true, no_callees);
+    eprintln!("{n} ABI-level shader_lookup cases passed");
+}

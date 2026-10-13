@@ -458,3 +458,44 @@ fn set_viewport_rect_matches_original() {
     assert!(n >= 1000, "{n} cases");
     eprintln!("{n} ABI-level set_viewport_rect cases passed");
 }
+
+/// Run a CRT log port on the 40000 recorded inputs of `path`, memory being
+/// the recorded tables.
+fn crt_log_cases(path: &str, run: impl Fn(&Memory, ddnative_base::mem::Pages, u64) -> u64) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let mut m = Memory::default();
+    for table in data["tables"].as_array().unwrap() {
+        let base = n(&table[0]);
+        for (k, b) in table[1].as_array().unwrap().iter().enumerate() {
+            m.bytes.insert(base + k as u32, b.as_u64().unwrap() as u8);
+        }
+    }
+    let pg = ddnative_base::mem::Pages::of(&m);
+    let cases = data["cases"].as_array().unwrap();
+    assert!(cases.len() >= 40000);
+    for (i, case) in cases.iter().enumerate() {
+        let (x, want) = (case[0].as_u64().unwrap(), case[1].as_u64().unwrap());
+        assert_eq!(run(&m, pg, x), want, "case {i}: x = {x:#x}");
+    }
+}
+
+// verifies 0x012f45c4 (bit for bit)
+#[test]
+fn crt_logf_matches_original() {
+    crt_log_cases("E:/ddda-re/notes/native-L184/crt_012F45C4.json", |m, pg, x| {
+        mtcore::semantic_s9::crt_logf(m, pg, f32::from_bits(x as u32)).to_bits() as u64
+    });
+}
+
+// verifies 0x012f439e (bit for bit)
+#[test]
+fn crt_log_matches_original() {
+    crt_log_cases("E:/ddda-re/notes/native-L184/crt_012F439E.json", |m, pg, x| {
+        mtcore::semantic_s9::crt_log(m, pg, f64::from_bits(x)).to_bits()
+    });
+}

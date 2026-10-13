@@ -34,13 +34,14 @@ pub fn pop(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) -> u3
 /// read in that order.
 #[inline]
 pub fn load128(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) -> [u32; 4] {
-    [m.fast_u32(pt, a), m.fast_u32(pt, a.wrapping_add(4)), m.fast_u32(pt, a.wrapping_add(8)), m.fast_u32(pt, a.wrapping_add(12))]
+    m.fast_u128_words(pt, a)
 }
 
 /// 8-byte load into the low half (MOVQ/MOVSD xmm, m64): upper lanes zero.
 #[inline]
 pub fn load64(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) -> [u32; 4] {
-    [m.fast_u32(pt, a), m.fast_u32(pt, a.wrapping_add(4)), 0, 0]
+    let [lo, hi] = m.fast_u64_words(pt, a);
+    [lo, hi, 0, 0]
 }
 
 /// 16-byte store: lanes 0..3 to a, a+4, a+8, a+12, in that order.
@@ -49,9 +50,7 @@ pub fn load64(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) -> [u32; 
 /// and permissions separately; a fallback may change the following lane.
 #[inline(never)]
 pub fn store128(x: [u32; 4], m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) {
-    for k in 0..4u32 {
-        m.fast_set_u32_inner(pt, a.wrapping_add(4 * k), x[k as usize]);
-    }
+    m.fast_set_u128_words(pt, a, x);
 }
 
 /// XORPS/XORPD/PXOR: lane-wise d ^ s.
@@ -82,6 +81,5 @@ pub fn andnps(d: [u32; 4], s: [u32; 4]) -> [u32; 4] {
 /// lane 1 to a+4.
 #[inline]
 pub fn store64(x: [u32; 4], m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) {
-    m.fast_set_u32(pt, a, x[0]);
-    m.fast_set_u32(pt, a.wrapping_add(4), x[1]);
+    m.fast_set_u64_words(pt, a, [x[0], x[1]]);
 }

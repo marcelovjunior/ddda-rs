@@ -88,7 +88,7 @@ pub fn package_key(m: &mut dyn Mem, c: &mut Cpu) {
     c.esp = c.esp.wrapping_add(8);
 }
 
-fn find_package_key(m: &dyn Mem, p: Pages, owner: u32, key: u32) -> u32 {
+pub(crate) fn find_package_key(m: &dyn Mem, p: Pages, owner: u32, key: u32) -> u32 {
     let count = p.u32(m, owner.wrapping_add(0xac2a0));
     for i in 0..count {
         if p.u32(m, owner.wrapping_add(0xab2a0).wrapping_add(i.wrapping_mul(4))) == key {
@@ -483,8 +483,7 @@ fn commit_state(m: &mut dyn Mem, c: &mut Cpu, p: Pages, entry: u32, context: u32
             if buffer != 0 {
                 let size = p.u16(m, descriptor.wrapping_add(24)) as u32 * 4;
                 let source = p.u32(m, descriptor.wrapping_add(36));
-                // the CRT's memcpy (0x012EFEA0), done natively
-                copy_guest(m, p, buffer, source, size);
+                crate::semantic::copy_guest(m, p, buffer, source, size);
                 c.eax = buffer; // memcpy returns its destination
                 p.set_u32(m, buffer, threshold);
                 p.set_u32(m, buffer.wrapping_add(8), 0);

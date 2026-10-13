@@ -1286,3 +1286,206 @@ pub fn any_member_test(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4 + 0x10);
 }
+
+// ---------------------------------------------------------------------------
+// Shader lookup (0x00E12A20) without guest calls
+
+/// The most dependency words the original's 1 KiB stack buffer holds.
+const KEY_WORDS: usize = 256;
+
+/// The key sequence 0x00E10FC0 builds in its stack buffer.
+struct KeyWords {
+    words: [u32; KEY_WORDS],
+    len: usize,
+    /// More words than the buffer holds, or a dependency chain nested too
+    /// deep: the caller falls back to the instruction-level port.
+    overflow: bool,
+}
+
+impl KeyWords {
+    fn push(&mut self, word: u32) {
+        if self.len < KEY_WORDS {
+            self.words[self.len] = word;
+            self.len += 1;
+        } else {
+            self.overflow = true;
+        }
+    }
+
+    /// 0x00E0E5E0: salted word FNV-1 of the sequence.
+    fn hash(&self) -> u32 {
+        let mut hash = 0x811c_9dc5u32;
+        for &word in &self.words[..self.len] {
+            let word = word ^ 0x14da_14da;
+            for shift in [0, 8, 16, 24] {
+                hash = hash.wrapping_mul(0x0100_0193) ^ ((word >> shift) & 255);
+            }
+        }
+        hash
+    }
+
+    /// The table CRC (0x014075C0) of the words' bytes, high byte first. The
+    /// table is constant image data: each entry is read from guest memory
+    /// the first time it is used and kept.
+    fn crc(&self, m: &dyn Mem, pg: Pages) -> u32 {
+        static TABLE: [std::sync::atomic::AtomicU64; 256] = [const { std::sync::atomic::AtomicU64::new(0) }; 256];
+        let mut crc = u32::MAX;
+        for &word in &self.words[..self.len] {
+            for shift in [24u32, 16, 8, 0] {
+                let index = ((word >> shift) ^ crc) & 0xff;
+                let slot = &TABLE[index as usize];
+                let mut entry = slot.load(std::sync::atomic::Ordering::Relaxed);
+                if entry == 0 {
+                    entry = pg.u32(m, 0x0140_75c0u32.wrapping_add(index * 4)) as u64 | 1 << 32;
+                    slot.store(entry, std::sync::atomic::Ordering::Relaxed);
+                }
+                crc = (crc >> 8) ^ entry as u32;
+            }
+        }
+        crc
+    }
+}
+
+/// 0x00E0EC50 `expand` into [`KeyWords`] instead of guest memory: a packed
+/// dependency emits its high part (bits 12..32) when non-zero, then the
+/// expansions of its recursive children and its non-zero terminal values
+/// (see `semantic::expand_dependencies`).
+fn expand_dependency(m: &dyn Mem, pg: Pages, bank: u32, values: u32, packed: u32, depth: u32, out: &mut KeyWords) {
+    if depth > 32 {
+        out.overflow = true;
+        return;
+    }
+    let high = packed & 0xffff_f000;
+    if high != 0 {
+        out.push(high);
+    }
+    let descriptor = bank.wrapping_add((packed & 0xfff).wrapping_mul(8));
+    let mut index = pg.u32(m, descriptor.wrapping_add(4));
+    let counts = pg.u32(m, descriptor);
+    let value_of = |m: &dyn Mem, index: u32| {
+        let child = pg.u16(m, index) as u32;
+        pg.u32(m, values.wrapping_add(child.wrapping_mul(8)).wrapping_add(4))
+    };
+    for _ in 0..(counts >> 20) & 0x3f {
+        let value = value_of(m, index);
+        index = index.wrapping_add(2);
+        expand_dependency(m, pg, bank, values, value, depth + 1, out);
+    }
+    for _ in 0..counts >> 26 {
+        let value = value_of(m, index);
+        index = index.wrapping_add(2);
+        if value != 0 {
+            out.push(value);
+        }
+    }
+}
+
+/// 0x00E10FC0 `intern_keys` without the guest buffer: the key sequence of
+/// `owner` (six packed dependencies), the four `keys` words (tagged with
+/// their slot) and `extra`. `None` when the sequence does not fit the
+/// original stack buffer.
+fn dependency_key_words(m: &dyn Mem, pg: Pages, this: u32, owner: u32, values: u32, keys: u32, extra: u32) -> Option<KeyWords> {
+    let mut out = KeyWords { words: [0; KEY_WORDS], len: 0, overflow: false };
+    for slot in 0..4u32 {
+        let key = pg.u32(m, keys.wrapping_add(4 * slot));
+        if key != 0 {
+            out.push((key & 0xffff_f000) | slot);
+        }
+    }
+    out.push(extra);
+    for field in [0u32, 3, 4, 2, 1, 5] {
+        let packed = pg.u32(m, owner.wrapping_add(4 * field));
+        if packed != 0 {
+            let bank = pg.u32(m, this.wrapping_add(0x28));
+            expand_dependency(m, pg, bank, values, packed, 0, &mut out);
+        }
+    }
+    (!out.overflow).then_some(out)
+}
+
+/// 0x01008260 `package->find_pair(key, crc)`: the record of the node with
+/// both words, or 0.
+fn find_pair(m: &dyn Mem, pg: Pages, package: u32, key: u32, crc: u32) -> u32 {
+    if key | crc == 0 {
+        return 0;
+    }
+    let table = pg.u32(m, package.wrapping_add(0x84));
+    let mut node = pg.u32(m, table.wrapping_add((key & 0xfff) * 4).wrapping_add(0x1c));
+    while node != 0 {
+        if pg.u32(m, node) == key && pg.u32(m, node.wrapping_add(4)) == crc {
+            let index = pg.u32(m, node.wrapping_add(12)) & 0x7fff_ffff;
+            return table.wrapping_add(index.wrapping_mul(36)).wrapping_add(0x401c);
+        }
+        let next = pg.u32(m, node.wrapping_add(8));
+        if next == 0 {
+            return 0;
+        }
+        node = next.wrapping_mul(16).wrapping_add(pg.u32(m, table.wrapping_add(0x18)));
+    }
+    0
+}
+
+/// 0x00E0F4B0 `shaders->find_pair_key(key, crc)`: [`find_pair`] in the six
+/// packages (`+0xab104`), first match.
+fn find_package_pair(m: &dyn Mem, pg: Pages, owner: u32, key: u32, crc: u32) -> u32 {
+    for i in 0..6u32 {
+        let package = pg.u32(m, owner.wrapping_add(0xab104 + 4 * i));
+        if package != 0 {
+            let found = find_pair(m, pg, package, key, crc);
+            if found != 0 {
+                return found;
+            }
+        }
+    }
+    0
+}
+
+// Translated from 0x00e12a20 (DDDA.exe 2017-12-13 Steam).
+/// 0x00E12A20, `shaders->lookup(a, bank, slot, owner_values, keys, extra,
+/// other_bank) -> entry` (thiscall, `ret 0x1c`): the shader/technique
+/// lookup of every model primitive draw, with no guest calls.
+///
+/// The common branch (byte `+0x39` clear) builds the dependency key
+/// sequence of `bucket(bank) + slot * 0x28 + 0x1c` (see
+/// `semantic::intern_dependency_keys`), hashes it and looks the hash up
+/// among the packages' keys (0x00E0F3C0), then the (hash, CRC) pair
+/// (0x00E0F4B0), then the pair of `other_bank`'s sequence. The rare branch
+/// (shader creation) runs the original body, as does a sequence too long
+/// for the original stack buffer (through the instruction-level port).
+pub fn shader_lookup(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let this = c.ecx;
+    if pg.u8(m, this.wrapping_add(0x39)) != 0 {
+        return crate::semantic::shader_lookup(m, c);
+    }
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (bank, slot, values, keys, extra, other) = (arg(m, 1), arg(m, 2), arg(m, 3), arg(m, 4), arg(m, 5), arg(m, 6));
+    let bucket_owner = |m: &dyn Mem, bank: u32, slot: u32| {
+        let table = pg.u32(m, this.wrapping_add(0x24));
+        let bucket = pg.u32(m, table.wrapping_add((bank & 0xfff).wrapping_mul(4)));
+        bucket.wrapping_add(slot.wrapping_mul(0x28)).wrapping_add(0x1c)
+    };
+    let finish = |c: &mut Cpu, result: u32| {
+        c.eax = result;
+        c.esp = entry.wrapping_add(4 + 0x1c);
+    };
+    let Some(words) = dependency_key_words(m, pg, this, bucket_owner(m, bank, slot), values, keys, extra) else {
+        return crate::semantic::shader_lookup(m, c);
+    };
+    let hash = words.hash();
+    let found = crate::semantic_draw_c::find_package_key(m, pg, this, hash);
+    if found != 0 {
+        return finish(c, found);
+    }
+    let found = find_package_pair(m, pg, this, hash, words.crc(m, pg));
+    if found != 0 || pg.u8(m, this.wrapping_add(0xab229)) != 0 || other == 0 {
+        return finish(c, found);
+    }
+    let owner = pg.u32(m, pg.u32(m, this.wrapping_add(0x24)).wrapping_add((other & 0xfff).wrapping_mul(4))).wrapping_add(0x1c);
+    let Some(words) = dependency_key_words(m, pg, this, owner, values, keys, extra) else {
+        return crate::semantic::shader_lookup(m, c);
+    };
+    let found = find_package_pair(m, pg, this, words.hash(), words.crc(m, pg));
+    finish(c, found)
+}

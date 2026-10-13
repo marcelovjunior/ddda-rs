@@ -30,8 +30,7 @@ impl Flags {
         let cf_defined = self.kind != PARTIAL || self.a & 1 != 0;
         if cf_defined {
             let cf = self.cf_value();
-            *self = Self::from_parts(kind, a, 1, r, bits);
-            self.cf_in = cf;
+            *self = Flags { kind, a, b: 1, r, bits, cf_in: cf };
         } else {
             let (value, _) = Self::from_parts(kind, a, 1, r, bits).snapshot();
             *self = Self::partial(value & ARITH_FLAGS & !1, ARITH_FLAGS & !1);

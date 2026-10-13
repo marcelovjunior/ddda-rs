@@ -340,7 +340,7 @@ pub(crate) fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
     if ddnative_base::x86::may_be_overridden(target) {
         return call_overridden(m, c, target);
     }
-    ddnative_base::x86::call_ext(m, c, target)
+    ddnative_base::x86::call_ext(m, c, target) // raw
 }
 
 /// The rare half of [`call_guest`], kept out of line so that recursive ports
@@ -349,7 +349,7 @@ pub(crate) fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
 fn call_overridden(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
     match ddnative_base::x86::override_of(target) {
         Some(f) => f(m, c),
-        None => ddnative_base::x86::call_ext(m, c, target),
+        None => ddnative_base::x86::call_ext(m, c, target), // raw
     }
 }
 
