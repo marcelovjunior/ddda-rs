@@ -44,6 +44,7 @@ use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -123,6 +124,10 @@ pub struct GuestLock {
     held_hint: std::sync::atomic::AtomicBool,
     /// Translated code runs without the lock (see the module comment).
     parallel: std::sync::atomic::AtomicBool,
+    /// Event handles -> (object, state), read without the guest lock by
+    /// SetEvent, ResetEvent and WaitForSingleObject (L86); kept by the
+    /// handle's creation and CloseHandle (under the guest lock).
+    events: std::sync::RwLock<crate::fasthash::FxMap<u32, (u32, Arc<EventCell>)>>,
 }
 
 impl Default for GuestLock {
@@ -147,6 +152,7 @@ impl Default for GuestLock {
             cv: Condvar::new(),
             held_hint: std::sync::atomic::AtomicBool::new(true),
             parallel: std::sync::atomic::AtomicBool::new(parallel),
+            events: Default::default(),
         }
     }
 }
@@ -732,15 +738,36 @@ fn wake(s: &mut LockState, key: Option<u64>) {
 /// the state the caller checked holds the guest lock, so signals only after
 /// this thread is registered: no wakeup is lost.
 pub(crate) fn block_on(keys: &[u64], deadline: Option<Instant>) {
+    wait_until(keys, deadline, || false)
+}
+
+/// Block until one of `keys` is signalled, a thread exits or `deadline`,
+/// unless `cond` holds; the caller rechecks its condition. Unlike
+/// [`block_on`] the caller need not hold the guest lock (a lock-free
+/// service in parallel mode, L86); if it does, the lock is given to the
+/// other guest threads meanwhile. `cond` is checked after this thread is
+/// registered, under the lock state's mutex, which [`signal_key`] takes: a
+/// state change made without the guest lock and signalled afterwards
+/// cannot be lost, as long as the changer signals whenever a waiter may
+/// exist (the waiter counts it before checking; see the critical sections
+/// and EventCell).
+pub(crate) fn wait_until(keys: &[u64], deadline: Option<Instant>, cond: impl Fn() -> bool) {
     let keys: Box<[u64]> = keys.into();
     let rt = runtime::current();
     let mut s = rt.lock.lock();
+    let held = s.held && s.holder == current_tid();
     let depth = s.depth;
     let id = s.next_sleeper;
     s.next_sleeper += 1;
     let cv = Arc::new(Condvar::new());
     s.sleepers.insert(id, Sleeper { keys, woken: false, cv: cv.clone() });
-    rt.lock.release_locked(&mut s);
+    if cond() {
+        s.sleepers.remove(&id);
+        return;
+    }
+    if held {
+        rt.lock.release_locked(&mut s);
+    }
     while !s.sleepers[&id].woken {
         match deadline {
             None => s = cv.wait(s).unwrap_or_else(|e| e.into_inner()),
@@ -754,8 +781,10 @@ pub(crate) fn block_on(keys: &[u64], deadline: Option<Instant>) {
         }
     }
     s.sleepers.remove(&id);
-    rt.lock.acquire_locked(s, depth);
-    adopt_context(&rt);
+    if held {
+        rt.lock.acquire_locked(s, depth);
+        adopt_context(&rt);
+    }
 }
 
 /// Let another ready thread run first (Sleep(0), SwitchToThread, the end
@@ -939,9 +968,49 @@ fn load_context(rt: &Runtime) {
 
 // --- kernel objects -----------------------------------------------------------
 
+/// An event's state in host atomics, so that SetEvent, ResetEvent and a
+/// wait for one event take no guest lock (L86: the game calls them ~25,000
+/// times a second and they queued for the lock).
+#[derive(Debug)]
+pub struct EventCell {
+    pub manual: bool,
+    set: std::sync::atomic::AtomicBool,
+    /// threads in a wait that includes this event (counted before they
+    /// check it): SetEvent signals the event's key only then
+    waiters: std::sync::atomic::AtomicU32,
+}
+
+impl EventCell {
+    pub fn new(manual: bool, set: bool) -> Arc<EventCell> {
+        Arc::new(EventCell { manual, set: set.into(), waiters: 0.into() })
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.set.load(SeqCst)
+    }
+
+    /// A satisfied wait: an auto-reset event is reset, so that one waiter
+    /// gets it; false if it was not set.
+    fn take(&self) -> bool {
+        if self.manual {
+            self.is_set()
+        } else {
+            self.set.compare_exchange(true, false, SeqCst, SeqCst).is_ok()
+        }
+    }
+
+    /// Set or reset; the threads waiting for it recheck (`object`: its id).
+    fn store(&self, object: u32, value: bool) {
+        self.set.store(value, SeqCst);
+        if value && self.waiters.load(SeqCst) > 0 {
+            signal_key(key::object(object));
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Object {
-    Event { manual: bool, set: bool },
+    Event(Arc<EventCell>),
     Semaphore { count: u32, max: u32 },
     Mutex { owner: u32, recursion: u32 },
     Thread { tid: u32, exit: Option<u32> },
@@ -1001,7 +1070,16 @@ pub fn faults() -> Vec<(u32, String)> {
 /// Close a kernel object handle; false if `h` is not one (CloseHandle
 /// then tries the file handles).
 pub(crate) fn close(h: u32) -> bool {
-    kernel(|k| k.handles.remove(&h).is_some())
+    let closed = kernel(|k| k.handles.remove(&h).is_some());
+    if closed {
+        runtime::current().lock.events.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+    }
+    closed
+}
+
+/// The event behind handle `h`, read without the guest lock.
+fn event_of(h: u32) -> Option<(u32, Arc<EventCell>)> {
+    runtime::current().lock.events.read().unwrap_or_else(|e| e.into_inner()).get(&h).cloned()
 }
 
 fn set_error(e: u32) {
@@ -1011,45 +1089,49 @@ fn set_error(e: u32) {
 /// A named object: the existing one (ERROR_ALREADY_EXISTS) or a new one.
 fn create_named(m: &dyn Mem, name: u32, make: impl FnOnce() -> Object) -> u32 {
     let name = (name != 0).then(|| crate::user32::guest_str_a(m, name));
-    kernel(|k| {
+    let (h, o) = kernel(|k| {
         if let Some(&o) = name.as_ref().and_then(|n| k.names.get(n)) {
             with_state(|s| s.last_error = ERROR_ALREADY_EXISTS);
-            return k.handle(o);
+            return (k.handle(o), o);
         }
         with_state(|s| s.last_error = 0);
         let o = k.add(make());
         if let Some(n) = name {
             k.names.insert(n, o);
         }
-        k.handle(o)
-    })
+        (k.handle(o), o)
+    });
+    if let Some(Object::Event(e)) = kernel(|k| k.objects.get(&o).map(|x| match x {
+        Object::Event(e) => Object::Event(e.clone()),
+        _ => Object::Thread { tid: 0, exit: None },
+    })) {
+        runtime::current().lock.events.write().unwrap_or_else(|e| e.into_inner()).insert(h, (o, e));
+    }
+    h
 }
 
 /// CreateEventA(security, manual reset, initial state, name).
 pub fn create_event(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (manual, set, name) = (arg(m, cpu, 1) != 0, arg(m, cpu, 2) != 0, arg(m, cpu, 3));
-    cpu.eax = create_named(m, name, || Object::Event { manual, set });
+    cpu.eax = create_named(m, name, || Object::Event(EventCell::new(manual, set)));
     ret(m, cpu, 16);
 }
 
+/// SetEvent / ResetEvent without the guest lock (L86: a lock-free
+/// service); a handle that is not an event fails as before.
 fn set_event_state(m: &mut dyn Mem, cpu: &mut Cpu, value: bool) {
     let h = arg(m, cpu, 0);
-    let o = kernel(|k| {
-        let o = k.object_of(h)?;
-        match k.objects.get_mut(&o) {
-            Some(Object::Event { set, .. }) => {
-                *set = value;
-                Some(o)
-            }
-            _ => None,
+    cpu.eax = match event_of(h) {
+        Some((o, e)) => {
+            e.store(o, value);
+            1
         }
-    });
-    match o {
-        Some(o) if value => signal_key(key::object(o)),
-        Some(_) => {}
-        None => set_error(ERROR_INVALID_HANDLE),
-    }
-    cpu.eax = o.is_some() as u32;
+        None => {
+            let _lock = service();
+            set_error(ERROR_INVALID_HANDLE);
+            0
+        }
+    };
     ret(m, cpu, 4);
 }
 /// SetEvent(handle).
@@ -1140,17 +1222,18 @@ pub fn release_mutex(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// Whether an object is signalled for thread `me`.
 fn signalled(o: &Object, me: u32) -> bool {
     match o {
-        Object::Event { set, .. } => *set,
+        Object::Event(e) => e.is_set(),
         Object::Semaphore { count, .. } => *count > 0,
         Object::Mutex { owner, .. } => *owner == 0 || *owner == me,
         Object::Thread { exit, .. } => exit.is_some(),
     }
 }
 
-/// The effect of a satisfied wait.
-fn consume(o: &mut Object, me: u32) {
+/// The effect of a satisfied wait; false if an event was taken meanwhile
+/// by a wait that holds no guest lock (the others change under it only).
+fn consume(o: &mut Object, me: u32) -> bool {
     match o {
-        Object::Event { manual: false, set } => *set = false,
+        Object::Event(e) => return e.take(),
         Object::Semaphore { count, .. } => *count -= 1,
         Object::Mutex { owner, recursion } => {
             *owner = me;
@@ -1158,45 +1241,139 @@ fn consume(o: &mut Object, me: u32) {
         }
         _ => {}
     }
+    true
 }
 
 /// Wait for `handles` (all of them, or any), up to `ms` milliseconds.
+/// The caller holds the guest lock (semaphores, mutexes and threads change
+/// only under it); events change without it (L86), so this thread counts
+/// itself a waiter of each event before it checks them, and blocks unless
+/// one is set (`wait_until`).
 pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
     let me = current_tid();
     let deadline = (ms != INFINITE).then(|| Instant::now() + Duration::from_millis(ms as u64));
-    loop {
+    let events: Vec<(u32, Arc<EventCell>)> = kernel(|k| {
+        handles.iter().filter_map(|&h| k.object_of(h)).filter_map(|o| match k.objects.get(&o) {
+            Some(Object::Event(e)) => Some((o, e.clone())),
+            _ => None,
+        }).collect()
+    });
+    for (_, e) in &events {
+        e.waiters.fetch_add(1, SeqCst);
+    }
+    let r = loop {
         let r = kernel(|k| {
             let objs: Option<Vec<u32>> = handles.iter().map(|&h| k.object_of(h)).collect();
             let Some(objs) = objs else { return Ok(WAIT_FAILED) };
             if all {
                 if objs.iter().all(|o| signalled(&k.objects[o], me)) {
+                    // the events first: one may be taken meanwhile by a
+                    // wait without the guest lock; then nothing is taken
+                    let mut taken = Vec::new();
+                    for &o in &objs {
+                        if let Object::Event(e) = &k.objects[&o] {
+                            if !e.take() {
+                                return Err(taken);
+                            }
+                            if !e.manual {
+                                taken.push((o, e.clone()));
+                            }
+                        }
+                    }
                     for o in &objs {
-                        consume(k.objects.get_mut(o).unwrap(), me);
+                        if !matches!(k.objects[o], Object::Event(_)) {
+                            consume(k.objects.get_mut(o).unwrap(), me);
+                        }
                     }
                     return Ok(WAIT_OBJECT_0);
                 }
-            } else if let Some(i) = objs.iter().position(|o| signalled(&k.objects[o], me)) {
-                consume(k.objects.get_mut(&objs[i]).unwrap(), me);
-                return Ok(WAIT_OBJECT_0 + i as u32);
+            } else {
+                for (i, o) in objs.iter().enumerate() {
+                    if signalled(&k.objects[o], me) && consume(k.objects.get_mut(o).unwrap(), me) {
+                        return Ok(WAIT_OBJECT_0 + i as u32);
+                    }
+                }
             }
-            Err(objs.iter().map(|&o| key::object(o)).collect::<Vec<_>>())
+            Err(Vec::new())
         });
         match r {
             Ok(WAIT_FAILED) => {
                 set_error(ERROR_INVALID_HANDLE);
-                return WAIT_FAILED;
+                break WAIT_FAILED;
             }
-            Ok(r) => return r,
-            Err(_) if deadline.is_some_and(|d| Instant::now() >= d) => return WAIT_TIMEOUT,
-            Err(keys) => block_on(&keys, deadline),
+            Ok(r) => break r,
+            Err(taken) => {
+                // a wait for all that lost an event: the ones it took are set
+                // again, and their waiters recheck
+                for (o, e) in &taken {
+                    e.store(*o, true);
+                }
+                if deadline.is_some_and(|d| Instant::now() >= d) {
+                    break WAIT_TIMEOUT;
+                }
+                let keys: Vec<u64> = kernel(|k| handles.iter().filter_map(|&h| k.object_of(h)).map(key::object).collect());
+                wait_until(&keys, deadline, || events.iter().any(|(_, e)| e.is_set()));
+            }
+        }
+    };
+    for (_, e) in &events {
+        e.waiters.fetch_sub(1, SeqCst);
+    }
+    r
+}
+
+/// A wait for one event without the guest lock (L86).
+fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
+    if e.take() {
+        return WAIT_OBJECT_0;
+    }
+    if ms == 0 {
+        return WAIT_TIMEOUT;
+    }
+    let deadline = (ms != INFINITE).then(|| Instant::now() + Duration::from_millis(ms as u64));
+    // a short spin first while other guest threads run, as for a critical
+    // section: the game's threads hand events back and forth quickly, and
+    // a sleep costs an OS wake-up
+    if parallel() && !holds_lock() {
+        let start = Instant::now();
+        let mut n = 0u32;
+        loop {
+            if e.is_set() && e.take() {
+                return WAIT_OBJECT_0;
+            }
+            std::hint::spin_loop();
+            n += 1;
+            if n % 64 == 0 && (start.elapsed() >= CS_SPIN || deadline.is_some_and(|d| Instant::now() >= d)) {
+                break;
+            }
         }
     }
+    e.waiters.fetch_add(1, SeqCst);
+    let r = loop {
+        if e.take() {
+            break WAIT_OBJECT_0;
+        }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            break WAIT_TIMEOUT;
+        }
+        wait_until(&[key::object(object)], deadline, || e.is_set());
+    };
+    e.waiters.fetch_sub(1, SeqCst);
+    r
 }
 
 /// WaitForSingleObject(handle, ms).
+/// A lock-free service (L86): an event is waited for without the guest
+/// lock; any other object as before, under it.
 pub fn wait_for_single_object(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, ms) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    cpu.eax = wait(&[h], false, ms);
+    cpu.eax = match event_of(h) {
+        Some((o, e)) => wait_event(o, &e, ms),
+        None => {
+            let _lock = service();
+            wait(&[h], false, ms)
+        }
+    };
     ret(m, cpu, 8);
 }
 
@@ -1206,6 +1383,125 @@ pub fn wait_for_multiple_objects(m: &mut dyn Mem, cpu: &mut Cpu) {
     let handles: Vec<u32> = (0..n.min(64)).map(|k| m.u32(p + 4 * k)).collect();
     cpu.eax = wait(&handles, all, ms);
     ret(m, cpu, 16);
+}
+
+// --- critical sections -------------------------------------------------------------
+//
+// CRITICAL_SECTION (winnt.h RTL_CRITICAL_SECTION, 24 bytes on x86): +0
+// DebugInfo, +4 LockCount, +8 RecursionCount, +12 OwningThread, +16
+// LockSemaphore, +20 SpinCount. L86: Enter and Leave work on the guest's
+// own words with host atomics, as Windows does, and take no guest lock;
+// only contention blocks (a short spin, then a wait for the section's key).
+// The fields hold what they held before (crate::services' convention since
+// L21): OwningThread the owner's id, RecursionCount its entries, LockCount
+// -1 plus its entries (waiters are not counted).
+
+/// Threads blocked in EnterCriticalSection (any section): LeaveCriticalSection
+/// signals only while there are some.
+static CS_WAITERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How long a contended Enter spins before it waits (a section is held
+/// ~1 us; measured gameplay mean 0.64 us). Unmeasured guess, not tuned.
+const CS_SPIN: Duration = Duration::from_micros(20);
+
+/// The section's LockCount, RecursionCount and OwningThread as atomics;
+/// None if they are not aligned writable guest words.
+fn cs_words(m: &dyn Mem, cs: u32) -> Option<(&std::sync::atomic::AtomicU32, &std::sync::atomic::AtomicU32, &std::sync::atomic::AtomicU32)> {
+    Some((m.atomic_u32(cs.wrapping_add(4))?, m.atomic_u32(cs.wrapping_add(8))?, m.atomic_u32(cs.wrapping_add(12))?))
+}
+
+/// KERNEL32 `EnterCriticalSection(cs)` (stdcall): takes ownership or
+/// recurses; while another guest thread owns it, spins briefly, then waits
+/// (without the guest lock) until it is released.
+pub fn enter_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let cs = arg(m, cpu, 0);
+    let me = current_tid();
+    match cs_words(m, cs) {
+        Some((lock_count, recursion, owner)) => {
+            match owner.compare_exchange(0, me, SeqCst, SeqCst) {
+                Ok(_) => {}
+                Err(o) if o == me => {}
+                Err(_) => contend(cs, owner, me),
+            }
+            lock_count.fetch_add(1, SeqCst);
+            recursion.fetch_add(1, SeqCst);
+        }
+        None => {
+            // not atomic words: as before L86, under the guest lock
+            let _lock = service();
+            loop {
+                let owner = m.u32(cs.wrapping_add(12));
+                if owner == 0 || owner == me {
+                    break;
+                }
+                CS_WAITERS.fetch_add(1, SeqCst);
+                block_on(&[key::critical_section(cs)], None);
+                CS_WAITERS.fetch_sub(1, SeqCst);
+            }
+            m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_add(1));
+            m.set_u32(cs.wrapping_add(8), m.u32(cs.wrapping_add(8)).wrapping_add(1));
+            m.set_u32(cs.wrapping_add(12), me);
+        }
+    }
+    ret(m, cpu, 4);
+}
+
+/// Take a section another thread owns.
+fn contend(cs: u32, owner: &std::sync::atomic::AtomicU32, me: u32) {
+    // spin while other guest threads run (parallel mode, no guest lock held)
+    if parallel() && !holds_lock() {
+        let start = Instant::now();
+        let mut n = 0u32;
+        loop {
+            if owner.load(SeqCst) == 0 && owner.compare_exchange(0, me, SeqCst, SeqCst).is_ok() {
+                return;
+            }
+            std::hint::spin_loop();
+            n += 1;
+            if n % 64 == 0 && start.elapsed() >= CS_SPIN {
+                break;
+            }
+        }
+    }
+    // counted before the owner is checked again: a Leave that frees it
+    // afterwards sees the count and signals (wait_until)
+    CS_WAITERS.fetch_add(1, SeqCst);
+    while owner.compare_exchange(0, me, SeqCst, SeqCst).is_err() {
+        wait_until(&[key::critical_section(cs)], None, || owner.load(SeqCst) == 0);
+    }
+    CS_WAITERS.fetch_sub(1, SeqCst);
+}
+
+/// KERNEL32 `LeaveCriticalSection(cs)` (stdcall): undoes one Enter.
+pub fn leave_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let cs = arg(m, cpu, 0);
+    let me = current_tid();
+    match cs_words(m, cs) {
+        Some((lock_count, recursion, owner)) => {
+            let rec = recursion.load(SeqCst);
+            assert!(rec > 0 && owner.load(SeqCst) == me, "LeaveCriticalSection({cs:#x}) without a matching Enter");
+            recursion.store(rec - 1, SeqCst);
+            lock_count.fetch_sub(1, SeqCst);
+            if rec == 1 {
+                owner.store(0, SeqCst);
+                if CS_WAITERS.load(SeqCst) > 0 {
+                    signal_key(key::critical_section(cs));
+                }
+            }
+        }
+        None => {
+            let _lock = service();
+            let rec = m.u32(cs.wrapping_add(8));
+            assert!(rec > 0 && m.u32(cs.wrapping_add(12)) == me, "LeaveCriticalSection({cs:#x}) without a matching Enter");
+            m.set_u32(cs.wrapping_add(8), rec - 1);
+            m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_sub(1));
+            if rec == 1 {
+                m.set_u32(cs.wrapping_add(12), 0);
+                signal_key(key::critical_section(cs));
+            }
+        }
+    }
+    ret(m, cpu, 4);
 }
 
 /// Sleep(ms): Sleep(0) lets a ready thread run; INFINITE never returns.
@@ -1952,8 +2248,8 @@ mod tests {
         set_parallel(true);
         let mut r = Registry::new();
         for (a, f, name) in [
-            (ENTER, crate::services::enter_critical_section as LiftFn, "KERNEL32.dll!EnterCriticalSection"),
-            (LEAVE, crate::services::leave_critical_section, "KERNEL32.dll!LeaveCriticalSection"),
+            (ENTER, enter_critical_section as LiftFn, "KERNEL32.dll!EnterCriticalSection"),
+            (LEAVE, leave_critical_section, "KERNEL32.dll!LeaveCriticalSection"),
             (NOOP, noop, "TEST.dll!Noop"),
             (WAIT, wait_service, "KERNEL32.dll!WaitForSingleObject"),
             (SET, set_event, "KERNEL32.dll!SetEvent"),
@@ -1964,7 +2260,7 @@ mod tests {
         let r = Arc::new(r);
         let mut m = GuestMemory::new();
         m.map(0x0090_0000, 0x1000, READ | WRITE).unwrap(); // the critical section
-        let events: Vec<u32> = (0..idle).map(|_| create_named(&m, 0, || Object::Event { manual: false, set: false })).collect();
+        let events: Vec<u32> = (0..idle).map(|_| create_named(&m, 0, || Object::Event(EventCell::new(false, false)))).collect();
         without_lock(|| {
             let waiters: Vec<_> = events
                 .iter()
@@ -2027,5 +2323,265 @@ mod tests {
         eprintln!("  16 idle waiting threads:   {with_idle:8.2} us");
         eprintln!("alone, {alone_stats}with 16 idle, {idle_stats}");
         assert!(with_idle < alone * 3.0 + 5.0, "idle waiters slow the busy thread: {alone:.2} -> {with_idle:.2} us");
+    }
+
+    // --- L86: critical sections and events without the guest lock ------------------
+
+    const S_ENTER: u32 = 0x7100_0000;
+    const S_LEAVE: u32 = 0x7100_0010;
+    const S_SET: u32 = 0x7100_0020;
+    const S_RESET: u32 = 0x7100_0030;
+    const S_WAIT1: u32 = 0x7100_0040;
+    const S_WAITN: u32 = 0x7100_0050;
+    /// Guest data: critical sections at +0 and +0x40, counters at +0x100,
+    /// handle arrays at +0x200.
+    const DATA: u32 = 0x0090_0000;
+
+    /// The synchronisation services, bound as the game's imports are
+    /// (services::LOCK_FREE), or all under the guest lock (`lock_free`
+    /// false: as before L86).
+    fn sync_registry(lock_free: bool) -> Arc<Registry> {
+        let mut r = Registry::new();
+        for (a, f, name, free) in [
+            (S_ENTER, enter_critical_section as LiftFn, "KERNEL32.dll!EnterCriticalSection", true),
+            (S_LEAVE, leave_critical_section, "KERNEL32.dll!LeaveCriticalSection", true),
+            (S_SET, set_event, "KERNEL32.dll!SetEvent", true),
+            (S_RESET, reset_event, "KERNEL32.dll!ResetEvent", true),
+            (S_WAIT1, wait_for_single_object, "KERNEL32.dll!WaitForSingleObject", true),
+            (S_WAITN, wait_for_multiple_objects, "KERNEL32.dll!WaitForMultipleObjects", false),
+        ] {
+            r.insert(a, if free && lock_free { Binding::LockFree(f) } else { Binding::Service(f) }).unwrap();
+            r.name(a, name);
+        }
+        Arc::new(r)
+    }
+
+    /// A guest thread of a stress test: calls services on its own stack.
+    struct GuestCaller {
+        r: Arc<Registry>,
+        m: GuestMemory,
+        c: Cpu,
+        top: u32,
+    }
+
+    impl GuestCaller {
+        fn call(&mut self, target: u32, args: &[u32]) -> u32 {
+            call_service(&self.r, &mut self.m, &mut self.c, self.top, target, args);
+            self.c.eax
+        }
+    }
+
+    /// A parallel-mode runtime with the guest data mapped.
+    fn sync_runtime() -> (Arc<Runtime>, GuestMemory) {
+        let rt = Arc::new(Runtime::default());
+        runtime::enter(rt.clone());
+        set_parallel(true);
+        let mut m = GuestMemory::new();
+        m.map(DATA, 0x1000, READ | WRITE).unwrap();
+        (rt, m)
+    }
+
+    /// Run `n` guest threads (ids 0x5000 + 4k) each calling `body(k, caller)`;
+    /// the wall time.
+    fn run_guest_threads(rt: &Arc<Runtime>, r: &Arc<Registry>, m: &GuestMemory, n: usize,
+                         body: Arc<dyn Fn(usize, &mut GuestCaller) + Send + Sync>) -> Duration {
+        without_lock(|| {
+            let t = Instant::now();
+            let threads: Vec<_> = (0..n).map(|k| {
+                let (rt, r, mut m, body) = (rt.clone(), r.clone(), m.share(), body.clone());
+                std::thread::spawn(move || {
+                    runtime::enter(rt);
+                    CURRENT_TID.with(|c| c.set(0x5000 + 4 * k as u32));
+                    let stack = 0x0300_0000 + k as u32 * 0x1_0000;
+                    // mapped by an earlier run in the same memory, or now
+                    let _ = m.map(stack, 0x1_0000, READ | WRITE);
+                    let mut caller = GuestCaller { r, m, c: Cpu::default(), top: stack + 0xF000 };
+                    body(k, &mut caller);
+                })
+            }).collect();
+            for th in threads {
+                th.join().unwrap();
+            }
+            t.elapsed()
+        })
+    }
+
+    fn critical_section_stress(lock_free: bool, n: usize, iters: u32) -> Duration {
+        let (rt, mut m) = sync_runtime();
+        for cs in [DATA, DATA + 0x40] {
+            for (off, v) in [(0, u32::MAX), (4, u32::MAX), (8, 0), (12, 0), (16, 0), (20, 0)] {
+                m.set_u32(cs + off, v);
+            }
+        }
+        let r = sync_registry(lock_free);
+        let t = run_guest_threads(&rt, &r, &m, n, Arc::new(move |k, g: &mut GuestCaller| {
+            // half the threads also count under a second section inside the first
+            for _ in 0..iters {
+                g.call(S_ENTER, &[DATA]);
+                g.call(S_ENTER, &[DATA]); // recursion
+                let v = g.m.u32(DATA + 0x100);
+                for _ in 0..8 {
+                    std::hint::spin_loop();
+                }
+                g.m.set_u32(DATA + 0x100, v + 1);
+                if k % 2 == 0 {
+                    g.call(S_ENTER, &[DATA + 0x40]);
+                    let w = g.m.u32(DATA + 0x104);
+                    g.m.set_u32(DATA + 0x104, w + 1);
+                    g.call(S_LEAVE, &[DATA + 0x40]);
+                }
+                g.call(S_LEAVE, &[DATA]);
+                g.call(S_LEAVE, &[DATA]);
+            }
+        }));
+        assert_eq!(m.u32(DATA + 0x100), n as u32 * iters, "mutual exclusion");
+        assert_eq!(m.u32(DATA + 0x104), n.div_ceil(2) as u32 * iters, "mutual exclusion (nested section)");
+        for cs in [DATA, DATA + 0x40] {
+            assert_eq!([m.u32(cs + 4), m.u32(cs + 8), m.u32(cs + 12)], [u32::MAX, 0, 0], "fields of {cs:#x} after the last Leave");
+        }
+        t
+    }
+
+    /// L86: 8 threads enter (recursively) and leave two critical sections
+    /// 4,000 times each around a non-atomic increment: no increment is
+    /// lost, the fields end as InitializeCriticalSection left them. With
+    /// the sections lock-free and, for comparison, under the guest lock.
+    #[test]
+    fn critical_sections_exclude_under_contention_without_the_guest_lock() {
+        stats::force_on();
+        let free = critical_section_stress(true, 8, 4000);
+        let free_stats = lock_stats().unwrap();
+        stats::force_on();
+        let locked = critical_section_stress(false, 8, 4000);
+        let locked_stats = lock_stats().unwrap();
+        eprintln!("8 threads x 4,000 x (Enter, Enter, increment, [Enter, increment, Leave], Leave, Leave):");
+        eprintln!("  lock-free sections:        {:8.1} ms", free.as_secs_f64() * 1e3);
+        eprintln!("  under the guest lock:      {:8.1} ms", locked.as_secs_f64() * 1e3);
+        eprintln!("lock-free, {free_stats}under the lock, {locked_stats}");
+    }
+
+    /// L86: pairs of threads hand two auto-reset events back and forth
+    /// (SetEvent, WaitForSingleObject) 5,000 times each, 4 pairs at once,
+    /// lock-free; every wait has a 10 s timeout, so a lost wakeup fails
+    /// the test instead of hanging it.
+    #[test]
+    fn events_lose_no_wakeup_without_the_guest_lock() {
+        let (rt, m) = sync_runtime();
+        let pairs = 4;
+        let rounds = 5000u32;
+        let events: Vec<u32> = (0..2 * pairs).map(|_| create_named(&m, 0, || Object::Event(EventCell::new(false, false)))).collect();
+        let r = sync_registry(true);
+        let ev = Arc::new(events);
+        let timeouts = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let (ev2, to2) = (ev.clone(), timeouts.clone());
+        let t = run_guest_threads(&rt, &r, &m, 2 * pairs, Arc::new(move |k, g: &mut GuestCaller| {
+            let (ping, pong) = (ev2[k / 2 * 2], ev2[k / 2 * 2 + 1]);
+            for _ in 0..rounds {
+                if k % 2 == 0 {
+                    g.call(S_SET, &[ping]);
+                    if g.call(S_WAIT1, &[pong, 10_000]) != WAIT_OBJECT_0 {
+                        to2.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                } else {
+                    if g.call(S_WAIT1, &[ping, 10_000]) != WAIT_OBJECT_0 {
+                        to2.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                    g.call(S_SET, &[pong]);
+                }
+            }
+        }));
+        eprintln!("{pairs} pairs x {rounds} event round trips: {:.1} ms ({:.2} us per round trip)",
+                  t.as_secs_f64() * 1e3, t.as_secs_f64() * 1e6 / rounds as f64);
+        assert_eq!(timeouts.load(Ordering::Relaxed), 0, "a wait timed out: a lost wakeup");
+    }
+
+    /// L86: one auto-reset event handed to 6 competing waiters 3,000 times:
+    /// each SetEvent releases exactly one of them (the producer waits for
+    /// an acknowledgement before setting it again).
+    #[test]
+    fn an_auto_reset_event_releases_one_waiter_per_set() {
+        let (rt, m) = sync_runtime();
+        let work = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        let ack = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        let r = sync_registry(true);
+        let sets = 3000u32;
+        let taken = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let failed = Arc::new(AtomicBool::new(false));
+        let (taken2, done2, failed2) = (taken.clone(), done.clone(), failed.clone());
+        run_guest_threads(&rt, &r, &m, 7, Arc::new(move |k, g: &mut GuestCaller| {
+            if k == 0 {
+                for _ in 0..sets {
+                    g.call(S_SET, &[work]);
+                    if g.call(S_WAIT1, &[ack, 10_000]) != WAIT_OBJECT_0 {
+                        failed2.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+                done2.store(true, Ordering::SeqCst);
+            } else {
+                while !done2.load(Ordering::SeqCst) {
+                    if g.call(S_WAIT1, &[work, 20]) == WAIT_OBJECT_0 {
+                        taken2.fetch_add(1, Ordering::SeqCst);
+                        g.call(S_SET, &[ack]);
+                    }
+                }
+            }
+        }));
+        assert!(!failed.load(Ordering::SeqCst), "the producer's acknowledgement timed out");
+        assert_eq!(taken.load(Ordering::SeqCst), sets, "one waiter released per SetEvent");
+    }
+
+    /// L86: WaitForMultipleObjects (under the guest lock) is woken by
+    /// SetEvent without it, and returns the event that was set, 3,000
+    /// times; ResetEvent clears a manual-reset event for both kinds of
+    /// wait.
+    #[test]
+    fn a_wait_for_several_objects_sees_lock_free_events() {
+        let (rt, m) = sync_runtime();
+        let a = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        let b = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        let ack = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        let manual = create_named(&m, 0, || Object::Event(EventCell::new(true, true)));
+        let mut mm = m.share();
+        mm.set_u32(DATA + 0x200, a);
+        mm.set_u32(DATA + 0x204, b);
+        let r = sync_registry(true);
+        let rounds = 3000u32;
+        let wrong = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let wrong2 = wrong.clone();
+        run_guest_threads(&rt, &r, &m, 2, Arc::new(move |k, g: &mut GuestCaller| {
+            for i in 0..rounds {
+                if k == 0 {
+                    g.call(S_SET, &[if i % 2 == 0 { a } else { b }]);
+                    if g.call(S_WAIT1, &[ack, 10_000]) != WAIT_OBJECT_0 {
+                        wrong2.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                } else {
+                    let got = g.call(S_WAITN, &[2, DATA + 0x200, 0, 10_000]);
+                    if got != WAIT_OBJECT_0 + i % 2 {
+                        wrong2.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                    g.call(S_SET, &[ack]);
+                }
+            }
+        }));
+        assert_eq!(wrong.load(Ordering::Relaxed), 0, "a wait timed out or returned the wrong object");
+        // the manual-reset event: set, then reset, for one and for several
+        let r2 = r.clone();
+        run_guest_threads(&rt, &r2, &m, 1, Arc::new(move |_, g: &mut GuestCaller| {
+            assert_eq!(g.call(S_WAIT1, &[manual, 0]), WAIT_OBJECT_0);
+            assert_eq!(g.call(S_WAIT1, &[manual, 0]), WAIT_OBJECT_0, "a manual-reset event stays set");
+            g.call(S_RESET, &[manual]);
+            assert_eq!(g.call(S_WAIT1, &[manual, 0]), WAIT_TIMEOUT);
+            g.m.set_u32(DATA + 0x208, manual);
+            assert_eq!(g.call(S_WAITN, &[1, DATA + 0x208, 0, 0]), WAIT_TIMEOUT);
+            g.call(S_SET, &[manual]);
+            assert_eq!(g.call(S_WAITN, &[1, DATA + 0x208, 1, 0]), WAIT_OBJECT_0);
+        }));
     }
 }
