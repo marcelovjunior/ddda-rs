@@ -297,7 +297,14 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
             std::hint::black_box(d.clone());
         });
         ddruntime::d3d9draw::set_backend(Box::new(Null));
-        time("send to the deferred backend (null worker)", &mut || ddruntime::ndraw_native::send_draw(&d));
+        time("send to the deferred backend alone (null worker)", &mut || ddruntime::ndraw_native::send_draw(&d));
+        let mut run = Vec::with_capacity(64);
+        time("send in runs of 64 (null worker), per draw", &mut || {
+            run.push(d.clone());
+            if run.len() == 64 {
+                ddruntime::ndraw_native::send_draws(std::mem::take(&mut run));
+            }
+        });
     }
     assert_eq!(com(&mut s, dev, 42, &[]), 0); // EndScene
 }

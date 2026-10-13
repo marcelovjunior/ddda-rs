@@ -1411,9 +1411,15 @@ pub fn flush_draw(m: &dyn Mem, d: &DrawCall) {
     crate::d3d9draw::flush_reads(m, reads_of(d));
 }
 
-/// Send `d` to the backend as a taken draw does (the benchmark).
+/// Send `d` to the backend alone (the benchmark).
 pub fn send_draw(d: &DrawCall) {
     crate::d3d9draw::backend_unlocked(|b| b.draw(d));
+}
+
+/// Send a run of taken draws as one command (the benchmark).
+pub fn send_draws(draws: Vec<DrawCall>) {
+    let mut batch = draws;
+    send_batch(&mut batch);
 }
 
 /// The resources a DrawCall reads, as the D3D9 path flushes them:
@@ -1604,6 +1610,8 @@ struct Inner {
     /// draws taken since the default path last ran, and their uploads
     handled: bool,
     uploads: Uploads,
+    /// taken draws not sent yet (`drawcall`): one backend command a run
+    batch: Vec<DrawCall>,
     comparison: comparison::Comparison,
     /// the backend takes native jobs (`1`; otherwise those draws go as
     /// DrawCalls, as `drawcall`)
@@ -1623,7 +1631,7 @@ impl Native {
             inner: Mutex::new(Inner {
                 frame: Frame::default(), totals: Totals::default(), since: Instant::now(),
                 info: FrameInfo::default(), scene: (0, 0), caches: Caches::default(), pending: Pending::default(), native: false,
-                handled: false, uploads: Uploads::default(),
+                handled: false, uploads: Uploads::default(), batch: Vec::new(),
                 comparison: comparison::Comparison::default(),
             }),
             every,
@@ -1694,6 +1702,7 @@ impl CommandSink for Native {
 
 impl Inner {
     fn send(&mut self) {
+        send_batch(&mut self.batch);
         if self.comparison.is_active() {
             crate::d3d9draw::backend_unlocked(|b| self.comparison.finish(b));
         }
@@ -1701,6 +1710,14 @@ impl Inner {
             self.totals.jobs += 1;
             self.totals.native += n;
         }
+    }
+}
+
+/// Send the taken draws not sent yet, as one backend command.
+fn send_batch(batch: &mut Vec<DrawCall>) {
+    if !batch.is_empty() {
+        let draws = std::mem::replace(batch, Vec::with_capacity(64));
+        crate::d3d9draw::backend_unlocked(|b| b.draws(draws));
     }
 }
 
@@ -1752,8 +1769,12 @@ impl Native {
                 commit(m, &g.info, &mut g.caches, shadow, &d.textures);
                 g.uploads.add(&binding);
                 g.handled = true;
+                // an upload goes after the draws taken before it
+                if objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
+                    send_batch(&mut g.batch);
+                }
                 crate::d3d9draw::flush_reads(m, reads_of(&d));
-                crate::d3d9draw::backend_unlocked(|b| b.draw(&d));
+                g.batch.push(d);
                 crate::d3d9draw::count_draws(1);
                 t.taken += 1;
                 Taken::Handled
