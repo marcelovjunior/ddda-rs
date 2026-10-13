@@ -137,6 +137,12 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
         })));
         body(&mut m, &mut c);
         x86::set_ext_calls(None);
+        // an x87 result: ST0 (64-bit mantissa, sign/exponent word) and one value on the stack
+        if let Some(st0) = case["after"].get("st0") {
+            let want = (st0[0].as_u64().unwrap(), n(&st0[1]) as u16);
+            assert_eq!(c.st.top_extended(), Some(want), "case {i}: ST0");
+            assert_eq!(c.st.depth(), 1, "case {i}: x87 depth");
+        }
         assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
         let eax = if returns { [c.eax, after[0]] } else { [0, 0] };
         let got = [eax[0], c.ebx, c.esp, c.ebp, c.esi, c.edi];
@@ -190,10 +196,18 @@ fn semantic_crt_trig_matches_original() {
         Err(_) => return,
     };
     let data: Value = serde_json::from_str(&text).unwrap();
+    let mut m = Memory::default();
+    for table in data["tables"].as_array().unwrap() {
+        let base = n(&table[0]);
+        for (k, b) in table[1].as_array().unwrap().iter().enumerate() {
+            m.bytes.insert(base + k as u32, n(b) as u8);
+        }
+    }
+    let pg = ddnative_base::mem::Pages::of(&m);
     let cases = data["cases"].as_array().unwrap();
     for (i, case) in cases.iter().enumerate() {
         let (kind, x, want) = (n(&case[0]), f32::from_bits(n(&case[1])), n(&case[2]));
-        let got = if kind == 0 { mtcore::semantic_s7_trig::sinf(x) } else { mtcore::semantic_s7_trig::cosf(x) };
+        let got = if kind == 0 { mtcore::semantic_s7_trig::sinf(&m, pg, x) } else { mtcore::semantic_s7_trig::cosf(&m, pg, x) };
         let got = got.unwrap_or_else(|| panic!("case {i}: kind {kind} x {x:e} left to the guest"));
         assert_eq!(got.to_bits(), want, "case {i}: kind {kind} x {x:e} ({:08x}): got {got:e} want {:e}", x.to_bits(), f32::from_bits(want));
     }
@@ -293,3 +307,12 @@ fn semantic_crt_expf_matches_original() {
     eprintln!("{} expf cases passed", cases.len());
 }
 
+
+// verifies 0x00f2ffc0 (distance falloff integral; thiscall, ST0 result)
+#[test]
+fn semantic_integrate_falloff_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S7_FALLOFF_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/integrate_falloff.json".into());
+    let n = abi_cases_with_calls_ret(&path, mtcore::semantic_s7_falloff::integrate_falloff, false);
+    eprintln!("{n} ABI-level integrate_falloff cases passed");
+}
