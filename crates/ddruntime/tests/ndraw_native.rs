@@ -380,6 +380,24 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     assert_eq!(differences(&filled.call, r, &d3d9), vec![]);
     s.mem.set_u32(record + 0xC, shader);
 
+    // L180: a binding used again after another one in the same frame is
+    // read again (the original's apply re-reads it), one used by the draw
+    // right after keeps its part (the apply skips the upload)
+    let c0y = s.mem.u32(vs_values + 4);
+    let _ = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    s.mem.set_u32(record + 0xC, shader2);
+    let _ = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    s.mem.set_u32(record + 0xC, shader);
+    s.mem.set_u32(vs_values + 4, 123f32.to_bits());
+    let again = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    assert!(again.rebuilt);
+    assert_eq!(again.call.vs_constants.f[0][1], 123f32.to_bits());
+    s.mem.set_u32(vs_values + 4, 7f32.to_bits());
+    let next = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    assert!(!next.rebuilt);
+    assert_eq!(next.call.vs_constants.f[0][1], 123f32.to_bits());
+    s.mem.set_u32(vs_values + 4, c0y);
+
     // an instanced draw (type 3): stream 1 instance data (stride 16,
     // offset 8), 5 instances, instance step 2. The D3D9 path: the stream
     // apply, then the calls 0x00DAB480's type 3 makes around the draw
