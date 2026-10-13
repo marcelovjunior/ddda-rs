@@ -71,5 +71,25 @@ Final log `C:/ddda-targets/L165/joints-gate.log` SHA-256
 
 Not yet checked: live concurrent mutation, fault-site machine states,
 combined native gate or gameplay image/per-worker speed. No default change.
-Next: exact FEDD60 sort port and 10A35D0 traversal; then head integration
-train with each opt-in separately and a matched route/camera.
+## FEDD60 checkpoint and reassignment
+
+Head #13696 redirected codex-6 to the 50-function real-input codegen corpus.
+The FEDD60 structured port is retained as an **unregistered** candidate;
+there is no runtime opt-in yet and no speed claim. Its 800 original cases
+cover negative/zero/odd/power-of-two boundaries through 257 pairs, five key
+patterns, duplicate-key stability, unaligned/page-crossing storage and four
+buffer alias choices. All return/scratch state and 1,800 synthetic memcpy
+boundaries match in sparse and atomic pages, for original lift and port.
+The memcpy seam deliberately uses a source snapshot and volatile register
+clobbers; it does not test the real memcpy implementation. No fault-state
+or live-concurrency acceptance. The combined isolated suite passes 8 tests.
+
+Reproduce oracle with `record_job_workers.py --kind sort`, then run the
+same isolated checker without `--bench`. Private corpus `job_sort.json`
+SHA-256 `49144f71ce7be1ae53af9c2e81e960e7baa62b1be05ec06a0a533ba3d96bfbc3`;
+`C:/ddda-targets/L165/sort-gate.log` SHA-256
+`8623140894b406a8a5ed2601f3b3e245987291df86b9b9e3e03d279e94ff3eff`.
+
+10A35D0 has only source inspection, no implementation. Next: build the
+head's requested codegen corpus; use these synthetic oracle cases only as
+additional correctness coverage, never as recorded gameplay inputs.

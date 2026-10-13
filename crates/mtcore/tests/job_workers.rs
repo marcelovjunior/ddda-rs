@@ -33,8 +33,8 @@ fn compare(c:&Cpu,v:&Value,mask:u32) {
     assert_eq!(c.xmm,std::array::from_fn(|i|std::array::from_fn(|j|n(&v["xmm"][i][j]))));
     assert_eq!(c.mxcsr.0,n(&v["mxcsr"]));
 }
-fn vectors()->Option<Value> {
-    let path=std::env::var("DDNATIVE_JOB_JOINTS_VECTORS").unwrap_or_else(|_|"E:/ddda-re/notes/native-L165/job_joints.json".into());
+fn vectors(kind:&str)->Option<Value> {
+    let path=std::env::var(format!("DDNATIVE_JOB_{}_VECTORS",kind.to_uppercase())).unwrap_or_else(|_|format!("E:/ddda-re/notes/native-L165/job_{kind}.json"));
     match std::fs::read_to_string(&path) {
         Ok(text)=>Some(serde_json::from_str(&text).unwrap()),
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some()=>panic!("{path}: {e}"),
@@ -42,8 +42,11 @@ fn vectors()->Option<Value> {
     }
 }
 fn verify(body:LiftFn, pages:bool) {
-    let Some(data)=vectors() else{return};
-    let cases=data["cases"].as_array().unwrap();assert_eq!(cases.len(),840);
+    verify_kind(body,pages,"joints",840);
+}
+fn verify_kind(body:LiftFn, pages:bool,kind:&str,count:usize) {
+    let Some(data)=vectors(kind) else{return};
+    let cases=data["cases"].as_array().unwrap();assert_eq!(cases.len(),count);
     let mut total_calls=0;
     for case in cases {
         let mut m=Memory {bytes:pairs(&case["initial"]),..Default::default()};
@@ -83,7 +86,7 @@ fn verify(body:LiftFn, pages:bool) {
         } else {assert_eq!(m.writes,changed,"seed {}",case["seed"]);}
         total_calls+=*calls.borrow();
     }
-    eprintln!("joint dispatcher: {} original returns / {total_calls} callback boundaries match",cases.len());
+    eprintln!("{kind}: {} original returns / {total_calls} callback boundaries match",cases.len());
 }
 
 // verifies 0x01054700
@@ -91,3 +94,8 @@ fn verify(body:LiftFn, pages:bool) {
 fn original_joint_dispatch_vectors(){verify(mtcore::job_joints::evaluate_joint_indices,false);}
 #[test]
 fn original_joint_dispatch_pages(){verify(mtcore::job_joints::evaluate_joint_indices,true);}
+// verifies 0x00fedd60
+#[test]
+fn original_sort_vectors(){verify_kind(mtcore::job_sort::sort_pairs,false,"sort",800);}
+#[test]
+fn original_sort_pages(){verify_kind(mtcore::job_sort::sort_pairs,true,"sort",800);}

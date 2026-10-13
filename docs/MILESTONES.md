@@ -8,8 +8,10 @@
 - First candidate: opt-in JOB_JOINTS dispatcher, 840 original returns /
   5,092 callback boundaries match both sparse and atomic-page replay.
   Twenty isolated median speed ratios 1.545–2.476x; callees excluded.
-- No full native/game acceptance or FPS claim. Next: exact merge-sort
-  and bounds-traversal ports, then head's shared integration train.
+- Unregistered FEDD60 sort checkpoint: 800 original returns / 1,800
+  synthetic memcpy boundaries match both memory paths; speed unmeasured.
+- No full native/game acceptance or FPS claim. Head #13696 redirected
+  next work to the 50-function real-input codegen benchmark corpus.
 
 ### L165 autoplay proposal (2026-10-13)
 

@@ -13,7 +13,12 @@ def main():
     (out/'original/src').mkdir(parents=True,exist_ok=True)
     source=(root/'crates/ddlift/lift_00/src/generated/lifted_026.rs').read_text(encoding='utf-8')
     start=source.index('pub fn f_01054700(');end=source.index('// Translated from',start)
-    (out/'original/src/lib.rs').write_text('#![allow(warnings)]\npub use ddnative_base::{mem,x86};\nuse mem::Mem;use x86::{Cpu,Flags};use ddnative_base::emit;\n'+source[start:end],encoding='utf-8')
+    bodies=source[start:end]
+    source=(root/'crates/ddlift/lift_31/src/generated/lifted_036.rs').read_text(encoding='utf-8')
+    start=source.index('pub fn f_00fedd60(');end=source.index('// Translated from',start)
+    bodies+=source[start:end]
+    boundary='mod platform { pub fn memcpy(m:&mut dyn crate::mem::Mem,c:&mut crate::x86::Cpu){crate::x86::call_ext(m,c,0x012efea0)} }\n'
+    (out/'original/src/lib.rs').write_text('#![allow(warnings)]\npub use ddnative_base::{mem,x86};\nuse mem::Mem;use x86::{Cpu,Flags};use ddnative_base::emit;\n'+boundary+bodies,encoding='utf-8')
     (out/'original/Cargo.toml').write_text(f'''[package]
 name="l165-original-workers"
 version="0.0.0"
@@ -43,6 +48,8 @@ opt-level=1
     test=(root/'crates/mtcore/tests/job_workers.rs').read_text(encoding='utf-8').replace('//!','//')
     test+='\n#[test]fn original_lifted_joint_vectors(){verify(l165_original_workers::f_01054700,false);}\n'
     test+='\n#[test]fn original_lifted_joint_pages(){verify(l165_original_workers::f_01054700,true);}\n'
+    test+='\n#[test]fn original_lifted_sort_vectors(){verify_kind(l165_original_workers::f_00fedd60,false,"sort",800);}\n'
+    test+='\n#[test]fn original_lifted_sort_pages(){verify_kind(l165_original_workers::f_00fedd60,true,"sort",800);}\n'
     (out/'workers.rs').write_text(test+BENCH,encoding='utf-8')
     env=dict(os.environ,CARGO_TARGET_DIR='C:/ddda-targets/L165',CARGO_INCREMENTAL='0',CARGO_BUILD_JOBS='4',DDNATIVE_REQUIRE_VECTORS='1')
     command=['cargo','test','--release','--manifest-path',str(out/'Cargo.toml')]
