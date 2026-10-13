@@ -24,6 +24,7 @@ pub const PORTS: &[(u32, x86::LiftFn, u8)] = &[
     (0x00fe_db80, save_draw_recording_state, 0xff),
     (0x00fe_dc00, restore_draw_recording_state, 0xff),
     (0x00fe_d200, initialize_draw_recording_lanes, 0xff),
+    (0x00e1_0fc0, intern_dependency_keys, 0xff),
 ];
 
 // Translated from 0x00fedb80 (DDDA.exe 2017-12-13 Steam).
@@ -326,6 +327,137 @@ pub fn initialize_draw_recording_lanes(m: &mut dyn Mem, c: &mut Cpu) {
     c.ebp = emit::pop(m, pt, c);
     c.esp = c.fl.alu_add(c.esp, 0x1c, 32);
     ret(c, 8);
+}
+
+// Translated from 0x00e10fc0 (DDDA.exe 2017-12-13 Steam).
+/// Assemble dependency keys, optionally compute their original CRC, and
+/// intern the key sequence. The dependency and interning callees stay intact.
+pub fn intern_dependency_keys(m: &mut dyn Mem, c: &mut Cpu) {
+    use ddnative_base::emit;
+    let pt = m.page_table();
+    macro_rules! r {
+        ($a:expr) => {
+            m.fast_u32(pt, $a)
+        };
+    }
+    macro_rules! w {
+        ($a:expr, $v:expr) => {
+            m.fast_set_u32(pt, $a, $v)
+        };
+    }
+    macro_rules! stack {
+        ($offset:expr) => {
+            c.esp.wrapping_add($offset)
+        };
+    }
+    macro_rules! push_fast {
+        ($v:expr) => {
+            emit::push($v, m, pt, c)
+        };
+    }
+    c.esp = c.esp.wrapping_sub(0x404);
+    c.edx = r!(stack!(0x410));
+    push_fast!(c.ebx);
+    push_fast!(c.ebp);
+    c.ebp = c.ecx;
+    c.ecx = r!(c.edx);
+    push_fast!(c.esi);
+    push_fast!(c.edi);
+    w!(stack!(0x10), c.ebp);
+    c.eax = stack!(0x14);
+    if c.ecx != 0 {
+        c.ecx &= 0xfffff000;
+        w!(stack!(0x14), c.ecx);
+        c.eax = stack!(0x18);
+    }
+    for index in 1..4u32 {
+        c.ecx = r!(c.edx.wrapping_add(index * 4));
+        if c.ecx != 0 {
+            c.ecx = (c.ecx & 0xfffff000) | index;
+            w!(c.eax, c.ecx);
+            c.eax = c.eax.wrapping_add(4);
+        }
+    }
+    c.ecx = r!(stack!(0x424));
+    c.edi = r!(stack!(0x418));
+    c.esi = r!(stack!(0x41c));
+    w!(c.eax, c.ecx);
+    c.ecx = r!(c.edi);
+    c.eax = c.eax.wrapping_add(4);
+    for (offset, resume) in [
+        (0, 0xe11058),
+        (12, 0xe11069),
+        (16, 0xe1107a),
+        (8, 0xe1108b),
+        (4, 0xe1109c),
+        (20, 0xe110ad),
+    ] {
+        // The first value was read before advancing EAX. Later values
+        // must be reloaded after callbacks, which may mutate the owner.
+        let value = if offset == 0 {
+            c.ecx
+        } else {
+            r!(c.edi.wrapping_add(offset))
+        };
+        if offset == 20 {
+            c.edi = value;
+        } else {
+            c.ecx = value;
+        }
+        c.fl.alu_and(value, value, 32);
+        if value != 0 {
+            push_fast!(c.eax);
+            push_fast!(c.esi);
+            push_fast!(value);
+            c.ecx = c.ebp;
+            push_fast!(resume);
+            x86::call_ext(m, c, 0xe0ec50);
+        }
+    }
+    c.ebx = r!(stack!(0x428));
+    c.edx = stack!(0x14);
+    c.eax = (c.eax.wrapping_sub(c.edx) as i32 >> 2) as u32;
+    c.edi = c.eax;
+    c.fl.alu_and(c.ebx, c.ebx, 32);
+    if c.ebx != 0 {
+        c.edx = c.edi.wrapping_mul(4);
+        c.eax = u32::MAX;
+        // LEA scales by four: the original byte-at-a-time CRC arm
+        // (E110D6) is unreachable, even when the arithmetic wraps.
+        c.edx >>= 2;
+        c.esi = c.edx;
+        c.edx = 0;
+        c.fl.alu_and(c.esi, c.esi, 32);
+        while c.edx < c.esi {
+            c.ecx = r!(stack!(0x14).wrapping_add(c.edx.wrapping_mul(4)));
+            for shift in [24, 16, 8] {
+                c.ebp = ((c.ecx >> shift) ^ c.eax) & 255;
+                c.eax = (c.eax >> 8) ^ r!(0x14075c0u32.wrapping_add(c.ebp * 4));
+            }
+            c.edx = c.edx.wrapping_add(1);
+            c.ecx = (c.ecx ^ c.eax) & 255;
+            c.eax = (c.eax >> 8) ^ r!(0x14075c0u32.wrapping_add(c.ecx * 4));
+            c.fl.alu_sub(c.edx, c.esi, 32);
+        }
+        if c.esi != 0 {
+            c.ebp = r!(stack!(0x10));
+        }
+        w!(c.ebx, c.eax);
+    }
+    push_fast!(0x811c9dc5);
+    c.eax = c.edi.wrapping_mul(4);
+    push_fast!(c.eax);
+    c.eax = stack!(0x1c);
+    push_fast!(c.eax);
+    c.ecx = c.ebp;
+    push_fast!(0xe1118f);
+    x86::call_ext(m, c, 0xe0e5e0);
+    c.edi = emit::pop(m, pt, c);
+    c.esi = emit::pop(m, pt, c);
+    c.ebp = emit::pop(m, pt, c);
+    c.ebx = emit::pop(m, pt, c);
+    c.esp = c.fl.alu_add(c.esp, 0x404, 32);
+    ret(c, 0x14);
 }
 
 // Translated from 0x011787c0 (DDDA.exe 2017-12-13 Steam).
