@@ -4,7 +4,7 @@
 //! original executable) made on the runtime's device, then the draw.
 //! Needs the installed game (DDDA_EXE) for a session; skipped without it.
 use ddnative_base::mem::Mem;
-use ddruntime::ndraw_native::{decode, draw_call, draw_params, identity, native_draw, Caches, FrameInfo, Pending};
+use ddruntime::ndraw_native::{decode, draw_call, draw_params, identity, native_draw, reads_of, Caches, FrameInfo, Pending};
 use ddruntime::session::{Outcome, Session};
 
 const SCRATCH: u32 = 0x7EFF_0000;
@@ -193,8 +193,19 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     // the native sink's DrawCall
     let info = FrameInfo { device: dev, srgb: false, filtering: 0, invalid_viewport: [0; 4] };
     let mut caches = Caches::default();
-    let (native, reads) = draw_call(&s.mem, &info, &mut caches, record, 1).expect("the draw is taken");
+    caches.begin_frame(&info);
+    let native = draw_call(&s.mem, &info, &mut caches, record, 1).expect("the draw is taken");
+    let reads: Vec<u32> = reads_of(&native).collect();
     assert!(reads.contains(&texture) && reads.contains(&vb) && reads.contains(&ib) && reads.contains(&target));
+    // from the caches: the same draw
+    assert_eq!(draw_call(&s.mem, &info, &mut caches, record, 1).unwrap(), native);
+    // what a taken draw costs from the caches (debug build: an upper bound)
+    let n = 20_000;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(draw_call(&s.mem, &info, &mut caches, record, 1).unwrap());
+    }
+    eprintln!("draw_call from the caches: {:.3} us", t.elapsed().as_secs_f64() * 1e6 / n as f64);
 
     // the D3D9 path: the applies' calls on the device, then the draw
     let mut ctx = Context { m: &s.mem, words: vec![0; 0xE28 / 4] };

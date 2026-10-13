@@ -8,9 +8,13 @@
   their DrawCalls); refusals counted by reason.
 - Tested: the sink's DrawCall equals the runtime D3D9 path's for the same
   record (tests/ndraw_native.rs, real D3D9 objects); decode unit tests.
+- combo13 (`drawcall`): 3,425 scene draws taken/frame, images normal, but
+  22-28 us per draw from per-draw decoding and allocation (7.9 vs 14.7
+  fps). Step 2c caches the decode by object identity and per-frame
+  binding; 2.5 us per draw in a debug build.
 - Blockers: the L126 worker; `native()` waits for the worker per job
-  (board #11174). Next: a head run with `DDDRAW_NATIVE=drawcall`
-  (eligibility, fps, decode cost). Details: docs/tasks/L119-native-executor.md.
+  (board #11174). Next: a head run of step 2c. Details:
+  docs/tasks/L119-native-executor.md.
 
 ### L126 native job transport checkpoint (2026-10-13)
 
