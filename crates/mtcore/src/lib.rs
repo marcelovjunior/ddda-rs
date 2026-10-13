@@ -49,4 +49,5 @@ pub mod shadow_lanes;
 pub mod semantic_c2;
 pub mod semantic_s2;
 pub mod semantic_s3;
+pub mod semantic_s5;
 pub mod tree;
