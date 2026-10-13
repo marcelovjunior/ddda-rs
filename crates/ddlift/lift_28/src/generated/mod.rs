@@ -39,6 +39,7 @@ mod lifted_035; pub use lifted_035::*;
 mod lifted_036; pub use lifted_036::*;
 mod lifted_037; pub use lifted_037::*;
 mod lifted_038; pub use lifted_038::*;
+mod lifted_039; pub use lifted_039::*;
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00E04960, f_00e04960),
