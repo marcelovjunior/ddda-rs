@@ -265,11 +265,75 @@ fn resolve(target: u32) -> LiftFn {
         SCHEDULE => private_schedule,
         crate::fastmem::MEMCPY => crate::fastmem::memcpy,
         crate::fastmem::MEMSET => crate::fastmem::memset,
-        _ => *current()
-            .raw
-            .get(&target)
-            .unwrap_or_else(|| std::panic::panic_any(Reject::UnsupportedTarget(target))),
+        _ => {
+            let replay = current();
+            if let Some(body) = replay.raw.get(&target) {
+                return *body;
+            }
+            // Import slots referenced by 0107FB57/0107FBAE (DDDA.exe
+            // 2017-12-13 Steam). Read the captured binding, never assume
+            // a loader token number or invoke the live service registry.
+            for (slot, service) in [(0x0139d160, private_enter as LiftFn), (0x0139d164, private_leave)] {
+                if replay.memory.probe(slot, 4, false).is_ok()
+                    && replay.memory.u32(slot) == target
+                    && target != 0
+                {
+                    return service;
+                }
+            }
+            std::panic::panic_any(Reject::UnsupportedTarget(target))
+        }
     }
+}
+
+/// Exact uncontended guest-memory contract of threads::{enter,leave}_critical_section.
+/// This is runtime service isolation, not a replacement game allocator. Every
+/// lock word remains tracked; shared allocator dependencies still refuse merge.
+/// Foreign owners, waiter counts, malformed state and unmatched leave refuse.
+fn private_section(m: &mut dyn Mem, cpu: &mut Cpu, enter: bool) {
+    let address = m.u32(cpu.esp.wrapping_add(4));
+    let reject = || std::panic::panic_any(Reject::UnsupportedLock(address));
+    // Inverse of seh::initialize_teb's runtime-owned TEB/thread mapping.
+    let Some(offset) = cpu.fs_base.checked_sub(crate::seh::TEB_BASE) else {
+        reject();
+        return;
+    };
+    if offset & 4095 != 0
+        || cpu.fs_base >= crate::session::STACK_TOP - crate::session::STACK_SIZE
+        || m.u32(cpu.fs_base + 24) != cpu.fs_base
+    {
+        reject();
+    }
+    let me = crate::services::MAIN_THREAD_ID + (offset / 4096) * 4;
+    let lock = m.u32(address.wrapping_add(4));
+    let recursion = m.u32(address.wrapping_add(8));
+    let owner = m.u32(address.wrapping_add(12));
+    if lock != recursion.wrapping_sub(1)
+        || recursion >= i32::MAX as u32
+        || (recursion == 0 && owner != 0)
+        || (recursion != 0 && owner != me)
+        || (!enter && recursion == 0)
+    {
+        reject();
+    }
+    if enter {
+        m.set_u32(address.wrapping_add(4), lock.wrapping_add(1));
+        m.set_u32(address.wrapping_add(8), recursion + 1);
+        m.set_u32(address.wrapping_add(12), me);
+    } else {
+        m.set_u32(address.wrapping_add(8), recursion - 1);
+        m.set_u32(address.wrapping_add(4), lock.wrapping_sub(1));
+        if recursion == 1 {
+            m.set_u32(address.wrapping_add(12), 0);
+        }
+    }
+    crate::services::ret(m, cpu, 4);
+}
+fn private_enter(m: &mut dyn Mem, cpu: &mut Cpu) {
+    private_section(m, cpu, true);
+}
+fn private_leave(m: &mut dyn Mem, cpu: &mut Cpu) {
+    private_section(m, cpu, false);
 }
 
 /// Called only on newly created audit threads. No Runtime is entered and no
@@ -536,7 +600,17 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
             }
         }
         compare_replays(
-            input, incoming, outgoing, mxcsr, result_mxcsr, context, scheduler, stack, observed, writes,
+            input,
+            incoming,
+            outgoing,
+            mxcsr,
+            result_mxcsr,
+            context,
+            scheduler,
+            stack,
+            observed,
+            writes,
+            RAW.get().unwrap().clone(),
         )
     } else {
         Err("serial stream capture refused".into())
@@ -570,6 +644,7 @@ pub fn replay_file(path: &std::path::Path) -> Result<usize, String> {
         fixture.stack,
         observed,
         fixture.writes,
+        RAW.get().unwrap().clone(),
     )
 }
 
@@ -584,8 +659,8 @@ fn compare_replays(
     stack: Range<u32>,
     observed: mtcore::shadow_lanes::StreamSnapshot,
     observed_writes: BTreeMap<u32, u8>,
+    raw: Arc<BTreeMap<u32, LiftFn>>,
 ) -> Result<usize, String> {
-    let raw = RAW.get().unwrap().clone();
     let mut results = Vec::new();
     for parallel in [false, true] {
         let (input, raw, mut cpu, stack) = (input.clone(), raw.clone(), incoming.clone(), stack.clone());
@@ -706,7 +781,9 @@ fn compare_control_state(a: &Cpu, a_mxcsr: u32, b: &Cpu, b_mxcsr: u32) -> Result
     if a.st.clone().state != b.st.clone().state {
         return Err("x87 image");
     }
-    if a.df != b.df || a.fs_base != b.fs_base || a.sys_flags != b.sys_flags
+    if a.df != b.df
+        || a.fs_base != b.fs_base
+        || a.sys_flags != b.sys_flags
         || [a.seg.es, a.seg.cs, a.seg.ss, a.seg.ds, a.seg.fs, a.seg.gs]
             != [b.seg.es, b.seg.cs, b.seg.ss, b.seg.ds, b.seg.fs, b.seg.gs]
     {
@@ -721,17 +798,334 @@ mod tests {
     use crate::memory::{GuestMemory, READ, WRITE};
 
     #[test]
+    fn private_sections_match_runtime_recursive_guest_memory_contract() {
+        let rt = Arc::new(crate::runtime::Runtime::default());
+        crate::runtime::enter(rt);
+        let tid = crate::services::MAIN_THREAD_ID + 12;
+        crate::runtime::local(|local| local.guest_tid.set(tid));
+        crate::threads::set_parallel(true);
+        let mut live = GuestMemory::new();
+        live.map(0x1000, 4096, READ | WRITE).unwrap();
+        live.set_u32(0x1104, u32::MAX);
+        live.set_u32(0x1800, 0x12345678);
+        live.set_u32(0x1804, 0x1100);
+        let teb = crate::seh::initialize_teb(&mut live, tid, 0x1000, 0x2000);
+        let mut input = Snapshot::default();
+        for page in [0x1000, teb] {
+            input.capture_page(&live, page, READ | WRITE);
+        }
+        let mut private = LaneMemory::new(Arc::new(input), 10000);
+        for enter in [true, true, true, false, true, false, false, false] {
+            let initial = Cpu {
+                esp: 0x1800,
+                fs_base: teb,
+                eax: 0xabcdef01,
+                ..Cpu::default()
+            };
+            let mut actual = initial.clone();
+            let mut expected = initial;
+            private_section(&mut private, &mut actual, enter);
+            if enter {
+                crate::threads::enter_critical_section(&mut live, &mut expected);
+            } else {
+                crate::threads::leave_critical_section(&mut live, &mut expected);
+            }
+            for at in 0x1100..0x1118 {
+                assert_eq!(private.u8(at), live.u8(at), "lock byte {at:#x}");
+            }
+            assert_eq!(actual.esp, expected.esp);
+            assert_eq!(actual.eax, expected.eax);
+        }
+        assert_eq!(private.u32(0x1104), u32::MAX);
+        assert_eq!(private.u32(0x1108), 0);
+        assert_eq!(private.u32(0x110c), 0);
+    }
+
+    #[test]
+    fn private_sections_reject_foreign_owners_waiters_and_unmatched_leave() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, 4096, READ | WRITE).unwrap();
+        let tid = crate::services::MAIN_THREAD_ID;
+        let teb = crate::seh::initialize_teb(&mut live, tid, 0x1000, 0x2000);
+        live.set_u32(0x1804, 0x1100);
+        for (lock, recursion, owner, enter) in [
+            (0, 1, tid + 4, true),
+            (1, 1, tid, true),
+            (u32::MAX, 0, 0, false),
+            (u32::MAX, 0, tid, true),
+        ] {
+            live.set_u32(0x1104, lock);
+            live.set_u32(0x1108, recursion);
+            live.set_u32(0x110c, owner);
+            let mut cpu = Cpu {
+                esp: 0x1800,
+                fs_base: teb,
+                ..Cpu::default()
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                private_section(&mut live, &mut cpu, enter)
+            }));
+            assert_eq!(
+                result.unwrap_err().downcast_ref::<Reject>(),
+                Some(&Reject::UnsupportedLock(0x1100))
+            );
+            assert_eq!(
+                [live.u32(0x1104), live.u32(0x1108), live.u32(0x110c)],
+                [lock, recursion, owner]
+            );
+            assert_eq!(cpu.esp, 0x1800);
+        }
+    }
+
+    #[test]
+    fn private_imports_use_captured_slots_without_live_registry() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, 4096, READ | WRITE).unwrap();
+        live.map(0x0139d000, 4096, READ | WRITE).unwrap();
+        let teb = crate::seh::initialize_teb(&mut live, crate::services::MAIN_THREAD_ID, 0x1000, 0x2000);
+        live.set_u32(0x0139d160, 0x7ff01230);
+        live.set_u32(0x0139d164, 0x7ff04560);
+        live.set_u32(0x1104, u32::MAX);
+        live.set_u32(0x1804, 0x1100);
+        let mut input = Snapshot::default();
+        for page in [0x1000, 0x0139d000, teb] {
+            input.capture_page(&live, page, READ | WRITE);
+        }
+        let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(Arc::new(input), 10000))));
+        let replay = Replay {
+            raw: Arc::new(BTreeMap::new()),
+            memory: memory.clone(),
+            stack: 0x1000..0x2000,
+            lane_count: 1,
+            depth: 0,
+        };
+        with_replay(replay, |m| {
+            for (target, recursion) in [(0x7ff01230, 1), (0x7ff01230, 2), (0x7ff04560, 1), (0x7ff04560, 0)] {
+                let mut cpu = Cpu {
+                    esp: 0x1800,
+                    fs_base: teb,
+                    ..Cpu::default()
+                };
+                x86::call_ext(m, &mut cpu, target);
+                assert_eq!(cpu.esp, 0x1808);
+                assert_eq!(m.u32(0x1108), recursion);
+                assert_eq!(live.u32(0x1108), 0);
+            }
+        });
+        assert_eq!(memory.u32(0x1104), u32::MAX);
+        assert_eq!(memory.u32(0x110c), 0);
+    }
+
+    #[test]
+    fn private_lock_model_does_not_hide_shared_allocator_dependencies() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, 4096, READ | WRITE).unwrap();
+        let teb = crate::seh::initialize_teb(&mut live, crate::services::MAIN_THREAD_ID, 0x1000, 0x2000);
+        live.set_u32(0x1104, u32::MAX);
+        live.set_u32(0x1300, 0x2000);
+        live.set_u32(0x1804, 0x1100);
+        let mut input = Snapshot::default();
+        for page in [0x1000, teb] {
+            input.capture_page(&live, page, READ | WRITE);
+        }
+        let input = Arc::new(input);
+        let results = lanes::execute(input.clone(), 2, 2, 10000, |_, _, m| {
+            let mut cpu = Cpu {
+                esp: 0x1800,
+                fs_base: teb,
+                ..Cpu::default()
+            };
+            private_enter(m, &mut cpu);
+            let allocated = m.u32(0x1300);
+            m.set_u32(0x1300, allocated + 16);
+            cpu.esp = 0x1800;
+            private_leave(m, &mut cpu);
+            allocated
+        })
+        .unwrap();
+        assert!(matches!(
+            lanes::merge(&input, &results, &[0x1800..0x1900]),
+            Err(Reject::ReadDependency {
+                lane: 1,
+                address: 0x1300,
+                ..
+            })
+        ));
+        assert_eq!(live.u32(0x1300), 0x2000);
+        assert_eq!(live.u32(0x1104), u32::MAX);
+    }
+
+    fn synthetic_job(m: &mut dyn Mem, cpu: &mut Cpu) {
+        let job = (cpu.ecx - 0x3000) / 0x10;
+        let entry = 0x2000 + job * 8;
+        let record = 0x2100 + job * 16;
+        let second_lane = m.u32(cpu.esp + 4) == 0x7100;
+        let mutation = m.u32(0x1010);
+        m.set_u32(entry, job);
+        m.set_u32(entry + 4, record);
+        m.set_u32(record, 7 << 16);
+        m.set_u32(record + 4, job + 100);
+        m.set_u32(record + 8, if second_lane && mutation == 1 { 9 } else { 1 });
+        m.set_u8(0x1400 + job, if second_lane && mutation == 2 { 9 } else { 1 });
+        cpu.esp += 8;
+    }
+
+    fn synthetic_traverse(m: &mut dyn Mem, cpu: &mut Cpu) {
+        let parallel = current().lane_count > 1;
+        cpu.ecx = 0x40000;
+        m.set_u32(0x4008c, 4);
+        push(m, cpu, 1);
+        push(m, cpu, 0x1234);
+        private_schedule(m, cpu);
+        m.set_u32(0x1048, 4);
+        // Synthetic fixture's own postcondition, not a game-state exclusion.
+        m.set_u8(NESTING, 1);
+        m.set_u8(NESTING_OTHER, 1);
+        if parallel {
+            match m.u32(0x1010) {
+                3 => x86::ldmxcsr(0x3f80),
+                4 => resolve(0x12345678)(m, cpu),
+                _ => {}
+            }
+        }
+        cpu.esp += 8;
+    }
+
+    /// Exercises capture serialization and the complete replay gate without
+    /// linking shards. The expected stream/state is constructed independently
+    /// from these synthetic callbacks; this is not original-game evidence.
+    fn synthetic_fixture(mutation: u32) -> capture_file::Fixture {
+        ddnative_host::install();
+        let mut live = GuestMemory::new();
+        let ranges = [
+            (0x1000, 0x3000),
+            (0x40000, 0x1d000),
+            (0x80000, 0x2000),
+            (0x18d0000, 0x2000),
+        ];
+        for (base, len) in ranges {
+            live.map(base, len, READ | WRITE).unwrap();
+        }
+        live.set_u32(0x1010, mutation);
+        live.set_u32(0x1044, 0x2000);
+        live.set_u32(SCHEDULER_GLOBAL, 0x40000);
+        live.set_u8(NESTING, 1);
+        live.set_u8(NESTING_OTHER, 1);
+        live.set_u32(0x4008c, 4);
+        live.set_u32(0x40098, 2);
+        live.set_u32(0x5bdd0, 0x7000);
+        live.set_u32(0x5bdf0, 0x7100);
+        for job in 0..4 {
+            live.set_u32(0x400c0 + job * 8, 0x3000 + job * 16);
+            live.set_u32(0x400c4 + job * 8, 0x400010);
+        }
+        let mut input = Snapshot::default();
+        for (base, len) in ranges {
+            for page in (base..base + len).step_by(4096) {
+                input.capture_page(&live, page, READ | WRITE);
+            }
+        }
+        let input = Arc::new(input);
+        let mut expected = LaneMemory::new(input.clone(), ACCESS_LIMIT);
+        for job in 0..4 {
+            for (address, value) in [
+                (0x2000 + job * 8, job),
+                (0x2004 + job * 8, 0x2100 + job * 16),
+                (0x2100 + job * 16, 7 << 16),
+                (0x2104 + job * 16, job + 100),
+                (0x2108 + job * 16, 1),
+            ] {
+                expected.set_u32(address, value);
+            }
+            expected.set_u8(0x1400 + job, 1);
+        }
+        for (address, value) in [(0x1048, 4), (0x4008c, 0), (0x40090, 4), (0x40094, 1)] {
+            expected.set_u32(address, value);
+        }
+        let incoming = Cpu {
+            esp: 0x81000,
+            ..Cpu::default()
+        };
+        let outgoing = Cpu {
+            esp: 0x81008,
+            ..incoming.clone()
+        };
+        capture_file::Fixture {
+            input,
+            incoming,
+            outgoing,
+            mxcsr: 0x1f80,
+            result_mxcsr: 0x1f80,
+            context: 0x1000,
+            scheduler: 0x40000,
+            stack: 0x80000..0x82000,
+            writes: expected.writes().clone(),
+        }
+    }
+
+    #[test]
+    fn serialized_synthetic_capture_checks_complete_replay_and_refusals() {
+        for (mutation, error) in [
+            (0, None),
+            (1, Some("stream mismatch")),
+            (2, Some("memory mismatch")),
+            (3, Some("MXCSR mismatch")),
+            (4, Some("UnsupportedTarget")),
+        ] {
+            let fixture = synthetic_fixture(mutation);
+            let mut bytes = Vec::new();
+            fixture.write(&mut bytes).unwrap();
+            let fixture = capture_file::Fixture::read(&mut &bytes[..]).unwrap();
+            let observed = capture_context(
+                &fixture.input.with_writes(&fixture.writes),
+                fixture.context,
+                Limits::default(),
+            )
+            .unwrap();
+            let result = compare_replays(
+                fixture.input,
+                fixture.incoming,
+                fixture.outgoing,
+                fixture.mxcsr,
+                fixture.result_mxcsr,
+                fixture.context,
+                fixture.scheduler,
+                fixture.stack,
+                observed,
+                fixture.writes,
+                Arc::new(BTreeMap::from([
+                    (TRAVERSE, synthetic_traverse as LiftFn),
+                    (0x400010, synthetic_job as LiftFn),
+                ])),
+            );
+            match error {
+                None => assert_eq!(result.unwrap(), 4),
+                Some(expected) => assert!(
+                    result.as_ref().unwrap_err().contains(expected),
+                    "{mutation}: {result:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
     fn proof_rejects_fp_and_thread_control_changes() {
         let cpu = Cpu::default();
         assert_eq!(compare_control_state(&cpu, 0x1f80, &cpu.clone(), 0x1f80), Ok(()));
         assert_eq!(compare_control_state(&cpu, 0x1f80, &cpu, 0x3f80), Err("MXCSR"));
         let mut changed = cpu.clone();
         changed.mxcsr.0 ^= 0x2000;
-        assert_eq!(compare_control_state(&cpu, 0x1f80, &changed, 0x1f80), Err("MXCSR"));
+        assert_eq!(
+            compare_control_state(&cpu, 0x1f80, &changed, 0x1f80),
+            Err("MXCSR")
+        );
         for byte in [0, 4, 8, 28, 107] {
             let mut changed = cpu.clone();
             changed.st.state[byte] ^= 1;
-            assert_eq!(compare_control_state(&cpu, 0x1f80, &changed, 0x1f80), Err("x87 image"));
+            assert_eq!(
+                compare_control_state(&cpu, 0x1f80, &changed, 0x1f80),
+                Err("x87 image")
+            );
         }
         for field in 0..4 {
             let mut changed = cpu.clone();
@@ -741,7 +1135,10 @@ mod tests {
                 2 => changed.sys_flags ^= 1,
                 _ => changed.seg.fs ^= 1,
             }
-            assert_eq!(compare_control_state(&cpu, 0x1f80, &changed, 0x1f80), Err("thread control state"));
+            assert_eq!(
+                compare_control_state(&cpu, 0x1f80, &changed, 0x1f80),
+                Err("thread control state")
+            );
         }
     }
 

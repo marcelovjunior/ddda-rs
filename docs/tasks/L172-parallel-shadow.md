@@ -144,7 +144,9 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 1. Obtain the head's nonempty real capture and close any unsupported import,
    missing input or dependency refusal using source-backed private semantics.
-   Allocator critical sections are currently unsupported, not no-ops.
+   Uncontended allocator critical sections now have a private guest-memory
+   model; foreign owners/waiters reject. Shared allocator dependencies still
+   require source-specific handling and are never ignored.
 2. Classify/restore private scheduler and lane bookkeeping without excluding
    shared allocator or resource changes. No arbitrary memory exclusions.
 3. Prove real same-run serial/parallel command, resource state and ABI equality
@@ -152,6 +154,16 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 4. Head alone measures whole-shadow time and matched image/FPS acceptance.
 
 ## Results
+
+Serialized synthetic end-to-end replay now checks four ordered query entries
+and rejects command, resource, MXCSR and unsupported-target mutations. Private
+Enter/LeaveCriticalSection resolves only from captured IAT slots referenced
+by 0107FB57/0107FBAE, updates the runtime lock words exactly, and rejects
+foreign owners, waiters and unmatched leaves. Ten focused replay tests pass,
+including differential recursive service checks and shared allocator
+read-dependency rejection. This is runtime-contract/synthetic evidence, not
+real shadow equality. No live publication is enabled.
+
 
 Publication preflight is implemented separately from the live hook. It checks
 all candidate read/write locations and optional same-run serial baseline,

@@ -2,6 +2,12 @@
 
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
+- Publication preflight: 11 executor tests pass, including three new
+  all-before-store checks. Complete serialized synthetic replay and private
+  uncontended critical-section model: 10 replay tests pass, including
+  differential runtime service checks and allocator dependency refusal.
+  Still awaiting real capture; no live publication or speed claim.
+
 - Continuation: capture v2 preserves live outgoing MXCSR; replay compares
   x87 and thread control state. Five focused replay tests pass; real
   capture and production publication remain pending.
