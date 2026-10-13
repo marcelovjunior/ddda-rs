@@ -192,6 +192,49 @@ const OVERRIDE_LIMIT: u32 = 0x0200_0000;
 static OVERRIDE_BITS: [std::sync::atomic::AtomicU32; ((OVERRIDE_LIMIT - OVERRIDE_BASE) >> 9) as usize] =
     [const { std::sync::atomic::AtomicU32::new(0) }; ((OVERRIDE_LIMIT - OVERRIDE_BASE) >> 9) as usize];
 static OVERRIDES: std::sync::OnceLock<Box<[(u32, LiftFn)]>> = std::sync::OnceLock::new();
+/// The overrides by address in an open-addressing table (L180): a lookup
+/// in a probe or two, not a binary search over every override (~12 ns
+/// once the semantic ports made them many; every call of an overridden
+/// function looks its address up).
+static OVERRIDE_TABLE: std::sync::OnceLock<OverrideTable> = std::sync::OnceLock::new();
+
+/// Slots of (address, function), a power of two of them, at most half
+/// full; address 0 marks an empty slot (no override is at 0).
+struct OverrideTable(Box<[(u32, Option<LiftFn>)]>);
+
+impl OverrideTable {
+    fn new(list: &[(u32, LiftFn)]) -> Self {
+        let size = (list.len() * 2).next_power_of_two().max(16);
+        let mut slots = vec![(0u32, None); size].into_boxed_slice();
+        for &(a, f) in list {
+            let mut i = Self::home(a, size);
+            while slots[i].0 != 0 {
+                i = (i + 1) & (size - 1);
+            }
+            slots[i] = (a, Some(f));
+        }
+        OverrideTable(slots)
+    }
+    #[inline]
+    fn home(target: u32, size: usize) -> usize {
+        (target.wrapping_mul(0x9E37_79B1) >> 8) as usize & (size - 1)
+    }
+    #[inline]
+    fn get(&self, target: u32) -> Option<LiftFn> {
+        let size = self.0.len();
+        let mut i = Self::home(target, size);
+        loop {
+            let (a, f) = self.0[i];
+            if a == target {
+                return f;
+            }
+            if a == 0 {
+                return None;
+            }
+            i = (i + 1) & (size - 1);
+        }
+    }
+}
 /// Set once a lifted target was resolved (and may be cached): overrides
 /// must be registered before.
 static RESOLVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -212,13 +255,14 @@ pub fn set_overrides(list: &[(u32, LiftFn)]) {
         let bit = (a - OVERRIDE_BASE) >> 4;
         OVERRIDE_BITS[(bit >> 5) as usize].fetch_or(1 << (bit & 31), std::sync::atomic::Ordering::Relaxed);
     }
+    let table = OverrideTable::new(&v);
     assert!(OVERRIDES.set(v.into_boxed_slice()).is_ok(), "overrides are already registered");
+    let _ = OVERRIDE_TABLE.set(table);
 }
 
 /// The override registered for `target`, if any.
 pub fn override_of(target: u32) -> Option<LiftFn> {
-    let v = OVERRIDES.get()?;
-    v.binary_search_by_key(&target, |e| e.0).ok().map(|k| v[k].1)
+    OVERRIDE_TABLE.get()?.get(target)
 }
 
 /// Every registered override (address order).
@@ -555,3 +599,34 @@ mod sse {
 #[cfg(target_arch = "x86_64")]
 pub use sse::*;
 
+#[cfg(test)]
+mod override_table_tests {
+    use super::*;
+
+    fn a(_: &mut dyn crate::mem::Mem, _: &mut Cpu) {}
+    fn b(_: &mut dyn crate::mem::Mem, _: &mut Cpu) {}
+
+    /// L180: every registered address finds its function (collisions and
+    /// wrap-around included), every other address none.
+    #[test]
+    fn the_override_table_finds_exactly_the_registered_addresses() {
+        for n in [0usize, 1, 7, 8, 100, 1000] {
+            let list: Vec<(u32, LiftFn)> = (0..n as u32)
+                .map(|k| (0x0040_0000 + k.wrapping_mul(0x1_0010) % 0x01C0_0000 & !15, if k % 2 == 0 { a as LiftFn } else { b }))
+                .collect();
+            let mut list = list;
+            list.sort_unstable_by_key(|e| e.0);
+            list.dedup_by_key(|e| e.0);
+            let table = OverrideTable::new(&list);
+            for &(addr, f) in &list {
+                assert_eq!(table.get(addr).map(|g| g as usize), Some(f as usize), "{addr:#x}");
+            }
+            for k in 0..5000u32 {
+                let addr = 0x0040_0000 + k * 0x1234 + 8;
+                if !list.iter().any(|e| e.0 == addr) {
+                    assert!(table.get(addr).is_none(), "{addr:#x}");
+                }
+            }
+        }
+    }
+}
