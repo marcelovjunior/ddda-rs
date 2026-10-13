@@ -271,11 +271,24 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     // two draws into the same targets: one pass
     let mut p = Pending::default();
     p.push(n.clone(), native.clone());
-    p.push(n, native);
+    p.push(n, native.clone());
     let (job, calls) = p.take().unwrap();
     assert_eq!((job.passes.len(), job.passes[0].draws.len(), calls.len()), (1, 2, 2));
     assert_eq!(job.passes[0].colours[0].as_ref().unwrap().surface, target);
     assert!(p.take().is_none());
+
+    // the next frames: an unchanged binding keeps its part (the same
+    // banks, no allocation); a changed constant is read
+    caches.begin_frame(&info);
+    let again = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap().call;
+    assert!(std::sync::Arc::ptr_eq(&again.vs_constants, &native.vs_constants));
+    assert_eq!(again, native);
+    s.mem.set_u32(vs_values, 99f32.to_bits());
+    caches.begin_frame(&info);
+    let changed = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).unwrap().call;
+    assert!(!std::sync::Arc::ptr_eq(&changed.vs_constants, &native.vs_constants));
+    assert_eq!(changed.vs_constants.f[0][0], 99f32.to_bits());
+    assert_eq!(changed.ps_constants, native.ps_constants);
 
     // NDRAW_BENCH=1 (release): what a taken draw costs, by part
     if std::env::var_os("NDRAW_BENCH").is_some() {
@@ -289,6 +302,10 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
         };
         let mem = &s.mem;
         time("draw_call from the caches", &mut || {
+            std::hint::black_box(draw_call(mem, &info, &mut caches, CONTEXT, record, 1).unwrap());
+        });
+        time("a new frame and its first draw (the binding unchanged)", &mut || {
+            caches.begin_frame(&info);
             std::hint::black_box(draw_call(mem, &info, &mut caches, CONTEXT, record, 1).unwrap());
         });
         let d = draw_call(mem, &info, &mut caches, CONTEXT, record, 1).unwrap().call;
