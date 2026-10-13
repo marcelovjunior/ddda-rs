@@ -2248,3 +2248,10 @@ opening (codex-31), route perf (codex-29).
   frame tests pass. No GPU, game or shard runs.
 - Next: head combo9 gameplay/image comparison and render-thread profile after
   integration. Details: `docs/tasks/L118-d3d9-render-thread.md`.
+
+### L127 integrated comparison gate (2026-10-13)
+
+- DDDRAW_NATIVE=compare producer, L126 shadow worker and asynchronous GPU reduction integrated with L119 cache-2c. Five end-to-end GPU tests pass (nine GPU cases total), one summary CPU test, three producer tests and eight transport tests pass.
+- 42 matched and three intentional mismatched target summaries; five explicit rejection diagnostics. Blended pre-pass loads, repeated shadows, mip attachments and D24S8 isolation checked; real targets unchanged, zero pending comparisons on test shutdown.
+- Runtime: 180 distinct passes across full suite plus isolated timing retry; one inherited fullscreen-gamma failure, three ignored. No checks weakened; no game/shard run or game image/FPS claim.
+- Next: head-run DDDRAW_NATIVE=compare gameplay and inspect mismatch/unverified/pending counts. Details: docs/tasks/L127-native-compare.md.
