@@ -149,8 +149,9 @@ pub fn recorded<R>(f: impl FnOnce(&Recorder) -> R) -> Option<R> {
 // --- uploads -------------------------------------------------------------------
 
 fn read_bytes(m: &dyn Mem, at: u32, len: u32) -> Vec<u8> {
-    // the same bytes as reading each with m.u8, copied page by page
-    let mut v = vec![0; len as usize];
+    // the same bytes as reading each with m.u8, copied page by page into
+    // a recycled buffer (L144: the backend gives it back once written)
+    let mut v = d3d9cmd::bytes::take(len as usize);
     m.read_bytes(at, &mut v);
     v
 }
@@ -195,12 +196,14 @@ pub(super) fn collect_reads(o: &mut crate::d3d9dev::Objects, reads: impl IntoIte
 
 pub(super) fn upload_reads(m: &dyn Mem, out: Vec<(u32, u32, u32, Image)>) {
     for (resource, index, format, img) in out {
+        let load_start = (index != u32::MAX).then(crate::load_log::begin).flatten();
         let u = if index == u32::MAX {
             Upload::Buffer { resource, bytes: read_bytes(m, img.shadow, img.size) }
         } else {
             image_upload(m, resource, index, format, &img)
         };
         backend(|b| b.upload(u));
+        crate::load_log::timeline::texture_upload(load_start, img.size as u64);
     }
 }
 
@@ -454,6 +457,7 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn present_back_buffer(m: &dyn Mem, back_buffer: u32) {
     static FIRST_PRESENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     crate::load_log::once(&FIRST_PRESENT, "first_present");
+    crate::load_log::timeline::present();
     PRESENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     flush(m, back_buffer);
     if let Some(t) = target(back_buffer) {

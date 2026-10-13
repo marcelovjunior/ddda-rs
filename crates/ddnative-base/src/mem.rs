@@ -379,6 +379,13 @@ impl dyn Mem + '_ {
     #[cfg_attr(feature = "inline-access", inline)]
     #[cfg_attr(not(feature = "inline-access"), inline(never))]
     pub fn fast_set_u32(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u32) {
+        self.fast_set_u32_inner(pt, addr, v);
+    }
+    // Shared only inside this crate: multiword helpers retain every ordered
+    // access check without another public accessor call for each lane.
+    // Keep the public boundary out of line for opt-level-0 generated callers.
+    #[inline]
+    pub(crate) fn fast_set_u32_inner(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u32) {
         let Some(p) = allowed(pt, addr, 4, WRITE) else { return self.slow_set_u32(addr, v); };
         // SAFETY: allowed returns 4 bytes inside a backed page.
         unsafe { store_at(p, 4, v) }

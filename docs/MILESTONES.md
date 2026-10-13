@@ -1,5 +1,83 @@
 # Milestones
 
+### L139 combo21 combined native gate (2026-10-13)
+### L149 loading timeline (2026-10-13)
+
+- Opt-in transition summaries tie title callback/stage state IDs to per-class
+  Windows thread CPU and archive/zlib/GPU/upload deltas. Code-state and
+  producer-Present boundaries remain distinct from visible/input readiness.
+- c23 resource-load estimate, 32.181-45.474 s: inclusive zlib **6.660 s**
+  (fast decoder **4.133 s**), file-read services **0.634 s**. Next 1.661 s
+  interval: pipelines **1.207 s**, modules **0.558 s**, overlapping costs.
+- Exact top-item candidate adopted from L145, still opt-in FAST=1; no
+  measured whole-loading improvement yet. Parser keeps legacy/manual marks.
+- Logging-on light suite **212 pass / inherited gamma failure / 5 ignored**;
+  **12 parser tests pass**; no-shard frontend and emu-feature checks pass.
+  Definitions/limits: `docs/tasks/L149-load-timeline.md`. Next: head matched
+  FAST=0/1 with PORT=0, then visual/input correlation of the state markers.
+
+### L145 outer inflate candidate (2026-10-13)
+
+- Whole original-layout `cf02e0` translation, opt-in `DDRUNTIME_ZLIB_PORT=1`:
+  **217 streams / 12,893 original-instruction returns match** registers,
+  defined flags, stack, state, window and output. Samples every one of the
+  install's 144 ARC classes; synthetic save, raw/gzip and random splits.
+- Runtime light: **205 pass / inherited fullscreen gamma failure / 5 ignored**.
+  Large-buffer microbenchmarks are mixed (including regressions); a tiny-buffer
+  repetitive stream improves 1.63x. No whole-loading gain established.
+- Head c23: 8.0195 s outer time is inclusive; fast decoder 4.9350 s,
+  Adler 0.7229 s, window 0.4669 s. Outer plus untracked helpers: ~1.8947 s.
+  Allocation census overflowed 99.58% of bytes; captured startup ranks cannot
+  identify gameplay allocation leaders. Details: `docs/tasks/L145-inflate.md`.
+- Head-requested fast decoder follow-up: `DDRUNTIME_ZLIB_FAST=1` page access
+  and ordered forward copies pass **632 leaf cases x3 configurations** plus
+  **217 streams / 12,893 returns**, with and without the new outer port.
+  Real ARC whole/chunked microbench **1.59–1.69x** over current decoder;
+  repetitive synthetic **3.11–4.47x**. Fast light **207 pass / gamma failure /
+  5 ignored**, plus final three access checks and parallel-policy replay.
+- Next: head's matched **FAST=0/1, PORT=0** loading A/B; both remain opt-in.
+
+### L140 loading costs (2026-10-13)
+
+- FPS line `335318fc` plus x87 discard `f4bfb866` and L130 FEDB80/FEDC00/
+  FED200 candidates: combined pin `981fb77a` is **GREEN**, **100 tests
+  passed / zero failures / seven benchmark ignores**. All 33 generated
+  crates rebuilt; expanded required-vector supplements and inventory pass.
+- Per-candidate correctness GREEN: `f4bfb866`, `382e5f35`, `4d53d724`,
+  `546a052d`. Existing five inventory gaps remain. No agent game/GPU run.
+- Head's c21 profile: main word loads/stores account for 23.9%/8.3% of
+  180 busy samples; similar shares on job threads. Retained store128 helper
+  compiles once in base, preserving each lane's permission/access checks.
+- Follow-up gate **102 pass / zero failures / seven benchmark ignores**;
+  base debug **36 pass**; runtime light **198 pass / inherited gamma
+  failure / four ignored**. Ordered-access oracle: 2,304 cases plus fault
+  ordering. All 33 generated crates rebuilt; no L142 flat-view code included.
+- Synthetic aligned reference-loop/helper thread cycles: caller opt0
+  **153.486 -> 61.833**, opt1 **29.657 -> 15.197**. All 33 opt0 paired
+  samples improve across three access cases; opt1 has two mixed cases.
+  No gameplay speedup claim; other multiword experiments were dropped.
+- Next: head's image/FPS/loading comparison and separately pinned L142
+  integration. `docs/tasks/L139-gate-c21.md`.
+### L147 CRT profile attribution checkpoint (2026-10-13)
+### L147 CRT profile attribution and upload copies (2026-10-13)
+
+- `_NLG_Return2` is a one-byte CRT return followed by private memcpy code.
+  DbgHelp's export-only Size is synthetic and cannot establish a function
+  boundary. Matching public PDB, unwind ranges and export thunks now bound
+  names; remaining gaps are explicit unresolved RVAs.
+- 17 Python tests pass; benign-process capture/replay reattributes the same
+  78/84 samples from `_NLG_Return2` to `memcpy_repmovs_amd`. No game run or
+  FPS claim. Raw module/PC evidence is retained for offline resolution.
+- Older c17 raw stacks identify eight backend copy samples in redundant
+  image packing/buffer clones; both now removed. 22 CPU and 12 focused GPU
+  tests pass. Tight 64 KiB image preparation: 2.718 -> 0.006 us, seven ->
+  zero allocations. Queue staging remains; no end-to-end/FPS claim.
+- All 17 c17 NLG samples on guest 0x1038 call X87::memory (L146 owner
+  informed); L144 already removed snapshot zeroing/DrawCall copies.
+  Runtime light: 202 pass, five ignored, inherited gamma failure after
+  isolated timing retry. Next: head captures current combo24 with corrected
+  profiler; text-only c21/c23 cannot recover PCs. `docs/tasks/L147-nlg.md`.
+
 ### L134 x87 helper follow-up, next batch (2026-10-13)
 
 - Discarding x87 callers omit unused PUSHFQ/POP capture; public flag-returning
@@ -2443,3 +2521,22 @@ opening (codex-31), route perf (codex-29).
 - 42 matched and three intentional mismatched target summaries; five explicit rejection diagnostics. Blended pre-pass loads, repeated shadows, mip attachments and D24S8 isolation checked; real targets unchanged, zero pending comparisons on test shutdown.
 - Runtime: 180 distinct passes across full suite plus isolated timing retry; one inherited fullscreen-gamma failure, three ignored. No checks weakened; no game/shard run or game image/FPS claim.
 - Next: head-run DDDRAW_NATIVE=compare gameplay and inspect mismatch/unverified/pending counts. Details: docs/tasks/L127-native-compare.md.
+
+
+### L143 backend worker CPU (2026-10-13)
+
+- Typed FIFO commands remove per-draw closure allocation; bulk constant
+  packing, recycled scratch, generation-stamped resource bits and collision-safe
+  derived-state memo retain the existing command/binding values and ordering.
+- Release synthetic median backend CPU **2.97 -> 1.97 us/draw**; direct
+  allocations **12.910 -> 0.162/draw**; deferred frame incl GPU wait
+  **5.30 -> 3.82 ms**. Queue transport **4,200,003 -> 2** allocations over
+  4.2 million draws. Shared-host fixture, no gameplay FPS claim.
+- **13 command + 24 CPU + 29 distinct GPU tests pass**, including all
+  150 render-state and 200 target-format cases. Light runtime **199 distinct
+  pass / inherited gamma failure / 5 ignored** after two isolated timing
+  retries. Additional cross-path GPU checks compile but await head's pause.
+- `_NLG_Return2` is not proven to be unwind cost: no per-command catch exists,
+  and the old profiler discards symbol displacement. Next: finish paused
+  checks; head integrates and measures gameplay plus raw-PC attribution.
+  Details: `docs/tasks/L143-backend-thread.md`.

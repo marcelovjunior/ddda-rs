@@ -41,10 +41,13 @@ pub fn load64(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) -> [u32; 
 }
 
 /// 16-byte store: lanes 0..3 to a, a+4, a+8, a+12, in that order.
-#[inline]
+/// Compile the loop once at the base crate's optimization level, including
+/// for opt-level-0 callers. Each lane still checks the current page entry
+/// and permissions separately; a fallback may change the following lane.
+#[inline(never)]
 pub fn store128(x: [u32; 4], m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) {
     for k in 0..4u32 {
-        m.fast_set_u32(pt, a.wrapping_add(4 * k), x[k as usize]);
+        m.fast_set_u32_inner(pt, a.wrapping_add(4 * k), x[k as usize]);
     }
 }
 

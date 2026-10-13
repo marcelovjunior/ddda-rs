@@ -549,6 +549,7 @@ impl Device {
         if self.modules.contains_key(&key) {
             return Ok(());
         }
+        let translation_started = std::time::Instant::now();
         let s = &self.shaders[shader.index as usize];
         let parsed = d3d9shader::parse(&s.tokens).map_err(|e| e.to_string())?;
         let first = d3d9wgsl::translate(&parsed).map_err(|e| e.to_string())?;
@@ -605,11 +606,14 @@ impl Device {
         }
         let translation = d3d9wgsl::translate_with(&parsed, options).map_err(|e| e.to_string())?;
         let source = crate::shader_cache::source(translation.wgsl)?;
+        crate::pipelines::translated(translation_started);
+        let module_started = std::time::Instant::now();
         let scope = self.gpu.push_error_scope(wgpu::ErrorFilter::Validation);
         let gpu = self.gpu.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("native translated shader"),
             source,
         });
+        crate::pipelines::module_created(module_started);
         if let Some(e) = crate::block_on(scope.pop()) {
             return Err(e.to_string());
         }
@@ -754,6 +758,7 @@ impl Device {
             })
             .collect();
         let end = targets.iter().rposition(Option::is_some).map_or(0, |n| n + 1);
+        let pipeline_started = std::time::Instant::now();
         let scope = self.gpu.push_error_scope(wgpu::ErrorFilter::Validation);
         let gpu = self.gpu.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("native pipeline"),
@@ -810,6 +815,7 @@ impl Device {
             multiview_mask: None,
             cache: self.disk_cache.as_ref().map(|cache| &cache.cache),
         });
+        crate::pipelines::pipeline_created(pipeline_started);
         if let Some(e) = crate::block_on(scope.pop()) {
             return Err(e.to_string());
         }

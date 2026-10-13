@@ -1670,6 +1670,7 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
 fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>, tid: u32, start: u32, param: u32, stack_top: u32, stack_size: u32) {
     runtime::enter(rt.clone());
     CURRENT_TID.with(|c| c.set(tid));
+    crate::load_log::timeline::guest_thread(start);
     registry.install();
     ddnative_base::platform::redirect(&crate::session::REDIRECTED_MODELS);
     let parallel = rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed);

@@ -871,3 +871,221 @@ fn lanes_cost() {
         }
     }
 }
+
+fn keys_vectors() -> Option<Value> {
+    let path = "E:/ddda-re/notes/native-L130/keys.json";
+    match std::fs::read_to_string(path) {
+        Ok(s) => Some(serde_json::from_str(&s).unwrap()),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => None,
+    }
+}
+
+// verifies 0x00e10fc0
+#[test]
+fn keys_match_original_and_lifted() {
+    ddnative_host::install();
+    let Some(data) = keys_vectors() else {
+        return;
+    };
+    for case in data["cases"].as_array().unwrap() {
+        run_with_callees(mtcore::hot::intern_dependency_keys, case);
+        // L130_KEYS_REFERENCE
+    }
+    eprintln!(
+        "{} exact keys cases passed",
+        data["cases"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+#[ignore = "paired recording microbenchmark"]
+fn keys_cost() {
+    ddnative_host::install();
+    ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::Relaxed);
+    let data = keys_vectors().unwrap();
+    let bodies: Vec<(&str, LiftFn)> = vec![("port", mtcore::hot::intern_dependency_keys)]; // L130_KEYS_COST
+    let mut m = Paged::default();
+    for index in [0, 3, 42, 45, 765] {
+        let case = &data["cases"][index];
+        let initial = pairs(&case["initial"]);
+        let initial_cpu = cpu(&case["before"]);
+        let effects: Vec<_> = case["events"]
+            .as_array()
+            .unwrap()
+            .chunks(2)
+            .map(|e| {
+                let mut runs: Vec<(u32, Vec<u8>)> = Vec::new();
+                for (address, byte) in pairs(&e[1]["effects"]) {
+                    if let Some((start, bytes)) = runs.last_mut() {
+                        if start.wrapping_add(bytes.len() as u32) == address {
+                            bytes.push(byte);
+                            continue;
+                        }
+                    }
+                    runs.push((address, vec![byte]));
+                }
+                (cpu(&e[1]), runs)
+            })
+            .collect();
+        for round in 0..5 {
+            for offset in 0..bodies.len() {
+                let (name, body) = bodies[(round + offset) % bodies.len()];
+                let effects = effects.clone();
+                let cursor = Rc::new(RefCell::new(0usize));
+                let position = cursor.clone();
+                x86::set_ext_calls(Some(Box::new(move |m, c, _| {
+                    let mut i = position.borrow_mut();
+                    let (state, writes) = &effects[*i];
+                    let pt = m.page_table();
+                    for run in writes {
+                        let (address, bytes) = run;
+                        let (chunks, remainder) = bytes.as_chunks::<4>();
+                        for (i, chunk) in chunks.iter().enumerate() {
+                            m.fast_set_u32(
+                                pt,
+                                address.wrapping_add(i as u32 * 4),
+                                u32::from_le_bytes(*chunk),
+                            );
+                        }
+                        let offset = bytes.len() - remainder.len();
+                        for (i, byte) in remainder.iter().enumerate() {
+                            m.fast_set_u8(pt, address.wrapping_add((offset + i) as u32), *byte);
+                        }
+                    }
+                    *c = state.clone();
+                    *i += 1;
+                })));
+                let mut elapsed = std::time::Duration::ZERO;
+                for iteration in 0..1020 {
+                    for (&a, &b) in &initial {
+                        m.set_u8(a, b);
+                    }
+                    let mut c = initial_cpu.clone();
+                    *cursor.borrow_mut() = 0;
+                    let start = std::time::Instant::now();
+                    body(std::hint::black_box(&mut m), std::hint::black_box(&mut c));
+                    let time = start.elapsed();
+                    if iteration >= 20 {
+                        elapsed += time;
+                    }
+                    if iteration == 0 {
+                        check(&m, &c, &case["after"], "recording bench gate");
+                    }
+                }
+                eprintln!(
+                    "keys deps={} count={} crc={} mode={} round={round} {name} ns/call={:.1}",
+                    case["depth"],
+                    case["count"],
+                    case["crc"],
+                    case["mode"],
+                    elapsed.as_nanos() as f64 / 1000.0
+                );
+                x86::set_ext_calls(None);
+            }
+        }
+    }
+}
+
+fn small_vectors() -> Option<Value> {
+    let path = "E:/ddda-re/notes/native-L130/small.json";
+    match std::fs::read_to_string(path) {
+        Ok(s) => Some(serde_json::from_str(&s).unwrap()),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => None,
+    }
+}
+
+fn small_port(entry: u32) -> LiftFn {
+    match entry {
+        0x5828e0 => mtcore::hot::forward_three_records,
+        0x582900 => mtcore::hot::forward_five_primary_records,
+        0x582920 => mtcore::hot::forward_five_secondary_records,
+        0x5abdc0 => mtcore::hot::object_flag_16,
+        0x5829a0 => mtcore::hot::track_identifier_transition,
+        _ => panic!("unknown small entry {entry:x}"),
+    }
+}
+
+// verifies 0x005828e0, 0x00582900, 0x00582920, 0x005abdc0, 0x005829a0
+#[test]
+fn small_match_original_and_lifted() {
+    ddnative_host::install();
+    let Some(data) = small_vectors() else {
+        return;
+    };
+    for case in data["cases"].as_array().unwrap() {
+        run_with_callees(small_port(n(&case["entry"])), case);
+        // L130_SMALL_REFERENCE
+    }
+    eprintln!(
+        "{} exact small cases passed",
+        data["cases"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+#[ignore = "paired small port microbenchmark"]
+fn small_cost() {
+    ddnative_host::install();
+    ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::Relaxed);
+    let data = small_vectors().unwrap();
+    let mut m = Paged::default();
+    for case in data["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| match n(&c["entry"]) {
+            0x5829a0 => [1, 3, 6, 10, 11].contains(&n(&c["seed"])),
+            0x5abdc0 => [1, 4].contains(&n(&c["seed"])),
+            _ => n(&c["seed"]) == 4,
+        })
+    {
+        let entry = n(&case["entry"]);
+        let bodies: Vec<(&str, LiftFn)> = vec![("port", small_port(entry))]; // L130_SMALL_COST
+        let initial = pairs(&case["initial"]);
+        let initial_cpu = cpu(&case["before"]);
+        let event = case["events"]
+            .as_array()
+            .unwrap()
+            .get(1)
+            .map(|v| (cpu(v), pairs(&v["effects"])));
+        x86::set_ext_calls(Some(Box::new(move |m, c, target| {
+            assert_eq!(target, 0x582a10);
+            release_x87(c);
+            let (state, writes) = event.as_ref().unwrap();
+            for (&a, &b) in writes {
+                m.set_u8(a, b);
+            }
+            *c = state.clone();
+        })));
+        for round in 0..5 {
+            for offset in 0..bodies.len() {
+                let (name, body) = bodies[(round + offset) % bodies.len()];
+                let mut elapsed = std::time::Duration::ZERO;
+                for iteration in 0..1020 {
+                    for (&a, &b) in &initial {
+                        m.set_u8(a, b);
+                    }
+                    let mut c = initial_cpu.clone();
+                    let start = std::time::Instant::now();
+                    body(&mut m, &mut c);
+                    let time = start.elapsed();
+                    if iteration >= 20 {
+                        elapsed += time;
+                    }
+                    if iteration == 0 {
+                        check(&m, &c, &case["after"], "small bench gate");
+                    }
+                    release_x87(&mut c);
+                }
+                eprintln!(
+                    "small entry={entry:x} seed={} round={round} {name} ns/call={:.1}",
+                    case["seed"],
+                    elapsed.as_nanos() as f64 / 1000.0
+                );
+            }
+        }
+        x86::set_ext_calls(None);
+    }
+}

@@ -1171,3 +1171,89 @@ targets, and ordinary/step-enabled binding replacement. The 12-log audit found
 15 first-seen entries per run, including the six already-ported L130 readers;
 activation in a game run remains for head to verify. See
 `tasks/L136-ports-dispatch.md` for counts and their phase/frequency limits.
+
+### L143 backend worker storage
+
+The deferred FIFO stores common commands directly in preallocated channel
+slots. Arbitrary presentation/result hooks retain their existing callbacks;
+queue bounds, result fences, command marks and panic propagation are unchanged.
+The wgpu backend bulk-packs register ranges, reuses draw scratch lists, tracks
+resource use with sparse generation-stamped bits, and retains collision-safe
+derived-state memo entries (bounded to 8192). Pipeline keys cache their hash
+without changing full equality or persisted recipes. Cache misses, payload
+ownership and wgpu/driver work can still allocate. Tests, synthetic release
+measurements and the unresolved `_NLG_Return2` attribution are recorded in
+[L143 results](tasks/L143-backend-thread.md); gameplay image/FPS validation
+remains with head.
+## L147 upload preparation ownership (2026-10-13)
+
+The wgpu backend pads an already-owned buffer upload in place, and borrows
+tightly packed Direct-format image rows until Queue::write_texture has
+copied them into staging. This removes a second host buffer clone and a
+second full image packing allocation. Padded/converted images preserve
+their prior paths, and pending uploads, flush-before-write ordering,
+finisher waits and small-buffer mirrors keep their existing semantics.
+
+22 ddgpu CPU tests and 12 focused GPU upload/copy/draw/texture tests pass;
+runtime light has 202 distinct passes, five ignored and the inherited
+fullscreen-gamma failure after an isolated contention-timing retry. The
+CPU preparation benchmark's tight 64 KiB image median is 2.718 -> 0.006 us
+(7 -> 0 allocations/reallocations); GPU staging still copies the data.
+Evidence, symbolization correction, benchmark limits and head's pending
+game capture are recorded in `tasks/L147-nlg.md`.
+## L145 exact zlib candidates (2026-10-13)
+
+`DDRUNTIME_ZLIB_PORT=1` replaces the whole `0x00cf02e0` outer inflater through
+the existing L136 override path. The original guest layout, stream counters,
+window, checksum, stack and register exits remain observable. This is an
+address-labelled native control-flow translation, not a host zlib object.
+Large-buffer timing is mixed, so the outer candidate remains opt-in.
+
+Independently, `DDRUNTIME_ZLIB_FAST=1` selects page-based scalar access and
+forward match-copy runs in the existing exact `0x00cf2cb0` decoder. It checks
+page permissions/backing, falls back for lazy/missing/cross-page scalar
+accesses, and retains atomic byte read/write order for overlapping matches.
+It neither snapshots an overlapping source nor uses memcpy/memmove for
+matches. The existing copy-entry preemption points remain. The original
+readable decoder is still selected when the new switch is absent; the
+existing `DDRUNTIME_ARCHIVE_INFLATE=0` disables both fast-decoder variants.
+User-supplied function overrides retain precedence over both registrations.
+
+Original-instruction gates: 632 fast-leaf cases in old/new fallback/new
+page-backed configurations; 217 complete streams and 12,893 returns through
+the new page-backed leaf, comparing registers, defined flags, full stack,
+stream/state/window and output. Includes all 144 installed ARC type classes
+(one sampled stream per class), random splits and synthetic saves. No real
+save or game launch by the agent. Reproduction, measurements, remaining
+coverage limits and head-run requests: [L145](tasks/L145-inflate.md).
+
+
+## L149 transition loading timeline
+
+`DDRUNTIME_LOAD_LOG=1` adds `event=interval` deltas at lifecycle/movie
+boundaries, title callback changes (`aTitle+0xF0`, 0x005317B0), area requests
+(0x00DB4C10), and stage mode/substate changes (0x00504330). Process origin
+includes work before Rust main. `first_gameplay_present` is the first
+producer Present after stage mode 2 is observed, following 0x0050ADC0's
+load-completion path; visible UI and player input readiness require the
+head's observation. Raw callback/mode IDs and boundary qualifications stay
+in the log. Guest state and previously selected overrides are preserved.
+
+Each interval reports Windows CPU per evidenced thread class, archive I/O,
+inclusive outer/fast/Adler/window times, ddgpu module/pipeline creation,
+image-upload copy/enqueue counts/bytes/time, emulated-engine slices, and
+1-in-256 raw service samples. Direct lifted time is explicitly unavailable;
+sampled service wall time must not be subtracted from CPU. Nested and
+cross-thread costs are nonadditive. GPU counters are read at the transition,
+not copied from the periodic logger. Native Device module/pipeline timing
+now participates in the shared counters. Raw Vulkan Context creations also contribute; DDGPU_VK totals include
+both real fallback and raw-object creation work, excluding cache hits. No extra timing is a GPU completion measurement.
+
+`scripts/load_timeline.py --at 0,9.257559,15.971918,32.181309,45.473565,47.134738 <private-log>`
+emits sample-aged historical deltas and a log hash. Existing Markdown,
+`--mark`, and legacy-clock modes are retained. L149's c23 analysis identifies
+CF2CB0 as the dominant measured resource-load cost, followed by first-frame
+pipeline creation. The adopted exact optimization is the independently
+opt-in L145 `DDRUNTIME_ZLIB_FAST=1`; outer `DDRUNTIME_ZLIB_PORT` stays off
+for the requested A/B. Full definitions, caveats, source evidence and head
+run environment: `docs/tasks/L149-load-timeline.md`.
