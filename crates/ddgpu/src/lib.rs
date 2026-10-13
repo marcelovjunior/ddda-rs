@@ -38,7 +38,10 @@ mod shader_cache;
 mod pipeline_log;
 mod warmup;
 pub mod present;
-pub use pipelines::{default_cache_dir, pipeline_stats, report_pipeline_stats_every, save_pipeline_caches, PipelineStats};
+pub use pipelines::{
+    default_cache_dir, pipeline_stats, pipelines_created_on_this_thread, report_pipeline_stats_every, save_pipeline_caches,
+    PipelineStats,
+};
 use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
 mod shader_identity;
 use std::future::Future;

@@ -729,9 +729,13 @@ fn releases_keep_the_native_worker_and_its_pipelines() {
     backend.upload(Upload::Buffer { resource: 99, bytes: vec![0; 64] });
     let d = draw(false, false, false, [0.0, 1.0, 0.0, 1.0]);
     backend.clear(&clear(&t, None));
+    let before = ddgpu::pipelines_created_on_this_thread();
     assert!(backend.native(job(d.clone(), &t, None)).is_ok());
     let first = backend.read_back(&t).unwrap();
-    let pipeline_creations = ddgpu::pipeline_stats().pipelines;
+    // this thread's count (tests running in parallel create their own):
+    // the first job made its pipelines here
+    let pipeline_creations = ddgpu::pipelines_created_on_this_thread();
+    assert!(pipeline_creations > before, "the first job creates its pipeline on this thread");
     // not held by the worker
     backend.release(99);
     assert!(backend.native(job(d.clone(), &t, None)).is_ok());
@@ -743,7 +747,7 @@ fn releases_keep_the_native_worker_and_its_pipelines() {
     backend.clear(&clear(&t, None));
     assert!(backend.native(job(d, &t, None)).is_ok());
     assert_eq!(backend.read_back(&t).unwrap(), first);
-    assert_eq!(ddgpu::pipeline_stats().pipelines, pipeline_creations,
+    assert_eq!(ddgpu::pipelines_created_on_this_thread(), pipeline_creations,
         "resource release must retain both wgpu and raw pipeline objects");
     let s = backend.native_job_stats();
     assert_eq!((s.worker_instances, s.resource_resets, s.accepted), (1, 1, 3));
