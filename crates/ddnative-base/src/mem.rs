@@ -224,23 +224,26 @@ pub static ATOMIC_ACCESSES: std::sync::atomic::AtomicBool = std::sync::atomic::A
 
 /// Reads `width` (1, 2 or 4) little-endian bytes at `at`, which lies with
 /// all `width` bytes inside one backed page. Once [`ATOMIC_ACCESSES`] is
-/// set: aligned accesses as one atomic load (Acquire), others byte by byte;
-/// before, a plain copy.
+/// set: aligned accesses as one atomic load (Acquire), others byte by byte.
+/// Aligned accesses use that same load in serial mode; only unaligned
+/// serial accesses use a plain copy.
 ///
 /// # Safety
 /// `at .. at + width` must be inside a page of a live table.
 #[inline(always)]
 pub unsafe fn load_at(at: *mut u8, width: usize) -> u32 {
     unsafe {
-        if !ATOMIC_ACCESSES.load(Ordering::Relaxed) {
-            let mut v = [0u8; 4];
-            std::ptr::copy_nonoverlapping(at, v.as_mut_ptr(), width);
-            return u32::from_le_bytes(v);
-        }
+        // Aligned Acquire loads have the same bytes and x86-64 instruction in
+        // serial and parallel mode. Only unaligned accesses need the mode bit.
         match width {
             1 => (*(at as *const AtomicU8)).load(Ordering::Acquire) as u32,
             2 if at as usize % 2 == 0 => u16::from_le((*(at as *const AtomicU16)).load(Ordering::Acquire)) as u32,
             4 if at as usize % 4 == 0 => u32::from_le((*(at as *const AtomicU32)).load(Ordering::Acquire)),
+            _ if !ATOMIC_ACCESSES.load(Ordering::Relaxed) => {
+                let mut v = [0u8; 4];
+                std::ptr::copy_nonoverlapping(at, v.as_mut_ptr(), width);
+                u32::from_le_bytes(v)
+            }
             _ => (0..width).fold(0, |v, k| v | ((*(at.add(k) as *const AtomicU8)).load(Ordering::Acquire) as u32) << (8 * k)),
         }
     }
@@ -254,14 +257,13 @@ pub unsafe fn load_at(at: *mut u8, width: usize) -> u32 {
 #[inline(always)]
 pub unsafe fn store_at(at: *mut u8, width: usize, v: u32) {
     unsafe {
-        if !ATOMIC_ACCESSES.load(Ordering::Relaxed) {
-            std::ptr::copy_nonoverlapping(v.to_le_bytes().as_ptr(), at, width);
-            return;
-        }
         match width {
             1 => (*(at as *const AtomicU8)).store(v as u8, Ordering::Release),
             2 if at as usize % 2 == 0 => (*(at as *const AtomicU16)).store((v as u16).to_le(), Ordering::Release),
             4 if at as usize % 4 == 0 => (*(at as *const AtomicU32)).store(v.to_le(), Ordering::Release),
+            _ if !ATOMIC_ACCESSES.load(Ordering::Relaxed) => {
+                std::ptr::copy_nonoverlapping(v.to_le_bytes().as_ptr(), at, width);
+            }
             _ => {
                 for k in 0..width {
                     (*(at.add(k) as *const AtomicU8)).store((v >> (8 * k)) as u8, Ordering::Release);
