@@ -600,7 +600,7 @@ pub struct BindingPart {
 
 /// A shader binding's state as the full apply sets it (0x00DAA8B0 with
 /// nothing applied: every sampler, texture and upload).
-fn binding_part(g: &G, c: &mut Caches, binding: u32) -> Result<BindingPart, Refusal> {
+fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<BindingPart>>) -> Result<Arc<BindingPart>, Refusal> {
     let flags = g.u32(binding);
     let alpha = if flags & 0x18_0000 == 0x18_0000 {
         let comparison = flags >> 3 & 255;
@@ -624,11 +624,14 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32) -> Result<BindingPart, Refu
             return Err(Refusal::Missing);
         }
     }
-    // constants: the binding's registers over zeros
-    let mut banks = [
-        Constants { f: vec![[0; 4]; meta.floats[0].min(FLOATS[0])], ..Default::default() },
-        Constants { f: vec![[0; 4]; meta.floats[1].min(FLOATS[1])], ..Default::default() },
-    ];
+    // constants: the binding's registers over zeros (in reused banks)
+    let mut banks = std::mem::take(&mut c.banks);
+    for (stage, bank) in banks.iter_mut().enumerate() {
+        bank.f.clear();
+        bank.f.resize(meta.floats[stage].min(FLOATS[stage]), [0; 4]);
+        bank.i = [[0; 4]; 16];
+        bank.b = [0; 16];
+    }
     let mut written = [([0u64; 4], 0u16, 0u16); 2];
     for stage in 0..2 {
         let bank = &mut banks[stage];
@@ -690,8 +693,14 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32) -> Result<BindingPart, Refu
             return Err(Refusal::BoolsUncovered);
         }
     }
-    let [vs, ps] = banks;
-    Ok(BindingPart { meta, alpha, constants: [Arc::new(vs), Arc::new(ps)], written })
+    // the same as the binding's part of an earlier frame: that part
+    let part = match previous {
+        Some(p) if Arc::ptr_eq(&p.meta, &meta) && p.alpha == alpha && p.written == written
+            && *p.constants[0] == banks[0] && *p.constants[1] == banks[1] => p.clone(),
+        _ => Arc::new(BindingPart { meta, alpha, constants: [Arc::new(banks[0].clone()), Arc::new(banks[1].clone())], written }),
+    };
+    c.banks = banks;
+    Ok(part)
 }
 
 fn set_float(bank: &mut Constants, written: &mut ([u64; 4], u16, u16), n: u32, r: [u32; 4]) {
@@ -1013,7 +1022,12 @@ pub struct Caches {
     /// the list is held in `states`)
     native_fixed: FxMap<(NativeStateIdentity, u64), Arc<NativeFixedState>>,
     // this frame's
-    bindings: FxMap<u32, Result<Arc<BindingPart>, Refusal>>,
+    /// shader bindings by address, with the frame they were last built
+    /// or checked in (kept across frames: an unchanged binding keeps its
+    /// part, no allocation)
+    bindings: FxMap<u32, (u64, Result<Arc<BindingPart>, Refusal>)>,
+    /// the banks a binding's constants are read into
+    banks: [Constants; 2],
     streams: FxMap<u32, Result<Arc<StreamPart>, Refusal>>,
     target_bindings: FxMap<u32, Result<Arc<TargetPart>, Refusal>>,
     targets: FxMap<u32, Option<Target>>,
@@ -1032,7 +1046,9 @@ impl Caches {
     /// (with the D3D lock held).
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
-        self.bindings.clear();
+        if self.bindings.len() > 16384 {
+            self.bindings.clear();
+        }
         self.streams.clear();
         self.target_bindings.clear();
         self.targets.clear();
@@ -1148,11 +1164,17 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         r?
     };
     let s = part(&mut c.streams, streams, || stream_part(&g, streams))?;
-    let b = {
-        let mut map = std::mem::take(&mut c.bindings);
-        let r = part(&mut map, shader, || binding_part(&g, c, shader));
-        c.bindings = map;
-        r?
+    let b = match c.bindings.get(&shader) {
+        Some((frame, r)) if *frame == c.frame => r.clone()?,
+        other => {
+            let previous = match other {
+                Some((_, Ok(p))) => Some(p.clone()),
+                _ => None,
+            };
+            let r = binding_part(&g, c, shader, previous.as_ref());
+            c.bindings.insert(shader, (c.frame, r.clone()));
+            r?
+        }
     };
     // the fixed state: the objects by identity, the dynamic values
     let id = identity_of(&g, fixed);
