@@ -30,4 +30,6 @@ pub mod job_hash;
 pub mod machine;
 pub mod object;
 pub mod property;
+pub mod shadow_traversal;
+pub mod shadow_pass;
 pub mod tree;

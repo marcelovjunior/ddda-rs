@@ -19,6 +19,13 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_JOB_HASH").as_deref() == Ok("1") {
         ports.push((0x00e0e5e0, mtcore::job_hash::dependency_hash));
     }
+    // L169: preserve the original serial/queued decision and callback order.
+    if std::env::var("DDRUNTIME_SHADOW_TRAVERSAL").as_deref() == Ok("1") {
+        ports.push((0x00db63e0, mtcore::shadow_traversal::traverse));
+    }
+    if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
+        ports.push((0x00efd240, mtcore::shadow_pass::setup));
+    }
     ports
 }
 
