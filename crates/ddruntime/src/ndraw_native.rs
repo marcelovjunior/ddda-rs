@@ -1393,21 +1393,15 @@ impl Pending {
         Some((NativeJob { passes: std::mem::take(&mut self.passes) }, std::mem::take(&mut self.calls)))
     }
 
-    /// Send the job; the draws' count, and whether the backend took it.
-    pub fn send(&mut self) -> Option<(u64, bool)> {
+    /// Send the job, with its draws' DrawCalls: the backend makes those
+    /// instead, once, in the same place in the FIFO, if it rejects the job
+    /// (d3d9cmd native_or_draw, L133). The draws' count.
+    pub fn send(&mut self) -> Option<u64> {
         let (job, calls) = self.take()?;
         let n = calls.len() as u64;
         crate::d3d9draw::count_draws(n);
-        let accepted = crate::d3d9draw::backend_unlocked(|b| match b.native(job) {
-            Ok(()) => true,
-            Err(_) => {
-                for c in &calls {
-                    b.draw(c);
-                }
-                false
-            }
-        });
-        Some((n, accepted))
+        crate::d3d9draw::backend_unlocked(|b| b.native_or_draw(job, calls));
+        Some(n)
     }
 }
 
@@ -1443,10 +1437,9 @@ struct Totals {
     /// time spent deciding and taking scene draws
     decode: Duration,
     filtering: u32,
-    /// native jobs sent, and their draws the backend took or rejected
+    /// native jobs sent, and their draws
     jobs: u64,
     native: u64,
-    rejected: u64,
 }
 
 struct Inner {
@@ -1556,13 +1549,9 @@ impl Inner {
         if self.comparison.is_active() {
             crate::d3d9draw::backend_unlocked(|b| self.comparison.finish(b));
         }
-        if let Some((n, accepted)) = self.pending.send() {
+        if let Some(n) = self.pending.send() {
             self.totals.jobs += 1;
-            if accepted {
-                self.totals.native += n;
-            } else {
-                self.totals.rejected += n;
-            }
+            self.totals.native += n;
         }
     }
 }
@@ -1715,8 +1704,8 @@ fn report(mode: Mode, t: &Totals) {
                     if mode == Mode::Census { "takeable" } else { "taken" }, per(t.taken), per(decided - t.taken),
                     if decided == 0 { 0.0 } else { t.decode.as_secs_f64() * 1e6 / decided as f64 }, t.filtering);
     if mode == Mode::Native {
-        out += &format!("  native jobs {:.1}, draws taken by the backend {:.1}, rejected (sent as DrawCalls) {:.1}\n",
-                        per(t.jobs), per(t.native), per(t.rejected));
+        out += &format!("  native jobs {:.1}, draws in them {:.1} (a job the backend rejects goes as its DrawCalls)\n",
+                        per(t.jobs), per(t.native));
     }
     if mode == Mode::Verify {
         out += &verify_report();
