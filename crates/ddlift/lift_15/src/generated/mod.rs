@@ -4,29 +4,6 @@ mod lifted_000; pub use lifted_000::*;
 mod lifted_001; pub use lifted_001::*;
 mod lifted_002; pub use lifted_002::*;
 mod lifted_003; pub use lifted_003::*;
-pub use mtmath::abi::f_007ad7a0;
-pub use mtmath::abi::f_007ad870;
-pub use mtmath::abi::f_007ad8e0;
-pub use mtmath::abi::f_007ad9d0;
-pub use mtmath::abi::f_007adc00;
-pub use mtmath::abi::f_007adca0;
-pub use mtmath::abi::f_007ae860;
-pub use mtmath::abi::f_007aeed0;
-pub use mtmath::abi::f_007af450;
-pub use mtmath::abi::f_007af5b0;
-/// The lifted bodies of the functions the readable ports replace.
-pub mod replaced {
-    pub use super::lifted_001::f_007ad7a0;
-    pub use super::lifted_001::f_007ad870;
-    pub use super::lifted_001::f_007ad8e0;
-    pub use super::lifted_001::f_007ad9d0;
-    pub use super::lifted_001::f_007adc00;
-    pub use super::lifted_001::f_007adca0;
-    pub use super::lifted_001::f_007ae860;
-    pub use super::lifted_001::f_007aeed0;
-    pub use super::lifted_001::f_007af450;
-    pub use super::lifted_001::f_007af5b0;
-}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00780300, f_00780300),

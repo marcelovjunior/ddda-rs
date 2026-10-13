@@ -7,67 +7,6 @@ mod lifted_003; pub use lifted_003::*;
 mod lifted_004; pub use lifted_004::*;
 mod lifted_005; pub use lifted_005::*;
 mod lifted_006; pub use lifted_006::*;
-pub use mtcore::abi::f_00cf5450;
-pub use mtcore::abi::f_00cf54a0;
-pub use mtcore::abi::f_00cf55b0;
-pub use mtcore::abi::f_00cf55e0;
-pub use mtcore::abi::f_00cf5750;
-pub use mtcore::abi::f_00cf5870;
-pub use mtcore::abi::f_00cf5c00;
-pub use mtcore::abi::f_00cf5e20;
-pub use mtcore::abi::f_00cf5e40;
-pub use mtcore::abi::f_00cf7340;
-pub use mtcore::abi::f_00cf74e0;
-pub use mtcore::abi::f_00cf76c0;
-pub use mtmath::abi::f_00cfc1d0;
-pub use mtmath::abi::f_00cfc350;
-pub use mtmath::abi::f_00cfc4b0;
-pub use mtmath::abi::f_00cfc620;
-pub use mtmath::abi::f_00cfc770;
-pub use mtmath::abi::f_00cfc810;
-pub use mtmath::abi::f_00cfc8b0;
-pub use mtmath::abi::f_00cfc940;
-pub use mtmath::abi::f_00cfc9e0;
-pub use mtmath::abi::f_00cfcb00;
-pub use mtmath::abi::f_00cfcc20;
-pub use mtmath::abi::f_00cfcd40;
-pub use mtmath::abi::f_00cfce60;
-pub use mtmath::abi::f_00cfcf80;
-pub use mtmath::abi::f_00cfd5e0;
-pub use mtmath::abi::f_00cfd890;
-pub use mtmath::abi::f_00cfdb10;
-/// The lifted bodies of the functions the readable ports replace.
-pub mod replaced {
-    pub use super::lifted_006::f_00cf5450;
-    pub use super::lifted_006::f_00cf54a0;
-    pub use super::lifted_006::f_00cf55b0;
-    pub use super::lifted_006::f_00cf55e0;
-    pub use super::lifted_006::f_00cf5750;
-    pub use super::lifted_006::f_00cf5870;
-    pub use super::lifted_006::f_00cf5c00;
-    pub use super::lifted_006::f_00cf5e20;
-    pub use super::lifted_006::f_00cf5e40;
-    pub use super::lifted_006::f_00cf7340;
-    pub use super::lifted_006::f_00cf74e0;
-    pub use super::lifted_006::f_00cf76c0;
-    pub use super::lifted_006::f_00cfc1d0;
-    pub use super::lifted_006::f_00cfc350;
-    pub use super::lifted_006::f_00cfc4b0;
-    pub use super::lifted_006::f_00cfc620;
-    pub use super::lifted_006::f_00cfc770;
-    pub use super::lifted_006::f_00cfc810;
-    pub use super::lifted_006::f_00cfc8b0;
-    pub use super::lifted_006::f_00cfc940;
-    pub use super::lifted_006::f_00cfc9e0;
-    pub use super::lifted_006::f_00cfcb00;
-    pub use super::lifted_006::f_00cfcc20;
-    pub use super::lifted_006::f_00cfcd40;
-    pub use super::lifted_006::f_00cfce60;
-    pub use super::lifted_006::f_00cfcf80;
-    pub use super::lifted_006::f_00cfd5e0;
-    pub use super::lifted_006::f_00cfd890;
-    pub use super::lifted_006::f_00cfdb10;
-}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00C80010, f_00c80010),

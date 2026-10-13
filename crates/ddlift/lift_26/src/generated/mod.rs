@@ -2,15 +2,6 @@
 use crate::x86::LiftFn;
 mod lifted_000; pub use lifted_000::*;
 mod lifted_001; pub use lifted_001::*;
-pub use mtmath::abi::f_00d00690;
-pub use mtmath::abi::f_00d006c0;
-pub use mtcore::abi::f_00d01b60;
-/// The lifted bodies of the functions the readable ports replace.
-pub mod replaced {
-    pub use super::lifted_000::f_00d00690;
-    pub use super::lifted_000::f_00d006c0;
-    pub use super::lifted_000::f_00d01b60;
-}
 mod lifted { pub use super::*; }
 pub const FUNCTIONS: &[(u32, LiftFn)] = &[
 (0x00D00010, f_00d00010),
