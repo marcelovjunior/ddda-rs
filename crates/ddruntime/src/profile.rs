@@ -37,7 +37,7 @@
 //!
 //! A file name without a path (Windows searches the Windows directory) or
 //! a UTF-16BE file is not modelled (stop).
-use crate::services::{arg, ret, with_state};
+use crate::services::{arg, ret};
 use std::path::{Path, PathBuf};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -48,7 +48,7 @@ const ERROR_ACCESS_DENIED: u32 = 5;
 const ERROR_MORE_DATA: u32 = 234;
 
 fn set_error(e: u32) {
-    with_state(|s| s.last_error = e);
+    crate::runtime::set_last_error(e);
 }
 
 fn guest_opt_w(m: &dyn Mem, p: u32) -> Option<String> {

@@ -19,7 +19,7 @@
 //! SSPI (Schannel) runs only after a socket connected (the TLS start at
 //! 0x00DA27F7 follows a select that reports the socket writable), which
 //! cannot happen here, so the Secur32 imports stop with a report.
-use crate::services::{arg, ret, with_state};
+use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 
@@ -46,7 +46,7 @@ fn first_call(name: &'static str) {
 /// WSANOTINITIALISED, no output written; stdcall cleanup of `args` words.
 fn not_initialised(m: &mut dyn Mem, cpu: &mut Cpu, name: &'static str, args: u32, failure: u32) {
     first_call(name);
-    with_state(|s| s.last_error = WSANOTINITIALISED);
+    crate::runtime::set_last_error(WSANOTINITIALISED);
     cpu.eax = failure;
     ret(m, cpu, 4 * args);
 }
@@ -127,7 +127,7 @@ pub fn ntohs(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// #111 WSAGetLastError(): the thread's last error, the same value as
 /// GetLastError (measured: a SetLastError value reads back unchanged).
 pub fn wsa_get_last_error(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = with_state(|s| s.last_error);
+    cpu.eax = crate::runtime::last_error();
     ret(m, cpu, 0);
 }
 

@@ -1345,3 +1345,32 @@ comparison jobs, rejection recovery and resource release. Synthetic raw
 versus wgpu-native speed is mixed; no native gameplay/FPS acceptance yet.
 Full counts, hashes, timings and head's requested game A/B are in
 [tasks/L152-native-vk.md](tasks/L152-native-vk.md).
+
+
+### L153 part 2: cached thread state and semaphore services
+
+The follow-up stores TLS values and last-error in thread-owned boxes, indexed by
+runtime identity and guest thread id. A const-initialized host TLS record caches
+the runtime/context pointers and hosts D3D lock identity/depth and service nesting.
+Warm runtime pins avoid reference-count updates, RefCell borrowing and a second
+TLS lookup on drop. Reentrant runtime replacement retains old owners through the
+last pin; a host thread still owns exactly one executing guest thread.
+
+TLS Get/Set and GetLastError/SetLastError run outside the guest service lock.
+Allocation generations clear reused slots across threads; error behavior and
+abandonment are checked against host Win32. Semaphore release/single waits use
+independent count synchronization; mixed waits recheck independent changes after
+registration, and wait-all holds a narrow count gate through semaphore commit.
+General mutex/thread waits still require the service lock. The prior auto-event
+multiwait rollback limitation remains explicit.
+
+This supersedes the part 1 TLS/semaphore serialization note above. Tests, exact
+microbenchmark definitions/hashes and head-run status: `docs/tasks/L153-sync.md`.
+No part 2 gameplay/image/FPS acceptance is claimed from CPU tests.
+
+Head's combo26 late-game census identifies about 69 main scheduler joins per
+frame, totaling 17.8–18.6 ms/frame inclusive. Render request waiting overlaps
+main work in the double-buffered handoff. The first census omitted worker job
+callbacks and counted tail redispatch twice; the follow-up fixes both, preserves
+MXCSR, and writes sparse cumulative reports. L158 owns the subsequent correlated
+batch trace; aggregate c26 rows cannot identify the last worker in a long join.

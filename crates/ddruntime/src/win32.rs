@@ -25,7 +25,7 @@ const HEAP_ZERO_MEMORY: u32 = 0x8;
 type Api = fn(&mut dyn Mem, &mut Cpu);
 
 fn set_error(e: u32) {
-    with_state(|s| s.last_error = e);
+    crate::runtime::set_last_error(e);
 }
 
 fn write_bytes(m: &mut dyn Mem, at: u32, data: &[u8]) {
@@ -53,7 +53,7 @@ fn exe_path() -> String {
 // --- errors, identity, time ------------------------------------------------
 
 pub fn get_last_error(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = with_state(|s| s.last_error);
+    cpu.eax = crate::runtime::last_error();
     ret(m, cpu, 0);
 }
 pub fn set_last_error(m: &mut dyn Mem, cpu: &mut Cpu) {
@@ -203,61 +203,81 @@ pub fn interlocked_compare_exchange(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 // --- TLS --------------------------------------------------------------------
 
-/// TlsAlloc(): the lowest free index (TLS_OUT_OF_INDEXES 0xFFFFFFFF after 1088).
+/// Allocation generations are shared, values and last-error belong to the
+/// calling host/guest thread. Odd = allocated, even = free. Allocation/free
+/// are cold and serialized; Get/Set need only one atomic generation read.
+/// Reuse changes the generation so every thread observes an initial zero.
+pub(crate) struct TlsSlots {
+    allocation: std::sync::Mutex<()>,
+    generation: [std::sync::atomic::AtomicU64; 1088],
+}
+impl Default for TlsSlots {
+    fn default() -> Self {
+        Self { allocation: std::sync::Mutex::new(()), generation: [const { std::sync::atomic::AtomicU64::new(0) }; 1088] }
+    }
+}
+impl TlsSlots {
+    fn alloc(&self) -> u32 {
+        let _lock = self.allocation.lock().unwrap_or_else(|e| e.into_inner());
+        for (i, slot) in self.generation.iter().enumerate() {
+            let generation = slot.load(SeqCst);
+            if generation & 1 == 0 {
+                slot.store(generation.checked_add(1).expect("TLS generation exhausted"), SeqCst);
+                return i as u32;
+            }
+        }
+        u32::MAX
+    }
+    fn free(&self, i: usize) -> bool {
+        let _lock = self.allocation.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(slot) = self.generation.get(i) else { return false; };
+        let generation = slot.load(SeqCst);
+        if generation & 1 == 0 { return false; }
+        slot.store(generation.checked_add(1).expect("TLS generation exhausted"), SeqCst);
+        true
+    }
+    fn generation(&self, i: usize) -> Option<u64> {
+        self.generation.get(i).map(|g| g.load(SeqCst))
+    }
+}
+
+/// TlsAlloc(): lowest free index; TLS_OUT_OF_INDEXES after 1088.
 pub fn tls_alloc(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = with_state(|s| match s.tls.iter().position(Option::is_none) {
-        Some(i) => {
-            s.tls[i] = Some(0);
-            s.tls_epoch[i] += 1;
-            i as u32
-        }
-        None if s.tls.len() < 1088 => {
-            s.tls.push(Some(0));
-            s.tls_epoch.push(1);
-            (s.tls.len() - 1) as u32
-        }
-        None => u32::MAX,
+    cpu.eax = crate::runtime::with_thread(|rt, c| {
+        let index = rt.tls.alloc();
+        if index == u32::MAX { c.last_error.set(ERROR_NOT_ENOUGH_MEMORY); }
+        index
     });
     ret(m, cpu, 0);
 }
-/// TlsGetValue(index): the value (0 if never set); sets the last error to
-/// 0 on success as documented, so callers can tell 0 from failure.
+/// Microsoft Learn, TlsGetValue: success clears last-error, including zero.
+/// Range validation follows the host Win32 oracle (0..1088), including
+/// unallocated slots; allocation/free generations clear prior values.
 pub fn tls_get_value(m: &mut dyn Mem, cpu: &mut Cpu) {
     let i = arg(m, cpu, 0) as usize;
-    cpu.eax = with_state(|s| match s.tls.get(i).copied().flatten() {
-        Some(v) => {
-            s.last_error = 0;
-            v
+    cpu.eax = crate::runtime::with_thread(|rt, c| match rt.tls.generation(i) {
+        Some(generation) => {
+            c.last_error.set(0);
+            let (epoch, value) = c.tls[i].get();
+            if epoch == generation { value } else { 0 }
         }
-        None => {
-            s.last_error = ERROR_INVALID_PARAMETER;
-            0
-        }
+        None => { c.last_error.set(ERROR_INVALID_PARAMETER); 0 }
     });
     ret(m, cpu, 4);
 }
 pub fn tls_set_value(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let (i, v) = (arg(m, cpu, 0) as usize, arg(m, cpu, 1));
-    cpu.eax = with_state(|s| match s.tls.get_mut(i) {
-        Some(slot @ Some(_)) => {
-            *slot = Some(v);
-            1
-        }
-        _ => {
-            s.last_error = ERROR_INVALID_PARAMETER;
-            0
-        }
+    let (i, value) = (arg(m, cpu, 0) as usize, arg(m, cpu, 1));
+    cpu.eax = crate::runtime::with_thread(|rt, c| match rt.tls.generation(i) {
+        Some(generation) => { c.tls[i].set((generation, value)); 1 }
+        None => { c.last_error.set(ERROR_INVALID_PARAMETER); 0 }
     });
     ret(m, cpu, 8);
 }
 pub fn tls_free(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let i = arg(m, cpu, 0) as usize;
-    cpu.eax = with_state(|s| match s.tls.get_mut(i) {
-        Some(slot @ Some(_)) => {
-            *slot = None;
-            1
-        }
-        _ => 0,
+    cpu.eax = crate::runtime::with_thread(|rt, c| {
+        let freed = rt.tls.free(arg(m, cpu, 0) as usize);
+        if !freed { c.last_error.set(ERROR_INVALID_PARAMETER); }
+        u32::from(freed)
     });
     ret(m, cpu, 4);
 }

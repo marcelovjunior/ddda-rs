@@ -2,9 +2,10 @@
 
 ### L153 game-thread synchronization (2026-10-13)
 
-- Opt-in service/site/handle census and scheduler job histograms; fan-out
-  join identified at return 0x00DBE66D. Initialization creates seven workers
-  plus main; actual participation and residual join time await head capture.
+- Head combo26 late-game census: main plus six joined workers, about 69
+  joins/frame at 0x00DBE66D, **18.644 / 17.813 ms/frame** inclusive with
+  cache/futex 0/0 versus 1/1. Long-join tails dominate; main Sleep is absent
+  in this interval. Render request waiting overlaps main work.
 - Opt-in event cache and address waits; shared-table microbench 5.64–7.34x,
   event ping-pong mixed. No game/FPS gain claimed. Default single-object
   polls avoid vectors; abandoned mutex and invalid multiwait-count handling
@@ -105,6 +106,20 @@
 - Next: head native VK=0/1 image/FPS/profile and VK=1 compare (zero mismatches).
   Evidence and remaining timing isolation: `docs/tasks/L152-native-vk.md`.
   Evidence and submission timings: `docs/tasks/L152-native-vk.md`.
+  corrected. Part 2 caches runtime/thread state in one const TLS record;
+  TLS Get/Set and semaphore release/single waits bypass the service lock.
+  Host Win32 and concurrency regressions cover errors, reuse and abandonment.
+- Final paired CPU microbench: TLS 1/4 threads **1.28x/18.87x**, semaphore
+  release/poll **1.69x**; local bookkeeping and DeviceLock medians regress ~6%.
+  No measured gain is established for the render worker's own TLS bookkeeping.
+- Part 2 light: **229 pass / inherited fullscreen-gamma failure / 7 ignored**;
+  Present timing passes; all-opt-ins library **84 pass**. Nine parser tests
+  pass. Corrected census adds the
+  missing worker callbacks, suppresses tail redispatch and emits sparse rows.
+  Detailed measurements/limits: `docs/tasks/L153-sync.md`.
+- Next: head adopts corrected census alongside L158's correlated batch trace,
+  identifies long-join worker jobs, and performs profile-off matched image/FPS
+  acceptance. Event cache/futex remain opt-in; no part 2 game gain claimed.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)
