@@ -88,7 +88,8 @@ pub struct Object {
 #[derive(Default)]
 pub(crate) struct Objects {
     vtables: HashMap<&'static str, u32>,
-    pub(crate) live: HashMap<u32, Object>,
+    /// by guest address (L78: a fast hash; looked up several times a draw)
+    pub(crate) live: crate::fasthash::FxMap<u32, Object>,
 }
 
 pub(crate) fn objects<R>(f: impl FnOnce(&mut Objects) -> R) -> R {

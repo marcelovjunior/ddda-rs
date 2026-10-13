@@ -157,42 +157,46 @@ fn image_upload(m: &dyn Mem, resource: u32, index: u32, format: u32, img: &Image
 
 /// Upload what `resource` has dirty (texture levels, a surface, a buffer).
 pub(crate) fn flush(m: &dyn Mem, resource: u32) {
-    let mut out = Vec::new();
-    // collect dirty images, clearing the flags
-    let surfaces = objects(|o| match o.live.get_mut(&resource).map(|x| &mut x.kind) {
-        Some(Kind::Texture { data, .. }) => {
-            for (k, v) in data.volumes.iter_mut().enumerate() {
-                if std::mem::take(&mut v.dirty) && v.shadow != 0 {
-                    out.push((k as u32, data.format, v.clone()));
+    // collect dirty images, clearing the flags: a texture's volumes, then
+    // its level surfaces in order (L78: in one pass, without copying the
+    // texture's surface list; a draw flushes everything it reads)
+    let out = objects(|o| {
+        let mut out = Vec::new();
+        let surfaces = match o.live.get_mut(&resource).map(|x| &mut x.kind) {
+            Some(Kind::Texture { data, .. }) => {
+                for (k, v) in data.volumes.iter_mut().enumerate() {
+                    if std::mem::take(&mut v.dirty) && v.shadow != 0 {
+                        out.push((k as u32, data.format, v.clone()));
+                    }
+                }
+                std::mem::take(&mut data.surfaces)
+            }
+            Some(Kind::Surface { desc, image, .. }) => {
+                if std::mem::take(&mut image.dirty) && image.shadow != 0 {
+                    out.push((0, desc.format, image.clone()));
+                }
+                return out;
+            }
+            Some(Kind::Buffer { data, .. }) => {
+                if std::mem::take(&mut data.image.dirty) && data.image.shadow != 0 {
+                    out.push((u32::MAX, 0, data.image.clone()));
+                }
+                return out;
+            }
+            _ => return out,
+        };
+        for (k, s) in surfaces.iter().enumerate() {
+            if let Some(Kind::Surface { desc, image, .. }) = o.live.get_mut(s).map(|x| &mut x.kind) {
+                if std::mem::take(&mut image.dirty) && image.shadow != 0 {
+                    out.push((k as u32, desc.format, image.clone()));
                 }
             }
-            data.surfaces.clone()
         }
-        Some(Kind::Surface { desc, image, .. }) => {
-            if std::mem::take(&mut image.dirty) && image.shadow != 0 {
-                out.push((0, desc.format, image.clone()));
-            }
-            vec![]
+        if let Some(Kind::Texture { data, .. }) = o.live.get_mut(&resource).map(|x| &mut x.kind) {
+            data.surfaces = surfaces;
         }
-        Some(Kind::Buffer { data, .. }) => {
-            if std::mem::take(&mut data.image.dirty) && data.image.shadow != 0 {
-                out.push((u32::MAX, 0, data.image.clone()));
-            }
-            vec![]
-        }
-        _ => vec![],
+        out
     });
-    for (k, s) in surfaces.iter().enumerate() {
-        let d = objects(|o| match o.live.get_mut(s).map(|x| &mut x.kind) {
-            Some(Kind::Surface { desc, image, .. }) => {
-                (std::mem::take(&mut image.dirty) && image.shadow != 0).then(|| (desc.format, image.clone()))
-            }
-            _ => None,
-        });
-        if let Some((format, img)) = d {
-            out.push((k as u32, format, img));
-        }
-    }
     for (index, format, img) in out {
         let u = if index == u32::MAX {
             Upload::Buffer { resource, bytes: read_bytes(m, img.shadow, img.size) }
@@ -274,50 +278,82 @@ pub fn vertex_count(primitive: u32, primitives: u32) -> Option<u32> {
 /// The draw's state snapshot, after flushing every dirty resource it reads.
 fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, base_vertex: i32, min_index: u32,
             vertex_count: u32, vertices: Option<Vertices>, indices: Option<Indices>) -> DrawCall {
-    let (state, rts, ds) = with_device(dev, |d| (d.state.clone(), d.render_targets, d.depth_stencil));
-    // what the draw reads, flushed first
-    let mut reads: Vec<u32> = state.textures.values().copied().collect();
-    reads.extend(state.streams.iter().map(|s| s.0).filter(|&b| b != 0));
-    // the device's index buffer only for a draw that uses it (indexed, not UP)
-    if state.indices != 0 && indices.is_none() {
-        reads.push(state.indices);
-    }
-    reads.extend(rts.iter().copied().filter(|&s| s != 0));
+    // what the draw reads, flushed first (flushing changes no device state)
+    let (reads, rts, ds) = with_device(dev, |d| {
+        let state = &d.state;
+        let mut reads: Vec<u32> = state.textures.values().copied().collect();
+        reads.extend(state.streams.iter().map(|s| s.0).filter(|&b| b != 0));
+        // the device's index buffer only for a draw that uses it (indexed, not UP)
+        if state.indices != 0 && indices.is_none() {
+            reads.push(state.indices);
+        }
+        reads.extend(d.render_targets.iter().copied().filter(|&s| s != 0));
+        (reads, d.render_targets, d.depth_stencil)
+    });
     for r in reads {
         flush(m, r);
     }
-    let mut textures: Vec<TextureBinding> = state.textures.iter().filter_map(|(&smp, &res)| {
-        let states: [u32; 14] = std::array::from_fn(|t| state.sampler.get(&(smp, t as u32)).copied().unwrap_or(0));
-        texture_binding(smp, res, states)
-    }).collect();
-    textures.sort_by_key(|t| t.sampler);
-    let mut render_states: Vec<(u32, u32)> = state.render.iter().map(|(&k, &v)| (k, v)).collect();
-    render_states.sort();
-    let vertices = vertices.unwrap_or_else(|| Vertices::Streams(
-        state.streams.iter().enumerate().filter(|(_, s)| s.0 != 0)
-            .map(|(k, s)| (k as u32, s.0, s.1, s.2, state.stream_freq[k])).collect(),
-    ));
-    let indices = indices.unwrap_or_else(|| if state.indices == 0 {
+    // the state the draw carries, read in place (L78: the whole device
+    // state, every map of it, was cloned for each draw)
+    struct Read {
+        textures: Vec<(u32, u32, [u32; 14])>,
+        render_states: Vec<(u32, u32)>,
+        vertices: Vertices,
+        indices: u32,
+        shaders: (u32, u32),
+        declaration: u32,
+        fvf: u32,
+        vs: d3d9cmd::Constants,
+        ps: d3d9cmd::Constants,
+        viewport: [u32; 6],
+        scissor: [i32; 4],
+    }
+    let r = with_device(dev, |d| {
+        let state = &d.state;
+        let mut textures: Vec<(u32, u32, [u32; 14])> = state.textures.iter().map(|(&smp, &res)| {
+            (smp, res, std::array::from_fn(|t| state.sampler.get(&(smp, t as u32)).copied().unwrap_or(0)))
+        }).collect();
+        textures.sort_unstable_by_key(|t| t.0);
+        Read {
+            textures,
+            // in state order already (a BTreeMap)
+            render_states: state.render.iter().map(|(&k, &v)| (k, v)).collect(),
+            vertices: vertices.unwrap_or_else(|| Vertices::Streams(
+                state.streams.iter().enumerate().filter(|(_, s)| s.0 != 0)
+                    .map(|(k, s)| (k as u32, s.0, s.1, s.2, state.stream_freq[k])).collect(),
+            )),
+            indices: state.indices,
+            shaders: (state.vertex_shader, state.pixel_shader),
+            declaration: state.declaration,
+            fvf: state.fvf,
+            vs: state.vs.clone(),
+            ps: state.ps.clone(),
+            viewport: state.viewport,
+            scissor: state.scissor,
+        }
+    });
+    let textures: Vec<TextureBinding> = r.textures.iter().filter_map(|&(smp, res, states)| texture_binding(smp, res, states)).collect();
+    let indices = indices.unwrap_or_else(|| if r.indices == 0 {
         Indices::None
     } else {
-        let format = objects(|o| match o.live.get(&state.indices).map(|x| &x.kind) {
+        let format = objects(|o| match o.live.get(&r.indices).map(|x| &x.kind) {
             Some(Kind::Buffer { data, .. }) => data.format,
             _ => 101,
         });
-        Indices::Buffer(state.indices, format)
+        Indices::Buffer(r.indices, format)
     });
     DrawCall {
-        primitive, primitives, start, base_vertex, min_index, vertex_count, vertices, indices,
-        vertex_shader: shader_tokens(state.vertex_shader),
-        pixel_shader: shader_tokens(state.pixel_shader),
-        declaration: declaration(state.declaration),
-        fvf: state.fvf,
-        vs_constants: state.vs.clone(),
-        ps_constants: state.ps.clone(),
+        primitive, primitives, start, base_vertex, min_index, vertex_count, vertices: r.vertices, indices,
+        vertex_shader: shader_tokens(r.shaders.0),
+        pixel_shader: shader_tokens(r.shaders.1),
+        declaration: declaration(r.declaration),
+        fvf: r.fvf,
+        vs_constants: r.vs,
+        ps_constants: r.ps,
         textures,
-        render_states,
-        viewport: state.viewport,
-        scissor: state.scissor,
+        render_states: r.render_states,
+        viewport: r.viewport,
+        scissor: r.scissor,
         targets: std::array::from_fn(|k| target(rts[k])),
         depth: target(ds),
     }

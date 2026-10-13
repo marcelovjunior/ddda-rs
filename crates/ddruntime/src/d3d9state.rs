@@ -15,7 +15,8 @@ use crate::d3d9dev::{add_ref_to, hand_out, new_object, objects, release_of, with
 use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
-use std::collections::HashMap;
+use crate::fasthash::FxMap as HashMap;
+use std::collections::BTreeMap;
 
 const RS_ZENABLE: u32 = 7;
 const TSS_TEXCOORDINDEX: u32 = 11;
@@ -26,7 +27,8 @@ pub use d3d9cmd::Constants;
 
 #[derive(Clone, Debug)]
 pub struct DeviceState {
-    pub render: HashMap<u32, u32>,
+    /// by state number (L78: ordered, so a draw reads them sorted)
+    pub render: BTreeMap<u32, u32>,
     /// (sampler, type) -> value; samplers 0..15 and vertex samplers 257..260
     pub sampler: HashMap<(u32, u32), u32>,
     /// (stage, type) -> value
@@ -54,9 +56,9 @@ impl DeviceState {
     /// A fresh device's state for a back buffer of `w` x `h`.
     pub fn new(auto_depth: bool, w: u32, h: u32) -> DeviceState {
         let p = profile();
-        let mut render: HashMap<u32, u32> = p.render_states.iter().copied().collect();
+        let mut render: BTreeMap<u32, u32> = p.render_states.iter().copied().collect();
         render.insert(RS_ZENABLE, auto_depth as u32);
-        let mut sampler = HashMap::new();
+        let mut sampler = HashMap::default();
         for &(s, t, v) in &p.sampler_states {
             // the displacement-map sampler 256 starts like the vertex samplers
             let range: Vec<u32> = if s == 0 { (0..16).collect() } else { (256..261).collect() };
@@ -64,7 +66,7 @@ impl DeviceState {
                 sampler.insert((k, t), v);
             }
         }
-        let mut stage = HashMap::new();
+        let mut stage = HashMap::default();
         for &(st, t, v) in &p.stage_states {
             let range: Vec<u32> = if st == 0 { vec![0] } else { (1..8).collect() };
             for k in range {
@@ -75,10 +77,10 @@ impl DeviceState {
             render,
             sampler,
             stage,
-            textures: HashMap::new(),
+            textures: HashMap::default(),
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],
             scissor: [0, 0, w as i32, h as i32],
-            transforms: HashMap::new(),
+            transforms: HashMap::default(),
             vs: Constants { f: vec![[0; 4]; VS_FLOATS as usize], ..Default::default() },
             ps: Constants { f: vec![[0; 4]; PS_FLOATS as usize], ..Default::default() },
             vertex_shader: 0,
