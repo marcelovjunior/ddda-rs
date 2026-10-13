@@ -43,7 +43,7 @@ pub(super) fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32,
             read(id);
             if dirty & TEXTURES != 0 {
                 textures[texture_count] = (slot, id,
-                    std::array::from_fn(|t| s.sampler.get(&(slot, t as u32)).copied().unwrap_or(0)));
+                    s.sampler.row(slot));
                 texture_count += 1;
             }
         }
