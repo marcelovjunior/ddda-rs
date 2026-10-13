@@ -182,6 +182,8 @@ impl Rng {
 /// of [0, 1], negative, beyond half range, denormal), blending (factors,
 /// ops, separate alpha), write masks and sRGB writes, compared as bits.
 /// TARGETS_FUZZ sets the number of cases.
+/// TARGETS_SHARD=i/n selects a disjoint shard of the same deterministic cases;
+/// run every i in 0..n to preserve the full coverage under per-process limits.
 #[test]
 fn target_formats_match_the_d3d9_driver() {
     let Some(mut d3d9) = available() else {
@@ -189,11 +191,20 @@ fn target_formats_match_the_d3d9_driver() {
         return;
     };
     let cases: usize = std::env::var("TARGETS_FUZZ").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let (shard, shards) = match std::env::var("TARGETS_SHARD") {
+        Ok(value) => {
+            let (index, count) = value.split_once('/').expect("TARGETS_SHARD must be i/n");
+            (index.parse::<usize>().expect("shard index"), count.parse::<usize>().expect("shard count"))
+        }
+        Err(_) => (0, 1),
+    };
+    assert!(shards > 0 && shard < shards, "TARGETS_SHARD requires 0 <= i < n");
     let mut rng = Rng(0x7A26_0029);
     let blends = [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15];
     let mut failures = Vec::new();
     let mut refused = std::collections::BTreeSet::new();
     let mut compared = 0;
+    let mut selected = 0;
     for case in 0..cases {
         let format = FORMATS[case % FORMATS.len()];
         let t = target(0x100, format);
@@ -206,6 +217,12 @@ fn target_formats_match_the_d3d9_driver() {
         ];
         let d = draw(&c, [Some(t.clone()), None, None, None], 0.5, &extra);
         let clear = clear_of(&[t.clone()], rng.next());
+        // All RNG calls above run even for another shard's cases, so the
+        // selected inputs are bit-identical to the unsharded test's inputs.
+        if case % shards != shard {
+            continue;
+        }
+        selected += 1;
         let theirs = match d3d9.render_targets(&[], Some(&clear), &[d.clone()], &[t.clone()]) {
             Ok(r) => r,
             Err(e) if e.contains("CreateRenderTarget") || e.contains("CreateOffscreenPlainSurface") => {
@@ -222,6 +239,7 @@ fn target_formats_match_the_d3d9_driver() {
             Err(e) => failures.push(format!("case {case} format {format}: backend error {e}; states {extra:?}")),
         }
     }
+    eprintln!("target-format shard {shard}/{shards}: {selected}/{cases} selected cases");
     eprintln!("{} of {compared} compared cases differ; formats the driver refuses as targets: {refused:?}", failures.len());
     for f in failures.iter().take(30) {
         eprintln!("{f}");

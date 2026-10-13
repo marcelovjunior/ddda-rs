@@ -821,3 +821,26 @@ The indexed-draw benchmark allocates 10 times instead of 15 (including
 test COM arguments). Paired debug medians on L92/L93 were 49.35 and 45.59
 us/draw; overlapping timing ranges limit that comparison. See
 [L90 results](tasks/L90-draw-costs.md) for GPU gates and later batches.
+### Deferred graphics backend (L89)
+
+`d3d9draw::set_backend` moves the supplied backend and optional capture onto
+one `d3d9-backend` host thread. `d3d9cmd::DeferredBackend` records owned
+commands into one FIFO, bounded to 2048 pending commands (a command-count
+bound, not a byte limit). Full queues block producers. Upload bytes and draw
+snapshots remain alive until execution; resource release and address reuse
+follow the same FIFO. The default headless Recorder remains immediate.
+
+At most two Presents can be outstanding; the first command of a third frame
+waits for the oldest Present. The window's `present_sink` executes on the
+worker, with the frame's copied `Presentation` installed in worker-local
+storage. It never reads runtime state or acquires the guest/device lock.
+Readbacks and occlusion results execute on the worker after preceding commands
+and return through a reply channel. Host-side query answers and render-target
+LockRect fence the queue first. Existing LockRect CPU-shadow behavior is
+unchanged; this does not implement its missing GPU-to-shadow readback.
+
+`DDRUNTIME_SYNC_BACKEND=1` keeps the previous synchronous installation path.
+Dropping/replacing the deferred backend drains accepted commands and joins the
+worker. A worker panic disconnects producers/results rather than leaving them
+waiting indefinitely. Test coverage and measurement limits are recorded in
+`tasks/L89-backend-worker.md`; gameplay FPS must be measured by the head.

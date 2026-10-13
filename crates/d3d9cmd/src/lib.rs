@@ -3,6 +3,9 @@
 //! draws with their complete state, clears and presents. A separate crate so
 //! that backends (crates/ddgpu, wgpu) do not depend on the runtime.
 
+mod deferred;
+pub use deferred::DeferredBackend;
+
 /// A texture's dimensionality.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TexKind {
@@ -172,6 +175,10 @@ pub struct FillCall {
 
 /// What draws the frames.
 pub trait GraphicsBackend: Send + std::any::Any {
+    /// Wait until previously recorded host commands have executed. Immediate
+    /// backends have nothing queued; read_back/query_result retain their own
+    /// GPU synchronization.
+    fn fence(&mut self) {}
     fn upload(&mut self, upload: Upload);
     fn draw(&mut self, draw: &DrawCall);
     fn clear(&mut self, clear: &ClearCall);

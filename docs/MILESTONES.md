@@ -1949,3 +1949,17 @@ opening (codex-31), route perf (codex-29).
   - the two loader threads run shards 15 and 19, still at opt-level 0.
 - Build: a full `play-fast` build takes ~6 min cold; a runtime-only relink
   takes ~20 s; the optimised `play` build takes ~25 min.
+
+### L89 deferred backend (2026-10-13, final measurements pending)
+
+- Implemented one owned, bounded FIFO and one backend worker, two outstanding
+  Presents, read-result fences, shutdown drain and per-frame presentation TLS.
+  `DDRUNTIME_SYNC_BACKEND=1` retains immediate execution.
+- Runtime **134**, queue **5**, capture **5**, GPU **33** pass; **3** existing
+  GPU tests ignored. Queued/synchronous frame pixels and worker sink match.
+- Target-format matrix exceeded the 60-second bound; standalone **0a1776ab**
+  shards its unchanged 200 cases. Final four shards and isolated timings wait
+  for the head's CPU-quiet build measurement. Preliminary contended producer
+  timings improve, but total frame time does not establish an FPS improvement.
+- Next: finish the bounded gate/timing, then head-run gameplay A/B. No game or
+  lifted-shard build by this lane. Details: `tasks/L89-backend-worker.md`.
