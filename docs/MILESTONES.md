@@ -29,6 +29,35 @@
 - Head-owned bounded WPR profile validates. Next: matched PMC and profiler-off
   gameplay A/B after playtest; actual snapshot/counters pending. Details:
   `docs/tasks/L168-tlb.md`.
+### L167 critical callbacks and exact shadow state save (2026-10-13)
+
+- Ranked 20,700 validated joins: sky-stable shadow EE2C90 leads at
+  3.905/3.651 ms solo overlap per frame; per-join IDs/durations retained.
+- Opt-in JOB_SHADOW_SAVE=1 ports whole FED480 state save with ordered
+  checked page accesses. 432 original returns, 68,200 paired fault/access
+  checks and serial/atomic production-memory replays pass. All 56 paired
+  helper samples improve, median 1.47–1.87x; no callback/FPS gain claimed.
+- Four isolated and four ranking tests pass; mtcore/ddports 20 pass,
+  nine ignored; light runtime 251 pass, zero fail, seven ignored.
+  Combined native gate and head image/per-job A/B pending.
+- Next: head train with this independent switch, then matched shadow-save
+  0/1 capture. Full evidence: `docs/tasks/L167-critical-callbacks.md`.
+
+### L158 combo31 critical paths and next lookup leaves (2026-10-13)
+
+- Late hash=0/1 captures: 150 frames / 10,350 joins each; main joins
+  **14.819→13.526 ms/frame**, solo callback tails **7.086→6.887**.
+  uSkyStableShadow leads 123/150 and 121/150 frames. Its join reduction
+  is **7.25%**, inside head's noise threshold; NPC counts change 8→7.
+  No clean causal port/frame improvement established.
+- Exact opt-in `JOB_LOOKUP` leaves 01008200/01008260: **1,380 original
+  vectors**, **11,520 paired fault/access cases**, serial/atomic replay.
+  Four isolated tests pass; synthetic **98/98 pairs improve**, medians
+  **1.43–2.68x**. Crate gate **19 pass / nine ignored**, Python **nine pass**.
+  Runtime light: **242 reported passes / zero failures / seven ignored**.
+- Verified trace compression recovers **3.12 GB**. Evidence and hashes:
+  `docs/tasks/L158-critical-jobs.md`. Combined native gate and live lookup
+  benefit remain pending; next: head integration gate and controlled A/B.
 
 ### L159 Vulkan default image gate (2026-10-13)
 

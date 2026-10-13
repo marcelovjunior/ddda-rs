@@ -13,6 +13,16 @@ are unproven. Runtime light 250 reported tests pass. Hardware miss rates and
 gameplay performance await the head-owned WPR/game A/B. See
 [L168 measurements and protocol](tasks/L168-tlb.md); alignment alone is not
 large-page backing. Rust allocator counters exclude VirtualAlloc regions.
+## L158 shader lookup opt-in (2026-10-13)
+
+`DDRUNTIME_JOB_LOOKUP=1` registers exact 01008200/01008260 dependency
+lookup leaves below the model-job shader path. Default remains off.
+Original vectors (1,380), isolated lifted/port replay and 11,520 paired
+access/fault positions pass; serial and atomic page policies agree.
+Combined native integration and head live A/B are pending. The combo31
+hash captures identify uSkyStableShadow as the dominant solo tail, but
+shared load and changed NPC counts prevent causal speedup attribution.
+See `docs/tasks/L158-critical-jobs.md` for windows, numbers and hashes.
 
 ## L160 job CPU sizing and wake diagnostics
 
@@ -1514,6 +1524,20 @@ The combined ARC microbenchmark improves 4.1-13.6%; FAST=2 alone is mixed.
 Modern-library parity and actual loading/image/control acceptance remain
 unestablished. Sources, hashes, measurements and limits:
 [task L156](tasks/L156-inflate-fast.md).
+## L167 exact shadow callback state save
+
+`DDRUNTIME_JOB_SHADOW_SAVE=1` opts into the whole FED480 context state-save
+port. Its partial-save branch retains 81 ordered MOVSD-width accesses,
+DF, overlap, guest ABI, and install-supplied selection keys, while using
+checked `Pages` in the native port. The full-save branch delegates to the
+existing memcpy dispatch. No scheduler or callback work order changes.
+
+432 original returns, 68,200 paired fault/access positions, and both
+serial/atomic production-memory replays pass. Isolated helper speedup is
+1.47–1.87x median; combined native gate and head callback/image/FPS A/B
+remain pending. Default off. Per-join ranking and source/corpus details:
+[L167 results](tasks/L167-critical-callbacks.md).
+
 ## L162 job participant diagnostic
 
 `DDRUNTIME_JOB_PARTICIPANTS=1..8` invokes original `00DBD620` after sMain
