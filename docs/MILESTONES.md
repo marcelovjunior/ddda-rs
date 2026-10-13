@@ -44,6 +44,28 @@
   variants are rejected, including corrupted and extra heap writes below ESP.
 - Next: head merges registrations and validates the combined semantic train
   against the native gate and matched image/critical-job capture.
+### L178 semantic instanced-model draw (2026-10-13)
+
+- C24640 `uOmSwingBaseInstancing::vf26` registered under SEMANTIC:
+  **256 original returns**, **337/337 body instructions**, including
+  callback buffers and nonstandard register arguments.
+- Five combined isolated tests pass, opt2 and serial/atomic Pages;
+  synthetic paired median **1.076x**, 58/77 improving pairs. No game run.
+- Next: head combined train; D7CF70 collision/simplex proof remains open.
+  Detailed evidence and runtime timing-test failures: L178 brief.
+
+### L178 semantic job bounds traversal (2026-10-13)
+
+- Opt-in `DDRUNTIME_SEMANTIC=1` replaces 010A35D0 with a semantic
+  four-way bounds traversal preserving guest work records and callbacks.
+- **192 original returns**, **369/369 body instructions**; ABI and
+  serial/atomic Pages replay pass. Four isolated tests include an opt2
+  lifted baseline and deliberate heap-corruption rejection.
+- Synthetic paired median **1.243x**, 63/77 improving pairs; individual
+  regressions remain. No gameplay/FPS or shard-build claim.
+- Next: head accumulated train; complete D7CF70/C24640 gates. Evidence,
+  private corpus hash and light-suite results: `docs/tasks/L178-semantic-jobs.md`.
+
 ### L169 exact shadow traversal and setup (2026-10-13)
 
 - Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
