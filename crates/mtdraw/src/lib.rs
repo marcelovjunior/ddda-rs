@@ -16,4 +16,5 @@
 //! lifted body on generated command lists).
 
 pub mod abi;
+pub mod apply;
 pub mod executor;

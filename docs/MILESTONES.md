@@ -2132,3 +2132,13 @@ opening (codex-31), route perf (codex-29).
 - Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+### L125 apply ABI ports, first batch (2026-10-13)
+
+- Targets, fixed-state and stream wrappers match **384 original Unicorn
+  cases** and isolated lifted-body replay, including ordered calls, all
+  GPR/XMM state, x87 control/status/depth and written bytes at call/return.
+- Pure binding decoders agreed with L119; three wrappers enter ddports
+  through mtdraw::abi::PORTS. No shard or game build/run, no FPS claim.
+- Next: complete shader/constants wrapper, expand coverage and measure.
+  Details: docs/tasks/L125-apply-ports.md.
