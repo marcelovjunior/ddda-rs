@@ -370,6 +370,9 @@ pub struct NativeJobStats {
     pub bundle_builds: u64,
     pub bundle_hits: u64,
     pub worker_instances: u64,
+    /// releases of resources the worker held: its resource tables reset
+    /// (pipelines kept)
+    pub resource_resets: u64,
     /// Worker refusals, not producer enqueue failures. At most 64 exact
     /// reasons plus an overflow bucket, to bound diagnostic memory.
     pub rejection_reasons: std::collections::BTreeMap<String, u64>,
@@ -419,11 +422,17 @@ pub(crate) struct Worker {
     device: n::Device,
     recording: Option<n::RecorderState>,
     constants: FxMap<n::Shader, n::ConstantBuffer>,
+    /// the register arrays last applied to each constant buffer (held, so
+    /// a pointer compare is exact): the same arrays are not applied again
+    applied: FxMap<n::ConstantBuffer, NativeConstants>,
     shaders: FxMap<(usize, n::Stage), ShaderEntry>,
     inputs: FxMap<InputKey, InputEntry>,
     fixed: FxMap<NativeStateIdentity, Vec<FixedEntry>>,
     buffers: FxMap<wgpu::Buffer, n::Buffer>,
     views: FxMap<wgpu::TextureView, n::View>,
+    /// render targets by surface and sRGB view (the backend's own target
+    /// view cache is cleared at every release)
+    targets: FxMap<(u32, bool), (n::View, wgpu::TextureFormat)>,
     sampled: FxMap<(wgpu::Texture, bool), n::View>,
     samplers: FxMap<[u32; 14], n::Sampler>,
     texture_sets: FxMap<(n::Pipeline, usize), (Arc<[TextureBinding]>, [n::TextureSet; 2])>,
@@ -455,9 +464,9 @@ impl WgpuBackend {
                 .unwrap_or_default();
             // These are worker outcomes, unlike the producer's enqueue totals.
             // Submitted does not mean GPU-complete or image-verified.
-            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} worker_instances={} pipelines={pipelines} texture_sets={texture_sets}",
+            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} worker_instances={} resource_resets={} pipelines={pipelines} texture_sets={texture_sets}",
                 s.accepted, s.rejected, s.rejected_draws, s.rejected_passes, s.draws, s.passes, s.upload_bytes,
-                s.dirty_registers, s.bundle_builds, s.bundle_hits, s.worker_instances);
+                s.dirty_registers, s.bundle_builds, s.bundle_hits, s.worker_instances, s.resource_resets);
             if !s.rejection_reasons.is_empty() {
                 eprintln!("native-worker refusal histogram: {:?}", s.rejection_reasons);
             }
@@ -515,11 +524,13 @@ impl Worker {
             device: n::Device::new(backend.device.clone(), backend.queue.clone()),
             recording: None,
             constants: Default::default(),
+            applied: Default::default(),
             shaders: Default::default(),
             inputs: Default::default(),
             fixed: Default::default(),
             buffers: Default::default(),
             views: Default::default(),
+            targets: Default::default(),
             sampled: Default::default(),
             samplers: Default::default(),
             texture_sets: Default::default(),
@@ -559,7 +570,13 @@ impl Worker {
         if crate::sample_count(target)? != 1 {
             return Err("native job MSAA unsupported".into());
         }
-        let (view, format) = if let Some(pair) = overrides.iter().find(|p| p.target == *target) {
+        let shadow = overrides.iter().find(|p| p.target == *target);
+        if shadow.is_none() {
+            if let Some(&hit) = self.targets.get(&(target.surface, srgb)) {
+                return Ok(hit);
+            }
+        }
+        let (view, format) = if let Some(pair) = shadow {
             (
                 if srgb {
                     pair.shadow.srgb.clone()
@@ -581,7 +598,28 @@ impl Worker {
             self.device
                 .retain_view(view, format, [target.width, target.height], 1)
         });
+        if shadow.is_none() {
+            self.targets.insert((target.surface, srgb), (handle, format));
+        }
         Ok((handle, format))
+    }
+    /// Whether the worker holds `buffer` or a view of `texture`.
+    pub(crate) fn holds(&self, buffer: Option<&wgpu::Buffer>, texture: Option<&wgpu::Texture>) -> bool {
+        buffer.is_some_and(|b| self.buffers.contains_key(b))
+            || texture.is_some_and(|t| self.sampled.contains_key(&(t.clone(), false)) || self.sampled.contains_key(&(t.clone(), true)))
+    }
+    /// Forget every resource the worker imported, with the recorder state
+    /// that may still name them; keep shaders, states and pipelines.
+    pub(crate) fn reset_resources(&mut self) {
+        self.device.reset_resources();
+        self.recording = None;
+        self.constants.clear();
+        self.applied.clear();
+        self.buffers.clear();
+        self.views.clear();
+        self.targets.clear();
+        self.sampled.clear();
+        self.texture_sets.clear();
     }
     fn buffer(
         &mut self,
@@ -1044,6 +1082,7 @@ impl Worker {
             Some(state) if state.uniform_capacity() >= bytes => n::Recorder::from_state(&self.device, state),
             _ => {
                 self.constants.clear();
+                self.applied.clear();
                 let resident_limit =
                     ((backend.device.limits().max_storage_buffer_binding_size - 16) * 4 / 5) / 256 * 256;
                 let resident = bytes.next_multiple_of(256) <= resident_limit;
@@ -1060,6 +1099,7 @@ impl Worker {
             }
         };
         let before = recorder.stats;
+        let applied = &mut self.applied;
         let constants = &mut self.constants;
         for p in &prepared {
             for d in &p.draws {
@@ -1086,12 +1126,15 @@ impl Worker {
                 for (stage, updates) in [&d.ps_constants, &d.vs_constants].into_iter().enumerate() {
                     let shader = p.shaders[stage];
                     let c = constants[&shader];
-                    apply_constants(
-                        &mut recorder,
-                        c,
-                        self.device.shader_constant_layout(shader),
-                        updates,
-                    )?;
+                    if !applied.get(&c).is_some_and(|last| same_arrays(last, updates)) {
+                        apply_constants(
+                            &mut recorder,
+                            c,
+                            self.device.shader_constant_layout(shader),
+                            updates,
+                        )?;
+                        applied.insert(c, updates.clone());
+                    }
                     recorder.set_constants(c);
                 }
                 let v = d.viewport;
@@ -1257,6 +1300,16 @@ fn primitive_vertices(kind: u32, primitives: u32) -> Result<u32, String> {
 fn words_bytes(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
+/// The same register arrays (by pointer: they are immutable and held) at
+/// the same registers: applying `b` after `a` changes nothing.
+fn same_arrays(a: &NativeConstants, b: &NativeConstants) -> bool {
+    a.floats.len() == b.floats.len()
+        && a.ints.len() == b.ints.len()
+        && a.bools.len() == b.bools.len()
+        && a.floats.iter().zip(&b.floats).all(|(x, y)| x.first == y.first && Arc::ptr_eq(&x.registers, &y.registers))
+        && a.ints.iter().zip(&b.ints).all(|(x, y)| x.first == y.first && Arc::ptr_eq(&x.registers, &y.registers))
+        && a.bools.iter().zip(&b.bools).all(|(x, y)| x.first == y.first && Arc::ptr_eq(&x.registers, &y.registers))
+}
 fn apply_constants(
     recorder: &mut n::Recorder<'_>,
     buffer: n::ConstantBuffer,
@@ -1267,35 +1320,24 @@ fn apply_constants(
         let first = (write.first as usize).min(layout.floats);
         let count = write.registers.len().min(layout.floats - first);
         if count != 0 {
-            recorder.update_constant_range(
-                buffer,
-                first * 16,
-                &write.registers[..count]
-                    .iter()
-                    .flatten()
-                    .flat_map(|x| x.to_le_bytes())
-                    .collect::<Vec<_>>(),
-            )?;
+            recorder.update_constant_words(buffer, first * 16, write.registers[..count].as_flattened())?;
         }
     }
     for write in &updates.ints {
-        recorder.update_constant_range(
-            buffer,
-            layout.int_offset + write.first as usize * 16,
-            &write
-                .registers
-                .iter()
-                .flatten()
-                .flat_map(|x| x.to_le_bytes())
-                .collect::<Vec<_>>(),
-        )?;
+        for (k, r) in write.registers.iter().enumerate() {
+            recorder.update_constant_words(
+                buffer,
+                layout.int_offset + (write.first as usize + k) * 16,
+                &r.map(|x| x as u32),
+            )?;
+        }
     }
     for write in &updates.bools {
         for (index, &value) in write.registers.iter().enumerate() {
-            recorder.update_constant_range(
+            recorder.update_constant_words(
                 buffer,
                 layout.bool_offset + (write.first as usize + index) * 16,
-                &value.to_le_bytes(),
+                &[value],
             )?;
         }
     }
