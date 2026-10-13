@@ -301,7 +301,7 @@ def pretty(name):
 
 
 WAITS = ("NtWait", "ZwWait", "NtDelayExecution", "NtRemoveIoCompletion", "NtUserMsgWaitForMultipleObjects",
-         "NtUserGetMessage", "NtAlertThreadByThreadId", "NtWaitForAlertByThreadId", "ZwRemoveIoCompletion",
+         "NtUserGetMessage", "NtWaitForAlertByThreadId", "ZwRemoveIoCompletion",
          "NtSignalAndWaitForSingleObject", "NtUserWaitMessage")
 
 

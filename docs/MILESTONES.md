@@ -2,6 +2,13 @@
 
 ### L154 render-worker allocation census (2026-10-13)
 
+- c26 offline wait attribution: render request event 323 samples at DAC0B4;
+  main residual join 512 at DBE66D; Present retirement 7, command send 2.
+  Wake notifications now classified separately; **25 Python tests pass**.
+- CPU deltas (main 54.4%, render 55.3%) differ from sampled busy shares;
+  22.28 Hz sequential sampling cannot establish the causal frame timeline.
+  L153 measured durations and L157 source map provide the complementary evidence.
+
 - Timed exact-thread Rust allocation/free census avoids startup contamination;
   all bounded-table rows and overflow are reported, ranked by calls or bytes.
 - Standalone allocator/parser **3 tests pass**, command **14**, ddgpu CPU **26**;
