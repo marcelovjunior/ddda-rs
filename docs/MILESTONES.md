@@ -1,5 +1,24 @@
 # Milestones
 
+### L161 generator flag fixed point (2026-10-13)
+
+- Audited ten hot main/job lifted routines against raw stacks and opt1
+  assembly. Register caching showed mixed timings and was rejected.
+  Independent generator switch `LIFT_FLAG_FIXED_POINT=1` removes dead
+  carry chains; default off. Regeneration removes 3,238 net flag helpers,
+  preserves 44 step bodies and all per-function memory-helper counts.
+- Full opt0 native/vector/inventory gate: 107 pass, 0 failures, 9 ignored;
+  178,130 original cases / 59,734 functions, five unchanged inventory gaps.
+  Generation 927.60 s; opt0 prebuild 370 s. Isolated opt0/opt1 replay passes
+  31 cases; 43 focused generator/fixture tests pass. Full opt1 build stopped
+  per head's shared-train rule; completion remains with that train.
+- Long hash-loop medians improve 1.032–1.824x opt0 / 1.150–1.879x opt1;
+  other fixture timings mixed. Not additive to L158 JOB_HASH=1. No game
+  FPS claim. Runtime light: 232 pass, two timing failures, seven ignored;
+  both failures pass isolated retries. Details: `docs/tasks/L161-codegen.md`.
+- Next: head combined generation/gate with the switch enabled, then
+  matched image/FPS acceptance.
+
 ### L153 game-thread synchronization (2026-10-13)
 
 - Head combo26 late-game census: main plus six joined workers, about 69
