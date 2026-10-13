@@ -195,7 +195,7 @@ fn main() {
 
     let no_lock = std::env::var_os("RW_NOLOCK").is_some();
     let n: u32 = std::env::var("RW_N").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000);
-    let mut best = [f64::MAX; 3];
+    let mut best = [f64::MAX; 4];
     let mut allocs = 0.0;
     ddruntime::threads::without_lock(|| {
         for round in 0..4 {
@@ -243,13 +243,22 @@ fn main() {
             // host reads of guest memory: 1M u32 through &dyn Mem, and a 64 KB bulk read
             let t = Instant::now();
             let mut sum = 0u32;
+            let opaque: &dyn Mem = std::hint::black_box(&*mem);
             for k in 0..1_000_000u32 {
-                sum = sum.wrapping_add(mem.u32(DATA + 4 * (k & 1023)));
+                sum = sum.wrapping_add(opaque.u32(DATA + 4 * (k & 1023)));
             }
             std::hint::black_box(sum);
             let read = t.elapsed().as_secs_f64() * 1e9 / 1e6;
+            // the same through the page table (ddnative-base's Pages, the readable ports' path)
+            let t = Instant::now();
+            let g = ddnative_base::mem::Pages::of(opaque);
+            for k in 0..1_000_000u32 {
+                sum = sum.wrapping_add(g.u32(opaque, DATA + 4 * (k & 1023)));
+            }
+            std::hint::black_box(sum);
+            let paged = t.elapsed().as_secs_f64() * 1e9 / 1e6;
             if round > 0 {
-                best = [best[0].min(frame), best[1].min(draw), best[2].min(read)];
+                best = [best[0].min(frame), best[1].min(draw), best[2].min(read), best[3].min(paged)];
                 allocs = a;
             }
         }
@@ -265,7 +274,7 @@ fn main() {
         }
         let gbs = 2000.0 * buf.len() as f64 / t.elapsed().as_secs_f64() / 1e9;
         println!("per iteration (Lock/Unlock 4 KB, SetTexture, 16+4 constants, DrawIndexedPrimitive): {:.0} ns, {allocs:.1} allocations", best[0]);
-        println!("DrawIndexedPrimitive alone: {:.0} ns; guest u32 read through &dyn Mem: {:.2} ns; read_bytes 64 KB (parallel mode): {gbs:.2} GB/s", best[1], best[2]);
+        println!("DrawIndexedPrimitive alone: {:.0} ns; guest u32 read through &dyn Mem: {:.2} ns, through Pages: {:.2} ns; read_bytes 64 KB (parallel mode): {gbs:.2} GB/s", best[1], best[2], best[3]);
     });
     quit();
 }

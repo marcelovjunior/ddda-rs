@@ -34,7 +34,7 @@
 //! addresses. The frame offsets below are the original's ESP offsets with
 //! no argument pushed.
 
-use ddnative_base::mem::Mem;
+use ddnative_base::mem::{Mem, Pages};
 use ddnative_base::x86::{self, Cpu};
 use mtcore::machine::{call_out, pop, push};
 
@@ -168,26 +168,27 @@ fn primitives(cpu: &mut Cpu, code: u32, count: u32) {
 /// object pushed, then the context (`lea`), ECX = sRender held in EBX. The
 /// registers rotate EDX, EAX, ECX, ... (types 1 and 3).
 fn apply_all(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, returns: [u32; 4]) {
-    cpu.edx = m.u32(record.wrapping_add(4));
-    cpu.ebx = m.u32(at(cpu, RENDER));
+    let g = Pages::of(m);
+    cpu.edx = g.u32(m, record.wrapping_add(4));
+    cpu.ebx = g.u32(m, at(cpu, RENDER));
     push(m, cpu, cpu.edx);
     cpu.eax = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.eax);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_TARGETS, returns[0]);
-    cpu.ecx = m.u32(record.wrapping_add(8));
+    cpu.ecx = g.u32(m, record.wrapping_add(8));
     push(m, cpu, cpu.ecx);
     cpu.edx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.edx);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_STATES, returns[1]);
-    cpu.eax = m.u32(record.wrapping_add(0x10));
+    cpu.eax = g.u32(m, record.wrapping_add(0x10));
     push(m, cpu, cpu.eax);
     cpu.ecx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.ecx);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_STREAMS, returns[2]);
-    cpu.edx = m.u32(record.wrapping_add(0xC));
+    cpu.edx = g.u32(m, record.wrapping_add(0xC));
     push(m, cpu, cpu.edx);
     cpu.eax = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.eax);
@@ -198,26 +199,27 @@ fn apply_all(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, returns: [u32; 4]) {
 /// The same four calls with the registers rotated EAX, ECX, EDX, ...
 /// (types 0 and 2).
 fn apply_all_alt(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, returns: [u32; 4]) {
-    cpu.eax = m.u32(record.wrapping_add(4));
-    cpu.ebx = m.u32(at(cpu, RENDER));
+    let g = Pages::of(m);
+    cpu.eax = g.u32(m, record.wrapping_add(4));
+    cpu.ebx = g.u32(m, at(cpu, RENDER));
     push(m, cpu, cpu.eax);
     cpu.ecx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.ecx);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_TARGETS, returns[0]);
-    cpu.edx = m.u32(record.wrapping_add(8));
+    cpu.edx = g.u32(m, record.wrapping_add(8));
     push(m, cpu, cpu.edx);
     cpu.eax = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.eax);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_STATES, returns[1]);
-    cpu.ecx = m.u32(record.wrapping_add(0x10));
+    cpu.ecx = g.u32(m, record.wrapping_add(0x10));
     push(m, cpu, cpu.ecx);
     cpu.edx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.edx);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_STREAMS, returns[2]);
-    cpu.eax = m.u32(record.wrapping_add(0xC));
+    cpu.eax = g.u32(m, record.wrapping_add(0xC));
     push(m, cpu, cpu.eax);
     cpu.ecx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.ecx);
@@ -228,10 +230,11 @@ fn apply_all_alt(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, returns: [u32; 4])
 /// `IDirect3DDevice9::DrawPrimitive(type = EAX, start = record+0x18,
 /// count = ECX)` as the original pushes it (EDX = the method).
 fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, return_to: u32) {
-    cpu.edx = m.u32(cpu.edi);
-    cpu.edx = m.u32(cpu.edx.wrapping_add(DRAW_PRIMITIVE));
+    let g = Pages::of(m);
+    cpu.edx = g.u32(m, cpu.edi);
+    cpu.edx = g.u32(m, cpu.edx.wrapping_add(DRAW_PRIMITIVE));
     push(m, cpu, cpu.ecx);
-    cpu.ecx = m.u32(record.wrapping_add(0x18));
+    cpu.ecx = g.u32(m, record.wrapping_add(0x18));
     push(m, cpu, cpu.ecx);
     push(m, cpu, cpu.eax);
     push(m, cpu, cpu.edi);
@@ -242,16 +245,17 @@ fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, return_to: u32) {
 /// vertices = VERTICES - base, start = record+0x18, count = ECX)`
 /// (EBX = the vtable, EDX = the method).
 fn draw_indexed(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, return_to: u32) {
-    cpu.edx = m.u32(record.wrapping_add(0x1C));
-    cpu.ebx = m.u32(cpu.edi);
+    let g = Pages::of(m);
+    cpu.edx = g.u32(m, record.wrapping_add(0x1C));
+    cpu.ebx = g.u32(m, cpu.edi);
     push(m, cpu, cpu.ecx);
-    cpu.ecx = m.u32(record.wrapping_add(0x18));
+    cpu.ecx = g.u32(m, record.wrapping_add(0x18));
     push(m, cpu, cpu.ecx);
-    cpu.ecx = m.u32(at(cpu, VERTICES + 8)).wrapping_sub(cpu.edx);
+    cpu.ecx = g.u32(m, at(cpu, VERTICES + 8)).wrapping_sub(cpu.edx);
     push(m, cpu, cpu.ecx);
     push(m, cpu, 0);
     push(m, cpu, cpu.edx);
-    cpu.edx = m.u32(cpu.ebx.wrapping_add(DRAW_INDEXED_PRIMITIVE));
+    cpu.edx = g.u32(m, cpu.ebx.wrapping_add(DRAW_INDEXED_PRIMITIVE));
     push(m, cpu, cpu.eax);
     push(m, cpu, cpu.edi);
     call(m, cpu, cpu.edx, return_to);
@@ -267,6 +271,7 @@ enum Next {
 
 /// thiscall `sRender::execute()`: ECX = sRender.
 pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let g = Pages::of(m);
     // prologue: a 16-byte aligned frame of 0xE74 bytes
     push(m, cpu, cpu.ebp);
     cpu.ebp = cpu.esp;
@@ -277,21 +282,21 @@ pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
     push(m, cpu, cpu.esi);
     push(m, cpu, cpu.edi);
     cpu.esi = cpu.ecx;
-    cpu.edi = m.u32(cpu.esi.wrapping_add(0x98)); // the device
+    cpu.edi = g.u32(m, cpu.esi.wrapping_add(0x98)); // the device
     cpu.eax = at(cpu, CONTEXT);
     push(m, cpu, cpu.eax);
-    m.set_u32(at(cpu, RENDER + 4), cpu.esi);
+    g.set_u32(m, at(cpu, RENDER + 4), cpu.esi);
     // eight words of the context, zeroed again by BEGIN_CONTEXT's memset
     for k in 0..8 {
-        m.set_u32(at(cpu, 0xC0 + 4 * k), cpu.ebx);
+        g.set_u32(m, at(cpu, 0xC0 + 4 * k), cpu.ebx);
     }
     call(m, cpu, BEGIN_CONTEXT, 0x00DA_B4DF);
     device_call(m, cpu, BEGIN_SCENE, 0x00DA_B4EA);
-    cpu.eax = (cpu.eax & !0xFF) | m.u8(cpu.esi.wrapping_add(0x30)) as u32;
-    m.set_u8(at(cpu, MERGE), cpu.eax as u8);
-    m.set_u32(at(cpu, BATCH), cpu.ebx);
-    m.set_u32(at(cpu, BATCH_START), cpu.ebx);
-    m.set_u32(at(cpu, BATCH_COUNT), cpu.ebx);
+    cpu.eax = (cpu.eax & !0xFF) | g.u8(m, cpu.esi.wrapping_add(0x30)) as u32;
+    g.set_u8(m, at(cpu, MERGE), cpu.eax as u8);
+    g.set_u32(m, at(cpu, BATCH), cpu.ebx);
+    g.set_u32(m, at(cpu, BATCH_START), cpu.ebx);
+    g.set_u32(m, at(cpu, BATCH_COUNT), cpu.ebx);
     // L119: a native sink, if one is installed, is offered the commands
     let sink = crate::sink::sink();
     if let Some(s) = &sink {
@@ -301,13 +306,13 @@ pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut next = Next::Reload;
     loop {
         if let Next::Reload = next {
-            cpu.ebx = m.u32(at(cpu, DEPTH));
+            cpu.ebx = g.u32(m, at(cpu, DEPTH));
         }
         // the next entry (0 when the frame's commands are done)
         let Some(entry) = fetch(m, cpu) else { break };
-        cpu.ecx = m.u32(entry.wrapping_add(0x14)); // a read the original makes (unused)
-        cpu.ecx = m.u32(at(cpu, BATCH));
-        cpu.esi = m.u32(entry.wrapping_add(4)); // the record
+        cpu.ecx = g.u32(m, entry.wrapping_add(0x14)); // a read the original makes (unused)
+        cpu.ecx = g.u32(m, at(cpu, BATCH));
+        cpu.esi = g.u32(m, entry.wrapping_add(4)); // the record
         if cpu.ecx != 0 {
             match merge_or_flush(m, cpu) {
                 Some(n) => {
@@ -318,7 +323,7 @@ pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
             }
         }
         if let Some(s) = &sink {
-            let kind = m.u16(cpu.esi.wrapping_add(2)) as u32 & 0xF;
+            let kind = g.u16(m, cpu.esi.wrapping_add(2)) as u32 & 0xF;
             // nested lists are walked here whatever the sink does
             if kind != 6 && s.command(m, at(cpu, CONTEXT), cpu.esi, kind) == crate::sink::Taken::Handled {
                 next = Next::Reload;
@@ -328,7 +333,7 @@ pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
         next = dispatch(m, cpu);
     }
     if let Some(s) = &sink {
-        let render = m.u32(at(cpu, RENDER));
+        let render = g.u32(m, at(cpu, RENDER));
         s.frame_end(m, render, at(cpu, CONTEXT));
     }
     finish(m, cpu);
@@ -337,8 +342,9 @@ pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// `push this; call [vtable + offset]` with ECX = the vtable, EDX = the
 /// method (BeginScene, EndScene).
 fn device_call(m: &mut dyn Mem, cpu: &mut Cpu, offset: u32, return_to: u32) {
-    cpu.ecx = m.u32(cpu.edi);
-    cpu.edx = m.u32(cpu.ecx.wrapping_add(offset));
+    let g = Pages::of(m);
+    cpu.ecx = g.u32(m, cpu.edi);
+    cpu.edx = g.u32(m, cpu.ecx.wrapping_add(offset));
     push(m, cpu, cpu.edi);
     call(m, cpu, cpu.edx, return_to);
 }
@@ -347,15 +353,16 @@ fn device_call(m: &mut dyn Mem, cpu: &mut Cpu, offset: u32, return_to: u32) {
 /// past the level's end, pop to the first level with an entry left (its
 /// cursor += 8). None: nothing is left, or the entry is null.
 fn fetch(m: &mut dyn Mem, cpu: &mut Cpu) -> Option<u32> {
+    let g = Pages::of(m);
     cpu.ecx = cpu.ebx.wrapping_mul(3);
     let cursor = at(cpu, RANGES + 4).wrapping_add(cpu.ecx.wrapping_mul(4));
-    cpu.eax = m.u32(cursor);
+    cpu.eax = g.u32(m, cursor);
     cpu.ecx = cursor;
     cpu.edx = cpu.eax.wrapping_add(8);
-    m.set_u32(cpu.ecx, cpu.edx);
-    cpu.ebx = m.u32(at(cpu, DEPTH));
+    g.set_u32(m, cpu.ecx, cpu.edx);
+    cpu.ebx = g.u32(m, at(cpu, DEPTH));
     cpu.ecx = cpu.ebx.wrapping_mul(3);
-    if cpu.eax >= m.u32(at(cpu, RANGES + 8).wrapping_add(cpu.ecx.wrapping_mul(4))) {
+    if cpu.eax >= g.u32(m, at(cpu, RANGES + 8).wrapping_add(cpu.ecx.wrapping_mul(4))) {
         // this level is done: pop
         if (cpu.ebx as i32) <= 0 {
             return None;
@@ -363,9 +370,9 @@ fn fetch(m: &mut dyn Mem, cpu: &mut Cpu) -> Option<u32> {
         loop {
             cpu.ebx = cpu.ebx.wrapping_sub(1);
             cpu.eax = cpu.ebx.wrapping_mul(3).wrapping_mul(4);
-            m.set_u32(at(cpu, DEPTH), cpu.ebx);
-            cpu.edx = m.u32(at(cpu, RANGES + 4).wrapping_add(cpu.eax));
-            if cpu.edx < m.u32(at(cpu, RANGES + 8).wrapping_add(cpu.eax)) {
+            g.set_u32(m, at(cpu, DEPTH), cpu.ebx);
+            cpu.edx = g.u32(m, at(cpu, RANGES + 4).wrapping_add(cpu.eax));
+            if cpu.edx < g.u32(m, at(cpu, RANGES + 8).wrapping_add(cpu.eax)) {
                 break;
             }
             if (cpu.ebx as i32) <= 0 {
@@ -374,24 +381,25 @@ fn fetch(m: &mut dyn Mem, cpu: &mut Cpu) -> Option<u32> {
         }
         cpu.ecx = cpu.ebx.wrapping_mul(3);
         let cursor = at(cpu, RANGES + 4).wrapping_add(cpu.ecx.wrapping_mul(4));
-        cpu.eax = m.u32(cursor);
+        cpu.eax = g.u32(m, cursor);
         cpu.ecx = cursor;
         cpu.edx = cpu.eax.wrapping_add(8);
-        m.set_u32(cpu.ecx, cpu.edx);
-        cpu.ebx = m.u32(at(cpu, DEPTH));
+        g.set_u32(m, cpu.ecx, cpu.edx);
+        cpu.ebx = g.u32(m, at(cpu, DEPTH));
     }
     (cpu.eax != 0).then_some(cpu.eax)
 }
 
 /// 0x00DAB554: EndScene, then END_CONTEXT(context) on sRender; the epilogue.
 fn finish(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.edx = m.u32(cpu.edi);
-    cpu.eax = m.u32(cpu.edx.wrapping_add(END_SCENE));
+    let g = Pages::of(m);
+    cpu.edx = g.u32(m, cpu.edi);
+    cpu.eax = g.u32(m, cpu.edx.wrapping_add(END_SCENE));
     push(m, cpu, cpu.edi);
     call(m, cpu, cpu.eax, 0x00DA_B55F);
     cpu.ecx = at(cpu, CONTEXT);
     push(m, cpu, cpu.ecx);
-    cpu.ecx = m.u32(at(cpu, RENDER + 4));
+    cpu.ecx = g.u32(m, at(cpu, RENDER + 4));
     call(m, cpu, END_CONTEXT, 0x00DA_B56D);
     cpu.edi = pop(m, cpu);
     cpu.esi = pop(m, cpu);
@@ -406,42 +414,43 @@ fn finish(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// fetch again); otherwise the pending draw is made and the record
 /// dispatched (None).
 fn merge_or_flush(m: &mut dyn Mem, cpu: &mut Cpu) -> Option<Next> {
+    let g = Pages::of(m);
     let pending = cpu.ecx;
     let record = cpu.esi;
-    let same = (m.u8(record.wrapping_add(2)) ^ m.u8(pending.wrapping_add(2))) & 0xF == 0
-        && m.u32(pending.wrapping_add(0xC)) == m.u32(record.wrapping_add(0xC))
-        && m.u32(pending.wrapping_add(0x10)) == m.u32(record.wrapping_add(0x10))
-        && m.u32(pending.wrapping_add(8)) == m.u32(record.wrapping_add(8))
-        && m.u32(pending.wrapping_add(4)) == m.u32(record.wrapping_add(4))
-        && m.u32(pending.wrapping_add(0x1C)) == m.u32(record.wrapping_add(0x1C));
+    let same = (g.u8(m, record.wrapping_add(2)) ^ g.u8(m, pending.wrapping_add(2))) & 0xF == 0
+        && g.u32(m, pending.wrapping_add(0xC)) == g.u32(m, record.wrapping_add(0xC))
+        && g.u32(m, pending.wrapping_add(0x10)) == g.u32(m, record.wrapping_add(0x10))
+        && g.u32(m, pending.wrapping_add(8)) == g.u32(m, record.wrapping_add(8))
+        && g.u32(m, pending.wrapping_add(4)) == g.u32(m, record.wrapping_add(4))
+        && g.u32(m, pending.wrapping_add(0x1C)) == g.u32(m, record.wrapping_add(0x1C));
     if same {
-        cpu.eax = m.u32(at(cpu, BATCH_COUNT));
-        cpu.edx = m.u32(at(cpu, BATCH_START));
+        cpu.eax = g.u32(m, at(cpu, BATCH_COUNT));
+        cpu.edx = g.u32(m, at(cpu, BATCH_START));
         cpu.ecx = (cpu.eax & 1).wrapping_add(cpu.eax);
         // the next start: count rounded up to even, + 2 (a strip continued
         // across a degenerate pair)
         cpu.edx = cpu.ecx.wrapping_add(cpu.edx).wrapping_add(2);
-        cpu.ecx = m.u32(record.wrapping_add(0x18));
+        cpu.ecx = g.u32(m, record.wrapping_add(0x18));
         if cpu.edx == cpu.ecx {
-            cpu.eax = m.u32(record.wrapping_add(0x14));
-            m.set_u32(at(cpu, BATCH_COUNT), cpu.eax);
-            m.set_u32(at(cpu, BATCH_START), cpu.ecx);
+            cpu.eax = g.u32(m, record.wrapping_add(0x14));
+            g.set_u32(m, at(cpu, BATCH_COUNT), cpu.eax);
+            g.set_u32(m, at(cpu, BATCH_START), cpu.ecx);
             return Some(Next::Fetch);
         }
-        cpu.ecx = m.u32(at(cpu, BATCH));
+        cpu.ecx = g.u32(m, at(cpu, BATCH));
     } else {
         // (the registers the compares loaded are all reloaded below)
-        cpu.eax = m.u32(at(cpu, BATCH_COUNT));
+        cpu.eax = g.u32(m, at(cpu, BATCH_COUNT));
         cpu.ecx = pending;
     }
     // 0x00DAB616: draw the pending indices
-    cpu.edx = m.u32(cpu.ecx.wrapping_add(0x18));
-    cpu.ecx = m.u32(cpu.ecx.wrapping_add(0xC));
+    cpu.edx = g.u32(m, cpu.ecx.wrapping_add(0x18));
+    cpu.ecx = g.u32(m, cpu.ecx.wrapping_add(0xC));
     cpu.eax = cpu.eax.wrapping_sub(cpu.edx);
-    cpu.eax = cpu.eax.wrapping_add(m.u32(at(cpu, BATCH_START)));
-    m.set_u32(at(cpu, BATCH_COUNT), cpu.edx);
+    cpu.eax = cpu.eax.wrapping_add(g.u32(m, at(cpu, BATCH_START)));
+    g.set_u32(m, at(cpu, BATCH_COUNT), cpu.edx);
     cpu.edx = cpu.eax;
-    cpu.eax = m.u32(cpu.ecx);
+    cpu.eax = g.u32(m, cpu.ecx);
     cpu.eax = (cpu.eax >> 21) & 0xFF;
     cpu.eax = cpu.eax.wrapping_sub(1);
     let kind = match cpu.eax {
@@ -467,33 +476,34 @@ fn merge_or_flush(m: &mut dyn Mem, cpu: &mut Cpu) -> Option<Next> {
         _ => 0,
     };
     if kind != 0 {
-        m.set_u32(at(cpu, BATCH_START), kind);
-        cpu.eax = m.u32(at(cpu, BATCH));
-        cpu.eax = m.u32(cpu.eax.wrapping_add(0x1C));
-        cpu.ecx = m.u32(cpu.edi);
-        cpu.ecx = m.u32(cpu.ecx.wrapping_add(DRAW_INDEXED_PRIMITIVE));
+        g.set_u32(m, at(cpu, BATCH_START), kind);
+        cpu.eax = g.u32(m, at(cpu, BATCH));
+        cpu.eax = g.u32(m, cpu.eax.wrapping_add(0x1C));
+        cpu.ecx = g.u32(m, cpu.edi);
+        cpu.ecx = g.u32(m, cpu.ecx.wrapping_add(DRAW_INDEXED_PRIMITIVE));
         push(m, cpu, cpu.edx); // count
-        cpu.edx = m.u32(at(cpu, BATCH_COUNT + 4)); // start
+        cpu.edx = g.u32(m, at(cpu, BATCH_COUNT + 4)); // start
         push(m, cpu, cpu.edx);
-        cpu.edx = m.u32(at(cpu, VERTICES + 8)).wrapping_sub(cpu.eax);
+        cpu.edx = g.u32(m, at(cpu, VERTICES + 8)).wrapping_sub(cpu.eax);
         push(m, cpu, cpu.edx); // vertices
         push(m, cpu, 0); // min index
         push(m, cpu, cpu.eax); // base vertex
-        cpu.eax = m.u32(at(cpu, BATCH_START + 0x14)); // type
+        cpu.eax = g.u32(m, at(cpu, BATCH_START + 0x14)); // type
         push(m, cpu, cpu.eax);
         push(m, cpu, cpu.edi);
         call(m, cpu, cpu.ecx, 0x00DA_B69E);
     }
     cpu.eax = 0;
-    m.set_u32(at(cpu, BATCH), 0);
-    m.set_u32(at(cpu, BATCH_START), 0);
-    m.set_u32(at(cpu, BATCH_COUNT), 0);
+    g.set_u32(m, at(cpu, BATCH), 0);
+    g.set_u32(m, at(cpu, BATCH_START), 0);
+    g.set_u32(m, at(cpu, BATCH_COUNT), 0);
     None
 }
 
 /// 0x00DAB6AC: run one record (ESI) by its type; where the loop goes next.
 fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) -> Next {
-    cpu.eax = m.u16(cpu.esi.wrapping_add(2)) as u32 & 0xF;
+    let g = Pages::of(m);
+    cpu.eax = g.u16(m, cpu.esi.wrapping_add(2)) as u32 & 0xF;
     match cpu.eax {
         0 => draw(m, cpu),
         1 => draw_indexed_or_merge(m, cpu),
@@ -510,27 +520,29 @@ fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) -> Next {
 
 /// Type 0: DrawPrimitive.
 fn draw(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let g = Pages::of(m);
     let record = cpu.esi;
     apply_all_alt(m, cpu, record, [0x00DA_B7AA, 0x00DA_B7BA, 0x00DA_B7CA, 0x00DA_B7DA]);
-    cpu.edx = m.u32(m.u32(record.wrapping_add(0xC)));
-    let count = m.u32(record.wrapping_add(0x14));
+    cpu.edx = g.u32(m, g.u32(m, record.wrapping_add(0xC)));
+    let count = g.u32(m, record.wrapping_add(0x14));
     primitives(cpu, (cpu.edx >> 21) & 0xFF, count);
     draw_primitive(m, cpu, record, 0x00DA_BD8C);
 }
 
 /// Type 1: DrawIndexedPrimitive, or (merging) the start of a merged draw.
 fn draw_indexed_or_merge(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let g = Pages::of(m);
     let record = cpu.esi;
     apply_all(m, cpu, record, [0x00DA_B6D7, 0x00DA_B6E7, 0x00DA_B6F7, 0x00DA_B707]);
-    cpu.ecx = m.u32(record.wrapping_add(0x14));
-    if m.u8(at(cpu, MERGE)) != 0 {
-        cpu.edx = m.u32(record.wrapping_add(0x18));
-        m.set_u32(at(cpu, BATCH), record);
-        m.set_u32(at(cpu, BATCH_COUNT), cpu.ecx);
-        m.set_u32(at(cpu, BATCH_START), cpu.edx);
+    cpu.ecx = g.u32(m, record.wrapping_add(0x14));
+    if g.u8(m, at(cpu, MERGE)) != 0 {
+        cpu.edx = g.u32(m, record.wrapping_add(0x18));
+        g.set_u32(m, at(cpu, BATCH), record);
+        g.set_u32(m, at(cpu, BATCH_COUNT), cpu.ecx);
+        g.set_u32(m, at(cpu, BATCH_START), cpu.edx);
         return;
     }
-    cpu.edx = m.u32(m.u32(record.wrapping_add(0xC)));
+    cpu.edx = g.u32(m, g.u32(m, record.wrapping_add(0xC)));
     primitives(cpu, (cpu.edx >> 21) & 0xFF, cpu.ecx);
     draw_indexed(m, cpu, record, 0x00DA_B791);
 }
@@ -542,38 +554,39 @@ fn draw_indexed_or_merge(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// multiplying the stream's stride for the offset. `returns`: (frequency,
 /// source) return addresses.
 fn set_frequencies(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, count: u32, stride_of: u32, returns: [u32; 2], indexed: bool) {
+    let g = Pages::of(m);
     cpu.ebx = 0;
     loop {
-        cpu.eax = m.u32(record.wrapping_add(0x10));
-        cpu.ecx = m.u32(cpu.eax.wrapping_add(cpu.ebx * 4));
-        m.set_u32(at(cpu, SLOT_C), cpu.ecx);
+        cpu.eax = g.u32(m, record.wrapping_add(0x10));
+        cpu.ecx = g.u32(m, cpu.eax.wrapping_add(cpu.ebx * 4));
+        g.set_u32(m, at(cpu, SLOT_C), cpu.ecx);
         if cpu.ecx != 0 {
-            cpu.eax = if m.u8(cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x24)) != 0 {
+            cpu.eax = if g.u8(m, cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x24)) != 0 {
                 0x8000_0001
             } else {
-                m.u32(record.wrapping_add(count)) | 0x4000_0000
+                g.u32(m, record.wrapping_add(count)) | 0x4000_0000
             };
             if indexed {
                 // 0x00DAB9EA: ECX = vtable, EDX = method
-                cpu.ecx = m.u32(cpu.edi);
-                cpu.edx = m.u32(cpu.ecx.wrapping_add(SET_STREAM_SOURCE_FREQ));
+                cpu.ecx = g.u32(m, cpu.edi);
+                cpu.edx = g.u32(m, cpu.ecx.wrapping_add(SET_STREAM_SOURCE_FREQ));
                 push(m, cpu, cpu.eax);
                 push(m, cpu, cpu.ebx);
                 push(m, cpu, cpu.edi);
                 call(m, cpu, cpu.edx, returns[0]);
-                cpu.eax = m.u32(record.wrapping_add(0x10));
-                if m.u8(cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x24)) != 0 {
-                    cpu.eax = m.u8(cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x10)) as u32;
-                    cpu.edx = m.u32(record.wrapping_add(stride_of));
-                    cpu.ecx = m.u32(cpu.edi);
+                cpu.eax = g.u32(m, record.wrapping_add(0x10));
+                if g.u8(m, cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x24)) != 0 {
+                    cpu.eax = g.u8(m, cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x10)) as u32;
+                    cpu.edx = g.u32(m, record.wrapping_add(stride_of));
+                    cpu.ecx = g.u32(m, cpu.edi);
                     cpu.edx = cpu.edx.wrapping_mul(cpu.eax);
                     push(m, cpu, cpu.eax);
-                    cpu.eax = m.u32(record.wrapping_add(0x10));
-                    cpu.edx = cpu.edx.wrapping_add(m.u32(cpu.eax.wrapping_add(cpu.ebx * 4).wrapping_add(0x14)));
-                    cpu.eax = m.u32(at(cpu, SLOT_C + 4));
+                    cpu.eax = g.u32(m, record.wrapping_add(0x10));
+                    cpu.edx = cpu.edx.wrapping_add(g.u32(m, cpu.eax.wrapping_add(cpu.ebx * 4).wrapping_add(0x14)));
+                    cpu.eax = g.u32(m, at(cpu, SLOT_C + 4));
                     push(m, cpu, cpu.edx);
-                    cpu.edx = m.u32(cpu.eax.wrapping_add(0x20));
-                    cpu.eax = m.u32(cpu.ecx.wrapping_add(SET_STREAM_SOURCE));
+                    cpu.edx = g.u32(m, cpu.eax.wrapping_add(0x20));
+                    cpu.eax = g.u32(m, cpu.ecx.wrapping_add(SET_STREAM_SOURCE));
                     push(m, cpu, cpu.edx);
                     push(m, cpu, cpu.ebx);
                     push(m, cpu, cpu.edi);
@@ -581,26 +594,26 @@ fn set_frequencies(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, count: u32, stri
                 }
             } else {
                 // 0x00DAB884: EDX = vtable, EAX = method
-                cpu.edx = m.u32(cpu.edi);
+                cpu.edx = g.u32(m, cpu.edi);
                 push(m, cpu, cpu.eax);
-                cpu.eax = m.u32(cpu.edx.wrapping_add(SET_STREAM_SOURCE_FREQ));
+                cpu.eax = g.u32(m, cpu.edx.wrapping_add(SET_STREAM_SOURCE_FREQ));
                 push(m, cpu, cpu.ebx);
                 push(m, cpu, cpu.edi);
                 call(m, cpu, cpu.eax, returns[0]);
-                cpu.ecx = m.u32(record.wrapping_add(0x10));
-                if m.u8(cpu.ecx.wrapping_add(cpu.ebx).wrapping_add(0x24)) != 0 {
-                    cpu.edx = m.u32(cpu.edi);
+                cpu.ecx = g.u32(m, record.wrapping_add(0x10));
+                if g.u8(m, cpu.ecx.wrapping_add(cpu.ebx).wrapping_add(0x24)) != 0 {
+                    cpu.edx = g.u32(m, cpu.edi);
                     cpu.eax = cpu.ecx;
-                    cpu.eax = m.u8(cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x10)) as u32;
-                    cpu.ecx = m.u32(record.wrapping_add(stride_of));
-                    cpu.edx = m.u32(cpu.edx.wrapping_add(SET_STREAM_SOURCE));
+                    cpu.eax = g.u8(m, cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x10)) as u32;
+                    cpu.ecx = g.u32(m, record.wrapping_add(stride_of));
+                    cpu.edx = g.u32(m, cpu.edx.wrapping_add(SET_STREAM_SOURCE));
                     cpu.ecx = cpu.ecx.wrapping_mul(cpu.eax);
                     push(m, cpu, cpu.eax);
-                    cpu.eax = m.u32(record.wrapping_add(0x10));
-                    cpu.ecx = cpu.ecx.wrapping_add(m.u32(cpu.eax.wrapping_add(cpu.ebx * 4).wrapping_add(0x14)));
-                    cpu.eax = m.u32(at(cpu, SLOT_C + 4));
+                    cpu.eax = g.u32(m, record.wrapping_add(0x10));
+                    cpu.ecx = cpu.ecx.wrapping_add(g.u32(m, cpu.eax.wrapping_add(cpu.ebx * 4).wrapping_add(0x14)));
+                    cpu.eax = g.u32(m, at(cpu, SLOT_C + 4));
                     push(m, cpu, cpu.ecx);
-                    cpu.ecx = m.u32(cpu.eax.wrapping_add(0x20));
+                    cpu.ecx = g.u32(m, cpu.eax.wrapping_add(0x20));
                     push(m, cpu, cpu.ecx);
                     push(m, cpu, cpu.ebx);
                     push(m, cpu, cpu.edi);
@@ -618,28 +631,29 @@ fn set_frequencies(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, count: u32, stri
 /// After an instanced draw: every stream with an object back to frequency
 /// 1, instance-data streams back to their own offset.
 fn reset_frequencies(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, returns: [u32; 2]) {
+    let g = Pages::of(m);
     cpu.ebx = 0;
     loop {
-        cpu.eax = m.u32(record.wrapping_add(0x10));
-        cpu.eax = m.u32(cpu.eax.wrapping_add(cpu.ebx * 4));
-        m.set_u32(at(cpu, SLOT_C), cpu.eax);
+        cpu.eax = g.u32(m, record.wrapping_add(0x10));
+        cpu.eax = g.u32(m, cpu.eax.wrapping_add(cpu.ebx * 4));
+        g.set_u32(m, at(cpu, SLOT_C), cpu.eax);
         if cpu.eax != 0 {
-            cpu.ecx = m.u32(cpu.edi);
-            cpu.edx = m.u32(cpu.ecx.wrapping_add(SET_STREAM_SOURCE_FREQ));
+            cpu.ecx = g.u32(m, cpu.edi);
+            cpu.edx = g.u32(m, cpu.ecx.wrapping_add(SET_STREAM_SOURCE_FREQ));
             push(m, cpu, 1);
             push(m, cpu, cpu.ebx);
             push(m, cpu, cpu.edi);
             call(m, cpu, cpu.edx, returns[0]);
-            cpu.eax = m.u32(record.wrapping_add(0x10));
-            if m.u8(cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x24)) != 0 {
-                cpu.edx = m.u8(cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x10)) as u32;
-                cpu.eax = m.u32(cpu.eax.wrapping_add(cpu.ebx * 4).wrapping_add(0x14));
-                cpu.ecx = m.u32(cpu.edi);
-                cpu.ecx = m.u32(cpu.ecx.wrapping_add(SET_STREAM_SOURCE));
+            cpu.eax = g.u32(m, record.wrapping_add(0x10));
+            if g.u8(m, cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x24)) != 0 {
+                cpu.edx = g.u8(m, cpu.eax.wrapping_add(cpu.ebx).wrapping_add(0x10)) as u32;
+                cpu.eax = g.u32(m, cpu.eax.wrapping_add(cpu.ebx * 4).wrapping_add(0x14));
+                cpu.ecx = g.u32(m, cpu.edi);
+                cpu.ecx = g.u32(m, cpu.ecx.wrapping_add(SET_STREAM_SOURCE));
                 push(m, cpu, cpu.edx);
-                cpu.edx = m.u32(at(cpu, SLOT_C + 4));
+                cpu.edx = g.u32(m, at(cpu, SLOT_C + 4));
                 push(m, cpu, cpu.eax);
-                cpu.eax = m.u32(cpu.edx.wrapping_add(0x20));
+                cpu.eax = g.u32(m, cpu.edx.wrapping_add(0x20));
                 push(m, cpu, cpu.eax);
                 push(m, cpu, cpu.ebx);
                 push(m, cpu, cpu.edi);
@@ -655,17 +669,18 @@ fn reset_frequencies(m: &mut dyn Mem, cpu: &mut Cpu, record: u32, returns: [u32;
 
 /// Type 2: instanced DrawPrimitive (instances: +0x1C, offset step: +0x20).
 fn draw_instanced(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let g = Pages::of(m);
     let record = cpu.esi;
     apply_all_alt(m, cpu, record, [0x00DA_B82A, 0x00DA_B83A, 0x00DA_B84A, 0x00DA_B85A]);
     set_frequencies(m, cpu, record, 0x1C, 0x20, [0x00DA_B891, 0x00DA_B8C5], false);
-    cpu.edx = m.u32(m.u32(record.wrapping_add(0xC)));
-    let count = m.u32(record.wrapping_add(0x14));
+    cpu.edx = g.u32(m, g.u32(m, record.wrapping_add(0xC)));
+    let count = g.u32(m, record.wrapping_add(0x14));
     primitives(cpu, (cpu.edx >> 21) & 0xFF, count);
     // 0x00DAB919: DrawPrimitive, EDX = vtable then method
-    cpu.edx = m.u32(cpu.edi);
-    cpu.edx = m.u32(cpu.edx.wrapping_add(DRAW_PRIMITIVE));
+    cpu.edx = g.u32(m, cpu.edi);
+    cpu.edx = g.u32(m, cpu.edx.wrapping_add(DRAW_PRIMITIVE));
     push(m, cpu, cpu.ecx);
-    cpu.ecx = m.u32(record.wrapping_add(0x18));
+    cpu.ecx = g.u32(m, record.wrapping_add(0x18));
     push(m, cpu, cpu.ecx);
     push(m, cpu, cpu.eax);
     push(m, cpu, cpu.edi);
@@ -676,11 +691,12 @@ fn draw_instanced(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// Type 3: instanced DrawIndexedPrimitive (instances: +0x20, offset step:
 /// +0x24).
 fn draw_indexed_instanced(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let g = Pages::of(m);
     let record = cpu.esi;
     apply_all(m, cpu, record, [0x00DA_B994, 0x00DA_B9A4, 0x00DA_B9B4, 0x00DA_B9C4]);
     set_frequencies(m, cpu, record, 0x20, 0x24, [0x00DA_B9F7, 0x00DA_BA29], true);
-    cpu.edx = m.u32(m.u32(record.wrapping_add(0xC)));
-    let count = m.u32(record.wrapping_add(0x14));
+    cpu.edx = g.u32(m, g.u32(m, record.wrapping_add(0xC)));
+    let count = g.u32(m, record.wrapping_add(0x14));
     primitives(cpu, (cpu.edx >> 21) & 0xFF, count);
     draw_indexed(m, cpu, record, 0x00DA_BA9E);
     reset_frequencies(m, cpu, record, [0x00DA_BABC, 0x00DA_BAE5]);
@@ -694,33 +710,34 @@ fn draw_indexed_instanced(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// channels than the target has, and the record clears colour, the
 /// fallback draw is made instead (a full-screen quad).
 fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let g = Pages::of(m);
     let record = cpu.esi;
-    cpu.ebx = m.u32(record.wrapping_add(0x20)); // the fallback draw
-    cpu.edx = m.u32(cpu.ebx.wrapping_add(4));
-    cpu.ecx = m.u32(at(cpu, RENDER));
+    cpu.ebx = g.u32(m, record.wrapping_add(0x20)); // the fallback draw
+    cpu.edx = g.u32(m, cpu.ebx.wrapping_add(4));
+    cpu.ecx = g.u32(m, at(cpu, RENDER));
     push(m, cpu, cpu.edx);
     cpu.eax = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.eax);
-    m.set_u32(at(cpu, SLOT_C + 8), cpu.ebx);
+    g.set_u32(m, at(cpu, SLOT_C + 8), cpu.ebx);
     call(m, cpu, APPLY_TARGETS, 0x00DA_BB09);
-    cpu.ecx = m.u32(cpu.ebx.wrapping_add(8));
+    cpu.ecx = g.u32(m, cpu.ebx.wrapping_add(8));
     push(m, cpu, cpu.ecx);
-    cpu.ecx = m.u32(at(cpu, RENDER + 4));
+    cpu.ecx = g.u32(m, at(cpu, RENDER + 4));
     cpu.edx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.edx);
     call(m, cpu, APPLY_STATES, 0x00DA_BB1B);
 
     // the colour bytes (SSE, as the original)
-    cpu.xmm[4] = [m.u32(record.wrapping_add(0x10)), 0, 0, 0];
-    cpu.xmm[3] = [m.u32(ONE), 0, 0, 0];
+    cpu.xmm[4] = [g.u32(m, record.wrapping_add(0x10)), 0, 0, 0];
+    cpu.xmm[3] = [g.u32(m, ONE), 0, 0, 0];
     let red_over = x86::comiss_hw::<true>(cpu.xmm[4][0], cpu.xmm[3][0]);
-    cpu.xmm[2] = [m.u32(record.wrapping_add(0x1C)), 0, 0, 0];
-    cpu.xmm[5] = [m.u32(record.wrapping_add(0x14)), 0, 0, 0];
-    cpu.xmm[6] = [m.u32(record.wrapping_add(0x18)), 0, 0, 0];
-    cpu.xmm[0] = [m.u32(BYTE_MAX), 0, 0, 0];
-    m.set_u32(at(cpu, ALPHA), cpu.xmm[2][0]);
+    cpu.xmm[2] = [g.u32(m, record.wrapping_add(0x1C)), 0, 0, 0];
+    cpu.xmm[5] = [g.u32(m, record.wrapping_add(0x14)), 0, 0, 0];
+    cpu.xmm[6] = [g.u32(m, record.wrapping_add(0x18)), 0, 0, 0];
+    cpu.xmm[0] = [g.u32(m, BYTE_MAX), 0, 0, 0];
+    g.set_u32(m, at(cpu, ALPHA), cpu.xmm[2][0]);
     cpu.xmm[1] = scaled(cpu, red_over.cond("be"), 4);
-    cpu.ecx = m.u32(at(cpu, COLOUR));
+    cpu.ecx = g.u32(m, at(cpu, COLOUR));
     cpu.eax = x86::cvttss2si(cpu.xmm[1][0]);
     cpu.edx = cpu.eax & 0xFF;
     cpu.ecx = (cpu.ecx & 0xFFFF_FF00) | cpu.edx;
@@ -747,41 +764,41 @@ fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
     // original's FADD of 2^32 for a negative integer cannot happen (the
     // bytes are 0..255) and is left out
     cpu.edx = cpu.eax & 0xFF;
-    m.set_u32(at(cpu, SLOT_10), cpu.edx);
-    m.set_u32(at(cpu, COLOUR), cpu.eax);
+    g.set_u32(m, at(cpu, SLOT_10), cpu.edx);
+    g.set_u32(m, at(cpu, COLOUR), cpu.eax);
     cpu.st.memory::<0x00db, 4, false>(m, at(cpu, SLOT_10)); // FILD red
     cpu.st.memory::<0x00d9, 4, false>(m, INV_BYTE_MAX); // FLD 1/255
     cpu.ecx = cpu.eax;
     cpu.st.register::<0xc9dc>(); // FMUL ST(1), ST
     cpu.ecx = (cpu.ecx >> 8) & 0xFF;
     cpu.st.register::<0xc9d9>(); // FXCH
-    m.set_u32(at(cpu, SLOT_10), cpu.ecx);
+    g.set_u32(m, at(cpu, SLOT_10), cpu.ecx);
     cpu.st.memory::<0x18d9, 4, true>(m, at(cpu, RED_F)); // FSTP
     cpu.ebx = cpu.eax;
     cpu.st.memory::<0x00db, 4, false>(m, at(cpu, SLOT_10)); // FILD green
     cpu.ebx = (cpu.ebx >> 16) & 0xFF;
-    m.set_u32(at(cpu, SLOT_10), cpu.ebx);
+    g.set_u32(m, at(cpu, SLOT_10), cpu.ebx);
     cpu.st.register::<0xc9d8>(); // FMUL ST, ST(1)
     cpu.st.memory::<0x18d9, 4, true>(m, at(cpu, GREEN_F));
     cpu.st.memory::<0x00db, 4, false>(m, at(cpu, SLOT_10)); // FILD blue
     cpu.st.register::<0xc9d8>();
     cpu.eax >>= 24;
-    m.set_u32(at(cpu, SLOT_10), cpu.eax);
+    g.set_u32(m, at(cpu, SLOT_10), cpu.eax);
     cpu.st.memory::<0x18d9, 4, true>(m, at(cpu, BLUE_F));
     cpu.st.memory::<0x00db, 4, false>(m, at(cpu, SLOT_10)); // FILD alpha
     // 0x00DABC45: alpha byte / 255 against the alpha float
-    cpu.eax = m.u32(at(cpu, SLOT_C));
+    cpu.eax = g.u32(m, at(cpu, SLOT_C));
     cpu.st.register::<0xc9de>(); // FMULP
-    cpu.ecx = m.u32(cpu.eax.wrapping_add(4));
+    cpu.ecx = g.u32(m, cpu.eax.wrapping_add(4));
     cpu.st.memory::<0x00d9, 4, false>(m, at(cpu, ALPHA)); // FLD alpha
-    cpu.ecx = m.u32(cpu.ecx.wrapping_add(0x14));
+    cpu.ecx = g.u32(m, cpu.ecx.wrapping_add(0x14));
     cpu.st.register::<0xc9d9>(); // FXCH
     cpu.ecx &= 7;
     // the target's channels as a mask: (1 << channels) - 1
     cpu.eax = 1u32.wrapping_shl(cpu.ecx & 31).wrapping_sub(1);
     let equal_alpha = cpu.st.compare_flags::<0xe9df>(); // FUCOMIP
     cpu.st.register::<0xd8dd>(); // FSTP ST0
-    m.set_u32(at(cpu, SLOT_10), cpu.eax);
+    g.set_u32(m, at(cpu, SLOT_10), cpu.eax);
     let equal = |cpu: &mut Cpu, f: x86::Flags| -> bool {
         // LAHF; TEST AH, 0x44; JP: on only when equal and ordered
         cpu.eax = (cpu.eax & !0xFF00) | ((f.lahf() as u32) << 8);
@@ -789,35 +806,35 @@ fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
     };
     let exact = equal(cpu, equal_alpha)
         && {
-            cpu.xmm[0] = [m.u32(at(cpu, RED_F)), 0, 0, 0];
+            cpu.xmm[0] = [g.u32(m, at(cpu, RED_F)), 0, 0, 0];
             let f = x86::comiss_hw::<false>(cpu.xmm[0][0], cpu.xmm[4][0]);
             equal(cpu, f)
         }
         && {
-            cpu.xmm[0] = [m.u32(at(cpu, GREEN_F)), 0, 0, 0];
+            cpu.xmm[0] = [g.u32(m, at(cpu, GREEN_F)), 0, 0, 0];
             let f = x86::comiss_hw::<false>(cpu.xmm[0][0], cpu.xmm[5][0]);
             equal(cpu, f)
         }
         && {
-            cpu.xmm[0] = [m.u32(at(cpu, BLUE_F)), 0, 0, 0];
+            cpu.xmm[0] = [g.u32(m, at(cpu, BLUE_F)), 0, 0, 0];
             let f = x86::comiss_hw::<false>(cpu.xmm[0][0], cpu.xmm[6][0]);
             equal(cpu, f)
         }
         && {
-            cpu.eax = m.u32(at(cpu, SLOT_10));
-            cpu.ecx = cpu.eax & m.u32(record.wrapping_add(4));
+            cpu.eax = g.u32(m, at(cpu, SLOT_10));
+            cpu.ecx = cpu.eax & g.u32(m, record.wrapping_add(4));
             cpu.ecx == cpu.eax
         };
     if !exact {
         // only depth or stencil to clear: the colour does not matter
-        cpu.eax = m.u32(record.wrapping_add(4));
+        cpu.eax = g.u32(m, record.wrapping_add(4));
         cpu.ecx = cpu.eax & 0x30;
         if cpu.ecx != cpu.eax {
             return fallback_draw(m, cpu);
         }
     }
     // 0x00DABCB6: D3DCLEAR flags: target (any colour channel), zbuffer, stencil
-    cpu.ecx = m.u32(record.wrapping_add(4));
+    cpu.ecx = g.u32(m, record.wrapping_add(4));
     cpu.eax = 0;
     if cpu.ecx & 0xF != 0 {
         cpu.eax = 1;
@@ -828,12 +845,12 @@ fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
     if cpu.ecx & 0x20 != 0 {
         cpu.eax |= 4;
     }
-    cpu.ecx = m.u32(record.wrapping_add(0xC));
+    cpu.ecx = g.u32(m, record.wrapping_add(0xC));
     cpu.st.memory::<0x00d9, 4, false>(m, record.wrapping_add(8)); // FLD z
-    cpu.esi = m.u32(at(cpu, COLOUR));
+    cpu.esi = g.u32(m, at(cpu, COLOUR));
     push(m, cpu, cpu.ecx); // stencil
     push(m, cpu, cpu.ecx); // z (stored over it below)
-    cpu.ecx = m.u32(cpu.edi);
+    cpu.ecx = g.u32(m, cpu.edi);
     cpu.st.memory::<0x18d9, 4, true>(m, cpu.esp); // FSTP [esp]
     // D3DCOLOR: alpha and green from the bytes, red (EDX) and blue (EBX)
     cpu.edx <<= 16;
@@ -841,7 +858,7 @@ fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.edx |= cpu.esi;
     cpu.edx |= cpu.ebx;
     push(m, cpu, cpu.edx);
-    cpu.edx = m.u32(cpu.ecx.wrapping_add(CLEAR));
+    cpu.edx = g.u32(m, cpu.ecx.wrapping_add(CLEAR));
     push(m, cpu, cpu.eax);
     push(m, cpu, 0);
     push(m, cpu, 0);
@@ -864,29 +881,30 @@ fn scaled(cpu: &Cpu, scale: bool, src: usize) -> [u32; 4] {
 /// 0x00DABD07: the Clear's fallback draw (a DrawPrimitive record at
 /// SLOT_C): its states, streams and shaders (its targets are applied).
 fn fallback_draw(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.esi = m.u32(at(cpu, SLOT_C));
+    let g = Pages::of(m);
+    cpu.esi = g.u32(m, at(cpu, SLOT_C));
     let record = cpu.esi;
-    cpu.eax = m.u32(record.wrapping_add(8));
-    cpu.ebx = m.u32(at(cpu, RENDER));
+    cpu.eax = g.u32(m, record.wrapping_add(8));
+    cpu.ebx = g.u32(m, at(cpu, RENDER));
     push(m, cpu, cpu.eax);
     cpu.ecx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.ecx);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_STATES, 0x00DA_BD1F);
-    cpu.edx = m.u32(record.wrapping_add(0x10));
+    cpu.edx = g.u32(m, record.wrapping_add(0x10));
     push(m, cpu, cpu.edx);
     cpu.eax = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.eax);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_STREAMS, 0x00DA_BD2F);
-    cpu.ecx = m.u32(record.wrapping_add(0xC));
+    cpu.ecx = g.u32(m, record.wrapping_add(0xC));
     push(m, cpu, cpu.ecx);
     cpu.edx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.edx);
     cpu.ecx = cpu.ebx;
     call(m, cpu, APPLY_SHADERS, 0x00DA_BD3F);
-    cpu.edx = m.u32(m.u32(record.wrapping_add(0xC)));
-    let count = m.u32(record.wrapping_add(0x14));
+    cpu.edx = g.u32(m, g.u32(m, record.wrapping_add(0xC)));
+    let count = g.u32(m, record.wrapping_add(0x14));
     primitives(cpu, (cpu.edx >> 21) & 0xFF, count);
     draw_primitive(m, cpu, record, 0x00DA_BD8C);
 }
@@ -897,77 +915,78 @@ fn fallback_draw(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// surface (+4)->+0x48[+8], outside the scene. A next entry with the same
 /// copy (same type, surfaces and rectangles) is consumed with this one.
 fn stretch_rect(m: &mut dyn Mem, cpu: &mut Cpu) -> Next {
+    let g = Pages::of(m);
     let record = cpu.esi;
-    cpu.eax = m.u32(record.wrapping_add(0x28));
-    cpu.ecx = m.u32(cpu.eax.wrapping_add(4));
+    cpu.eax = g.u32(m, record.wrapping_add(0x28));
+    cpu.ecx = g.u32(m, cpu.eax.wrapping_add(4));
     push(m, cpu, cpu.ecx);
-    cpu.ecx = m.u32(at(cpu, RENDER + 4));
+    cpu.ecx = g.u32(m, at(cpu, RENDER + 4));
     cpu.edx = at(cpu, CONTEXT + 4);
     push(m, cpu, cpu.edx);
     call(m, cpu, APPLY_TARGETS, 0x00DA_BDA6);
     merge_copy(m, cpu, record);
     // 0x00DABEA5
-    cpu.eax = m.u32(record.wrapping_add(0xC)) & 0xF;
-    m.set_u32(at(cpu, SLOT_C), cpu.eax);
+    cpu.eax = g.u32(m, record.wrapping_add(0xC)) & 0xF;
+    g.set_u32(m, at(cpu, SLOT_C), cpu.eax);
     if cpu.eax < 4 {
-        cpu.eax = m.u32(record.wrapping_add(4));
-        cpu.edx = m.u32(cpu.eax.wrapping_add(0x44));
-        cpu.ecx = m.u32(record.wrapping_add(8));
-        cpu.eax = m.u32(cpu.edx.wrapping_add(cpu.ecx.wrapping_mul(4))); // the surface
-        cpu.ebx = m.u32(record.wrapping_add(0x20));
-        cpu.ecx = m.u32(record.wrapping_add(0x18)).wrapping_sub(m.u32(record.wrapping_add(0x10)));
-        cpu.edx = m.u32(record.wrapping_add(0x1C)).wrapping_sub(m.u32(record.wrapping_add(0x14)));
-        m.set_u32(at(cpu, SLOT_10), cpu.eax);
+        cpu.eax = g.u32(m, record.wrapping_add(4));
+        cpu.edx = g.u32(m, cpu.eax.wrapping_add(0x44));
+        cpu.ecx = g.u32(m, record.wrapping_add(8));
+        cpu.eax = g.u32(m, cpu.edx.wrapping_add(cpu.ecx.wrapping_mul(4))); // the surface
+        cpu.ebx = g.u32(m, record.wrapping_add(0x20));
+        cpu.ecx = g.u32(m, record.wrapping_add(0x18)).wrapping_sub(g.u32(m, record.wrapping_add(0x10)));
+        cpu.edx = g.u32(m, record.wrapping_add(0x1C)).wrapping_sub(g.u32(m, record.wrapping_add(0x14)));
+        g.set_u32(m, at(cpu, SLOT_10), cpu.eax);
         cpu.eax = record.wrapping_add(0x10); // the source rectangle
-        cpu.esi = m.u32(record.wrapping_add(0x24));
-        m.set_u32(at(cpu, DEST_RECT), cpu.ebx);
+        cpu.esi = g.u32(m, record.wrapping_add(0x24));
+        g.set_u32(m, at(cpu, DEST_RECT), cpu.ebx);
         push(m, cpu, STRETCH_RECT_RECTS);
-        m.set_u32(at(cpu, DEST_RECT + 8), cpu.esi);
+        g.set_u32(m, at(cpu, DEST_RECT + 8), cpu.esi);
         cpu.ebx = cpu.ebx.wrapping_add(cpu.ecx);
-        cpu.ecx = m.u32(at(cpu, SLOT_10 + 4));
+        cpu.ecx = g.u32(m, at(cpu, SLOT_10 + 4));
         cpu.esi = cpu.esi.wrapping_add(cpu.edx);
-        cpu.edx = m.u32(at(cpu, SLOT_C + 4));
-        cpu.edx = m.u32(at(cpu, TARGETS).wrapping_add(cpu.edx.wrapping_mul(4)));
+        cpu.edx = g.u32(m, at(cpu, SLOT_C + 4));
+        cpu.edx = g.u32(m, at(cpu, TARGETS).wrapping_add(cpu.edx.wrapping_mul(4)));
         push(m, cpu, 0); // D3DTEXF_NONE
-        m.set_u32(at(cpu, DEST_RECT + 0x10), cpu.ebx);
-        m.set_u32(at(cpu, DEST_RECT + 0x14), cpu.esi);
-        cpu.ecx = m.u32(cpu.ecx.wrapping_add(0x14)); // the surface's handle
-        cpu.esi = m.u32(S_RENDER);
-        cpu.edx = m.u32(cpu.edx.wrapping_add(0x14)); // the target's handle
+        g.set_u32(m, at(cpu, DEST_RECT + 0x10), cpu.ebx);
+        g.set_u32(m, at(cpu, DEST_RECT + 0x14), cpu.esi);
+        cpu.ecx = g.u32(m, cpu.ecx.wrapping_add(0x14)); // the surface's handle
+        cpu.esi = g.u32(m, S_RENDER);
+        cpu.edx = g.u32(m, cpu.edx.wrapping_add(0x14)); // the target's handle
         cpu.ebx = at(cpu, DEST_RECT + 8);
         push(m, cpu, cpu.ebx);
         push(m, cpu, cpu.ecx);
         push(m, cpu, cpu.eax);
-        m.set_u32(at(cpu, SLOT_10 + 0x14), cpu.esi);
-        cpu.esi = m.u32(cpu.edi);
-        cpu.eax = m.u32(cpu.esi.wrapping_add(STRETCH_RECT));
+        g.set_u32(m, at(cpu, SLOT_10 + 0x14), cpu.esi);
+        cpu.esi = g.u32(m, cpu.edi);
+        cpu.eax = g.u32(m, cpu.esi.wrapping_add(STRETCH_RECT));
         push(m, cpu, cpu.edx);
         push(m, cpu, cpu.edi);
         call(m, cpu, cpu.eax, 0x00DA_BF2A);
-        cpu.ecx = m.u32(at(cpu, SLOT_10 + 4));
+        cpu.ecx = g.u32(m, at(cpu, SLOT_10 + 4));
         push(m, cpu, cpu.eax);
         call(m, cpu, CHECK_RESULT, 0x00DA_BF34);
         return Next::Reload;
     }
     // 0x00DABF39: the whole target, between EndScene and BeginScene
-    cpu.ecx = m.u32(record.wrapping_add(4));
-    cpu.edx = m.u32(record.wrapping_add(8));
-    cpu.eax = m.u32(cpu.ecx.wrapping_add(0x48));
-    cpu.ecx = m.u32(cpu.edi);
-    cpu.esi = m.u32(cpu.eax.wrapping_add(cpu.edx.wrapping_mul(4)));
-    cpu.edx = m.u32(cpu.ecx.wrapping_add(END_SCENE));
+    cpu.ecx = g.u32(m, record.wrapping_add(4));
+    cpu.edx = g.u32(m, record.wrapping_add(8));
+    cpu.eax = g.u32(m, cpu.ecx.wrapping_add(0x48));
+    cpu.ecx = g.u32(m, cpu.edi);
+    cpu.esi = g.u32(m, cpu.eax.wrapping_add(cpu.edx.wrapping_mul(4)));
+    cpu.edx = g.u32(m, cpu.ecx.wrapping_add(END_SCENE));
     push(m, cpu, cpu.edi);
     call(m, cpu, cpu.edx, 0x00DA_BF50);
-    cpu.eax = m.u32(cpu.esi.wrapping_add(0x14));
-    cpu.ecx = m.u32(at(cpu, TARGETS + 0xC));
-    cpu.ecx = m.u32(cpu.ecx.wrapping_add(0x14));
-    cpu.edx = m.u32(cpu.edi);
-    cpu.esi = m.u32(S_RENDER);
+    cpu.eax = g.u32(m, cpu.esi.wrapping_add(0x14));
+    cpu.ecx = g.u32(m, at(cpu, TARGETS + 0xC));
+    cpu.ecx = g.u32(m, cpu.ecx.wrapping_add(0x14));
+    cpu.edx = g.u32(m, cpu.edi);
+    cpu.esi = g.u32(m, S_RENDER);
     push(m, cpu, STRETCH_RECT_WHOLE);
     push(m, cpu, 0);
     push(m, cpu, 0);
     push(m, cpu, cpu.eax);
-    cpu.eax = m.u32(cpu.edx.wrapping_add(STRETCH_RECT));
+    cpu.eax = g.u32(m, cpu.edx.wrapping_add(STRETCH_RECT));
     push(m, cpu, 0);
     push(m, cpu, cpu.ecx);
     push(m, cpu, cpu.edi);
@@ -983,39 +1002,40 @@ fn stretch_rect(m: &mut dyn Mem, cpu: &mut Cpu) -> Next {
 /// with the same type, surfaces and rectangles is consumed (the cursor
 /// moves past it; past the level's end the stack pops as `fetch` does).
 fn merge_copy(m: &mut dyn Mem, cpu: &mut Cpu, record: u32) {
-    cpu.ebx = m.u32(at(cpu, DEPTH));
+    let g = Pages::of(m);
+    cpu.ebx = g.u32(m, at(cpu, DEPTH));
     cpu.eax = cpu.ebx.wrapping_mul(3).wrapping_mul(4);
     cpu.ecx = at(cpu, RANGES + 4).wrapping_add(cpu.eax);
-    m.set_u32(at(cpu, SLOT_10), cpu.ecx);
-    cpu.ecx = m.u32(cpu.ecx);
-    m.set_u32(at(cpu, SLOT_C), cpu.ecx);
-    if cpu.ecx >= m.u32(at(cpu, RANGES + 8).wrapping_add(cpu.eax)) || cpu.ecx == 0 {
+    g.set_u32(m, at(cpu, SLOT_10), cpu.ecx);
+    cpu.ecx = g.u32(m, cpu.ecx);
+    g.set_u32(m, at(cpu, SLOT_C), cpu.ecx);
+    if cpu.ecx >= g.u32(m, at(cpu, RANGES + 8).wrapping_add(cpu.eax)) || cpu.ecx == 0 {
         return;
     }
-    cpu.eax = m.u32(cpu.ecx.wrapping_add(4)); // the next record
-    cpu.ecx = (cpu.ecx & !0xFF) | (m.u8(cpu.eax.wrapping_add(2)) & 0xF) as u32;
+    cpu.eax = g.u32(m, cpu.ecx.wrapping_add(4)); // the next record
+    cpu.ecx = (cpu.ecx & !0xFF) | (g.u8(m, cpu.eax.wrapping_add(2)) & 0xF) as u32;
     if cpu.ecx & 0xFF != 5 {
         return;
     }
-    cpu.eax = m.u32(at(cpu, SLOT_C));
-    cpu.edx = m.u32(record.wrapping_add(0x20));
-    cpu.eax = m.u32(cpu.eax.wrapping_add(4));
-    if cpu.edx != m.u32(cpu.eax.wrapping_add(0x20)) {
+    cpu.eax = g.u32(m, at(cpu, SLOT_C));
+    cpu.edx = g.u32(m, record.wrapping_add(0x20));
+    cpu.eax = g.u32(m, cpu.eax.wrapping_add(4));
+    if cpu.edx != g.u32(m, cpu.eax.wrapping_add(0x20)) {
         return;
     }
-    cpu.edx = m.u32(at(cpu, SLOT_C));
-    cpu.ecx = m.u32(record.wrapping_add(0x24));
-    cpu.eax = m.u32(cpu.edx.wrapping_add(4));
-    if cpu.ecx != m.u32(cpu.eax.wrapping_add(0x24)) {
+    cpu.edx = g.u32(m, at(cpu, SLOT_C));
+    cpu.ecx = g.u32(m, record.wrapping_add(0x24));
+    cpu.eax = g.u32(m, cpu.edx.wrapping_add(4));
+    if cpu.ecx != g.u32(m, cpu.eax.wrapping_add(0x24)) {
         return;
     }
-    cpu.ecx = m.u32(record.wrapping_add(0xC));
-    cpu.eax = m.u32(cpu.edx.wrapping_add(4));
-    if cpu.ecx != m.u32(cpu.eax.wrapping_add(0xC)) {
+    cpu.ecx = g.u32(m, record.wrapping_add(0xC));
+    cpu.eax = g.u32(m, cpu.edx.wrapping_add(4));
+    if cpu.ecx != g.u32(m, cpu.eax.wrapping_add(0xC)) {
         return;
     }
     cpu.eax = cpu.edx;
-    cpu.eax = m.u32(cpu.eax.wrapping_add(4)).wrapping_add(0x10);
+    cpu.eax = g.u32(m, cpu.eax.wrapping_add(4)).wrapping_add(0x10);
     push(m, cpu, cpu.eax);
     cpu.ecx = record.wrapping_add(0x10);
     push(m, cpu, 0x00DA_BE34);
@@ -1023,19 +1043,19 @@ fn merge_copy(m: &mut dyn Mem, cpu: &mut Cpu, record: u32) {
     if cpu.eax & 0xFF == 0 {
         return;
     }
-    cpu.eax = m.u32(at(cpu, SLOT_C));
-    cpu.edx = m.u32(record.wrapping_add(4));
-    cpu.ecx = m.u32(cpu.eax.wrapping_add(4));
-    if cpu.edx != m.u32(cpu.ecx.wrapping_add(4)) {
+    cpu.eax = g.u32(m, at(cpu, SLOT_C));
+    cpu.edx = g.u32(m, record.wrapping_add(4));
+    cpu.ecx = g.u32(m, cpu.eax.wrapping_add(4));
+    if cpu.edx != g.u32(m, cpu.ecx.wrapping_add(4)) {
         return;
     }
     // consume it
-    cpu.edx = m.u32(at(cpu, SLOT_10));
+    cpu.edx = g.u32(m, at(cpu, SLOT_10));
     cpu.ecx = cpu.eax.wrapping_add(8);
-    m.set_u32(cpu.edx, cpu.ecx);
-    cpu.ebx = m.u32(at(cpu, DEPTH));
+    g.set_u32(m, cpu.edx, cpu.ecx);
+    cpu.ebx = g.u32(m, at(cpu, DEPTH));
     cpu.ecx = cpu.ebx.wrapping_mul(3);
-    if cpu.eax < m.u32(at(cpu, RANGES + 8).wrapping_add(cpu.ecx.wrapping_mul(4))) {
+    if cpu.eax < g.u32(m, at(cpu, RANGES + 8).wrapping_add(cpu.ecx.wrapping_mul(4))) {
         return;
     }
     if (cpu.ebx as i32) <= 0 {
@@ -1044,9 +1064,9 @@ fn merge_copy(m: &mut dyn Mem, cpu: &mut Cpu, record: u32) {
     loop {
         cpu.ebx = cpu.ebx.wrapping_sub(1);
         cpu.eax = cpu.ebx.wrapping_mul(3).wrapping_mul(4);
-        m.set_u32(at(cpu, DEPTH), cpu.ebx);
-        cpu.edx = m.u32(at(cpu, RANGES + 4).wrapping_add(cpu.eax));
-        if cpu.edx < m.u32(at(cpu, RANGES + 8).wrapping_add(cpu.eax)) {
+        g.set_u32(m, at(cpu, DEPTH), cpu.ebx);
+        cpu.edx = g.u32(m, at(cpu, RANGES + 4).wrapping_add(cpu.eax));
+        if cpu.edx < g.u32(m, at(cpu, RANGES + 8).wrapping_add(cpu.eax)) {
             break;
         }
         if (cpu.ebx as i32) <= 0 {
@@ -1055,37 +1075,40 @@ fn merge_copy(m: &mut dyn Mem, cpu: &mut Cpu, record: u32) {
     }
     cpu.eax = cpu.ebx.wrapping_mul(3);
     let cursor = at(cpu, RANGES + 4).wrapping_add(cpu.eax.wrapping_mul(4));
-    m.set_u32(cursor, m.u32(cursor).wrapping_add(8));
-    cpu.ebx = m.u32(at(cpu, DEPTH));
+    let v = g.u32(m, cursor).wrapping_add(8);
+    g.set_u32(m, cursor, v);
+    cpu.ebx = g.u32(m, at(cpu, DEPTH));
     cpu.eax = cursor;
 }
 
 /// Type 6: a nested list (+8 entries, +0xC count, +4 owner) as the next
 /// level of the stack.
 fn nested(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let g = Pages::of(m);
     let record = cpu.esi;
-    cpu.eax = m.u32(record.wrapping_add(8));
-    cpu.edx = m.u32(record.wrapping_add(0xC));
+    cpu.eax = g.u32(m, record.wrapping_add(8));
+    cpu.edx = g.u32(m, record.wrapping_add(0xC));
     cpu.ebx = cpu.ebx.wrapping_add(1);
-    m.set_u32(at(cpu, DEPTH), cpu.ebx);
+    g.set_u32(m, at(cpu, DEPTH), cpu.ebx);
     cpu.ecx = cpu.ebx.wrapping_mul(3);
-    m.set_u32(at(cpu, RANGES + 4).wrapping_add(cpu.ecx.wrapping_mul(4)), cpu.eax);
+    g.set_u32(m, at(cpu, RANGES + 4).wrapping_add(cpu.ecx.wrapping_mul(4)), cpu.eax);
     cpu.ecx = cpu.eax.wrapping_add(cpu.edx.wrapping_mul(8));
-    cpu.eax = m.u32(at(cpu, DEPTH));
+    cpu.eax = g.u32(m, at(cpu, DEPTH));
     cpu.edx = cpu.eax.wrapping_mul(3);
-    m.set_u32(at(cpu, RANGES + 8).wrapping_add(cpu.edx.wrapping_mul(4)), cpu.ecx);
-    cpu.eax = m.u32(at(cpu, DEPTH));
-    cpu.ecx = m.u32(record.wrapping_add(4));
+    g.set_u32(m, at(cpu, RANGES + 8).wrapping_add(cpu.edx.wrapping_mul(4)), cpu.ecx);
+    cpu.eax = g.u32(m, at(cpu, DEPTH));
+    cpu.ecx = g.u32(m, record.wrapping_add(4));
     cpu.eax = cpu.eax.wrapping_mul(3);
-    m.set_u32(at(cpu, RANGES).wrapping_add(cpu.eax.wrapping_mul(4)), cpu.ecx);
+    g.set_u32(m, at(cpu, RANGES).wrapping_add(cpu.eax.wrapping_mul(4)), cpu.ecx);
 }
 
 /// Type 7: a query span on the object at +8 (+4: 0 begins, else ends).
 fn span(m: &mut dyn Mem, cpu: &mut Cpu) -> Next {
+    let g = Pages::of(m);
     let record = cpu.esi;
-    cpu.ecx = m.u32(record.wrapping_add(8));
+    cpu.ecx = g.u32(m, record.wrapping_add(8));
     if cpu.ecx != 0 {
-        if m.u32(record.wrapping_add(4)) == 0 {
+        if g.u32(m, record.wrapping_add(4)) == 0 {
             call(m, cpu, SPAN_BEGIN, 0x00DA_BFEE);
         } else {
             call(m, cpu, SPAN_END, 0x00DA_BFF8);

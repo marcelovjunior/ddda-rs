@@ -3,6 +3,9 @@
 //! reads and writes, at the same addresses, as the original; the
 //! differential tests run it over the byte image the original ran on and
 //! compare the whole result. (docs/NATIVE_PIPELINE.md, "Memory-model ports")
+mod host;
+pub use host::Pages;
+
 pub trait Mem {
     /// Preflight an instruction access without reading or publishing bytes.
     /// Returns the first inaccessible byte. Runtime adapters must forward
