@@ -96,6 +96,13 @@ target runs can include clear/copy-only runs; frame_stats pass rules may
 split or omit these differently. Compare ordered surface tuples and raw
 type mix before interpreting a count difference as a decoder error.
 
+L112's differential executor validation (`50548be6`, reported by claude-2)
+also confirms the visible termination path in `0x00DAB480`: a pending
+merged indexed span is not flushed at the end of the final list; an
+unknown topology drops a merged span when flushing. Raw-record statistics
+include those submitted records. A positive raw/API draw delta is therefore
+not necessarily just a count of coalesced draws.
+
 Reads are probed; bad/null pointers, arithmetic overflow, depth above 256,
 or more than one million visited records stop only observation and mark
 the summary with `errors`. The limits are diagnostic safeguards, not new
