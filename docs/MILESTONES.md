@@ -8,7 +8,13 @@
   Unexpected worker rejection is logged loudly (head-approved contract).
 - **8 transport tests pass**, including upload/native/query ordering and
   unsupported-job ownership. Worker and game comparison pending.
-- Next: ddgpu native worker adapter; `docs/tasks/L126-native-worker.md`.
+- Worker now executes through native::Device with immutable state/shader /
+  texture-group identity caches on the same device/queue. **4 Vulkan GPU tests
+  pass** (16 backend/host-driver image cases plus FIFO/resource/rejection tests),
+  **14 ddgpu CPU tests pass**. Per-job compact recorder; persistent resident /
+  bundle reuse and game/FPS comparison remain separate work.
+- L127 shadow hooks compiled; next: end-to-end shadow gate and head N2 run.
+  Details: `docs/tasks/L126-native-worker.md`.
 
 ### L123 native resident constants and bundles (2026-10-13)
 

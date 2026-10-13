@@ -431,6 +431,33 @@ impl Device {
         let b = backend.buffer(resource).ok_or("buffer not uploaded")?;
         Ok(insert!(self, buffers, Buffer, b))
     }
+    // The backend adapter has already resolved and validated these objects on
+    // the same device. Retain their actual identities, not reusable guest IDs.
+    pub(crate) fn retain_buffer(&mut self, gpu: wgpu::Buffer) -> Buffer {
+        insert!(self, buffers, Buffer, gpu)
+    }
+    pub(crate) fn retain_view(
+        &mut self,
+        gpu: wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        size: [u32; 2],
+        samples: u32,
+    ) -> View {
+        insert!(
+            self,
+            views,
+            View,
+            ViewObject {
+                gpu,
+                format,
+                size,
+                samples
+            }
+        )
+    }
+    pub(crate) fn retain_sampler(&mut self, gpu: wgpu::Sampler, lod_bias: f32) -> Sampler {
+        insert!(self, samplers, Sampler, SamplerObject { gpu, lod_bias })
+    }
     pub fn create_buffer(&mut self, bytes: &[u8], usage: wgpu::BufferUsages) -> Buffer {
         use wgpu::util::DeviceExt;
         let b = self.gpu.create_buffer_init(&wgpu::util::BufferInitDescriptor {

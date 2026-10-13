@@ -952,3 +952,20 @@ full 1.644 -> resident 1.264 -> resident + bundles 0.843 us/draw including
 upload/finish/submit; 15.67 MB -> 340 KB uploaded per frame. Six GPU tests and
 11 CPU tests pass. This is not game/FPS evidence. Head #11087 assigns L126's
 owned NativeJob/worker adapter next. See `tasks/L123-native-device-2.md`.
+
+
+## L126 native jobs on the backend worker (2026-10-13)
+
+`GraphicsBackend::native_supported()` is false by default and cached once by
+DeferredBackend. Supported NativeJobs enqueue on the same FIFO as uploads,
+legacy draws, queries, copies and readback, without a per-job producer wait.
+Unexpected worker rejection logs ERROR; the producer must satisfy the native
+eligibility contract before sending. Direct WgpuBackend calls return the
+untouched job on rejection before any native target submission.
+
+The worker resolves live backend resources, prewarms identity-cached native
+objects, records compact constants and submits one or more passes. Initial
+recorder lifetime is one job, so L123 cross-job resident/bundle speedups are
+not yet active here. Four focused GPU tests and 14 CPU tests pass. Shadow
+comparison begin/end hooks are compiled; L127 end-to-end gate and head's
+DDDRAW_NATIVE=1 image/FPS run remain pending. Details: tasks/L126-native-worker.md.
