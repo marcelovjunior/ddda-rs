@@ -1104,18 +1104,27 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
         e.waiters.fetch_add(1, SeqCst);
     }
     let r = loop {
+        // Err: the events taken by a wait for all that lost another (to
+        // put back), and the objects whose events the check found set and
+        // so does not wait for (the recheck condition is an event that was
+        // not set becoming set; "any event set" stayed true for a wait for
+        // all of a set event and an unsignalled semaphore, so the thread
+        // rechecked forever holding the guest lock: the deadlock at the
+        // game's logos)
         let r = kernel(|k| {
             let objs: Option<Vec<u32>> = handles.iter().map(|&h| k.object_of(h)).collect();
             let Some(objs) = objs else { return Ok(WAIT_FAILED) };
+            let states: Vec<bool> = objs.iter().map(|o| signalled(&k.objects[o], me)).collect();
+            let mut seen_set: Vec<u32> = Vec::new();
             if all {
-                if objs.iter().all(|o| signalled(&k.objects[o], me)) {
+                if states.iter().all(|&s| s) {
                     // the events first: one may be taken meanwhile by a
                     // wait without the guest lock; then nothing is taken
                     let mut taken = Vec::new();
                     for &o in &objs {
                         if let Object::Event(e) = &k.objects[&o] {
                             if !e.take() {
-                                return Err(taken);
+                                return Err((taken, seen_set));
                             }
                             if !e.manual {
                                 taken.push((o, e.clone()));
@@ -1129,14 +1138,18 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
                     }
                     return Ok(WAIT_OBJECT_0);
                 }
+                // not all signalled: the events that are set do not wake
+                // this thread again; the others, and the locked objects, do
+                seen_set = objs.iter().zip(&states).filter(|&(o, &s)| s && matches!(k.objects[o], Object::Event(_))).map(|(&o, _)| o).collect();
             } else {
                 for (i, o) in objs.iter().enumerate() {
-                    if signalled(&k.objects[o], me) && consume(k.objects.get_mut(o).unwrap(), me) {
+                    // an event taken meanwhile counts as not set
+                    if states[i] && consume(k.objects.get_mut(o).unwrap(), me) {
                         return Ok(WAIT_OBJECT_0 + i as u32);
                     }
                 }
             }
-            Err(Vec::new())
+            Err((Vec::new(), seen_set))
         });
         match r {
             Ok(WAIT_FAILED) => {
@@ -1144,7 +1157,7 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
                 break WAIT_FAILED;
             }
             Ok(r) => break r,
-            Err(taken) => {
+            Err((taken, seen_set)) => {
                 // a wait for all that lost an event: the ones it took are set
                 // again, and their waiters recheck
                 for (o, e) in &taken {
@@ -1154,7 +1167,9 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
                     break WAIT_TIMEOUT;
                 }
                 let keys: Vec<u64> = kernel(|k| handles.iter().filter_map(|&h| k.object_of(h)).map(key::object).collect());
-                wait_until(&keys, deadline, || events.iter().any(|(_, e)| e.is_set()));
+                // the guest lock is given up unless an event the check found
+                // not set is set by now (then the check runs again)
+                wait_until(&keys, deadline, || events.iter().any(|(o, e)| !seen_set.contains(o) && e.is_set()));
             }
         }
     };
@@ -2002,6 +2017,8 @@ mod tests {
     const S_RESET: u32 = 0x7100_0030;
     const S_WAIT1: u32 = 0x7100_0040;
     const S_WAITN: u32 = 0x7100_0050;
+    const S_NOOP: u32 = 0x7100_0060;
+    const S_RELEASE_SEM: u32 = 0x7100_0070;
     /// Guest data: critical sections at +0 and +0x40, counters at +0x100,
     /// handle arrays at +0x200.
     const DATA: u32 = 0x0090_0000;
@@ -2018,6 +2035,8 @@ mod tests {
             (S_RESET, reset_event, "KERNEL32.dll!ResetEvent", true),
             (S_WAIT1, wait_for_single_object, "KERNEL32.dll!WaitForSingleObject", true),
             (S_WAITN, wait_for_multiple_objects, "KERNEL32.dll!WaitForMultipleObjects", false),
+            (S_NOOP, noop, "TEST.dll!Noop", false),
+            (S_RELEASE_SEM, release_semaphore, "KERNEL32.dll!ReleaseSemaphore", false),
         ] {
             r.insert(a, if free && lock_free { Binding::LockFree(f) } else { Binding::Service(f) }).unwrap();
             r.name(a, name);
@@ -2252,5 +2271,106 @@ mod tests {
             g.call(S_SET, &[manual]);
             assert_eq!(g.call(S_WAITN, &[1, DATA + 0x208, 1, 0]), WAIT_OBJECT_0);
         }));
+    }
+
+    /// L86 regression (the game deadlocked at the logos): a thread waits in
+    /// WaitForMultipleObjects under the guest lock for an event or a
+    /// semaphore, while signallers first need the guest lock (a locked
+    /// service, ReleaseSemaphore) and others keep taking it; 2,000 rounds,
+    /// every wait with a timeout, so a wait that keeps the lock fails the
+    /// test instead of hanging it.
+    #[test]
+    fn a_locked_wait_lets_signallers_that_need_the_lock_run() {
+        let (rt, m) = sync_runtime();
+        let ev = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        let sem = create_named(&m, 0, || Object::Semaphore { count: 0, max: 1 });
+        let ack = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        let mut mm = m.share();
+        mm.set_u32(DATA + 0x200, ev);
+        mm.set_u32(DATA + 0x204, sem);
+        let r = sync_registry(true);
+        let rounds = 2000u32;
+        let failures = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (f2, stop2) = (failures.clone(), stop.clone());
+        run_guest_threads(&rt, &r, &m, 4, Arc::new(move |k, g: &mut GuestCaller| match k {
+            // the waiter: under the guest lock
+            0 => {
+                for i in 0..rounds {
+                    let got = g.call(S_WAITN, &[2, DATA + 0x200, 0, 10_000]);
+                    if got != WAIT_OBJECT_0 + i % 2 {
+                        f2.fetch_add(1, Ordering::SeqCst);
+                        break;
+                    }
+                    g.call(S_SET, &[ack]);
+                }
+                stop2.store(true, Ordering::SeqCst);
+            }
+            // the signaller: takes the guest lock first
+            1 => {
+                for i in 0..rounds {
+                    g.call(S_NOOP, &[]);
+                    if i % 2 == 0 {
+                        g.call(S_SET, &[ev]);
+                    } else {
+                        g.call(S_RELEASE_SEM, &[sem, 1, 0]);
+                    }
+                    if g.call(S_WAIT1, &[ack, 10_000]) != WAIT_OBJECT_0 {
+                        f2.fetch_add(1, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+            // lock traffic
+            _ => {
+                while !stop2.load(Ordering::SeqCst) {
+                    g.call(S_NOOP, &[]);
+                }
+            }
+        }));
+        assert_eq!(failures.load(Ordering::SeqCst), 0, "a wait timed out or returned the wrong object");
+    }
+
+    /// L86 regression: a wait for ALL of an event that is set and a
+    /// semaphore that is not, under the guest lock, while the thread that
+    /// releases the semaphore needs the guest lock first (ReleaseSemaphore
+    /// is a locked service). The wait must give the lock up until the
+    /// semaphore is released: it spun holding it (its recheck condition,
+    /// "an event is set", stayed true), and the game deadlocked at the
+    /// logos. 500 rounds; the waiter's timeout fails the test instead of
+    /// hanging it.
+    #[test]
+    fn a_wait_for_all_gives_the_lock_up_while_an_event_is_already_set() {
+        let (rt, m) = sync_runtime();
+        let ev = create_named(&m, 0, || Object::Event(EventCell::new(true, true)));
+        let sem = create_named(&m, 0, || Object::Semaphore { count: 0, max: 1 });
+        let ack = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        let mut mm = m.share();
+        mm.set_u32(DATA + 0x200, ev);
+        mm.set_u32(DATA + 0x204, sem);
+        let r = sync_registry(true);
+        let rounds = 500u32;
+        let failures = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let f2 = failures.clone();
+        run_guest_threads(&rt, &r, &m, 2, Arc::new(move |k, g: &mut GuestCaller| {
+            for _ in 0..rounds {
+                if k == 0 {
+                    if g.call(S_WAITN, &[2, DATA + 0x200, 1, 5_000]) != WAIT_OBJECT_0 {
+                        f2.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    }
+                    g.call(S_SET, &[ack]);
+                } else {
+                    // let the waiter block first, sometimes
+                    std::thread::yield_now();
+                    g.call(S_RELEASE_SEM, &[sem, 1, 0]);
+                    if g.call(S_WAIT1, &[ack, 5_000]) != WAIT_OBJECT_0 {
+                        f2.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    }
+                }
+            }
+        }));
+        assert_eq!(failures.load(Ordering::SeqCst), 0, "a wait timed out: the wait for all kept the guest lock");
     }
 }
