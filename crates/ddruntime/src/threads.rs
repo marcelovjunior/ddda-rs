@@ -109,9 +109,17 @@ struct Sleeper {
     cv: Arc<Condvar>,
 }
 
+/// How long a thread waiting for the guest lock spins before it sleeps.
+const LOCK_SPIN: Duration = Duration::from_micros(30);
+
 pub struct GuestLock {
     state: Mutex<LockState>,
     cv: Condvar,
+    /// A copy of `LockState::held` that a thread waiting for the lock spins
+    /// on before it sleeps (L87): most services hold the lock ~1 us, so a
+    /// short spin takes it without an OS sleep and wake-up (the gameplay
+    /// lock statistics showed ~100,000 hand-offs per second).
+    held_hint: std::sync::atomic::AtomicBool,
     /// Translated code runs without the lock (see the module comment).
     parallel: std::sync::atomic::AtomicBool,
 }
@@ -135,6 +143,7 @@ impl Default for GuestLock {
                 ..LockState::default()
             }),
             cv: Condvar::new(),
+            held_hint: std::sync::atomic::AtomicBool::new(true),
             parallel: std::sync::atomic::AtomicBool::new(parallel),
         }
     }
@@ -178,6 +187,7 @@ impl GuestLock {
     fn release_locked(&self, s: &mut LockState) {
         debug_assert!(s.held && s.holder == current_tid());
         s.held = false;
+        self.held_hint.store(false, std::sync::atomic::Ordering::Release);
         stats::released();
         self.cv.notify_all();
     }
@@ -189,8 +199,23 @@ impl GuestLock {
         let asked = stats::on().then(Instant::now);
         s.waiting += 1;
         signal_preempt(&s);
+        let mut spun = false;
         while s.held || s.suspended.get(&me).copied().unwrap_or(0) > 0 {
+            // L87: spin briefly (only for a held lock, not a suspension)
+            // before sleeping on the condvar; the state is rechecked under
+            // the mutex either way, so this changes timing only
+            if !spun && s.held && s.suspended.get(&me).copied().unwrap_or(0) == 0 {
+                drop(s);
+                let t0 = Instant::now();
+                while self.held_hint.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < LOCK_SPIN {
+                    std::hint::spin_loop();
+                }
+                spun = true;
+                s = self.lock();
+                continue;
+            }
             s = self.cv.wait(s).unwrap_or_else(|e| e.into_inner());
+            spun = false;
         }
         if let Some(t) = asked {
             stats::acquired(t);
@@ -198,6 +223,7 @@ impl GuestLock {
         s.waiting -= 1;
         signal_preempt(&s);
         s.held = true;
+        self.held_hint.store(true, std::sync::atomic::Ordering::Release);
         s.holder = me;
         s.depth = depth;
         s.acquisitions += 1;
