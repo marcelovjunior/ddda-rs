@@ -56,6 +56,10 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00e0e5e0, mtcore::semantic_draw_b::dependency_hash),
             (0x010655a0, mtcore::semantic_draw_b::apply_material),
             (0x01066c60, mtcore::semantic_draw_b::select_material_pass),
+            (0x00ff1920, mtcore::semantic_draw_a::shadow_draws),
+            (0x00ff14d0, mtcore::semantic_draw_a::replay_draw_passes),
+            (0x00fefb90, mtcore::semantic_draw_a::bind_render_target),
+            (0x00ea5320, mtcore::semantic_draw::draw_mesh),
         ] {
             ports.retain(|p| p.0 != a);
             ports.push((a, f));

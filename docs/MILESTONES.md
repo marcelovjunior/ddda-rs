@@ -70,6 +70,20 @@
   variants are rejected, including corrupted and extra heap writes below ESP.
 - Next: head merges registrations and validates the combined semantic train
   against the native gate and matched image/critical-job capture.
+### L173 semantic model draw leaves (2026-10-13)
+
+- Native FF1920/FF14D0/FEFB90 under `DDRUNTIME_SEMANTIC=1`: 480 original
+  ABI returns pass, including all heap writes and external call arguments.
+  Seven isolated checks pass with lifted/semantic serial/atomic Pages;
+  runtime light 255 pass, zero failures, seven ignored.
+- Median isolated gains across four cases: FF1920 1.07–2.02x,
+  FF14D0 2.25–2.56x, FEFB90 1.48–1.67x. Synthetic callees; no gameplay or
+  FPS acceptance. x87 signaling-NaN emulator limit documented.
+- Head EA5320 follow-up: 302 originals pass head/strict ABI harnesses and
+  isolated lift; callback spheres and heap writes included. Leaf oracle
+  rejects three deliberate below-stack heap corruptions.
+- Next: head combined train/image acceptance. Evidence and reproduction:
+  `docs/tasks/L173-semantic-draw-a.md`.
 
 ### L162c job distribution and host scheduling (2026-10-13)
 

@@ -34,6 +34,7 @@ pub mod semantic;
 pub mod semantic_draw;
 pub mod semantic_draw_c;
 pub mod semantic_draw_b;
+pub mod semantic_draw_a;
 pub mod object;
 pub mod property;
 pub mod shadow_traversal;

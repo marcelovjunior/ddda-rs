@@ -12,6 +12,15 @@ Draw benchmark medians improve 1.221–2.111x; this is isolated caller cost,
 not an FPS or image acceptance result. Defaults and inventory totals stay
 unchanged. Head-owned integration/game acceptance is next. See
 [L174 evidence and reproduction](tasks/L174-semantic-draw-b.md).
+## L173 semantic model-draw leaves
+
+`DDRUNTIME_SEMANTIC=1` additionally replaces FF1920 (shadow draw copies),
+FF14D0 (extra material passes), and FEFB90 (render-target/viewport binding).
+480 original ABI cases and production serial/atomic memory replay pass;
+runtime light 255 pass, zero failures, seven ignored. Full train and live
+image/per-job acceptance remain head-owned. See
+[L173 evidence](tasks/L173-semantic-draw-a.md) for isolated timings and
+the x87 signaling-NaN oracle limitation.
 
 ## L168 guest-memory backing experiment
 
