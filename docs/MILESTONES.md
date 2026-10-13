@@ -12,6 +12,22 @@
   `docs/tasks/L159-vk-default.md`.
 - Next: head `DDGPU_VK=1 DDGPU_VK_SHADOW=997` gameplay image gate, then
   separately adopt the staged default-on commit only after acceptance.
+### L163 boot attribution and exact stream skip (2026-10-13)
+
+- Boot intervals mix original logo holds, authored GUI sequences, input
+  residence and work. Autoplay cadence ~1.66 s; title entry/exit nominally
+  5.3 s. Storage's 120-frame hold has original input escape; no timer edits.
+- Combo30 loading: decoders 16.969 CPU s / 14 s; 207 non-wait samples.
+  CF02E0 76, CFEEC0 59 (28.5%), DB9F40 service/lock loop 52. New opt-in
+  ARCHIVE_SKIP batches buffered skip, preserving original refill and ABI.
+- CPU timeline replaces repeated Toolhelp with one first-Present discovery
+  plus cached GetThreadTimes; process residual covers unregistered CPU.
+  Boot-detail observations opt-in. 192 original-instruction + 192 scalar
+  skip cases pass; 16 parser tests pass; final library results in brief.
+- Not yet compared in game; inherited gamma Reset failure remains. Next:
+  head skip0/1 load/image run plus boot detail; retain FAST2/TABLE opt-ins.
+  Evidence and limitations: docs/LOADING.md, docs/tasks/L163-loader-cpu.md.
+
 ### L156 exact inflate and Huffman builder (2026-10-13)
 
 - Opt-in FAST=2 adds bounded table/output spans, packed input pairs and
@@ -78,6 +94,34 @@
   not wake delays. No runtime behavior change or game/shard run.
 - Next: head L158 trace capture, cache/futex 0/0 versus 1/1, with exact
   binary/env hashes. Details: `docs/tasks/L160-job-threads.md`.
+### L159 shadow failure diagnostics (2026-10-13)
+
+- Head combo30: 1,652 shadow aspect checks / zero mismatches, then backend
+  disconnect around t=91 s. `not Vulkan` can mean invalid encoder or HAL-open
+  failure; Windows records NVIDIA event 153 during the run window. Exact
+  trigger remains unresolved; this is not default-flip acceptance.
+- Opt-in `DDGPU_DIAGNOSTICS=1` prints device-loss and fatal validation
+  errors despite the runtime's silent panic hook; finisher preserves its
+  panic cause. **Four CPU + two bounded GPU checks pass**; validation stays
+  fatal. Next: head repeats shadow997 with diagnostics and event correlation.
+  Details: `docs/tasks/L164-native-backend.md` (L159 follow-up).
+
+### L164 native backend constant processing (2026-10-13)
+
+- c29nat1 backend: 18.5 CPU seconds/30 seconds, 386 busy samples;
+  native preparation 86 inclusive samples, constant uploads 61, synchronous
+  scatter finish 27. Late counters: 52.23 draws/job, 318.54 upload bytes/draw,
+  one submit/job, no new pipelines/texture sets or resource resets.
+- Candidate defers scatter finish to the ordered encoder pool and skips
+  coverage bitmap scans for complete constant banks, retaining range errors.
+  Upload gates, source-slot tickets, draw order and submit count are unchanged.
+- GPU **43 + eight ordering checks pass**, same 96-job image hash. CPU
+  **30 pass / inherited strip-test failure / one ignored**; baseline reproduces
+  that failure. Runtime light **233 pass / inherited gamma failure / seven ignored**.
+- Paired raw-Vulkan median: 64-draw jobs **2.312 -> 2.216 us/draw**;
+  5,000-draw jobs **1.804 -> 1.832** (regression). Same bytes/submits/hashes;
+  no gameplay gain claimed. Next: head native VK=1 A/B and zero-mismatch
+  compare. Details and limitations: `docs/tasks/L164-native-backend.md`.
 
 ### L153 game-thread synchronization (2026-10-13)
 

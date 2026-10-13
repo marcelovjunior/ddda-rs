@@ -1250,7 +1250,7 @@ impl Worker {
             // The ordered finisher submits the scatter and its consumers in
             // one batch. This removes a queue submit per dirty job without
             // changing the wait-before-write or scatter-before-draw boundary.
-            chunks.insert(0, crate::vk::Chunk::Buffer(scatter));
+            chunks.insert(0, crate::vk::Chunk::Wgpu(scatter));
         }
         if !chunks.is_empty() {
             backend.native_stats.submit_batches += 1;
@@ -1440,6 +1440,37 @@ fn apply_constants(
     }
     Ok(())
 }
+fn constant_ranges_covered(required: &[bool], mut ranges: impl Iterator<Item = (u32, usize)>) -> Result<(), String> {
+    let first_range = ranges.next();
+    if first_range == Some((0, required.len())) {
+        // Native snapshots commonly supply a complete bank. Coverage is then
+        // certain, but trailing ranges must still be checked in original order.
+        for (first, len) in ranges {
+            let first = first as usize;
+            let end = first.checked_add(len).ok_or("native constant range overflow")?;
+            required.get(first..end).ok_or("native constant range outside bank")?;
+        }
+        return Ok(());
+    }
+    let mut storage = [false; 256];
+    let written = &mut storage[..required.len()];
+    for (first, len) in first_range.into_iter().chain(ranges) {
+        let first = first as usize;
+        let end = first.checked_add(len).ok_or("native constant range overflow")?;
+        written
+            .get_mut(first..end)
+            .ok_or("native constant range outside bank")?
+            .fill(true);
+    }
+    if required
+        .iter()
+        .zip(written.iter())
+        .any(|(&needed, &have)| needed && !have)
+    {
+        return Err("native constants do not cover shader reads".into());
+    }
+    Ok(())
+}
 impl ConstantReads {
     fn from_shader(shader: &d3d9shader::Shader) -> Result<Self, String> {
         use d3d9shader::{op, reg, Stage};
@@ -1494,35 +1525,15 @@ impl ConstantReads {
         Ok(r)
     }
     fn validate(&self, updates: &NativeConstants) -> Result<(), String> {
-        fn covered(required: &[bool], ranges: impl Iterator<Item = (u32, usize)>) -> Result<(), String> {
-            let mut storage = [false; 256];
-            let written = &mut storage[..required.len()];
-            for (first, len) in ranges {
-                let first = first as usize;
-                let end = first.checked_add(len).ok_or("native constant range overflow")?;
-                written
-                    .get_mut(first..end)
-                    .ok_or("native constant range outside bank")?
-                    .fill(true);
-            }
-            if required
-                .iter()
-                .zip(written.iter())
-                .any(|(&needed, &have)| needed && !have)
-            {
-                return Err("native constants do not cover shader reads".into());
-            }
-            Ok(())
-        }
-        covered(
+        constant_ranges_covered(
             &self.floats,
             updates.floats.iter().map(|w| (w.first, w.registers.len())),
         )?;
-        covered(
+        constant_ranges_covered(
             &self.ints,
             updates.ints.iter().map(|w| (w.first, w.registers.len())),
         )?;
-        covered(
+        constant_ranges_covered(
             &self.bools,
             updates.bools.iter().map(|w| (w.first, w.registers.len())),
         )
@@ -1532,6 +1543,37 @@ impl ConstantReads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn complete_bank_coverage_preserves_range_errors_and_partial_coverage() {
+        fn reference(required: &[bool], ranges: &[(u32, usize)]) -> Result<(), String> {
+            let mut written = vec![false; required.len()];
+            for &(first, len) in ranges {
+                let end = (first as usize).checked_add(len).ok_or("native constant range overflow")?;
+                written.get_mut(first as usize..end)
+                    .ok_or("native constant range outside bank")?.fill(true);
+            }
+            if required.iter().zip(written).any(|(&need, have)| need && !have) {
+                return Err("native constants do not cover shader reads".into());
+            }
+            Ok(())
+        }
+        for size in [0, 1, 16, 224, 256] {
+            for pattern in 0..3 {
+                let required: Vec<_> = (0..size).map(|i| pattern == 0 || (pattern == 1 && i % 3 == 0)).collect();
+                let candidates = [(0, size), (0, size / 2), (size as u32 / 2, size - size / 2),
+                    (size as u32, 0), (size as u32, 1), (u32::MAX, usize::MAX)];
+                let mut cases = vec![vec![]];
+                for a in candidates {
+                    cases.push(vec![a]);
+                    for b in candidates { cases.push(vec![a, b]); }
+                }
+                for ranges in cases {
+                    assert_eq!(constant_ranges_covered(&required, ranges.iter().copied()),
+                        reference(&required, &ranges), "size={size} pattern={pattern} ranges={ranges:?}");
+                }
+            }
+        }
+    }
     #[test]
     fn strip_restart_exclusion_uses_declared_index_range_without_wrapping() {
         for primitive in [5] {
