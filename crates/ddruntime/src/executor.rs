@@ -198,6 +198,7 @@ pub(crate) fn run(registry: &crate::dispatch::Registry, m: &mut dyn Mem, cpu: &m
                 Some(Binding::ServiceTail(f)) => Some((f, true, true, false)),
                 Some(Binding::LockFree(f)) => Some((f, false, false, false)),
                 Some(Binding::Device(f, guest)) => Some((f, guest, false, true)),
+                Some(Binding::DeviceState(f)) => Some((f, false, false, true)),
                 _ => None,
             };
             let flow = if let Some((f, locked, tail, device)) = service {

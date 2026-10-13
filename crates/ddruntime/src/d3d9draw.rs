@@ -170,24 +170,30 @@ pub(crate) fn flush(m: &dyn Mem, resource: u32) {
 /// All of a draw's reads share one objects access. Preserve read order,
 /// duplicates, and the old per-resource volume/face/mip upload order.
 pub(crate) fn flush_reads(m: &dyn Mem, reads: impl IntoIterator<Item = u32>) {
-    let out = objects(|o| {
-        let mut out = Vec::new(); // no allocation unless an image needs upload
+    let out = objects(|o| collect_reads(o, reads));
+    upload_reads(m, out);
+}
+
+pub(super) fn collect_reads(o: &mut crate::d3d9dev::Objects, reads: impl IntoIterator<Item = u32>) -> Vec<(u32, u32, u32, Image)> {
+    let mut out = Vec::new(); // no allocation unless an image needs upload
+    #[cfg(debug_assertions)]
+    let verify = verify_dirty_flush();
+    for resource in reads {
+        let dirty = o.dirty.remove(&resource);
+        // Opt-in slow audit, including dirty images without a shadow:
+        // the old walk would clear those too, even though it emits nothing.
         #[cfg(debug_assertions)]
-        let verify = verify_dirty_flush();
-        for resource in reads {
-            let dirty = o.dirty.remove(&resource);
-            // Opt-in slow audit, including dirty images without a shadow:
-            // the old walk would clear those too, even though it emits nothing.
-            #[cfg(debug_assertions)]
-            if verify && !dirty {
-                assert!(!resource_has_dirty(o, resource), "unindexed dirty D3D resource {resource:#x}");
-            }
-            if dirty {
-                collect_dirty(o, resource, &mut out);
-            }
+        if verify && !dirty {
+            assert!(!resource_has_dirty(o, resource), "unindexed dirty D3D resource {resource:#x}");
         }
-        out
-    });
+        if dirty {
+            collect_dirty(o, resource, &mut out);
+        }
+    }
+    out
+}
+
+pub(super) fn upload_reads(m: &dyn Mem, out: Vec<(u32, u32, u32, Image)>) {
     for (resource, index, format, img) in out {
         let u = if index == u32::MAX {
             Upload::Buffer { resource, bytes: read_bytes(m, img.shadow, img.size) }
@@ -196,6 +202,14 @@ pub(crate) fn flush_reads(m: &dyn Mem, reads: impl IntoIterator<Item = u32>) {
         };
         backend(|b| b.upload(u));
     }
+}
+
+/// Consult under the same object borrow used to read device state. The audit
+/// deliberately bypasses this shortcut so missing dirty-index entries still fail.
+pub(super) fn needs_flush(o: &crate::d3d9dev::Objects) -> bool {
+    #[cfg(debug_assertions)]
+    if verify_dirty_flush() { return true; }
+    !o.dirty.is_empty()
 }
 
 #[cfg(debug_assertions)]

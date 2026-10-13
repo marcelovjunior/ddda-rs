@@ -4,6 +4,20 @@ use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 use ddnative_base::emit;
 
+// Translated from 0x01310B50 (DDDA.exe 2017-12-13 Steam), MtDtiSelecter::dtor_deleting.
+pub fn f_01310b50(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x1310B50;
+    loop {
+        match pc {
+            0x1310B50 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.cond("e") { 0x1310B77 } else { 0x1310B60 }; continue; }
+            0x1310B60 => { emit::push(0x18D8B2Cu32, m, pt, cpu); emit::push(0x1310B6A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x1310B77, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x1310B77; continue; }
+            0x1310B77 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // Translated from 0x01310B80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01310b80.
 pub fn f_01310b80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();

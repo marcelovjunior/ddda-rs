@@ -45,6 +45,12 @@ pub enum Binding {
     /// (taken first), without it (the hot device methods, which touch only
     /// the D3D objects and the backend) none in parallel mode.
     Device(LiftFn, bool),
+    /// A Direct3D 9 device method that only sets or reads device state
+    /// (L101: SetRenderState, SetTexture, the shader constants, ...): the
+    /// D3D lock, no guest lock, and the guest's x87 state stays in the FPU
+    /// (these run no host code that uses it; an object destroyed by a
+    /// Release in them parks it first, crate::d3d9dev::release_of).
+    DeviceState(LiftFn),
 }
 
 impl Binding {
@@ -55,6 +61,7 @@ impl Binding {
             Binding::ServiceTail(_) => "service with host-only tail",
             Binding::LockFree(_) => "lock-free service",
             Binding::Device(..) => "D3D service",
+            Binding::DeviceState(_) => "D3D state service",
         }
     }
 }
@@ -169,6 +176,9 @@ pub struct Registry {
     entries: Entries,
     bound: usize,
     names: HashMap<u32, String>,
+    /// Dense resolved COM tokens. Built once after registration; mutation
+    /// invalidates the entire cache, including indexed interior step entries.
+    methods: std::sync::OnceLock<Vec<Option<Entry>>>,
 }
 
 impl Registry {
@@ -192,6 +202,9 @@ impl Registry {
                 crate::load_log::wrap_archive(ports, &ddnative::generated::lifted::bodies());
             }
         });
+        // L119: DDDRAW_NATIVE (a sink over the executor port)
+        #[cfg(feature = "game")]
+        crate::ndraw_native::install();
         #[cfg(feature = "game")]
         r.set_instruction_lookup(ddnative::generated::lifted::instruction);
         #[cfg(feature = "game")]
@@ -213,6 +226,7 @@ impl Registry {
     /// Bind `addr` to `b`, replacing what was there (the runtime's own
     /// services over platform models, e.g. fastmem's memcpy).
     pub fn replace(&mut self, addr: u32, b: Binding) {
+        self.methods.take();
         match self.entries.get_mut(&addr) {
             Some(e) => {
                 // its step entry is resolved already (with the lookup set)
@@ -241,6 +255,7 @@ impl Registry {
     /// Install the generated, exact instruction-address resolver. Services
     /// retain precedence; whole-function lifts are not instruction fallbacks.
     pub fn set_instruction_lookup(&mut self, lookup: Lookup) {
+        self.methods.take();
         self.instructions = Some(lookup);
         // resolve the step entries again, from every bound address
         self.entries.retain(|_, e| e.binding.is_some());
@@ -269,13 +284,37 @@ impl Registry {
         self.bound == 0
     }
 
+    fn method_slot(addr: u32) -> Option<usize> {
+        // interfaces::Tokens allocates aligned 16-byte tokens in the reserved
+        // method region below image::IMPORT_TOKENS. Other addresses stay hashed.
+        let offset = addr.wrapping_sub(crate::interfaces::METHOD_TOKENS);
+        (offset < crate::image::IMPORT_TOKENS - crate::interfaces::METHOD_TOKENS
+            && offset & 15 == 0).then_some((offset / 16) as usize)
+    }
+
+    fn call_entry(&self, target: u32) -> Option<&Entry> {
+        if let Some(slot) = Self::method_slot(target) {
+            let methods = self.methods.get_or_init(|| {
+                let len = self.entries.keys().filter_map(|&addr| Self::method_slot(addr))
+                    .max().map_or(0, |slot| slot + 1);
+                let mut methods = vec![None; len];
+                for (&addr, &entry) in &self.entries {
+                    if let Some(slot) = Self::method_slot(addr) { methods[slot] = Some(entry); }
+                }
+                methods
+            });
+            return methods.get(slot).and_then(Option::as_ref);
+        }
+        self.entries.get(&target)
+    }
+
     /// Run whatever is bound at `target` (return address already pushed),
     /// or report it as unbound.
     pub fn call(&self, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) -> Result<(), Unbound> {
         // The step executor only where gen emitted restartable instruction
         // entries (L27b, LIFT_INSTRUCTIONS); whole-function bindings run
         // directly below.
-        let binding = match self.entries.get(&target) {
+        let binding = match self.call_entry(target) {
             Some(Entry { step: Some(_), .. }) => None,
             Some(Entry { binding: Some(b), .. }) => Some(*b),
             // not indexed: no binding, and a step entry only if the
@@ -287,13 +326,54 @@ impl Registry {
         };
         match binding {
             None => crate::executor::run(self, m, cpu, target),
-            Some(Binding::Service(f)) => self.run_service(f, m, cpu, target, true, false),
-            Some(Binding::ServiceTail(f)) => self.run_service(f, m, cpu, target, true, true),
-            Some(Binding::LockFree(f)) => self.run_service(f, m, cpu, target, false, false),
-            Some(Binding::Device(f, guest)) => self.run_service_as(f, m, cpu, target, guest, false, true),
-            Some(Binding::Lifted(f)) => f(m, cpu),
+            Some(b) => self.run_binding(b, m, cpu, target),
         }
         Ok(())
+    }
+
+    /// The binding a call of `target` runs directly (not the step executor).
+    fn direct(&self, target: u32) -> Option<Binding> {
+        match self.call_entry(target) {
+            Some(Entry { step: None, binding: Some(b) }) => Some(*b),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn run_binding(&self, binding: Binding, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        match binding {
+            Binding::Service(f) => self.run_service(f, m, cpu, target, true, false),
+            Binding::ServiceTail(f) => self.run_service(f, m, cpu, target, true, true),
+            Binding::LockFree(f) => self.run_service(f, m, cpu, target, false, false),
+            Binding::Device(f, guest) => self.run_service_as(f, m, cpu, target, guest, false, true),
+            Binding::DeviceState(f) => self.run_device_state(f, m, cpu, target),
+            Binding::Lifted(f) => f(m, cpu),
+        }
+    }
+
+    /// A [`Binding::DeviceState`] method: [`run_service_as`](Self::run_service_as)
+    /// for a D3D method without the guest lock, minus the x87 park.
+    fn run_device_state(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        // the lock statistics and the service trace keep the full path
+        if crate::threads::stats::on() || trace::on() {
+            return self.run_service_as(f, m, cpu, target, false, false, true);
+        }
+        // L22: Rust runs under the host default MXCSR, as in run_service_as
+        let guest = x86::stmxcsr();
+        cpu.mxcsr = x86::Mxcsr(guest);
+        if guest != x86::MXCSR_DEFAULT {
+            x86::ldmxcsr(x86::MXCSR_DEFAULT);
+        }
+        let lock = crate::threads::service_lock_free();
+        let scope = crate::threads::ServiceScope::enter_with_tail(false);
+        let d3d = crate::d3d9dev::device_lock();
+        f(m, cpu);
+        drop(d3d);
+        drop(scope);
+        drop(lock);
+        if x86::stmxcsr() != cpu.mxcsr.0 {
+            x86::ldmxcsr(cpu.mxcsr.0);
+        }
     }
 
     #[cold]
@@ -325,8 +405,11 @@ impl Registry {
         // L22: a service is Rust: it runs under the host default MXCSR and
         // the guest's (live while lifted code runs) waits in cpu.mxcsr, so
         // neither sees nor changes the other's rounding or sticky flags.
-        cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
-        x86::ldmxcsr(x86::MXCSR_DEFAULT);
+        let guest = x86::stmxcsr();
+        cpu.mxcsr = x86::Mxcsr(guest);
+        if guest != x86::MXCSR_DEFAULT {
+            x86::ldmxcsr(x86::MXCSR_DEFAULT);
+        }
         // L62: the guest x87 state leaves the host FPU, so host code
         // (drivers, libraries) sees the thread's own FPU
         ddnative_base::x87::park();
@@ -349,7 +432,10 @@ impl Registry {
         drop(scope);
         drop(lock);
         drop(stats);
-        x86::ldmxcsr(cpu.mxcsr.0);
+        // (the register as the guest's again; loaded only if it differs)
+        if x86::stmxcsr() != cpu.mxcsr.0 {
+            x86::ldmxcsr(cpu.mxcsr.0);
+        }
     }
 
     fn unbound(&self, m: &dyn Mem, cpu: &Cpu, target: u32) -> Unbound {
@@ -372,7 +458,21 @@ impl Registry {
         ddnative_host::install();
         ddnative_host::set_preempt_hook(crate::threads::preempt);
         let me = Arc::clone(self);
+        // L101: the bindings this thread called, direct-mapped by address
+        // (the registry no longer changes once shared, so they never go
+        // stale): a hit skips the map lookup
+        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 256]> = Box::new([const { std::cell::Cell::new(None) }; 256]);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
+            let slot = &cache[((target >> 2) ^ (target >> 10)) as usize & 255];
+            if let Some((t, b)) = slot.get() {
+                if t == target {
+                    return me.run_binding(b, m, cpu, target);
+                }
+            }
+            if let Some(b) = me.direct(target) {
+                slot.set(Some((target, b)));
+                return me.run_binding(b, m, cpu, target);
+            }
             if let Err(u) = me.call(m, cpu, target) {
                 std::panic::panic_any(u);
             }
@@ -413,9 +513,28 @@ mod trace {
         .as_ref()
     }
 
+    /// Whether service calls are traced (DDRUNTIME_TRACE_SERVICES).
+    pub(super) fn on() -> bool {
+        file().is_some()
+    }
+
     /// The line's start, if this call is traced.
+    #[inline]
     pub(super) fn start(r: &Registry, m: &dyn Mem, cpu: &Cpu, target: u32) -> Option<String> {
-        file()?;
+        // (L101: the untraced case is one load, inline)
+        static OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if OFF.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        if file().is_none() {
+            OFF.store(true, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+        start_traced(r, m, cpu, target)
+    }
+
+    #[inline(never)]
+    fn start_traced(r: &Registry, m: &dyn Mem, cpu: &Cpu, target: u32) -> Option<String> {
         let name = r.names.get(&target)?;
         let word = |k: u32| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u32(cpu.esp.wrapping_add(4 * k)))).ok();
         let w = |k| word(k).map_or("-".to_string(), |v| format!("{v:#x}"));
@@ -541,6 +660,62 @@ mod tests {
 
     fn same(a: Option<Step>, b: Option<Step>) -> bool {
         a.map(|f| f as usize) == b.map(|f| f as usize)
+    }
+
+    #[test]
+    fn dense_method_entries_preserve_rebinding_steps_holes_and_registries() {
+        const BASE: u32 = crate::interfaces::METHOD_TOKENS;
+        fn lookup(ip: u32) -> Option<Step> {
+            (ip == BASE || ip == BASE + 16).then_some(step)
+        }
+        fn no_steps(_: u32) -> Option<Step> { None }
+        let mut r = Registry::new();
+        r.insert(BASE, Binding::Device(ret, false)).unwrap();
+        r.insert(BASE + 32, Binding::Service(ret)).unwrap();
+        assert!(matches!(r.call_entry(BASE).unwrap().binding, Some(Binding::Device(_, false))));
+        assert!(r.call_entry(BASE + 16).is_none());
+        assert!(r.call_entry(BASE + 1).is_none());
+        assert!(r.call_entry(crate::image::IMPORT_TOKENS).is_none());
+        r.replace(BASE, Binding::LockFree(ret));
+        assert!(matches!(r.call_entry(BASE).unwrap().binding, Some(Binding::LockFree(_))));
+        assert!(r.insert(BASE, Binding::Service(ret)).is_err());
+        r.set_instruction_lookup(lookup);
+        assert!(same(r.call_entry(BASE).unwrap().step, Some(step)));
+        assert!(same(r.call_entry(BASE + 16).unwrap().step, Some(step)));
+        assert!(r.call_entry(BASE + 16).unwrap().binding.is_none());
+        r.set_instruction_lookup(no_steps);
+        assert!(r.call_entry(BASE).unwrap().step.is_none());
+        assert!(r.call_entry(BASE + 16).is_none());
+        let mut other = Registry::new();
+        other.insert(BASE, Binding::ServiceTail(ret)).unwrap();
+        assert!(matches!(other.call_entry(BASE).unwrap().binding, Some(Binding::ServiceTail(_))));
+        assert!(matches!(r.call_entry(BASE).unwrap().binding, Some(Binding::LockFree(_))));
+        // A late bound method grows the dense table after its first call.
+        r.insert(BASE + 4096, Binding::Service(ret)).unwrap();
+        assert!(r.call_entry(BASE + 4096).unwrap().binding.is_some());
+        assert_eq!(r.len(), 3);
+    }
+
+    #[test]
+    fn method_lookup_cost() {
+        let mut r = Registry::new();
+        let base = crate::interfaces::METHOD_TOKENS;
+        for slot in 0..1024 { r.insert(base + slot * 16, Binding::Device(ret, false)).unwrap(); }
+        r.call_entry(base); // exclude one-time resolution
+        let n = 1_000_000;
+        for _ in 0..3 {
+            let t = Instant::now();
+            for k in 0..n {
+                std::hint::black_box(r.entries.get(&std::hint::black_box(base + (k % 1024) * 16)));
+            }
+            let hash = t.elapsed().as_secs_f64() * 1e9 / n as f64;
+            let t = Instant::now();
+            for k in 0..n {
+                std::hint::black_box(r.call_entry(std::hint::black_box(base + (k % 1024) * 16)));
+            }
+            let dense = t.elapsed().as_secs_f64() * 1e9 / n as f64;
+            eprintln!("COM method lookup: hash {hash:.2} ns, dense {dense:.2} ns");
+        }
     }
 
     /// The registry answers exactly as the program's lookup and its

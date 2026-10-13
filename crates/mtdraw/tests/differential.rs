@@ -533,3 +533,87 @@ fn the_port_executes_frames_as_the_lifted_executor_does() {
         assert!(by_target.get(&t).copied().unwrap_or(0) > 0, "{} never called", name(t));
     }
 }
+
+// --- L119: the command sink ------------------------------------------------------------
+
+/// A sink that records what it is offered and takes the kinds `take` says.
+struct Taker {
+    take: fn(u32) -> bool,
+    offered: std::sync::Mutex<Vec<(u32, u32)>>,
+    taken: std::sync::Mutex<Vec<u32>>,
+    frames: std::sync::atomic::AtomicU32,
+}
+
+impl mtdraw::sink::CommandSink for Taker {
+    fn frame_begin(&self, _m: &mut dyn Mem, render: u32, _context: u32) {
+        assert_eq!(render, RENDER);
+        self.frames.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn command(&self, _m: &mut dyn Mem, _context: u32, record: u32, kind: u32) -> mtdraw::sink::Taken {
+        assert_ne!(kind, 6, "nested lists are not offered");
+        self.offered.lock().unwrap().push((record, kind));
+        if (self.take)(kind) {
+            self.taken.lock().unwrap().push(record);
+            mtdraw::sink::Taken::Handled
+        } else {
+            mtdraw::sink::Taken::Default
+        }
+    }
+    fn frame_end(&self, _m: &mut dyn Mem, render: u32, _context: u32) {
+        assert_eq!(render, RENDER);
+    }
+}
+
+fn taker(take: fn(u32) -> bool) -> std::sync::Arc<Taker> {
+    std::sync::Arc::new(Taker { take, offered: Default::default(), taken: Default::default(), frames: Default::default() })
+}
+
+/// The executor with a sink: (b) a sink taking nothing changes nothing (the
+/// lifted result); (c) a sink taking the DrawPrimitive and instanced
+/// DrawPrimitive records gives exactly the lifted result on the same frame
+/// with those records turned into no-ops (type 8): their applies and
+/// device calls, and nothing else, are gone.
+#[test]
+fn a_sink_takes_whole_commands_and_nothing_else() {
+    ddnative_host::install();
+    x86::set_lifted_lookup(lookup);
+    x86::set_ext_calls(Some(Box::new(mock)));
+    let frames = std::env::var("MTDRAW_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(400u64);
+    let (mut offered, mut taken) = (0usize, 0usize);
+    for seed in 1..=frames {
+        let (m, cpu) = frame(seed);
+        // (b)
+        let watch = taker(|_| false);
+        mtdraw::sink::set_sink(Some(watch.clone()));
+        let (pm, pcpu, pcalls) = run(mtdraw::abi::f_00dab480, &m, &cpu);
+        mtdraw::sink::set_sink(None);
+        let (lm, lcpu, lcalls) = run(ddlift_hot_00::f_00dab480, &m, &cpu);
+        assert_eq!(lcalls, pcalls, "frame {seed}: a sink taking nothing changed the calls");
+        assert_eq!((regs(&lcpu), lcpu.xmm), (regs(&pcpu), pcpu.xmm), "frame {seed}: registers");
+        assert!(lm.written == pm.written, "frame {seed}: memory");
+        assert_eq!(watch.frames.load(std::sync::atomic::Ordering::Relaxed), 1);
+        offered += watch.offered.lock().unwrap().len();
+        // (c)
+        let draws = taker(|kind| kind == 0 || kind == 2);
+        mtdraw::sink::set_sink(Some(draws.clone()));
+        let (pm, pcpu, pcalls) = run(mtdraw::abi::f_00dab480, &m, &cpu);
+        mtdraw::sink::set_sink(None);
+        let mut skipped = m.clone();
+        for &r in draws.taken.lock().unwrap().iter() {
+            let half = skipped.u16(r + 2);
+            skipped.set_u16(r + 2, (half & !0xF) | 8);
+        }
+        skipped.written.clear();
+        let (lm, lcpu, lcalls) = run(ddlift_hot_00::f_00dab480, &skipped, &cpu);
+        for (k, (a, b)) in lcalls.iter().zip(&pcalls).enumerate() {
+            assert_eq!(a, b, "frame {seed}: call {k} differs with draws taken");
+        }
+        assert_eq!(lcalls.len(), pcalls.len(), "frame {seed}: call count with draws taken");
+        assert_eq!((regs(&lcpu), lcpu.xmm), (regs(&pcpu), pcpu.xmm), "frame {seed}: registers with draws taken");
+        assert_eq!((lcpu.st.status(), lcpu.st.depth()), (pcpu.st.status(), pcpu.st.depth()), "frame {seed}: x87");
+        assert!(lm.written == pm.written, "frame {seed}: memory with draws taken");
+        taken += draws.taken.lock().unwrap().len();
+    }
+    eprintln!("{frames} frames: {offered} commands offered; {taken} draws taken by the sink, the rest equal");
+    assert!(taken > 0);
+}
