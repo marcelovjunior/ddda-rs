@@ -78,8 +78,12 @@ pub(crate) fn threads_from_env() -> usize {
     parse_threads(std::env::var("DDGPU_ENCODE_THREADS").ok().as_deref())
 }
 
+// Default 2: combo22 in game (heavy scene) ran 21.0 fps with 2 encoder
+// threads, 18.7 with 1 and 17.4 with 4 (contention on a shared machine).
+pub(crate) const DEFAULT_THREADS: usize = 2;
+
 fn parse_threads(value: Option<&str>) -> usize {
-    value.and_then(|v| v.parse().ok()).filter(|n| (1..=4).contains(n)).unwrap_or(1)
+    value.and_then(|v| v.parse().ok()).filter(|n| (1..=4).contains(n)).unwrap_or(DEFAULT_THREADS)
 }
 
 type Finished<T> = Result<Vec<T>, Box<dyn std::any::Any + Send>>;
@@ -175,9 +179,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opt_in_is_bounded_and_defaults_to_one() {
+    fn bounded_and_defaults_to_two() {
         for value in [None, Some(""), Some("0"), Some("5"), Some("-1"), Some("foo")] {
-            assert_eq!(parse_threads(value), 1);
+            assert_eq!(parse_threads(value), DEFAULT_THREADS);
         }
         for n in 1..=4 { assert_eq!(parse_threads(Some(&n.to_string())), n); }
     }

@@ -848,7 +848,7 @@ impl WgpuBackend {
     }
 
     /// Opt-in encoder workers (1..=4). Changes drain pending work first.
-    /// Default 1; DDGPU_ENCODE_THREADS=2..4 enables this at construction.
+    /// Default 2 (encode::DEFAULT_THREADS); DDGPU_ENCODE_THREADS=1..4 overrides it at construction.
     /// Consecutive pass chunks are encoded independently and submitted in order.
     pub fn set_encode_threads(&mut self, threads: usize) {
         assert!((1..=4).contains(&threads));
