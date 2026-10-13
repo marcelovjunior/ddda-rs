@@ -2,6 +2,11 @@
 
 ### L165 autoplay proposal (2026-10-13)
 
+- Follow-up skip correctness: 256 composed original/Rust returns and 129
+  real texture skip/read pairs match through original refill/decompression.
+  Ring-wrap/delayed-publication fixtures pass; sync is stubbed, no live
+  concurrency/image claim. Head confirmed c32play camera movement, so its
+  draw-count difference is not a controlled regression. No skip fix made.
 - Separate host input cadence from stage probes: existing 80 ms down/up
   phases allow approximately 160 ms Enter attempts versus 1.66 s. Normal
   game input gates remain; new Presents separate edges and world-like

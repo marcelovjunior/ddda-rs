@@ -109,3 +109,56 @@ head's combo32 ARCHIVE_SKIP=0/1, BOOT_DETAIL and load-window raw stacks.
 | `final-load.log` | `3db33abb83ecc5b6b94b39ac34449de72b482285676872d99b4eec76aa77a07e` |
 | `texture-cpu.log` | `7a2702a460a62ad200bd88ace78e541e1356e958bf589068f2d788cb01cf41f4` |
 | `frontend-final.log` | `c07687690cc3a4ef7baa64b5eb683548212b7063ae3213c9691a19af0ff29bf2` |
+
+## Composed archive skip check (head #13513 / #13551)
+
+Head initially suspected missing resources after c32play averaged 3,397
+draws/frame versus roughly 5,700 in c31. Head then confirmed the user had
+moved through different scene/camera views during c32play (#13551), so the
+draw-count difference is not a controlled skip A/B or evidence of a skip
+bug. Loading work otherwise paused under head's game-code-speed redirection.
+
+`scripts/check_archive_skip.py` compiles the actual production skip source
+into a private DLL with `ddnative-base` only. The composed checker
+`research/native/check_archive_skip_streams.py` compares original CFEEC0
+instructions with that Rust skip. **Both sides execute original CFE9D0,
+DB92C0, CF02E0 and decoder helpers**, over installed compressed ARC members.
+The original reader CFEC00 also executes after selected texture skips.
+No generated shards, game window, or changes to the skip implementation.
+
+- **256 matching skip returns:** eight ARC members, capacities 257/4096/
+  32768 and a fourth case with a physically wrapped compressed ring plus
+  delayed publication at the first Sleep boundary. Includes zero requests,
+  spans ending at buffer boundaries, refills, partial final buffers and 17
+  failed EOF refill attempts per case.
+- **129 matching texture skip/read pairs:** eight distinct shape/format
+  samples from installed mip-bearing textures, each at all three buffer
+  capacities. Subsequent selected mip bytes match the TEX payload decoded
+  independently by Python zlib; no game data is committed.
+- At each compared return: GPR/XMM, defined flags, all private scratch
+  (reader/stream/state/window/workspace/queue entry), full stack and output
+  buffers match. Refill entry registers and scratch hashes, and critical-
+  section/Sleep call sequences and arguments, also match.
+
+The oracle uses explicit deterministic Win32 critical-section stubs. The
+delayed case publishes the already available fixture at the first Sleep;
+it does not model live threads, timing, ring overwrite races or the entire
+resource loader. The bridge uses the Mem fallback rather than page-backed
+concurrent memory. These limits prevent a concurrency/image acceptance
+claim. **No exactness mismatch was found; no production fix was made.**
+
+Run, with artifacts private and the install read-only:
+
+```
+python scripts/check_archive_skip.py
+E:/ddda-re/tools/pyenv/Scripts/python.exe research/native/check_archive_skip_streams.py
+```
+
+Private final log `C:/ddda-targets/L165/skip-chain-final.log` SHA-256:
+`6996d497a49a26cb1a9b326ba2c2c532c33ccef2f5b284aca596641998713d21`.
+Private bridge DLL SHA-256:
+`b3826ffecbe141c75c6d92b68d92b810a73b50c31ca0530e73b2fa0137ce3b78`.
+
+Next: keep skip opt-in pending a controlled same-route head A/B. Resume
+the separately assigned worker-code ranking/ports; do not claim a loading
+gain or resource regression from c32play's moving-camera average.

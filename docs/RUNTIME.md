@@ -11,6 +11,13 @@ input/display readiness and speedup are not inferred. Old frontends without
 the new snapshot provider omit its fields. Semantics, tests and head run
 request: [L165](tasks/L165-load-next.md).
 
+L165's composed skip check compares the existing Rust CFEEC0 port with
+original instructions through original CFE9D0/DB92C0/CF02E0: 256 returns
+and 129 real texture skip/read pairs match, including selected mip bytes.
+Platform synchronization/publication is explicitly stubbed; live races
+and image acceptance remain untested. No skip fix was indicated. Head
+confirmed c32play's draw-count comparison had a moving-camera confound.
+
 ## L160 job CPU sizing and wake diagnostics
 
 Parallel `GetSystemInfo` reports host logical processors capped at 32;
