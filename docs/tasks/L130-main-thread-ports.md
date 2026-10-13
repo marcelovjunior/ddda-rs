@@ -388,3 +388,25 @@ The c20 FPS change must not be attributed to these six ports.
 
 Next: commit the separately verified FED200 lane initializer, then finish
 the E10FC0 dependency-key wrapper oracle. Milestone update sent to its owner.
+
+### FED200 recording-lane initialization
+
+Whole port registered through mtcore/ddports. **60 original Unicorn and
+isolated lifted cases / 560 call-return boundaries pass**: one/two/four
+lanes, descriptor counts 0/1/8/32/4096, capacity 0/1/17/FFFFFFFF and all
+three frame-bank indices. Full machine/memory state is checked with the
+same explicit memcpy/memset callback contract. The initial zero-lane
+branch is unreachable because the preceding DIV faults; the port retains
+the existing lifted divide-error behavior. All other conditional edges pass.
+
+Five alternating opt1-lifted/opt3-port medians (ns/call): one lane, count0
+**523.2 -> 523.2**; one lane, count1 **527.2 -> 516.4**; two lanes, count0
+**1,009.3 -> 1,020.5**; four lanes, count0 **1,924.5 -> 1,954.9**.
+No reliable speedup. Includes synthetic callee work; no gameplay claim.
+Registry and strict own-crate clippy pass. Private `lanes.json` is recorded
+with `--lanes`; isolated benchmark uses `--bench --lanes`. Logs:
+`restore-lanes-differential.log`, `lanes-bench2.log`,
+`recording-{registry,clippy}.log` in the L130 target directory.
+
+Next: E10FC0 original/lifted replay. L136 independently fixes runtime
+activation of entries absent from the generated list (`d1c586ee`).
