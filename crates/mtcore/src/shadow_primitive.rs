@@ -2343,6 +2343,79 @@ pub fn sprimitive_vf12(m: &mut dyn Mem, c: &mut Cpu) {
     }
 }
 
+/// 0x0111E180, `pool->sort_pairs(scratch)` (thiscall, `ret 4`): the kind-2
+/// sort job of the sPrimitive pools. Sort the pool's current list (a count
+/// and an array of 8-byte records in its descriptor `[pool + 4]`, at
+/// `desc + depth * 16 - 4 / - 8`) by the unsigned second dword, largest
+/// first, stable, with a bottom-up merge sort of doubling run widths
+/// through `scratch` (merge pass 0x0111D490). EAX returns the count.
+///
+/// The merge pass copies each pair of runs into `scratch` (same indices) and
+/// merges back; the last pass spans the whole list, so `scratch` ends up
+/// holding the list as it was before that pass.
+// Translated from 0x0111E180 and 0x0111D490 (DDDA.exe 2017-12-13 Steam).
+pub fn sprimitive_sort(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let pool = c.ecx;
+    let scratch = pg.u32(m, entry.wrapping_add(4));
+    c.esp = entry.wrapping_add(8);
+    let desc = pg.u32(m, pool.wrapping_add(4));
+    let row = desc.wrapping_add(pg.u32(m, desc.wrapping_add(0x64)).wrapping_mul(16));
+    let count = pg.u32(m, row.wrapping_sub(4));
+    let array = if count != 0 { pg.u32(m, row.wrapping_sub(8)) } else { 0 };
+    c.eax = count;
+    let n = count as i32;
+    if n <= 1 {
+        return;
+    }
+    let n = n as usize;
+    let mut list: Vec<[u32; 2]> = (0..n as u32)
+        .map(|i| {
+            let at = array.wrapping_add(8 * i);
+            [pg.u32(m, at), pg.u32(m, at.wrapping_add(4))]
+        })
+        .collect();
+    let mut before_last = Vec::new();
+    let mut run = vec![[0u32; 2]; n];
+    let mut width = 1usize;
+    while width < n {
+        before_last.clone_from(&list);
+        let mut lo = 0usize;
+        while lo + width < n {
+            let hi = (lo + 2 * width).min(n);
+            let mid = lo + width;
+            run[lo..hi].copy_from_slice(&list[lo..hi]);
+            let (mut left, mut right, mut out) = (lo, mid, lo);
+            while left < mid && right < hi {
+                // the right record goes first only when its key is larger
+                if run[right][1] <= run[left][1] {
+                    list[out] = run[left];
+                    left += 1;
+                } else {
+                    list[out] = run[right];
+                    right += 1;
+                }
+                out += 1;
+            }
+            let rest = if left < mid { &run[left..mid] } else { &run[right..hi] };
+            list[out..out + rest.len()].copy_from_slice(rest);
+            lo += 2 * width;
+        }
+        width *= 2;
+    }
+    for (i, record) in list.iter().enumerate() {
+        let at = array.wrapping_add(8 * i as u32);
+        pg.set_u32(m, at, record[0]);
+        pg.set_u32(m, at.wrapping_add(4), record[1]);
+    }
+    for (i, record) in before_last.iter().enumerate() {
+        let at = scratch.wrapping_add(8 * i as u32);
+        pg.set_u32(m, at, record[0]);
+        pg.set_u32(m, at.wrapping_add(4), record[1]);
+    }
+}
+
 /// 0x0107FF00, `sPrimitive::begin(a0, a1, a2, a3)` (cdecl, caller pops):
 /// forward the four stack arguments to virtual +0x2C of the singleton at
 /// `0x018D1848`; the known vf11 is called directly.

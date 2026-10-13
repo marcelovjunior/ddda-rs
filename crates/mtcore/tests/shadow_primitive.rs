@@ -361,3 +361,17 @@ fn dispatch_end_matches_original() {
     );
     assert!(n >= 1000, "{n} cases");
 }
+
+// verifies 0x0111e180 (ABI level; the merge pass 0x0111d490 is folded in)
+#[test]
+fn sprimitive_sort_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_options(
+        "E:/ddda-re/notes/native-L172p2b/pair_sort.json",
+        mtcore::shadow_primitive::sprimitive_sort,
+        true,
+        &[],
+        false,
+    );
+    assert!(n >= 1000, "{n} cases");
+}
