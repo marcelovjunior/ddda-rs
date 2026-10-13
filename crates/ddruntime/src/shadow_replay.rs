@@ -1110,20 +1110,42 @@ fn compare_replays(
         results.push(result);
     }
     if let Some(diff) = results[0].1.first_difference(&results[1].1) {
-        fn header(stream: &mtcore::shadow_lanes::StreamSnapshot, path: &[usize]) -> Option<(u32, u32)> {
+        fn entry<'a>(
+            stream: &'a mtcore::shadow_lanes::StreamSnapshot,
+            path: &[usize],
+        ) -> Option<&'a mtcore::shadow_lanes::Entry> {
             let mut entries = &stream.entries;
             for (depth, &index) in path.iter().enumerate() {
                 let entry = entries.get(index)?;
                 if depth + 1 == path.len() {
-                    return Some((entry.key, entry.record.header));
+                    return Some(entry);
                 }
                 entries = &entry.record.children;
             }
             None
         }
+        let a = entry(&results[0].1, &diff.path);
+        let b = entry(&results[1].1, &diff.path);
+        let binding = a.zip(b).and_then(|(a, b)| {
+            a.record
+                .bindings
+                .iter()
+                .zip(&b.record.bindings)
+                .find(|(a, b)| a != b)
+                .map(|(a, b)| {
+                    let byte = a
+                        .bytes
+                        .iter()
+                        .zip(&b.bytes)
+                        .enumerate()
+                        .find(|(_, (a, b))| a != b)
+                        .map(|(offset, (a, b))| (offset, *a, *b));
+                    (a.kind, a.identity, b.identity, a.bytes.len(), b.bytes.len(), byte)
+                })
+        });
         return Err(format!(
-            "serial/parallel stream mismatch: {diff:?}; key/header serial={:#x?} parallel={:#x?}; entries={}/{}",
-            header(&results[0].1, &diff.path), header(&results[1].1, &diff.path),
+            "serial/parallel stream mismatch: {diff:?}; key/header serial={:#x?} parallel={:#x?}; binding(kind,identities,lengths,first_byte)={binding:#x?}; entries={}/{}",
+            a.map(|entry| (entry.key, entry.record.header)), b.map(|entry| (entry.key, entry.record.header)),
             results[0].1.entries.len(), results[1].1.entries.len(),
         ));
     }
