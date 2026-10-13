@@ -422,6 +422,25 @@ struct OpenPass {
     /// a draw set the scissor rectangle: a draw without the scissor test
     /// starts a new pass (whose scissor is the whole attachment)
     scissored: bool,
+    /// What the pass has set (L80): a draw records only the commands whose
+    /// values differ, so wgpu validates and encodes fewer commands per draw.
+    /// Equal to recording them all: a render pass keeps its pipeline, bind
+    /// groups, buffers and dynamic state until they are set again.
+    last: PassState,
+}
+
+#[derive(Default)]
+struct PassState {
+    pipeline: Option<wgpu::RenderPipeline>,
+    group0: Option<[u32; 2]>,
+    group1: Option<wgpu::BindGroup>,
+    group2: Option<wgpu::BindGroup>,
+    viewport: Option<[u32; 6]>,
+    scissor: Option<[i32; 4]>,
+    stencil_ref: Option<u32>,
+    blend: Option<u32>,
+    vertex: Vec<Option<(wgpu::Buffer, u64, u64)>>,
+    index: Option<(wgpu::Buffer, u64, u64, wgpu::IndexFormat)>,
 }
 
 impl WgpuBackend {
@@ -1833,37 +1852,68 @@ impl WgpuBackend {
                 multiview_mask: None,
             }).forget_lifetime();
             *self.open.borrow_mut() = Some(enc);
-            *self.pass.borrow_mut() = Some(OpenPass { pass, key, scissored: false });
+            *self.pass.borrow_mut() = Some(OpenPass { pass, key, scissored: false, last: PassState::default() });
             self.passes_begun.set(self.passes_begun.get() + 1);
         }
         {
             let mut open = self.pass.borrow_mut();
             let open = open.as_mut().expect("begun above");
             open.scissored |= scissor;
-            let pass = &mut open.pass;
+            let (pass, last) = (&mut open.pass, &mut open.last);
             if let Some(s) = slot {
                 pass.begin_occlusion_query(s % OCCLUSION_SET);
             }
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &self.group0, &[ps_off, vs_off]);
-            pass.set_bind_group(1, &groups[0], &[]);
-            pass.set_bind_group(2, &groups[1], &[]);
+            if last.pipeline.as_ref() != Some(&pipeline) {
+                pass.set_pipeline(&pipeline);
+                last.pipeline = Some(pipeline.clone());
+            }
+            if last.group0 != Some([ps_off, vs_off]) {
+                pass.set_bind_group(0, &self.group0, &[ps_off, vs_off]);
+                last.group0 = Some([ps_off, vs_off]);
+            }
+            if last.group1.as_ref() != Some(&groups[0]) {
+                pass.set_bind_group(1, &groups[0], &[]);
+                last.group1 = Some(groups[0].clone());
+            }
+            if last.group2.as_ref() != Some(&groups[1]) {
+                pass.set_bind_group(2, &groups[1], &[]);
+                last.group2 = Some(groups[1].clone());
+            }
             let v = d.viewport;
-            pass.set_viewport(v[0] as f32, v[1] as f32, v[2] as f32, v[3] as f32, f32::from_bits(v[4]), f32::from_bits(v[5]));
-            if scissor {
+            if last.viewport != Some(v) {
+                pass.set_viewport(v[0] as f32, v[1] as f32, v[2] as f32, v[3] as f32, f32::from_bits(v[4]), f32::from_bits(v[5]));
+                last.viewport = Some(v);
+            }
+            if scissor && last.scissor != Some(d.scissor) {
                 let s = d.scissor;
                 pass.set_scissor_rect(s[0].max(0) as u32, s[1].max(0) as u32, (s[2] - s[0]).max(0) as u32, (s[3] - s[1]).max(0) as u32);
+                last.scissor = Some(s);
             }
-            pass.set_stencil_reference(state(57));
+            if last.stencil_ref != Some(state(57)) {
+                pass.set_stencil_reference(state(57));
+                last.stencil_ref = Some(state(57));
+            }
             // BLENDFACTOR in single precision as the driver converts it
             // (byte * (1/255 as f32); measured on 32-bit float targets)
-            pass.set_blend_constant(clear_colour(state(193), wgpu::TextureFormat::Rgba32Float));
+            if last.blend != Some(state(193)) {
+                pass.set_blend_constant(clear_colour(state(193), wgpu::TextureFormat::Rgba32Float));
+                last.blend = Some(state(193));
+            }
             for (k, (b, off, end, _)) in vbufs.iter().enumerate() {
-                pass.set_vertex_buffer(k as u32, b.slice(*off..*end));
+                if last.vertex.len() <= k {
+                    last.vertex.resize(k + 1, None);
+                }
+                if last.vertex[k].as_ref().is_none_or(|(lb, lo, le)| lb != b || lo != off || le != end) {
+                    pass.set_vertex_buffer(k as u32, b.slice(*off..*end));
+                    last.vertex[k] = Some((b.clone(), *off, *end));
+                }
             }
             match &index {
                 Some((ib, off, end, _)) => {
-                    pass.set_index_buffer(ib.slice(*off..*end), format);
+                    if last.index.as_ref().is_none_or(|(lb, lo, le, lf)| lb != ib || lo != off || le != end || *lf != format) {
+                        pass.set_index_buffer(ib.slice(*off..*end), format);
+                        last.index = Some((ib.clone(), *off, *end, format));
+                    }
                     pass.draw_indexed(first..first + count, if fan { 0 } else { d.base_vertex }, 0..instances);
                 }
                 None => pass.draw(first..first + count, 0..instances),
