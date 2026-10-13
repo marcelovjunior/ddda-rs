@@ -346,6 +346,12 @@ pub struct WgpuBackend {
     gamma: Option<Box<GammaRamp>>,
     /// the adapter drawing (its backend decides some rasteriser details)
     pub adapter: wgpu::AdapterInfo,
+    /// the render pass of the open encoder that draws are recorded into,
+    /// kept open while consecutive draws use the same attachments (L72)
+    pass: RefCell<Option<OpenPass>>,
+    /// draws recorded, and render passes begun for them (L72)
+    draws_recorded: Cell<u64>,
+    passes_begun: Cell<u64>,
     /// draws recorded and not yet submitted; submitted (with the ring
     /// bytes) before anything else touches the queue
     open: RefCell<Option<wgpu::CommandEncoder>>,
@@ -395,6 +401,24 @@ pub struct Presented<'a> {
 
 /// Occlusion query slots per wgpu query set.
 const OCCLUSION_SET: u32 = 256;
+
+/// What a draw's render pass draws into: the colour attachments (one per
+/// slot up to the last one written), the depth-stencil attachment, the
+/// occlusion query set.
+type PassKey = (Vec<Option<wgpu::TextureView>>, Option<wgpu::TextureView>, Option<wgpu::QuerySet>);
+
+/// A render pass left open for the next draw (L72). Every attachment is
+/// loaded and stored, so consecutive draws in one pass draw what they drew
+/// in a pass each: a draw sets all the pass state it uses (pipeline, bind
+/// groups, viewport, stencil reference, blend constant, buffers), and the
+/// scissor rectangle when its scissor test is on.
+struct OpenPass {
+    pass: wgpu::RenderPass<'static>,
+    key: PassKey,
+    /// a draw set the scissor rectangle: a draw without the scissor test
+    /// starts a new pass (whose scissor is the whole attachment)
+    scissored: bool,
+}
 
 impl WgpuBackend {
     /// The device features the backend needs: hosts that create the
@@ -483,6 +507,9 @@ impl WgpuBackend {
             active_queries: Vec::new(),
             gamma: None,
             adapter,
+            pass: RefCell::new(None),
+            draws_recorded: Cell::new(0),
+            passes_begun: Cell::new(0),
             open: RefCell::new(None),
             open_draws: Cell::new(0),
             open_uses: RefCell::new(HashSet::new()),
@@ -513,6 +540,7 @@ impl WgpuBackend {
 
     /// Submit the recorded draws, after writing the ring bytes they use.
     fn flush(&self) {
+        self.end_pass();
         let enc = self.open.borrow_mut().take();
         self.uniforms.borrow_mut().upload(&self.queue);
         self.inline.borrow_mut().upload(&self.queue);
@@ -521,6 +549,17 @@ impl WgpuBackend {
         }
         self.open_draws.set(0);
         self.open_uses.borrow_mut().clear();
+    }
+
+    /// End the open render pass: the encoder can record other commands
+    /// (a copy) or be finished.
+    fn end_pass(&self) {
+        self.pass.borrow_mut().take();
+    }
+
+    /// Draws recorded and render passes begun for them so far.
+    pub fn pass_counts(&self) -> (u64, u64) {
+        (self.draws_recorded.get(), self.passes_begun.get())
     }
 
     /// Room in a ring for `bytes` (`len` reserved), flushing and starting
@@ -1601,6 +1640,7 @@ impl WgpuBackend {
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[src.format().add_srgb_suffix(), src.format().remove_srgb_suffix()],
                 });
+                self.end_pass();
                 let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
                 for level in 0..src.mip_level_count() {
                     let size = src.size().mip_level_size(level, src.dimension());
@@ -1736,13 +1776,18 @@ impl WgpuBackend {
             uses.extend(d.textures.iter().map(|t| t.resource));
             uses.extend(d.targets.iter().chain(std::iter::once(&d.depth)).flatten().filter_map(|t| t.texture.map(|x| x.resource)));
         }
-        let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
-        {
+        let key: PassKey = (colour[..max_out].iter().map(|c| c.as_ref().map(|(v, _)| v.clone())).collect(),
+                            depth.as_ref().map(|(v, _)| v.clone()), query_set.clone());
+        let scissor = state(174) != 0;
+        let same_pass = matches!(&*self.pass.borrow(), Some(p) if p.key == key && (scissor || !p.scissored));
+        if !same_pass {
+            self.end_pass();
+            let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
             let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = colour[..max_out].iter().map(|c| c.as_ref().map(|(view, _)| wgpu::RenderPassColorAttachment {
                 view, depth_slice: None, resolve_target: None,
                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
             })).collect();
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &attachments,
                 depth_stencil_attachment: depth.as_ref().map(|(view, f)| wgpu::RenderPassDepthStencilAttachment {
@@ -1753,7 +1798,16 @@ impl WgpuBackend {
                 timestamp_writes: None,
                 occlusion_query_set: query_set.as_ref(),
                 multiview_mask: None,
-            });
+            }).forget_lifetime();
+            *self.open.borrow_mut() = Some(enc);
+            *self.pass.borrow_mut() = Some(OpenPass { pass, key, scissored: false });
+            self.passes_begun.set(self.passes_begun.get() + 1);
+        }
+        {
+            let mut open = self.pass.borrow_mut();
+            let open = open.as_mut().expect("begun above");
+            open.scissored |= scissor;
+            let pass = &mut open.pass;
             if let Some(s) = slot {
                 pass.begin_occlusion_query(s % OCCLUSION_SET);
             }
@@ -1763,7 +1817,7 @@ impl WgpuBackend {
             pass.set_bind_group(2, &groups[1], &[]);
             let v = d.viewport;
             pass.set_viewport(v[0] as f32, v[1] as f32, v[2] as f32, v[3] as f32, f32::from_bits(v[4]), f32::from_bits(v[5]));
-            if state(174) != 0 {
+            if scissor {
                 let s = d.scissor;
                 pass.set_scissor_rect(s[0].max(0) as u32, s[1].max(0) as u32, (s[2] - s[0]).max(0) as u32, (s[3] - s[1]).max(0) as u32);
             }
@@ -1785,7 +1839,7 @@ impl WgpuBackend {
                 pass.end_occlusion_query();
             }
         }
-        *self.open.borrow_mut() = Some(enc);
+        self.draws_recorded.set(self.draws_recorded.get() + 1);
         self.open_draws.set(self.open_draws.get() + 1);
         if self.open_draws.get() >= DRAWS_PER_SUBMIT {
             self.flush();

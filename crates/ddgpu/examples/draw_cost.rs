@@ -109,4 +109,6 @@ fn main() {
     }
     println!("{draws} draws x {frames} frames: {:.2} us per draw submitted, {:.2} ms per frame with the GPU waited for",
              submit * 1e6 / (draws * frames) as f64, total * 1e3 / frames as f64);
+    let (recorded, passes) = gpu.pass_counts();
+    println!("{recorded} draws in {passes} render passes ({:.1} draws per pass)", recorded as f64 / passes.max(1) as f64);
 }
