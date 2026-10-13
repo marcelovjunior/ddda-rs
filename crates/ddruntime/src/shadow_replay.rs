@@ -31,6 +31,7 @@ const ACCESS_LIMIT: usize = 40_000_000;
 static ORIGINAL: OnceLock<[LiftFn; 3]> = OnceLock::new();
 static RAW: OnceLock<Arc<BTreeMap<u32, LiftFn>>> = OnceLock::new();
 static SAMPLE: AtomicU64 = AtomicU64::new(0);
+static CAPTURE_START: OnceLock<std::time::Instant> = OnceLock::new();
 #[path = "shadow_replay_file.rs"]
 mod capture_file;
 thread_local! {
@@ -49,6 +50,7 @@ pub(crate) fn enabled() -> bool {
 }
 
 pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) {
+    CAPTURE_START.get_or_init(std::time::Instant::now);
     let originals = [SHADOW, TRAVERSE, SCHEDULE].map(|address| {
         ports
             .iter()
@@ -69,9 +71,10 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
         ports.push((address, body));
     }
     eprintln!(
-        "parallel-shadow installed capture=v3 first={} count={} dump={:?}",
+        "parallel-shadow installed capture=v3 first={} count={} after_ms={} dump={:?}",
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST").unwrap_or_else(|_| "0".into()),
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_COUNT").unwrap_or_else(|_| "1".into()),
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_AFTER_MS").unwrap_or_else(|_| "0".into()),
         std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP")
     );
 }
@@ -346,7 +349,14 @@ fn resolve(target: u32) -> LiftFn {
             // Import slots referenced by 0107FB57/0107FBAE (DDDA.exe
             // 2017-12-13 Steam). Read the captured binding, never assume
             // a loader token number or invoke the live service registry.
-            for (slot, service) in [(0x0139d160, private_enter as LiftFn), (0x0139d164, private_leave)] {
+            // DA7D80 calls InterlockedExchangeAdd through this captured IAT slot.
+            // PrivateMemory has no page table: the existing service uses tracked
+            // Mem reads/writes, never a raw host atomic or live service state.
+            for (slot, service) in [
+                (0x0139d160, private_enter as LiftFn),
+                (0x0139d164, private_leave),
+                (0x0139d0a8, crate::win32::interlocked_exchange_add),
+            ] {
                 if replay.memory.probe(slot, 4, false).is_ok()
                     && replay.memory.u32(slot) == target
                     && target != 0
@@ -594,6 +604,16 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     if !IN_SHADOW.with(Cell::get) {
         static OUTSIDE: std::sync::Once = std::sync::Once::new();
         OUTSIDE.call_once(|| eprintln!("parallel-shadow traversal outside shadow scope"));
+        return original(memory, cpu);
+    }
+    let after_ms = std::env::var("DDRUNTIME_PARALLEL_SHADOW_AFTER_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    if CAPTURE_START
+        .get()
+        .is_some_and(|start| start.elapsed().as_millis() < u128::from(after_ms))
+    {
         return original(memory, cpu);
     }
     let index = SAMPLE.fetch_add(1, Relaxed);
@@ -1130,6 +1150,8 @@ mod tests {
         let teb = crate::seh::initialize_teb(&mut live, crate::services::MAIN_THREAD_ID, 0x1000, 0x2000);
         live.set_u32(0x0139d160, 0x7ff01230);
         live.set_u32(0x0139d164, 0x7ff04560);
+        live.set_u32(0x0139d0a8, 0x7ff07890);
+        live.set_u32(0x1300, u32::MAX - 2);
         live.set_u32(0x1104, u32::MAX);
         live.set_u32(0x1804, 0x1100);
         let mut input = Snapshot::default();
@@ -1156,6 +1178,20 @@ mod tests {
                 assert_eq!(m.u32(0x1108), recursion);
                 assert_eq!(live.u32(0x1108), 0);
             }
+            m.set_u32(0x1804, 0x1300);
+            m.set_u32(0x1808, 7);
+            let mut cpu = Cpu {
+                esp: 0x1800,
+                ebx: 42,
+                ..Cpu::default()
+            };
+            assert!((m as &mut dyn Mem).atomic_u32(0x1300).is_none());
+            x86::call_ext(m, &mut cpu, 0x7ff07890);
+            assert_eq!(cpu.eax, u32::MAX - 2);
+            assert_eq!(cpu.esp, 0x180c);
+            assert_eq!(cpu.ebx, 42);
+            assert_eq!(m.u32(0x1300), 4);
+            assert_eq!(live.u32(0x1300), u32::MAX - 2);
         });
         assert_eq!(memory.u32(0x1104), u32::MAX);
         assert_eq!(memory.u32(0x110c), 0);

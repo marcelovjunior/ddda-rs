@@ -273,3 +273,16 @@ Codex-7's original merge and comparator evidence is recorded separately in
 
 No game, GPU test, shard build, push, installation write, private data copy,
 or decompiler dump committed. Production TRAIN READY is not claimed.
+
+2026-10-13 real replay follow-up: pinned a66f3de7 example verifies serial/live
+6 entries from shadow-48204-300; private manager copy removes the previous
+CreateEventA detour. Next refusal is InterlockedExchangeAdd, called at
+DA7D80 through IAT 0139D0A8 (return DA7D86). Private replay now resolves
+that captured slot to the existing pure Mem/Cpu service; no raw page table
+means tracked reads/writes. Regression covers wraparound, old return value,
+stdcall stack, preserved EBX and unchanged live memory. Focused shadow:33
+passed/0 failed. No new original parallel equality claim yet.
+Capture was t23s/169 draws with one queued job. Added diagnostic selection
+DDRUNTIME_PARALLEL_SHADOW_AFTER_MS=60000 FIRST=0 COUNT=1 for a later sample
+(FIRST counts scoped calls after the delay). Next: head rebuild offline
+example, replay existing input, then obtain a representative multi-job capture.
