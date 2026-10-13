@@ -1,5 +1,16 @@
 # Phase 1 runtime proposal (R01)
 
+## L174b semantic model palette and culled instances
+
+`DDRUNTIME_SEMANTIC=1` also selects `00FFC9F0` model palette setup and
+`01140180` instancing-culling submission. The two native callers preserve
+guest call seams, scalar SSE ordering, command records and live memory.
+247 original synthetic returns pass sparse and serial/atomic Pages replay
+and the isolated opt2 lifted baseline. Paired scenario medians improve
+1.188–1.485x and 1.248–1.914x respectively; gameplay acceptance is pending.
+The prior `010655A0` port is retained. See the
+[L174b results and x87 oracle limitation](tasks/L174-semantic-draw-b.md).
+
 ## L174 semantic material draw and dependency hash
 
 `DDRUNTIME_SEMANTIC=1` replaces E0E5E0 dependency hashing, 10655A0 material

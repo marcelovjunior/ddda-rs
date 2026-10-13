@@ -36,6 +36,546 @@ fn dirty(memory: &mut dyn Mem, pages: Pages, draw: u32, bits: u32) {
     pages.set_u32(memory, draw.wrapping_add(0x154), value | bits);
 }
 
+/// Bind a state-bank entry, preserving the old pair in the command journal.
+/// Source: 00FFCA2E..00FFCAD2 and 00FFCD1E..00FFCEDE.
+fn bind_bank(m: &mut dyn Mem, p: Pages, draw: u32, slot: u32, bank_slot: u32, key: u32) {
+    let bank = p.u32(m, draw + 0x20);
+    if p.u32(m, draw + slot) != p.u32(m, bank + bank_slot) {
+        save_pair(m, p, draw, slot, (slot - 0x1f8) / 8);
+        let bank = p.u32(m, draw + 0x20);
+        let value = p.u32(m, bank + bank_slot);
+        p.set_u32(m, draw + slot, value);
+        p.set_u32(m, draw + slot + 4, key);
+        dirty(m, p, draw, 3);
+    }
+}
+
+/// Stamp a resource and bind its salted key. The return preserves the
+/// original incidental EAX value when the pointer comparison is equal.
+/// Source: 00FFCAD9..00FFCCF2, 00FFD3D9..00FFD490.
+fn bind_resource(m: &mut dyn Mem, p: Pages, draw: u32, slot: u32, resource: u32, salt: u32, eax: u32) -> u32 {
+    if p.u32(m, draw + slot) == resource {
+        return eax;
+    }
+    save_pair(m, p, draw, slot, (slot - 0x1f8) / 8);
+    let key = if resource == 0 {
+        p.set_u32(m, draw + slot, 0);
+        0
+    } else {
+        let stamp = p.u32(m, 0x018d2ce8).wrapping_add(1);
+        p.set_u32(m, resource + 4, stamp);
+        p.set_u32(m, draw + slot, resource);
+        p.u32(m, resource + 12) | salt
+    };
+    if p.u32(m, draw + slot + 4) != key {
+        p.set_u32(m, draw + slot + 4, key);
+        dirty(m, p, draw, 2);
+    }
+    dirty(m, p, draw, 1);
+    key
+}
+
+// Translated from 0x00FFC9F0 (DDDA.exe 2017-12-13 Steam).
+/// uModel::vf25: bind skinning resources, generate the transposed 3x4 joint
+/// palette, and copy the model's final four parameters into draw storage.
+/// The base setup, palette lock/unlock, binding, growth and memcpy remain
+/// original guest calls. Matrix products retain scalar SSE operand order.
+pub fn prepare_model_palette(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let p = Pages::of(m);
+    let sp = cpu.esp;
+    let frame = sp.wrapping_sub(0x4c);
+    let model = cpu.ecx;
+    let draw = p.u32(m, sp + 4);
+    call(m, cpu, p, frame, 0xea5b50, model, &[draw], 0xffca06);
+    let mut eax;
+    let resource = p.u32(m, model + 0xf0);
+    if p.u8(m, draw + 0x168) != 9 && resource != 0 && p.u32(m, resource + 0x220) != 0 {
+        bind_bank(m, p, draw, 0x30a0, 0x2ed8, 0xd04f95db);
+        // The bank pointer is also EAX after a changed binding.
+        eax = p.u32(m, draw + 0x20);
+        for (field, slot, salt) in [
+            (0xe34, 0x1ad8, 0x298de000),
+            (0xe3c, 0x1af0, 0x15232000),
+            (0xe38, 0x1ae8, 0x282e9000),
+        ] {
+            let value = p.u32(m, model + field);
+            eax = bind_resource(m, p, draw, slot, value, salt, eax);
+        }
+    } else {
+        eax = p.u32(m, model + 0x360);
+        if eax != 0 {
+            let manager = p.u32(m, 0x018d08f4);
+            let large = eax > p.u32(m, manager + 0xfc);
+            bind_bank(
+                m,
+                p,
+                draw,
+                0x2840,
+                if large { 0x2648 } else { 0x2668 },
+                if large { 0x4c9 } else { 0xf139f4cd },
+            );
+            bind_bank(m, p, draw, 0x2848, 0x2650, 0x4ca);
+            let resource = p.u32(m, model + 0xf0);
+            let matrices = p.u32(m, resource + 0x6c);
+            p.set_u32(m, sp + 4, matrices);
+            let handle = p.u32(m, model + 0xd8c);
+            let manager = p.u32(m, 0x018d2c80);
+            call(m, cpu, p, frame, 0xfe46c0, manager, &[handle], 0xffcefd);
+            if cpu.eax != 0 {
+                let count = p.u32(m, model + 0x360);
+                let transforms = p.u32(m, model + 0x364);
+                for i in 0..count {
+                    palette_matrix(
+                        m,
+                        p,
+                        matrices.wrapping_add(i.wrapping_mul(64)),
+                        transforms.wrapping_add(i.wrapping_mul(160)),
+                        cpu.eax.wrapping_add(i.wrapping_mul(48)),
+                    );
+                }
+                let countdown = p.u32(m, model + 0xd80);
+                if countdown != 0 {
+                    p.set_u32(m, model + 0xd80, countdown - 1);
+                }
+                let handle = p.u32(m, model + 0xd8c);
+                let manager = p.u32(m, 0x018d2c80);
+                call(m, cpu, p, frame, 0xbfc7d0, manager, &[handle], 0xffd2fe);
+            }
+            let handle = p.u32(m, model + 0xd8c);
+            let manager = p.u32(m, 0x018d2c80);
+            call(m, cpu, p, frame, 0xfe4780, manager, &[draw, handle], 0xffd315);
+            let alternate = if p.u32(m, model + 0x108) & 0x20000000 != 0 {
+                let manager = p.u32(m, 0x018d08f4);
+                let index = p.u32(m, manager + 0x33db8);
+                p.u32(m, model.wrapping_add(0xe2c).wrapping_add(index.wrapping_mul(4))) != 0
+            } else {
+                false
+            };
+            bind_bank(
+                m,
+                p,
+                draw,
+                0x30d8,
+                if alternate { 0x2ee8 } else { 0x2ee0 },
+                if alternate { 0xf32275dd } else { 0x5dc },
+            );
+            if alternate {
+                let manager = p.u32(m, 0x018d08f4);
+                let index = p.u32(m, manager + 0x33db8);
+                let texture = p.u32(m, model.wrapping_add(0xe2c).wrapping_add(index.wrapping_mul(4)));
+                bind_resource(m, p, draw, 0x1d18, texture, 0x1c967000, 0);
+            }
+            let layout = p.u32(m, draw + 0x18);
+            let descriptor = p.u32(m, layout + 0x8c4);
+            p.set_u32(m, sp + 4, descriptor);
+            let size = (u32::from(p.u16(m, descriptor + 0x18)) * 4 + 15) & !15;
+            eax = p.u32(m, draw + 0x24).wrapping_add(size);
+            if eax > p.u32(m, draw + 0x28) {
+                call(m, cpu, p, frame, 0xfed890, draw, &[size], 0xffd561);
+                eax = cpu.eax;
+            }
+            let output = p.u32(m, draw + 0x24);
+            let allocation_end = output.wrapping_add(size);
+            p.set_u32(m, draw + 0x24, allocation_end);
+            p.set_u32(m, draw + 0x1380, output);
+            dirty(m, p, draw, 1);
+            if output != 0 {
+                let descriptor = p.u32(m, sp + 4);
+                let size = u32::from(p.u16(m, descriptor + 0x18)) * 4;
+                let source = p.u32(m, descriptor + 0x24);
+                // ECX is the post-allocation cursor at this cdecl seam.
+                call(
+                    m,
+                    cpu,
+                    p,
+                    frame,
+                    0x12efea0,
+                    allocation_end,
+                    &[output, source, size],
+                    0xffd592,
+                );
+                for offset in [0, 4, 8, 12] {
+                    cpu.st.real_memory::<0x00d9, 4, false>(m, model + 0xe1c + offset);
+                    cpu.st.real_memory::<0x18d9, 4, true>(m, output + offset);
+                }
+                eax = model;
+            }
+        }
+    }
+    cpu.eax = eax;
+    cpu.esp = sp.wrapping_add(8);
+}
+
+/// 00FFCF30..00FFD2C0: matrix rows become palette columns. Load both inputs
+/// before any output store, preserving overlap within the current matrix.
+fn palette_matrix(m: &mut dyn Mem, p: Pages, joints: u32, transform: u32, output: u32) {
+    let a: [u32; 16] = std::array::from_fn(|i| p.u32(m, joints + i as u32 * 4));
+    let b: [[u32; 3]; 4] = std::array::from_fn(|i| {
+        std::array::from_fn(|j| p.u32(m, transform + 16 + i as u32 * 16 + j as u32 * 4))
+    });
+    let mut result = [0; 12];
+    for row in 0..4 {
+        for column in 0..3 {
+            let (second_left, second_right) = if row == 0 {
+                (b[1][column], a[1])
+            } else {
+                (a[row * 4 + 1], b[1][column])
+            };
+            result[column * 4 + row] = palette_dot(
+                [a[row * 4], second_left, a[row * 4 + 2], a[row * 4 + 3]],
+                [b[0][column], second_right, b[2][column], b[3][column]],
+            );
+        }
+    }
+    for i in [2, 0, 1, 3, 5, 6, 7, 4, 8, 9, 10, 11] {
+        p.set_u32(m, output + i as u32 * 4, result[i]);
+    }
+}
+
+/// Four scalar SSE products, summed left to right without contraction or
+/// compiler constant folding. The live guest MXCSR controls each operation;
+/// keeping both operands explicit also preserves NaN payload selection.
+#[inline]
+fn palette_dot(left: [u32; 4], right: [u32; 4]) -> u32 {
+    let result: f32;
+    unsafe {
+        std::arch::asm!(
+            "mulss {a}, {x}", "mulss {b}, {y}", "addss {a}, {b}",
+            "mulss {c}, {z}", "addss {a}, {c}",
+            "mulss {d}, {w}", "addss {a}, {d}",
+            a=inout(xmm_reg) f32::from_bits(left[0])=>result,
+            b=inout(xmm_reg) f32::from_bits(left[1])=>_,
+            c=inout(xmm_reg) f32::from_bits(left[2])=>_,
+            d=inout(xmm_reg) f32::from_bits(left[3])=>_,
+            x=in(xmm_reg) f32::from_bits(right[0]),y=in(xmm_reg) f32::from_bits(right[1]),
+            z=in(xmm_reg) f32::from_bits(right[2]),w=in(xmm_reg) f32::from_bits(right[3]),
+            options(nostack,preserves_flags));
+    }
+    result.to_bits()
+}
+
+/// 011401D4..0114023C: the scalar shader-key journal has its high bit set
+/// and stores one value in the third word, unlike the paired value bank.
+fn bind_shader_key(m: &mut dyn Mem, p: Pages, draw: u32, key: u32) {
+    if p.u32(m, draw + 0x1c8) == key {
+        return;
+    }
+    if p.u8(m, draw + 0x5c) & 0x80 != 0 {
+        let record = |m: &dyn Mem| {
+            draw.wrapping_add(0x30c7c)
+                .wrapping_add(p.u32(m, draw + 0x6c).wrapping_mul(12))
+        };
+        let a = record(m);
+        let old = p.u32(m, a);
+        p.set_u32(m, a, (old & 0x80000003) | 3);
+        let a = record(m);
+        let old = p.u32(m, a);
+        p.set_u32(m, a, old | 0x80000000);
+        let a = record(m);
+        let old = p.u32(m, draw + 0x1c8);
+        p.set_u32(m, a + 8, old);
+        let cursor = p.u32(m, draw + 0x6c);
+        p.set_u32(m, draw + 0x6c, cursor.wrapping_add(1));
+    }
+    dirty(m, p, draw, 3);
+    p.set_u32(m, draw + 0x1c8, key);
+}
+
+// Translated from 0x01140180 (DDDA.exe 2017-12-13 Steam).
+/// cInstancingCulling::vf16: issue up to three visible instance ranges,
+/// optionally repeat with the secondary material, then clear transient
+/// state. Bounds, counts, sort keys and bindings remain runtime guest data.
+pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let p = Pages::of(m);
+    let sp = cpu.esp;
+    let frame = ((sp.wrapping_sub(4)) & !15).wrapping_sub(0x60);
+    let object = cpu.ecx;
+    let draw = p.u32(m, sp + 4);
+    let indexed = p.u32(m, draw + 0x1368) & !15;
+    let table = 0x018d45c0u32.wrapping_add(p.u32(m, indexed).wrapping_mul(0x70));
+    if p.u32(m, table + 0x60) == 0 {
+        cpu.eax = indexed;
+        cpu.esp = sp.wrapping_add(16);
+        return;
+    }
+    let primitive = p.u32(m, sp + 8);
+    let mask = p.u8(m, primitive + 7) & 7;
+    call(m, cpu, p, frame, 0xff1920, draw, &[], 0x11401d4);
+    bind_shader_key(m, p, draw, 0x8771a00f);
+    let key = p.u32(m, table + 0x64);
+    let resource = p.u32(m, table + 0x60);
+    if p.u32(m, draw + 0x144) != key || p.u32(m, draw + 0x130) != resource || p.u8(m, draw + 0x137) != 0x40 {
+        if resource != 0 {
+            let stamp = p.u32(m, 0x18d2ce8).wrapping_add(1);
+            p.set_u32(m, resource + 4, stamp);
+        }
+        p.set_u32(m, draw + 0x130, resource);
+        p.set_u8(m, draw + 0x137, 0x40);
+        p.set_u32(m, draw + 0x144, key);
+        p.set_u32(m, draw + 0x150, 1);
+    }
+    bind_bank(m, p, draw, 0x2ff8, 0x2e00, 0x5c0);
+    let first_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, false);
+    if first_drawn {
+        call(m, cpu, p, frame, 0xff1920, draw, &[], 0x11405a5);
+    }
+    if p.u8(m, object + 0x26) != 0 {
+        bind_bank(m, p, draw, 0x2ee0, 0x2cf0, 0x2399759e);
+        let bank = p.u32(m, draw + 0x20);
+        let value = p.u32(m, bank + 0x1138);
+        if p.u32(m, draw + 0x1330) & !15 != value || p.u32(m, draw + 0x1334) != 0 {
+            save_pair(m, p, draw, 0x1330, 0x227);
+            p.set_u32(m, draw + 0x1330, value);
+            if p.u32(m, draw + 0x1334) != 0 {
+                p.set_u32(m, draw + 0x1334, 0);
+                dirty(m, p, draw, 2);
+            }
+            dirty(m, p, draw, 1);
+        }
+        bind_bank(m, p, draw, 0x2eb0, 0x2cc8, 0x950a6599);
+        let manager = p.u32(m, 0x18d2c80);
+        let texture = p.u32(m, manager + 0x2cc);
+        bind_resource(m, p, draw, 0x1cf0, texture, 0x45fbb000, 0);
+        instance_parameter(m, cpu, p, frame, draw, true);
+        bind_shader_key(m, p, draw, 0x8771a00f);
+        let second_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, true);
+        if second_drawn {
+            call(m, cpu, p, frame, 0xff1920, draw, &[], 0x1140c32);
+        }
+        bind_bank(m, p, draw, 0x2eb0, 0x2cc8, 0x950a6599);
+        instance_parameter(m, cpu, p, frame, draw, false);
+        bind_bank(m, p, draw, 0x2ee0, 0x2ce8, 0x59d);
+    }
+    bind_shader_key(m, p, draw, 0);
+    if p.u32(m, draw + 0x144) != 0 || p.u32(m, draw + 0x130) != 0 || p.u8(m, draw + 0x137) != 0 {
+        p.set_u32(m, draw + 0x130, 0);
+        p.set_u8(m, draw + 0x137, 0);
+        p.set_u32(m, draw + 0x144, 0);
+        p.set_u32(m, draw + 0x150, 1);
+    }
+    call(m, cpu, p, frame, 0xfeef20, draw, &[], 0x1140edb);
+    cpu.esp = sp.wrapping_add(16);
+}
+
+/// 0114085E..01140938 / 01140CC1..01140D9E: copy the parameter template
+/// through the original cdecl memcpy, then toggle its third float.
+fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, enabled: bool) {
+    let flags = p.u32(m, draw + 0x5c);
+    p.set_u32(m, draw + 0x5c, flags | 2);
+    save_pair(m, p, draw, 0x1330, 0x227);
+    let layout = p.u32(m, draw + 0x18);
+    let descriptor = p.u32(m, layout + 0x89c);
+    let size = (u32::from(p.u16(m, descriptor + 0x18)) * 4 + 15) & !15;
+    let end = p.u32(m, draw + 0x24).wrapping_add(size);
+    let mut memcpy_this = end;
+    if end > p.u32(m, draw + 0x28) {
+        call(
+            m,
+            cpu,
+            p,
+            frame,
+            0xfed890,
+            draw,
+            &[size],
+            if enabled { 0x11408ec } else { 0x1140d63 },
+        );
+        memcpy_this = cpu.ecx;
+    }
+    let output = p.u32(m, draw + 0x24);
+    p.set_u32(m, draw + 0x24, output.wrapping_add(size));
+    p.set_u32(m, draw + 0x1330, output);
+    dirty(m, p, draw, 1);
+    if output != 0 {
+        let size = u32::from(p.u16(m, descriptor + 0x18)) * 4;
+        let source = p.u32(m, descriptor + 0x24);
+        call(
+            m,
+            cpu,
+            p,
+            frame,
+            0x12efea0,
+            if enabled { size } else { memcpy_this },
+            &[output, source, size],
+            if enabled { 0x1140928 } else { 0x1140d93 },
+        );
+    }
+    let value = if enabled { p.u32(m, 0x1406ce0) } else { 0 };
+    p.set_u32(m, output + 8, value);
+    let flags = p.u32(m, draw + 0x5c);
+    p.set_u32(m, draw + 0x5c, flags & !2);
+}
+
+/// Both original three-range loops share the same bounds and draw layout;
+/// the second selects the adjacent count/offset pair in each table row.
+fn instance_ranges(
+    m: &mut dyn Mem,
+    cpu: &mut Cpu,
+    p: Pages,
+    frame: u32,
+    object: u32,
+    draw: u32,
+    primitive: u32,
+    table: u32,
+    mask: u8,
+    secondary: bool,
+) -> bool {
+    let mut drawn = false;
+    for i in 0..3u32 {
+        if mask & (1 << i) == 0 {
+            continue;
+        }
+        let pair = table + i * 8 + if secondary { 4 } else { 0 };
+        let offset = u32::from(p.u16(m, pair + 2));
+        let count = u32::from(p.u16(m, pair));
+        if count == 0 {
+            continue;
+        }
+        if drawn {
+            call(
+                m,
+                cpu,
+                p,
+                frame,
+                0xff1920,
+                draw,
+                &[],
+                if secondary { 0x11409ff } else { 0x1140371 },
+            );
+        }
+        let sort = p.u32(m, table + 0x20 + i * 4);
+        let old = p.u32(m, draw + 0x164);
+        p.set_u32(m, draw + 0x164, (old & 31) | (sort << 5));
+        let sphere = table + 0x30 + i * 16;
+        let radius = p.u32(m, sphere + 12);
+        let center: [u32; 3] = std::array::from_fn(|j| p.u32(m, sphere + j as u32 * 4));
+        let bounds = frame + 0x40;
+        for j in 0..3 {
+            p.set_u32(m, bounds + j as u32 * 4, x86::subss(center[j], radius));
+        }
+        p.set_u32(m, bounds + 12, 0);
+        for j in 0..3 {
+            p.set_u32(m, bounds + 16 + j as u32 * 4, x86::addss(radius, center[j]));
+        }
+        p.set_u32(m, bounds + 28, 0);
+        let one = p.u32(m, 0x1406ce0);
+        let manager = p.u32(m, 0x18d2c80);
+        let vtable = p.u32(m, manager);
+        let target = p.u32(m, vtable + 0x40);
+        call(
+            m,
+            cpu,
+            p,
+            frame,
+            target,
+            manager,
+            &[draw, 8, bounds, u32::MAX, u32::MAX, one, one, one],
+            if secondary { 0x1140ab6 } else { 0x1140428 },
+        );
+        let manager = p.u32(m, 0x18d2c80);
+        let vtable = p.u32(m, manager);
+        let target = p.u32(m, vtable + 0x34);
+        let first = p.u32(m, object + 0x20);
+        let second = p.u32(m, object + 0x1c);
+        call(
+            m,
+            cpu,
+            p,
+            frame,
+            target,
+            manager,
+            &[draw, first, second, sphere],
+            if secondary { 0x1140ad1 } else { 0x1140443 },
+        );
+        call(
+            m,
+            cpu,
+            p,
+            frame,
+            0xfeef20,
+            draw,
+            &[],
+            if secondary { 0x1140ad8 } else { 0x114044a },
+        );
+        let values = [
+            p.u32(m, primitive + 0x18),
+            p.u32(m, primitive + 0x1c),
+            p.u32(m, primitive + 0x20),
+        ];
+        let flags = p.u32(m, draw + 0x5c);
+        if flags & 0x100 != 0 || flags & 0x50 == 0 {
+            let end = p.u32(m, draw + 0x24).wrapping_add(0x30);
+            if end > p.u32(m, draw + 0x28) {
+                call(
+                    m,
+                    cpu,
+                    p,
+                    frame,
+                    0xfed890,
+                    draw,
+                    &[0x30],
+                    if secondary { 0x1140b12 } else { 0x1140484 },
+                );
+            }
+            instance_command(m, p, draw, count, offset, values);
+        }
+        drawn = true;
+    }
+    drawn
+}
+
+/// 01140484..0114055B / 01140B12..01140BE9: emit a 48-byte draw and its
+/// eight-byte sort entry, preserving untouched command words and bitfields.
+fn instance_command(m: &mut dyn Mem, p: Pages, draw: u32, count: u32, offset: u32, values: [u32; 3]) {
+    let output = p.u32(m, draw + 0x24);
+    p.set_u32(m, draw + 0x24, output.wrapping_add(0x30));
+    let old = p.u32(m, output);
+    let header = (old & 0xfff3ffff) | 0x30000;
+    p.set_u32(m, output, header);
+    let sequence = p.u32(m, draw + 0x74);
+    p.set_u32(m, output, (header & !0x7fff) | (sequence & 0x7fff));
+    let sequence = p.u32(m, draw + 0x74);
+    p.set_u32(m, draw + 0x74, sequence.wrapping_add(1));
+    let flag = if p.u8(m, draw + 0x5c) & 0x50 != 0 {
+        0x8000
+    } else {
+        0
+    };
+    let old = p.u32(m, output);
+    p.set_u32(m, output, (old & !0x8000) | flag);
+    let records = p.u32(m, draw + 0x6c);
+    let old = p.u32(m, output);
+    p.set_u32(m, output, (old & 0xfffff) | (records << 20));
+    for (dst, src) in [(8, 0x194), (12, 0x198), (16, 0x19c), (4, 0x1a0)] {
+        let value = p.u32(m, draw + src);
+        p.set_u32(m, output + dst, value);
+    }
+    for (dst, value) in [
+        (20, values[1]),
+        (24, values[0]),
+        (28, values[2]),
+        (32, count),
+        (36, offset),
+    ] {
+        p.set_u32(m, output + dst, value);
+    }
+    let cursor = p.u32(m, draw + 0x48);
+    let entries = p.u32(m, draw + 0x44);
+    let sort = p.u32(m, draw + 0x164);
+    let entry = entries.wrapping_add(cursor.wrapping_mul(8));
+    p.set_u32(m, draw + 0x48, cursor.wrapping_add(1));
+    let old = p.u32(m, entry);
+    let high = (old & 0x7ffffff) | (sort << 27);
+    p.set_u32(m, entry, high);
+    let sort = p.u32(m, draw + 0x164);
+    let base = p.u32(m, draw + 0x178);
+    p.set_u32(m, entry + 4, output);
+    p.set_u32(
+        m,
+        entry,
+        (high & !0x7ffffff) | ((sort >> 5).wrapping_add(base) & 0x7ffffff),
+    );
+}
+
 fn color_dirty(memory: &mut dyn Mem, pages: Pages, draw: u32) {
     let value = pages.u32(memory, draw.wrapping_add(0x114));
     pages.set_u32(memory, draw.wrapping_add(0x114), (value & 0xfff) | 0x1000);

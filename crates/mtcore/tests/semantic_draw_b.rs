@@ -161,6 +161,26 @@ fn apply_material_original() {
     );
 }
 
+// verifies 0x00FFC9F0
+#[test]
+fn model_palette_original() {
+    ddnative_host::install();
+    verify(
+        "E:/ddda-re/notes/native-L174/00ffc9f0.json",
+        mtcore::semantic_draw_b::prepare_model_palette,
+    );
+}
+
+// verifies 0x01140180
+#[test]
+fn culled_instances_original() {
+    ddnative_host::install();
+    verify(
+        "E:/ddda-re/notes/native-L174/01140180.json",
+        mtcore::semantic_draw_b::draw_culled_instances,
+    );
+}
+
 // verifies 0x01066C60
 #[test]
 fn select_material_pass_original() {
@@ -217,6 +237,14 @@ fn page_backed_originals() {
     for atomic in [false, true] {
         ddnative_base::mem::ATOMIC_ACCESSES.store(atomic, std::sync::atomic::Ordering::Relaxed);
         for (path, body) in [
+            (
+                "E:/ddda-re/notes/native-L174/01140180.json",
+                mtcore::semantic_draw_b::draw_culled_instances as LiftFn,
+            ),
+            (
+                "E:/ddda-re/notes/native-L174/00ffc9f0.json",
+                mtcore::semantic_draw_b::prepare_model_palette as LiftFn,
+            ),
             (
                 "E:/ddda-re/notes/native-L158/job_hash.json",
                 mtcore::semantic_draw_b::dependency_hash as LiftFn,
@@ -283,9 +311,19 @@ fn draw_benchmark() {
     for atomic in [false, true] {
         ddnative_base::mem::ATOMIC_ACCESSES.store(atomic, std::sync::atomic::Ordering::Relaxed);
         for (entry, port) in [
+            (
+                0x1140180,
+                mtcore::semantic_draw_b::draw_culled_instances as LiftFn,
+            ),
+            (0xffc9f0, mtcore::semantic_draw_b::prepare_model_palette as LiftFn),
             (0x10655a0, mtcore::semantic_draw_b::apply_material as LiftFn),
             (0x1066c60, mtcore::semantic_draw_b::select_material_pass),
         ] {
+            if let Ok(filter) = std::env::var("L174_BENCH_ENTRY") {
+                if filter != format!("{entry:x}") {
+                    continue;
+                }
+            }
             let Some(lifted) = baseline(entry) else { continue };
             let data = read(&format!("E:/ddda-re/notes/native-L174/{entry:08x}.json")).unwrap();
             let cases = data["cases"].as_array().unwrap();
@@ -294,6 +332,8 @@ fn draw_benchmark() {
                 let initial = pairs(&case["initial"]);
                 let expected = pairs(&case["after"]["memory"]);
                 let before = cpu(&case["before"]);
+                let host_mxcsr = x86::stmxcsr();
+                x86::ldmxcsr(n(&case["before"]["mxcsr"]));
                 let want = cpu(&case["after"]);
                 let events: Vec<_> = case["events"]
                     .as_array()
@@ -368,8 +408,12 @@ fn draw_benchmark() {
                 for values in &mut medians {
                     values.sort_by(f64::total_cmp)
                 }
-                eprintln!("draw entry={entry:x} seed={} atomic={atomic} lifted_ns={:.1} semantic_ns={:.1} median={:.3}x range={:.3}..{:.3}",case["seed"],medians[0][3],medians[1][3],ratios[3],ratios[0],ratios[6]);
+                eprintln!(
+                    "draw entry={entry:x} seed={} atomic={atomic} lifted_ns={:.1} semantic_ns={:.1} median={:.3}x range={:.3}..{:.3}",
+                    case["seed"], medians[0][3], medians[1][3], ratios[3], ratios[0], ratios[6]
+                );
                 x86::set_ext_calls(None);
+                x86::ldmxcsr(host_mxcsr);
             }
         }
     }

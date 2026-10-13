@@ -1,5 +1,20 @@
 # Milestones
 
+### L174b semantic model palette and culled instances (2026-10-13)
+
+- Opt-in SEMANTIC ports FFC9F0/1140180 retain original guest seams;
+  prior 10655A0 is retained. Requested integration base 1fcd6330 merged.
+- 247 original returns pass sparse/serial/atomic Pages and isolated opt2
+  lifted replay. Instruction coverage 641/644 and 824/824; signaling-NaN
+  x87 oracle boundary documented, hardware behavior retained.
+- 24/24 paired scenario medians improve: model 1.188–1.485x, instancing
+  1.248–1.914x. No game/shard run or FPS claim. Evidence and private hashes:
+  `docs/tasks/L174-semantic-draw-b.md`, continuation Results.
+- Runtime light rerun: 260 passed, zero failed, seven ignored. Default
+  and SEMANTIC/JOB_HASH/JOB_LOOKUP registration checks pass. Full mtcore
+  and ddports gate: 38 passed, zero failed, 11 ignored.
+- Next: head combined semantic train and matched critical-job/image gate.
+
 ### L174 semantic material draw and dependency hash (2026-10-13)
 
 - `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
