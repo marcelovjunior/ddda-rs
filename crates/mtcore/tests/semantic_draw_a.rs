@@ -151,3 +151,40 @@ fn replay_draw_passes_original() {
 fn bind_render_target_original() {
     verify(0xfefb90, mtcore::semantic_draw_a::bind_render_target);
 }
+
+/// Mutation check for the oracle itself: EAX/stack stay valid while a heap
+/// output below ESP is corrupted. The final comparison must reject it.
+#[test]
+fn abi_oracle_rejects_corrupted_heap_below_stack() {
+    ddnative_host::install();
+    for (entry, body) in [
+        (0xff1920, mtcore::semantic_draw_a::shadow_draws as LiftFn),
+        (0xff14d0, mtcore::semantic_draw_a::replay_draw_passes),
+        (0xfefb90, mtcore::semantic_draw_a::bind_render_target),
+    ] {
+        let Some(data) = vectors(entry) else { continue };
+        let case = &data["cases"][43];
+        let mut memory = Memory {
+            bytes: pairs(&case["initial"]),
+            ..Default::default()
+        };
+        let mut cpu = cpu(&case["before"]);
+        let cursor = install_calls(case);
+        x86::ldmxcsr(cpu.mxcsr.0);
+        body(&mut memory, &mut cpu);
+        x86::set_ext_calls(None);
+        assert_eq!(*cursor.borrow(), case["events"].as_array().unwrap().len());
+        check(&cpu, &memory, case);
+        let address = pairs(&case["after"]["memory"])
+            .keys()
+            .copied()
+            .find(|a| (0xe000000..0xe090000).contains(a))
+            .expect("case must write heap memory below ESP");
+        memory.set_u8(address, memory.u8(address) ^ 1);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            check(&cpu, &memory, case);
+        }))
+        .is_err());
+    }
+    x86::ldmxcsr(x86::MXCSR_DEFAULT);
+}

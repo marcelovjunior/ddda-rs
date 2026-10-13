@@ -45,6 +45,10 @@ Implemented and tested in isolation, not compared in the running game:
   and memory, and all written memory except discarded stack bytes. Heap
   below ESP is explicitly included; extra heap writes fail.
 - Runtime light: **255 passed, zero failed, seven ignored**.
+- Full `mtcore`/`ddports` suite: **25 passed, zero failed, nine ignored**.
+  Follow-up oracle mutation test corrupts a below-stack heap byte separately
+  for each port and proves all three corruptions fail; the four focused
+  leaf/oracle tests pass (the full suite preceded this additional test).
 - Paired production atomic-Pages timings, 200 iterations, seven alternating
   rounds, four 12-record scenarios per entry; reset work outside timers,
   identical synthetic callees. Lift opt2 / port and memory opt3. Median
