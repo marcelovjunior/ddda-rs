@@ -535,9 +535,10 @@ impl Registry {
         // L101: the bindings this thread called, direct-mapped by address
         // (the registry no longer changes once shared, so they never go
         // stale): a hit skips the map lookup
-        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 256]> = Box::new([const { std::cell::Cell::new(None) }; 256]);
+        // L171: 4096 entries (256 thrashed on the game's call mix)
+        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 4096]> = Box::new([const { std::cell::Cell::new(None) }; 4096]);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
-            let slot = &cache[((target >> 2) ^ (target >> 10)) as usize & 255];
+            let slot = &cache[((target >> 2) ^ (target >> 14)) as usize & 4095];
             if let Some((t, b)) = slot.get() {
                 if t == target {
                     return me.run_binding(b, m, cpu, target);
