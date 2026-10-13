@@ -1,5 +1,17 @@
 # Milestones
 
+### L155 save-load source map (2026-10-13)
+
+- One resource FIFO worker already overlaps reads with up to three entry
+  decode workers. Shared archive workspace and ordered finalizers block a
+  simple parallel-archive change (`00DB9C30`/`00DB9C80`/`00DB9F40`).
+- Added base/append shader gates and stage list/barrier order. The historical
+  `00532110` marker is not proven PC Continue: PC storage ignores its kind 9,
+  and `00531E60` has direct GameMain paths. Raw callback IDs and head input
+  observations must establish the actual load interval.
+- Static evidence only; no measured speedup. Next: completed combo25 FAST
+  timeline ranking and exact intervention. `docs/tasks/L155-saveload.md`.
+
 ### L155 ddgpu example build repair (2026-10-13)
 
 - `module_cost` now declares the existing pipeline logger required by its
