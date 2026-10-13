@@ -1228,19 +1228,6 @@ fn compare_replays(
         .collect();
     let mut residue: Vec<(Vec<usize>, mtcore::shadow_lanes::ConstByte, u8, u8)> = Vec::new();
     let mut refused = 0;
-    let mut allow = |path: &[usize],
-                     a: &mtcore::shadow_lanes::Binding,
-                     b: &mtcore::shadow_lanes::Binding,
-                     offset: usize| {
-        let verdict = residue_allowed(path, a, b, offset);
-        if let Err(why) = &verdict {
-            refused += 1;
-            if refused <= 4 {
-                eprintln!("parallel-shadow constant byte {offset:#x} at {path:?} refused: {why}");
-            }
-        }
-        verdict.is_ok()
-    };
     let mut residue_allowed = |path: &[usize],
                      a: &mtcore::shadow_lanes::Binding,
                      b: &mtcore::shadow_lanes::Binding,
@@ -1275,6 +1262,19 @@ fn compare_replays(
         }
         residue.push((path.to_vec(), ca, a.bytes[offset], b.bytes[offset]));
         Ok(())
+    };
+    let mut allow = |path: &[usize],
+                     a: &mtcore::shadow_lanes::Binding,
+                     b: &mtcore::shadow_lanes::Binding,
+                     offset: usize| {
+        let verdict = residue_allowed(path, a, b, offset);
+        if let Err(why) = &verdict {
+            refused += 1;
+            if refused <= 4 {
+                eprintln!("parallel-shadow constant byte {offset:#x} at {path:?} refused: {why}");
+            }
+        }
+        verdict.is_ok()
     };
     let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
     if !residue.is_empty() {
