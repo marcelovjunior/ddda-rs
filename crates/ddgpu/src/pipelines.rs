@@ -21,6 +21,11 @@ static PIPELINES: AtomicU64 = AtomicU64::new(0);
 static PIPELINE_NS: AtomicU64 = AtomicU64::new(0);
 static REUSED: AtomicU64 = AtomicU64::new(0);
 
+thread_local! {
+    /// render pipelines created on this thread
+    static CREATED_HERE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Shader modules and render pipelines the backends of this process
 /// created for draws, the time that took on the calling thread, and the
 /// draws that found their pipeline built already.
@@ -71,7 +76,15 @@ pub(crate) fn module_created(since: Instant) {
 
 pub(crate) fn pipeline_created(since: Instant) {
     PIPELINES.fetch_add(1, Ordering::Relaxed);
+    CREATED_HERE.with(|n| n.set(n.get() + 1));
     PIPELINE_NS.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+}
+
+/// Render pipelines created on the calling thread so far: what a backend
+/// driven from this thread created, whatever other threads (other tests,
+/// background warm-up) create meanwhile.
+pub fn pipelines_created_on_this_thread() -> u64 {
+    CREATED_HERE.with(|n| n.get())
 }
 
 pub(crate) fn pipeline_reused() {

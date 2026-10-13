@@ -228,3 +228,74 @@ fn semantic_sort_pairs_matches_original() {
     let n = abi_cases_full("E:/ddda-re/notes/native-L165/job_sort.json", mtcore::semantic::sort_pairs, true, &[0x012e_fea0]);
     eprintln!("{n} ABI-level sort cases passed");
 }
+
+// verifies 0x00cd8760 (ABI level): the devirtualized walk against the
+// instruction-level port, whose two virtual calls run the real accessors
+// (0x0040E330 count = this[0x64], 0x00CD7A30 entry(i) = this[0x60] + 0x70 i)
+#[test]
+fn semantic_find_identifier_matches_port() {
+    use ddnative_base::x86;
+    ddnative_host::install();
+    let mut seed = 0x1234_5678u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    let (owner, vtable, entries, stack) = (0x2000_0000u32, 0x2000_1000u32, 0x2001_0000u32, 0x2010_0000u32);
+    for case in 0..4000 {
+        let mut m = Memory::default();
+        let count = next() % 40;
+        let store = |m: &mut Memory, a: u32, v: u32| (0..4).for_each(|k| m.set_u8(a + k, (v >> (8 * k)) as u8));
+        // a quarter of the owners have other methods: the port runs as is
+        let real = case % 4 != 0;
+        store(&mut m, owner, vtable);
+        store(&mut m, owner + 0x60, entries);
+        store(&mut m, owner + 0x64, count);
+        store(&mut m, vtable + 0x3c, if real { 0x00cd_7a30 } else { 0x00cd_7a31 });
+        store(&mut m, vtable + 0x40, 0x0040_e330);
+        for i in 0..count {
+            let e = entries + i * 0x70;
+            let (kind, id) = (0x60 + next() % 0x1e, next() % 4);
+            store(&mut m, e + 0x10, kind | (id << 16));
+        }
+        for a in (stack - 0x100..stack + 8).step_by(4) {
+            store(&mut m, a, 0xcccc_cccc);
+        }
+        let packed = match next() % 8 {
+            0 => 0x8000_0000 | next(),
+            1 => next(),
+            _ => ((0x60 + next() % 0x1e) << 16) | (next() % 4),
+        };
+        m.writes.clear();
+        let run = |body: LiftFn, m: &mut Memory| {
+            let mut c = Cpu::default();
+            (c.eax, c.esi, c.esp, c.ebx, c.ebp, c.edi) = (packed, owner, stack, 0xb, 0xbb, 0xd);
+            x86::set_ext_calls(Some(Box::new(|m, c, target| {
+                let this = c.ecx;
+                match target {
+                    0x0040_e330 => {
+                        c.eax = m.u32(this + 0x64);
+                        c.esp += 4;
+                    }
+                    0x00cd_7a30 | 0x00cd_7a31 => {
+                        c.eax = m.u32(c.esp + 4).wrapping_mul(0x70).wrapping_add(m.u32(this + 0x60));
+                        c.esp += 8;
+                    }
+                    _ => panic!("call {target:x}"),
+                }
+            })));
+            body(m, &mut c);
+            x86::set_ext_calls(None);
+            c
+        };
+        let mut port_memory = Memory { bytes: m.bytes.clone(), writes: BTreeMap::new() };
+        let want = run(mtcore::hot::resolve_identifier, &mut port_memory);
+        let got = run(mtcore::semantic::find_identifier, &mut m);
+        let abi = |c: &Cpu| [c.eax, c.ebx, c.esp, c.ebp, c.esi, c.edi];
+        assert_eq!(abi(&got), abi(&want), "case {case}: packed {packed:x} count {count}");
+        // nothing written at or above the returned stack
+        assert!(m.writes.keys().all(|&a| a < got.esp), "case {case}: native writes");
+    }
+}

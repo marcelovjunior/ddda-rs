@@ -462,3 +462,47 @@ pub fn set_pass(m: &mut dyn Mem, c: &mut Cpu) {
     }
     finish(c)
 }
+
+/// The owner methods [`find_identifier`] devirtualizes: `count()` (vtable
+/// +0x40) returning `this[0x64]`, and `entry(i)` (vtable +0x3c, `ret 4`)
+/// returning `this[0x60] + i * 0x70`.
+const IDENTIFIER_COUNT: u32 = 0x0040_e330;
+const IDENTIFIER_ENTRY: u32 = 0x00cd_7a30;
+
+// Translated from 0x00cd8760 (DDDA.exe 2017-12-13 Steam).
+/// 0x00CD8760, `find(owner = ESI, packed = EAX) -> entry` (`ret`): the
+/// owner's entry whose u16 type at +0x10 and u16 id at +0x12 equal the
+/// packed identifier's high and low halves, or 0. Only types 0x62..=0x7a
+/// are searched; a negative identifier finds nothing.
+///
+/// The original walks `entry(i)` for `i < count()` through two virtual
+/// calls per entry (~7% of the main thread, 54 searches a frame from
+/// 0x00485850). When the owner's methods are the array accessors above,
+/// the walk reads the array directly; any other owner runs the
+/// instruction-level port, so the result is the same for every owner.
+pub fn find_identifier(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let packed = c.eax;
+    let owner = c.esi;
+    let (kind, id) = (packed >> 16, packed & 0xffff);
+    if (packed as i32) < 0 || !(0x62..=0x7a).contains(&kind) {
+        c.eax = 0;
+        c.esp = c.esp.wrapping_add(4);
+        return;
+    }
+    let vtable = pg.u32(m, owner);
+    if pg.u32(m, vtable.wrapping_add(0x40)) != IDENTIFIER_COUNT || pg.u32(m, vtable.wrapping_add(0x3c)) != IDENTIFIER_ENTRY {
+        return crate::hot::resolve_identifier(m, c);
+    }
+    let count = pg.u32(m, owner.wrapping_add(0x64));
+    let entries = pg.u32(m, owner.wrapping_add(0x60));
+    c.eax = (0..count)
+        .map(|i| entries.wrapping_add(i.wrapping_mul(0x70)))
+        .find(|&entry| {
+            entry != 0
+                && u32::from(pg.u16(m, entry.wrapping_add(0x10))) == kind
+                && u32::from(pg.u16(m, entry.wrapping_add(0x12))) == id
+        })
+        .unwrap_or(0);
+    c.esp = c.esp.wrapping_add(4);
+}
