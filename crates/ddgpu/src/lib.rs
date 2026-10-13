@@ -24,6 +24,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod cache;
+mod compute_quads;
+mod encode;
 pub mod native;
 pub mod native_compare;
 mod native_job;
@@ -392,6 +394,10 @@ pub struct WgpuBackend {
     pub async_queries: bool,
     /// L124: the finisher thread (set_async_submit)
     finisher: Option<Finisher>,
+    encode_threads: usize,
+    encode_profile: encode::Profile,
+    chunks: RefCell<Vec<wgpu::CommandEncoder>>,
+    chunk_start: Cell<u32>,
     /// Draws (and clears and copies) recorded before a submission
     /// (DRAWS_PER_SUBMIT by default; ddplay lowers it with async submits,
     /// so encoding overlaps recording within a frame)
@@ -404,6 +410,13 @@ pub struct WgpuBackend {
     /// the render pass of the open encoder that draws are recorded into,
     /// kept open while consecutive draws use the same attachments (L72)
     pass: RefCell<Option<OpenPass>>,
+    /// L113: the open compute pass of quad dispatches (compute_quads)
+    cpass: RefCell<Option<wgpu::ComputePass<'static>>>,
+    /// DDGPU_NATIVE_SIM=1: eligible full-target quad draws run as dispatches
+    native_sim: bool,
+    quads: compute_quads::QuadCache,
+    /// CPU copies of small vertex buffers (a quad's vertices, compute_quads)
+    small_buffers: cache::FxMap<u32, Vec<u8>>,
     /// draws recorded, and render passes begun for them (L72)
     draws_recorded: Cell<u64>,
     passes_begun: Cell<u64>,
@@ -484,22 +497,33 @@ type PassKey = (Vec<Option<wgpu::TextureView>>, Option<wgpu::TextureView>, Optio
 /// L124: a thread that finishes command encoders and submits them in the
 /// order given.
 struct Finisher {
-    send: Option<std::sync::mpsc::Sender<wgpu::CommandEncoder>>,
+    send: Option<std::sync::mpsc::Sender<Vec<wgpu::CommandEncoder>>>,
     sent: Cell<u64>,
-    done: Arc<(std::sync::Mutex<u64>, std::sync::Condvar)>,
+    done: Arc<(std::sync::Mutex<(u64, bool)>, std::sync::Condvar)>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Finisher {
-    fn new(queue: wgpu::Queue) -> Finisher {
-        let (send, recv) = std::sync::mpsc::channel::<wgpu::CommandEncoder>();
-        let done = Arc::new((std::sync::Mutex::new(0u64), std::sync::Condvar::new()));
+    fn new(queue: wgpu::Queue, threads: usize, profile: encode::Profile) -> Finisher {
+        let (send, recv) = std::sync::mpsc::channel::<Vec<wgpu::CommandEncoder>>();
+        let done = Arc::new((std::sync::Mutex::new((0u64, false)), std::sync::Condvar::new()));
         let d = done.clone();
         let thread = std::thread::Builder::new().name("wgpu-finish".into()).spawn(move || {
-            for enc in recv {
-                queue.submit([enc.finish()]);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let pool = encode::Pool::new(threads, profile.clone(), encode::finish_wgpu);
+                for encoders in recv {
+                    let buffers = pool.finish(encoders);
+                    let start = profile.start();
+                    queue.submit(buffers);
+                    profile.end(8, start);
+                    let (m, c) = &*d;
+                    m.lock().unwrap().0 += 1;
+                    c.notify_all();
+                }
+            }));
+            if result.is_err() {
                 let (m, c) = &*d;
-                *m.lock().unwrap() += 1;
+                m.lock().unwrap().1 = true;
                 c.notify_all();
             }
         }).expect("start the finisher thread");
@@ -507,16 +531,21 @@ impl Finisher {
     }
 
     fn submit(&self, enc: wgpu::CommandEncoder) {
+        self.submit_batch(vec![enc]);
+    }
+
+    fn submit_batch(&self, encoders: Vec<wgpu::CommandEncoder>) {
         self.sent.set(self.sent.get() + 1);
-        self.send.as_ref().unwrap().send(enc).expect("the finisher thread stopped");
+        self.send.as_ref().unwrap().send(encoders).expect("the finisher thread stopped");
     }
 
     fn wait(&self) {
         let (m, c) = &*self.done;
         let mut submitted = m.lock().unwrap();
-        while *submitted < self.sent.get() {
+        while submitted.0 < self.sent.get() && !submitted.1 {
             submitted = c.wait(submitted).unwrap();
         }
+        assert!(!submitted.1, "the finisher thread failed during encoding/submission");
     }
 }
 
@@ -648,6 +677,10 @@ impl WgpuBackend {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, adapter: wgpu::AdapterInfo) -> WgpuBackend {
         let uniforms = Ring::new(&device, UNIFORM_RING, wgpu::BufferUsages::UNIFORM, "constants");
         let inline = Ring::new(&device, INLINE_RING, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX, "inline data");
+        // L113: with DDGPU_NATIVE_SIM the pixel stage's bindings are also
+        // the quad dispatches' (compute_quads)
+        let native_sim = compute_quads::enabled();
+        let ps_visibility = if native_sim { wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE } else { wgpu::ShaderStages::FRAGMENT };
         let uniform = |binding, visibility| wgpu::BindGroupLayoutEntry {
             binding, visibility,
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: None },
@@ -655,7 +688,7 @@ impl WgpuBackend {
         };
         let layout0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[uniform(0, wgpu::ShaderStages::FRAGMENT), uniform(2, wgpu::ShaderStages::VERTEX)],
+            entries: &[uniform(0, ps_visibility), uniform(2, wgpu::ShaderStages::VERTEX)],
         });
         let block = |size| wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &uniforms.buffer, offset: 0, size: std::num::NonZeroU64::new(size) });
         let group0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -663,7 +696,7 @@ impl WgpuBackend {
             layout: &layout0,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: block(PS_BLOCK) }, wgpu::BindGroupEntry { binding: 2, resource: block(VS_BLOCK) }],
         });
-        WgpuBackend {
+        let mut backend = WgpuBackend {
             native_worker: None,
             native_stats: Default::default(),
             native_comparisons: None,
@@ -690,11 +723,19 @@ impl WgpuBackend {
             pending_queries: HashMap::new(),
             async_queries: false,
             finisher: None,
+            encode_threads: encode::threads_from_env(),
+            encode_profile: encode::Profile::from_env(),
+            chunks: RefCell::new(Vec::new()),
+            chunk_start: Cell::new(0),
             draws_per_submit: DRAWS_PER_SUBMIT,
             active_queries: Vec::new(),
             gamma: None,
             adapter,
             pass: RefCell::new(None),
+            cpass: RefCell::new(None),
+            native_sim,
+            quads: Default::default(),
+            small_buffers: Default::default(),
             draws_recorded: Cell::new(0),
             passes_begun: Cell::new(0),
             submissions: Cell::new(0),
@@ -722,7 +763,9 @@ impl WgpuBackend {
             warm_hits: 0,
             created_modules: 0,
             created_pipelines: 0,
-        }
+        };
+        if backend.encode_threads > 1 { backend.set_async_submit(true); }
+        backend
     }
 
     /// Create the draws' pipelines through a pipeline cache kept in `dir`
@@ -740,7 +783,7 @@ impl WgpuBackend {
     /// DDGPU_PIPELINE_WARMUP=0 records recipes without speculative compilation.
     pub fn enable_pipeline_warmup(&mut self, dir: &std::path::Path, exe: &std::path::Path) -> bool {
         let Some(cache) = self.pipeline_cache.clone() else { return false };
-        self.warmup = warmup::Warmup::start(self.device.clone(), self.adapter.clone(), self.layout0.clone(), cache, dir.to_owned(), exe.to_owned());
+        self.warmup = warmup::Warmup::start(self.device.clone(), self.adapter.clone(), self.layout0.clone(), self.native_sim, cache, dir.to_owned(), exe.to_owned());
         self.warmup.is_some()
     }
 
@@ -778,20 +821,28 @@ impl WgpuBackend {
     /// at offsets no earlier batch uses (a ring restarts only after flush).
     fn flush_async(&self) {
         self.end_pass();
-        let enc = self.open.borrow_mut().take();
+        let mut encoders = std::mem::take(&mut *self.chunks.borrow_mut());
+        if let Some(enc) = self.open.borrow_mut().take() { encoders.push(enc); }
         self.uniforms.borrow_mut().upload(&self.queue);
         self.inline.borrow_mut().upload(&self.queue);
-        if let Some(enc) = enc {
+        if !encoders.is_empty() {
             match &self.finisher {
                 Some(f) => {
-                    f.submit(enc);
+                    f.submit_batch(encoders);
                     self.submissions.set(self.submissions.get() + 1);
                 }
                 None => {
-                    self.submit_encoder(enc);
+                    self.wait_finisher();
+                    let pool = encode::Pool::new(1, self.encode_profile.clone(), encode::finish_wgpu);
+                    let buffers = pool.finish(encoders);
+                    let start = self.encode_profile.start();
+                    self.queue.submit(buffers);
+                    self.encode_profile.end(8, start);
+                    self.submissions.set(self.submissions.get() + 1);
                 }
             }
         }
+        self.chunk_start.set(0);
         self.open_draws.set(0);
         self.open_uses.borrow_mut().clear();
     }
@@ -804,10 +855,23 @@ impl WgpuBackend {
     }
 
     /// L124: finish and submit draw batches on a second thread (ddplay turns
-    /// it on; off, every submission happens on the calling thread).
+    /// it on). Multiple encoding workers require this coordinator even when
+    /// `on` is false; select one worker to restore synchronous submissions.
     pub fn set_async_submit(&mut self, on: bool) {
-        self.wait_finisher();
-        self.finisher = on.then(|| Finisher::new(self.queue.clone()));
+        self.flush();
+        self.finisher = (on || self.encode_threads > 1).then(||
+            Finisher::new(self.queue.clone(), self.encode_threads, self.encode_profile.clone()));
+    }
+
+    /// Opt-in encoder workers (1..=4). Changes drain pending work first.
+    /// Default 2 (encode::DEFAULT_THREADS); DDGPU_ENCODE_THREADS=1..4 overrides it at construction.
+    /// Consecutive pass chunks are encoded independently and submitted in order.
+    pub fn set_encode_threads(&mut self, threads: usize) {
+        assert!((1..=4).contains(&threads));
+        self.flush();
+        self.encode_threads = threads;
+        let async_submit = self.finisher.is_some();
+        self.set_async_submit(async_submit);
     }
 
     /// Backend queue submissions, including explicit readbacks and queries.
@@ -819,14 +883,45 @@ impl WgpuBackend {
     fn submit_encoder(&self, enc: wgpu::CommandEncoder) {
         // L124: after everything the finisher holds
         self.wait_finisher();
-        self.queue.submit([enc.finish()]);
+        let start = self.encode_profile.start();
+        let buffer = enc.finish();
+        self.encode_profile.end(7, start);
+        let start = self.encode_profile.start();
+        self.queue.submit([buffer]);
+        self.encode_profile.end(8, start);
         self.submissions.set(self.submissions.get() + 1);
     }
 
     /// End the open render pass: the encoder can record other commands
     /// (a copy) or be finished.
     fn end_pass(&self) {
-        self.pass.borrow_mut().take();
+        if let Some(pass) = self.pass.borrow_mut().take() {
+            let start = self.encode_profile.start();
+            drop(pass);
+            self.encode_profile.end(1, start);
+        }
+        self.cpass.borrow_mut().take();
+        // A boundary never adds/splits a render pass or changes its load/store
+        // semantics. Track all chunks' resources until the whole batch submits.
+        let chunk_draws = self.draws_per_submit.max(1).div_ceil(self.encode_threads as u32);
+        if self.encode_threads > 1 && self.open_draws.get() - self.chunk_start.get() >= chunk_draws {
+            if let Some(enc) = self.open.borrow_mut().take() {
+                self.chunks.borrow_mut().push(enc);
+                self.chunk_start.set(self.open_draws.get());
+            }
+        }
+    }
+
+    /// Submit what is recorded and wait until the GPU has run it (a replay
+    /// without Presents frees finished submissions this way).
+    pub fn wait_idle(&self) {
+        self.flush();
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Draws run as compute dispatches so far (DDGPU_NATIVE_SIM, L113).
+    pub fn quad_dispatches(&self) -> u64 {
+        self.quads.dispatches
     }
 
     /// Take the shared encoder after ending any live draw pass. Copy helpers
@@ -1046,8 +1141,11 @@ impl WgpuBackend {
         }
         let target = t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0;
         let (format, block, usage) = if target {
-            (target_format(d3d_format, false)?, 1,
-             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST)
+            let format = target_format(d3d_format, false)?;
+            // L113: float targets the quad dispatches write (compute_quads)
+            let storage = if self.native_sim && format == wgpu::TextureFormat::Rgba32Float { wgpu::TextureUsages::STORAGE_BINDING } else { wgpu::TextureUsages::empty() };
+            (format, 1,
+             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | storage)
         } else {
             let (format, _, _, block) = sampled_format(d3d_format)?;
             (format, block, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC)
@@ -2262,6 +2360,7 @@ impl WgpuBackend {
                 view, depth_slice: None, resolve_target: None,
                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
             })).collect();
+            let timing = self.encode_profile.start();
             let pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &attachments,
@@ -2274,6 +2373,7 @@ impl WgpuBackend {
                 occlusion_query_set: query_set.as_ref(),
                 multiview_mask: None,
             }).forget_lifetime();
+            self.encode_profile.end(0, timing);
             *self.open.borrow_mut() = Some(enc);
             *self.pass.borrow_mut() = Some(OpenPass { pass, key, scissored: false, last: PassState::default() });
             self.passes_begun.set(self.passes_begun.get() + 1);
@@ -2286,10 +2386,13 @@ impl WgpuBackend {
             if let Some(s) = slot {
                 pass.begin_occlusion_query(s % OCCLUSION_SET);
             }
+            let timing = self.encode_profile.start();
             if last.pipeline.as_ref() != Some(pipeline) {
                 pass.set_pipeline(&pipeline);
                 last.pipeline = Some(pipeline.clone());
             }
+            self.encode_profile.end(2, timing);
+            let timing = self.encode_profile.start();
             if last.group0 != Some([ps_off, vs_off]) {
                 pass.set_bind_group(0, &self.group0, &[ps_off, vs_off]);
                 last.group0 = Some([ps_off, vs_off]);
@@ -2302,6 +2405,8 @@ impl WgpuBackend {
                 pass.set_bind_group(2, &groups[1], &[]);
                 last.group2 = Some(groups[1].clone());
             }
+            self.encode_profile.end(3, timing);
+            let timing = self.encode_profile.start();
             let v = d.viewport;
             if last.viewport != Some(v) {
                 pass.set_viewport(v[0] as f32, v[1] as f32, v[2] as f32, v[3] as f32, f32::from_bits(v[4]), f32::from_bits(v[5]));
@@ -2322,6 +2427,8 @@ impl WgpuBackend {
                 pass.set_blend_constant(clear_colour(state(193), wgpu::TextureFormat::Rgba32Float));
                 last.blend = Some(state(193));
             }
+            self.encode_profile.end(6, timing);
+            let timing = self.encode_profile.start();
             for (k, (b, off, end, _)) in vbufs.iter().enumerate() {
                 if last.vertex.len() <= k {
                     last.vertex.resize(k + 1, None);
@@ -2331,6 +2438,8 @@ impl WgpuBackend {
                     last.vertex[k] = Some((b.clone(), *off, *end));
                 }
             }
+            self.encode_profile.end(4, timing);
+            let timing = self.encode_profile.start();
             match &index {
                 Some((ib, off, end, _)) => {
                     if last.index.as_ref().is_none_or(|(lb, lo, le, lf)| lb != ib || lo != off || le != end || *lf != format) {
@@ -2341,6 +2450,7 @@ impl WgpuBackend {
                 }
                 None => pass.draw(first..first + count, 0..instances),
             }
+            self.encode_profile.end(5, timing);
             if slot.is_some() {
                 pass.end_occlusion_query();
             }
@@ -2359,7 +2469,9 @@ impl WgpuBackend {
         if let Some(l) = self.tex_layouts.get(&key) {
             return l.clone();
         }
-        let l = warmup::texture_layout(&self.device, vs, kinds);
+        // L113: with DDGPU_NATIVE_SIM the pixel textures are the quad
+        // dispatches' too (compute_quads)
+        let l = warmup::texture_layout(&self.device, vs, kinds, self.native_sim);
         self.tex_layouts.insert(key, l.clone());
         l
     }
@@ -2683,6 +2795,13 @@ impl GraphicsBackend for WgpuBackend {
         }
         match &upload {
             Upload::Buffer { resource, bytes } => {
+                if self.native_sim {
+                    if bytes.len() <= 512 {
+                        self.small_buffers.insert(*resource, bytes.clone());
+                    } else {
+                        self.small_buffers.remove(resource);
+                    }
+                }
                 // a buffer of the same size is written in place
                 let size = (bytes.len() as u64).next_multiple_of(4).max(4);
                 match self.buffers.get(resource) {
@@ -2712,6 +2831,9 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn draw(&mut self, draw: &DrawCall) {
+        if self.native_sim && self.try_quad(draw) {
+            return;
+        }
         if let Err(e) = self.try_draw(draw) {
             if self.errors.len() < 1000 {
                 self.errors.push(e);
@@ -2837,6 +2959,8 @@ impl GraphicsBackend for WgpuBackend {
 
     fn release(&mut self, resource: u32) {
         self.flush();
+        self.small_buffers.remove(&resource);
+        self.quads.forget(resource);
         self.native_worker = None; // Guest/resource identities may now be reused.
         // cached views and bind groups may hold the resource
         self.tex_groups.clear();
@@ -2880,5 +3004,6 @@ impl GraphicsBackend for WgpuBackend {
                 width: rt.width, height: rt.height, gamma: self.gamma.as_deref(),
             });
         }
+        self.encode_profile.present();
     }
 }

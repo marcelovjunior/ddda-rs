@@ -257,6 +257,13 @@ pub trait GraphicsBackend: Send + std::any::Any {
     fn native_compare_end(&mut self, _id: u64, job: NativeJob) -> Result<(), NativeJob> { Err(job) }
     fn upload(&mut self, upload: Upload);
     fn draw(&mut self, draw: &DrawCall);
+    /// Draws in order: the same as `draw` for each (a native path's run of
+    /// draws, L119; a deferred backend sends them as one command).
+    fn draws(&mut self, draws: Vec<DrawCall>) {
+        for d in &draws {
+            self.draw(d);
+        }
+    }
     fn clear(&mut self, clear: &ClearCall);
     /// Show the back buffer surface.
     fn present(&mut self, back_buffer: &Target);

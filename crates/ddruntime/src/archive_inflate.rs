@@ -4,12 +4,61 @@ use ddnative_base::{mem::Mem, x86::Cpu};
 
 /// Install before diagnostic wrappers, preserving explicit ports/mods.
 pub fn install(ports: &mut Vec<(u32, ddnative_base::x86::LiftFn)>) {
+    if std::env::var("DDRUNTIME_ZLIB_ADLER").as_deref() == Ok("1")
+        && !ports.iter().any(|&(address, _)| address == 0x00cf_34d0) {
+        ports.push((0x00cf_34d0, adler32));
+    }
     if std::env::var("DDRUNTIME_ARCHIVE_INFLATE").is_ok_and(|value| value == "0") {
         return;
     }
     if !ports.iter().any(|&(address, _)| address == 0x00cf_2cb0) {
         ports.push((0x00cf_2cb0, inflate_fast));
     }
+}
+
+/// Translated from 0x00cf34d0 (DDDA.exe 2017-12-13 Steam), zlib Adler-32.
+/// Includes the original stack spills, modified length argument, volatile
+/// registers and defined arithmetic flags. No host allocation or stream state.
+pub fn adler32(m: &mut dyn Mem, cpu: &mut Cpu) {
+    use ddnative_base::x86::{Flags, LOGIC};
+    let stack = cpu.esp;
+    let initial = m.u32(stack.wrapping_add(4));
+    let mut source = m.u32(stack.wrapping_add(8));
+    m.set_u32(stack.wrapping_sub(4), cpu.ebp);
+    m.set_u32(stack.wrapping_sub(8), cpu.esi);
+    m.set_u32(stack.wrapping_sub(12), cpu.edi);
+    let mut low = initial & 0xffff;
+    let mut high = initial >> 16;
+    if source == 0 {
+        cpu.eax = 1;
+        cpu.ecx = low;
+        cpu.fl = Flags::new(LOGIC, 0, 0, 0, 32);
+        cpu.esp = stack.wrapping_add(4);
+        return;
+    }
+    m.set_u32(stack.wrapping_sub(16), cpu.ebx);
+    let mut remaining = m.u32(stack.wrapping_add(12));
+    // 5552 and 65521 are embedded at 0x00cf3502 / 0x00cf35d5.
+    let mut buffer = [0u8; 5552];
+    while remaining != 0 {
+        let count = remaining.min(5552);
+        remaining -= count;
+        m.set_u32(stack.wrapping_add(12), remaining);
+        m.read_bytes(source, &mut buffer[..count as usize]);
+        for &byte in &buffer[..count as usize] {
+            low = low.wrapping_add(u32::from(byte));
+            high = high.wrapping_add(low);
+        }
+        source = source.wrapping_add(count);
+        low %= 65521;
+        // The final multiply/subtract used to reduce high leaves this in EDX.
+        cpu.edx = (high / 65521).wrapping_mul(65521).wrapping_neg();
+        high %= 65521;
+    }
+    cpu.ecx = low;
+    cpu.eax = (high << 16) | low;
+    cpu.fl = Flags::new(LOGIC, high << 16, low, cpu.eax, 32);
+    cpu.esp = stack.wrapping_add(4);
 }
 
 fn mask(bits: u32) -> u32 {

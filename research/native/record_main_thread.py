@@ -363,13 +363,165 @@ class DurationOracle(Oracle):
                     before=before,initial=sorted(self.initial.items()),events=[],after=after)
 
 
+class RecordingOracle(Oracle):
+    """Recording-side ABI oracle; memcpy is an explicit synthetic callee.
+
+    The callback copies exactly the requested bytes and varies volatile
+    machine state. It is not a replacement claim for the original memcpy.
+    """
+    def __init__(self,entry=0xfedb80):
+        self.entry=entry
+        self.uc=Uc(UC_ARCH_X86,UC_MODE_32)
+        self.uc.ctl_set_tcg_buffer_size(16*1024*1024)
+        for address,size in ((0,0x1000),(0xda7000,0x1000),(0x18d0000,0x1000),(0xfed000,0x2000),(0x12ef000,0x1000),(BASE,SIZE),(STACK,STACK_SIZE),(h.RET,0x1000)):
+            self.uc.mem_map(address,size)
+        self.uc.mem_write(0xfedb80,h.code(0xfedb80,0x7a))
+        self.uc.mem_write(0xfedc00,h.code(0xfedc00,0x152))
+        if entry==0xfed200:
+            self.uc.mem_map(BASE+SIZE,0x500000-SIZE)
+            self.uc.mem_map(0x18d1000,0x1000)
+            self.uc.mem_write(entry,h.code(entry,0x1a3))
+        self.active=False
+        self.uc.hook_add(UC_HOOK_MEM_READ,self.read)
+        self.uc.hook_add(UC_HOOK_MEM_WRITE,self.write)
+        self.uc.hook_add(UC_HOOK_CODE,self.code)
+
+    def code(self,uc,address,size,data):
+        if address==h.RET: uc.emu_stop(); return
+        if address in (0x12efea0,0x12efe20,0xda7d70):
+            event=dict(kind='call',target=address,**self.snapshot())
+            # IMUL defines CF/OF only. Preserve/check DF as well.
+            if not self.events and self.entry!=0xfed200: event['flag_mask']=0xc01
+            self.events.append(event)
+            sp=uc.reg_read(x.UC_X86_REG_ESP)
+            self.remember(sp,8 if address==0xda7d70 else 16)
+            return_to=struct.unpack('<I',uc.mem_read(sp,4))[0]
+            effects={}
+            if address==0x12efea0:
+                destination,source,length=struct.unpack('<III',uc.mem_read(sp+4,12))
+                assert length<=0x8144
+                self.remember(source,length); self.remember(destination,length)
+                payload=bytes(uc.mem_read(source,length))
+                effects=dict(zip(range(destination,destination+length),payload))
+                uc.mem_write(destination,payload)
+            if address==0x12efe20:
+                destination,value,length=struct.unpack('<III',uc.mem_read(sp+4,12))
+                assert length==0x30
+                self.remember(destination,length)
+                payload=bytes([value&255])*length
+                effects=dict(zip(range(destination,destination+length),payload))
+                uc.mem_write(destination,payload)
+            if self.mode and self.entry==0xfedb80:
+                # The caller must reload depth and the overwritten argument.
+                for a,v in ((OWNER+0x30874,0xffffffff),(SP+4,self.rng.getrandbits(32))):
+                    self.remember(a,4)
+                    bits=struct.pack('<I',v); uc.mem_write(a,bits)
+                    effects.update(zip(range(a,a+4),bits))
+            self.written.update(effects)
+            for reg in REGS[:3]: uc.reg_write(reg,self.rng.getrandbits(32))
+            if address==0xda7d70:
+                assert struct.unpack('<I',uc.mem_read(sp+4,4))[0]==0x1000
+                uc.reg_write(x.UC_X86_REG_EAX,0 if self.mode==3 else BASE+0x36000)
+            for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,self.rng.getrandbits(128))
+            uc.reg_write(x.UC_X86_REG_EFLAGS,0x202|(self.rng.getrandbits(12)&0xcd5))
+            uc.reg_write(x.UC_X86_REG_ESP,sp+(8 if address==0xda7d70 else 4))
+            self.events.append(dict(kind='return',effects=sorted(effects.items()),**self.snapshot()))
+            uc.reg_write(x.UC_X86_REG_EIP,return_to)
+            return
+        assert self.entry<=address<={0xfedb80:0xfedbf9,0xfedc00:0xfedd51,0xfed200:0xfed3a2}[self.entry],hex(address)
+        self.visited.add(address)
+        if self.last is not None: self.edges.add((self.last,address))
+        self.last=address
+
+    def run(self,seed,depth,count,mode):
+        uc=self.uc; self.active=False; self.rng=rng=random.Random(seed); self.mode=mode
+        uc.mem_write(BASE,rng.randbytes(SIZE)); uc.mem_write(STACK,rng.randbytes(STACK_SIZE))
+        for a,v in ((SP,h.RET),(SP+4,rng.getrandbits(32)),(SP+8,rng.getrandbits(32)),
+                    (OWNER+0x30874,depth),(OWNER+0x14,count)):
+            uc.mem_write(a,struct.pack('<I',v))
+        if self.entry==0xfedc00:
+            uc.mem_write(0,rng.randbytes(0x1000))
+            pending=(seed//4)%9
+            words={OWNER+0x30874:depth+1, OWNER+0x48:pending+3, OWNER+0x4c:64,
+                   OWNER+0x44:BASE+0x38000, OWNER+0x30850+depth*8:3,
+                   OWNER+0x24:BASE+0x34000, OWNER+0x28:BASE+0x34000+(16 if mode==1 else 32 if mode==0 else 15),
+                   OWNER+0x30c78:seed%8,0x18d08f4:BASE+0x37000}
+            for a,v in words.items(): uc.mem_write(a,struct.pack('<I',v))
+        if self.entry==0xfed200:
+            # depth is the lane count here. Managers are synthetic, including
+            # the three frame-indexed slots; no bulk executable data is copied.
+            uc.mem_write(BASE+0x100000,rng.randbytes(0x100000))
+            words={SP+4:BASE+0x100000,SP+8:depth,OWNER+0x4c:mode,
+                   0x18d12cc:BASE+0x5000,0x18d08f4:BASE+0x50000,
+                   BASE+0x50000+0x33dbc:seed%3}
+            for offset in range(0x433dec,0x433e0c,4):
+                words[BASE+0x50000+offset]=rng.getrandbits(32)
+            for a,v in words.items(): uc.mem_write(a,struct.pack('<I',v))
+        for reg in REGS: uc.reg_write(reg,rng.getrandbits(32))
+        uc.reg_write(x.UC_X86_REG_ESP,SP); uc.reg_write(x.UC_X86_REG_ECX,OWNER)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,rng.getrandbits(128))
+        uc.reg_write(x.UC_X86_REG_FPCW,0x37f); uc.reg_write(x.UC_X86_REG_FPSW,0); uc.reg_write(x.UC_X86_REG_FPTAG,0)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_FP0+i,((1<<63)|rng.getrandbits(63),0x3fff))
+        uc.reg_write(x.UC_X86_REG_MXCSR,0x1f80)
+        uc.reg_write(x.UC_X86_REG_EFLAGS,0x202|(rng.getrandbits(12)&0xcd5))
+        self.initial,self.written,self.events,self.visited={},set(),[],set()
+        self.edges,self.last=set(),None; before=self.snapshot(False); self.active=True
+        uc.emu_start(self.entry,h.RET,count=10000)
+        assert uc.reg_read(x.UC_X86_REG_EIP)==h.RET,'instruction limit'
+        self.active=False
+        return dict(entry=self.entry,seed=seed,depth=depth,count=count,mode=mode,
+                    before=before,initial=sorted(self.initial.items()),events=self.events,
+                    after=self.snapshot(),visited=sorted(self.visited),edges=sorted(self.edges))
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out')
     p.add_argument('--geometry',action='store_true')
     p.add_argument('--identifiers',action='store_true')
     p.add_argument('--durations',action='store_true')
+    p.add_argument('--recording',action='store_true')
+    p.add_argument('--restore',action='store_true')
+    p.add_argument('--lanes',action='store_true')
     a=p.parse_args()
+    if a.lanes:
+        oracle=RecordingOracle(0xfed200)
+        cases=[oracle.run(i+1,*recipe) for i,recipe in enumerate(
+            ((lanes,count,capacity) for lanes in (1,2,4) for count in (0,1,8,32,4096) for capacity in (0,1,17,0xffffffff)))]
+        out=Path(a.out or 'E:/ddda-re/notes/native-L130/lanes.json'); out.parent.mkdir(parents=True,exist_ok=True)
+        edges={tuple(e) for c in cases for e in c['edges']}
+        branches=[i for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(h.code(0xfed200,0x1a3),0xfed200)
+                  if i.mnemonic.startswith('j') and i.mnemonic!='jmp']
+        missing=[(hex(i.address),hex(t)) for i in branches for t in (i.address+i.size,int(i.op_str,16)) if (i.address,t) not in edges]
+        # Zero lane count faults at DIV before the zero-count conditional.
+        assert missing==[('0xfed21e','0xfed39b')],missing
+        out.write_text(json.dumps(dict(source='DDDA.exe 2017-12-13 Steam',uncovered_edges=missing,
+                       exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),cases=cases),separators=(',',':')))
+        print(f'{len(cases)} lane cases, {sum(len(c["events"]) for c in cases)} boundaries -> {out}')
+        return
+    if a.restore:
+        oracle=RecordingOracle(0xfedc00)
+        cases=[oracle.run(i+1,*recipe) for i,recipe in enumerate(
+            ((depth,count,mode) for depth in range(4) for count in (0,1,8,32,256,4096) for mode in range(4)))]
+        out=Path(a.out or 'E:/ddda-re/notes/native-L130/restore.json'); out.parent.mkdir(parents=True,exist_ok=True)
+        edges={tuple(e) for c in cases for e in c['edges']}
+        branches=[i for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(h.code(0xfedc00,0x152),0xfedc00)
+                  if i.mnemonic.startswith('j') and i.mnemonic!='jmp']
+        missing=[(hex(i.address),hex(t)) for i in branches for t in (i.address+i.size,int(i.op_str,16)) if (i.address,t) not in edges]
+        assert not missing,missing
+        out.write_text(json.dumps(dict(source='DDDA.exe 2017-12-13 Steam',conditional_edges=len(branches)*2,
+                       exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),cases=cases),separators=(',',':')))
+        print(f'{len(cases)} restore cases, {sum(len(c["events"]) for c in cases)} boundaries -> {out}')
+        return
+    if a.recording:
+        oracle=RecordingOracle()
+        cases=[oracle.run(i+1,*recipe) for i,recipe in enumerate(
+            ((depth,count,mode) for depth in range(4) for count in (0,1,8,32,256,4096) for mode in (0,1)))]
+        out=Path(a.out or 'E:/ddda-re/notes/native-L130/recording.json'); out.parent.mkdir(parents=True,exist_ok=True)
+        out.write_text(json.dumps(dict(source='DDDA.exe 2017-12-13 Steam',
+                       exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),cases=cases),separators=(',',':')))
+        print(f'{len(cases)} recording cases, {sum(len(c["events"]) for c in cases)} boundaries -> {out}')
+        return
     if a.durations:
         oracle=DurationOracle()
         rng=random.Random(130)

@@ -107,7 +107,7 @@ impl Drop for Warmup {
 }
 
 impl Warmup {
-    pub fn start(device: wgpu::Device, adapter: wgpu::AdapterInfo, layout0: wgpu::BindGroupLayout,
+    pub fn start(device: wgpu::Device, adapter: wgpu::AdapterInfo, layout0: wgpu::BindGroupLayout, ps_compute: bool,
                  cache: Arc<crate::pipelines::Persistent>, dir: PathBuf, exe: PathBuf) -> Option<Self> {
         let driver = wgpu::util::pipeline_cache_key(&adapter)?;
         let (sender, records) = mpsc::channel();
@@ -117,7 +117,7 @@ impl Warmup {
         let finished = Arc::new(AtomicBool::new(false));
         let done = finished.clone();
         std::thread::Builder::new().name("pipeline-warmup".into()).spawn(move || {
-            if let Err(e) = worker(device, layout0, cache, &dir, &exe, &driver, records, completed, cancelled, done.clone()) {
+            if let Err(e) = worker(device, layout0, ps_compute, cache, &dir, &exe, &driver, records, completed, cancelled, done.clone()) {
                 eprintln!("pipeline warmup disabled: {e}");
             }
             done.store(true, Ordering::Release);
@@ -225,7 +225,7 @@ impl Store {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn worker(device: wgpu::Device, layout0: wgpu::BindGroupLayout, cache: Arc<crate::pipelines::Persistent>,
+fn worker(device: wgpu::Device, layout0: wgpu::BindGroupLayout, ps_compute: bool, cache: Arc<crate::pipelines::Persistent>,
           dir: &Path, exe: &Path, driver: &str, records: mpsc::Receiver<Record>, ready: mpsc::Sender<Ready>, stop: Arc<AtomicBool>, done: Arc<AtomicBool>) -> Result<(), String> {
     let driver = format!("{driver}-{:?}-{:?}", device.features(), device.limits());
     let identity = identity(exe, &driver).map_err(|e| e.to_string())?;
@@ -255,8 +255,8 @@ fn worker(device: wgpu::Device, layout0: wgpu::BindGroupLayout, cache: Arc<crate
                 let _ = ready.send(Ready::Module(hash, module.clone()));
                 modules.insert(hash, module);
             }
-            let ps = texture_layout(&device, false, &recipe.ps_kinds);
-            let vs = texture_layout(&device, true, &recipe.vs_kinds);
+            let ps = texture_layout(&device, false, &recipe.ps_kinds, ps_compute);
+            let vs = texture_layout(&device, true, &recipe.vs_kinds, ps_compute);
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("warmup"), bind_group_layouts: &[Some(&layout0), Some(&ps), Some(&vs)], immediate_size: 0,
             });
@@ -283,8 +283,16 @@ fn worker(device: wgpu::Device, layout0: wgpu::BindGroupLayout, cache: Arc<crate
     Ok(())
 }
 
-pub(crate) fn texture_layout(device: &wgpu::Device, vs: bool, kinds: &[(u32, u8)]) -> wgpu::BindGroupLayout {
-    let visibility = if vs { wgpu::ShaderStages::VERTEX } else { wgpu::ShaderStages::FRAGMENT };
+/// A stage's texture and sampler layout; `ps_compute`: the pixel stage's
+/// is also visible to compute (DDGPU_NATIVE_SIM's quad dispatches, L113).
+pub(crate) fn texture_layout(device: &wgpu::Device, vs: bool, kinds: &[(u32, u8)], ps_compute: bool) -> wgpu::BindGroupLayout {
+    let visibility = if vs {
+        wgpu::ShaderStages::VERTEX
+    } else if ps_compute {
+        wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE
+    } else {
+        wgpu::ShaderStages::FRAGMENT
+    };
     let mut entries = Vec::new();
     for &(n, kind) in kinds {
         let view_dimension = match kind { 0 => wgpu::TextureViewDimension::D2, 1 => wgpu::TextureViewDimension::Cube, _ => wgpu::TextureViewDimension::D3 };
