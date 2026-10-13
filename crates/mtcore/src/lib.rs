@@ -38,6 +38,7 @@ pub mod semantic_s4_model;
 pub mod semantic_s4_player;
 pub mod semantic_instancing;
 pub mod semantic_draw;
+pub mod semantic_s9;
 pub mod semantic_draw_c;
 pub mod semantic_draw_b;
 pub mod semantic_draw_a;
