@@ -87,10 +87,36 @@ impl<'a> View<'a> {
         std::array::from_fn(|k| self.u32(addr.wrapping_add(4 * k as u32)))
     }
 
-    /// `count` consecutive words at `addr`, appended to `out`.
+    /// `count` consecutive words at `addr`, appended to `out`: page by
+    /// page, one table lookup per page and an Acquire load per aligned word
+    /// (the same access as `u32`); anything else word by word.
     pub fn extend_words(&self, addr: u32, count: u32, out: &mut Vec<u32>) {
         out.reserve(count as usize);
-        out.extend((0..count).map(|k| self.u32(addr.wrapping_add(4 * k))));
+        let mut k = 0u32;
+        while k < count {
+            let a = addr.wrapping_add(4 * k);
+            let off = (a % PAGE) as usize;
+            // the words of this run that lie wholly in the page
+            let run = ((PAGE as usize - off) / 4).min((count - k) as usize) as u32;
+            match self.table {
+                Some(t) if a % 4 == 0 && run > 0 && t.perm((a / PAGE) as usize) & READ != 0 => {
+                    let page = t.page((a / PAGE) as usize);
+                    if page.is_null() {
+                        out.extend(std::iter::repeat_n(0, run as usize)); // lazy: zero until written
+                    } else {
+                        // SAFETY: `run` aligned words inside a backed page
+                        out.extend((0..run as usize).map(|j| unsafe {
+                            u32::from_le((*(page.add(off + 4 * j) as *const std::sync::atomic::AtomicU32)).load(std::sync::atomic::Ordering::Acquire))
+                        }));
+                    }
+                    k += run;
+                }
+                _ => {
+                    out.push(self.u32(a));
+                    k += 1;
+                }
+            }
+        }
     }
 
     /// `out.len()` bytes at `addr` (Mem::read_bytes: page by page, each
@@ -131,9 +157,11 @@ mod tests {
             assert_eq!(g.u32(a), m.u32(a), "{a:#x}");
         }
         assert_eq!(g.words::<3>(0x10FFC), [m.u32(0x10FFC), m.u32(0x11000), m.u32(0x11004)]);
-        let mut v = Vec::new();
-        g.extend_words(0x10FF8, 4, &mut v);
-        assert_eq!(v, (0..4).map(|k| m.u32(0x10FF8 + 4 * k)).collect::<Vec<_>>());
+        for (a, n) in [(0x10FF8u32, 4u32), (0x10FFA, 3), (0x10000, 0x800), (0x11FF0, 8), (0x12000, 5)] {
+            let mut v = vec![7];
+            g.extend_words(a, n, &mut v);
+            assert_eq!(v[1..], (0..n).map(|k| m.u32(a + 4 * k)).collect::<Vec<_>>(), "{a:#x}+{n}");
+        }
         let unmapped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| g.u32(0x20000)));
         assert!(unmapped.is_err(), "an unmapped read faults");
     }
