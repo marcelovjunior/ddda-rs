@@ -1689,7 +1689,32 @@ fn compare_replays(
     //   and leaves its caches at the last unit's values. Both are the
     //   original's own post-states for this input; the byte is accepted only
     //   where the parallel run kept the input value.
+    // - the root entry array's record pointers (+4 of each 8-byte entry):
+    //   the records sit at different arena addresses; the stream comparison
+    //   above followed them and found them equal;
+    // - fresh command arena bytes (at or above the input cursor): new
+    //   allocations, reached only through the compared stream (bytes below
+    //   the input cursor stay exact);
+    // - the renderer's arena cursor (+0x33DC8) when both runs advanced it and
+    //   the parallel one stays within capacity (lanes refill whole pages).
     let mut root_untouched = 0usize;
+    let mut relocated = [0usize; 3];
+    let final_word = |run: &ReplayResult, address: u32| -> u32 {
+        u32::from_le_bytes(std::array::from_fn(|i| {
+            let at = address + i as u32;
+            run.2.get(&at).copied().unwrap_or_else(|| input.u8(at))
+        }))
+    };
+    let render = input.u32(0x018d08f4);
+    let arena_base = input.u32(render + 0x33dc0 + input.u32(render + 0x33db8) * 4);
+    let (cursor_in, capacity) = (input.u32(render + 0x33dc8), input.u32(render + 0x33dcc));
+    let fresh_arena = arena_base.wrapping_add(cursor_in)..arena_base.wrapping_add(capacity);
+    let cursor_word = render + 0x33dc8;
+    let cursors = (final_word(&results[0], cursor_word), final_word(&results[1], cursor_word));
+    let cursor_ok = cursors.0 >= cursor_in && cursors.1 >= cursor_in && cursors.1 <= capacity;
+    let entries = |run: &ReplayResult| (final_word(run, context + 0x44), final_word(run, context + 0x48));
+    let (entry_base, entry_count) = entries(&results[1]);
+    let entries_same = entries(&results[0]) == (entry_base, entry_count);
     for address in results[0].2.keys().chain(results[1].2.keys()) {
         // Only newly allocated private sort storage is discarded. FED3B0's
         // consumed roots/children must already be outside it (PublishedView),
@@ -1712,6 +1737,19 @@ fn compare_replays(
                 root_untouched += 1;
                 continue;
             }
+            let offset = address.wrapping_sub(entry_base);
+            if entries_same && offset < entry_count.wrapping_mul(8) && offset % 8 >= 4 {
+                relocated[0] += 1;
+                continue;
+            }
+            if fresh_arena.contains(address) {
+                relocated[1] += 1;
+                continue;
+            }
+            if cursor_ok && address.wrapping_sub(cursor_word) < 4 {
+                relocated[2] += 1;
+                continue;
+            }
             return Err(format!(
                 "streams matched {} entries; serial/parallel memory mismatch at {address:#x}: serial={a:#04x} parallel={b:#04x} input={:#04x} (root context bytes the parallel branch left untouched: {root_untouched})",
                 observed.entries.len(),
@@ -1719,7 +1757,10 @@ fn compare_replays(
             ));
         }
     }
-    eprintln!("parallel-shadow root context bytes the parallel branch left untouched={root_untouched}");
+    eprintln!(
+        "parallel-shadow final memory accepted: root context left untouched {root_untouched}, relocated record pointers {}, fresh arena {}, arena cursor {} (cursor {:#x} serial / {:#x} parallel, capacity {capacity:#x})",
+        relocated[0], relocated[1], relocated[2], cursors.0, cursors.1
+    );
     if abi(&results[0].0) != abi(&results[1].0) {
         return Err("serial/parallel ABI mismatch".into());
     }
