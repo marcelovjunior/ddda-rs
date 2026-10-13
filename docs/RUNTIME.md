@@ -739,3 +739,24 @@ initializer side effects and exits, dynamic frame/worker frontier, guest
 exception/control-state requirements, complete renderer/audio contracts,
 and the player-ownership adaptation. No runtime behavior is claimed tested
 or compared against the running original by this design task.
+
+
+### L81 source audio feed workspace
+
+`audio.rs` caches each voice's decoder format and reuses byte, float and
+ADPCM block scratch across sequential source consumption segments. The
+read stays at consumption time, before buffer-end callbacks; samples and
+callback order are unchanged. Warmed feed removes two PCM / four ADPCM
+temporary allocations; graph rendering still allocates. The full light
+runtime suite (134), five ddaudio unit tests and nine explicit host XAudio2
+oracles initially pass, including a new bit-exact comparison of old/new
+mixed output on synthetic streamed input. Final loaded-machine reruns hit
+two existing thread-lock timing assertions; audio comparison still passes.
+Optimized feed microbenchmarks improve
+1.05-1.21x; no game/FPS comparison was performed.
+
+The supplied gameplay profiles identify the actual mixer worker as guest
+`0x103c`. The render thread's generic `Vec<u8>::extend_from_slice` name
+alone is not an audio caller trace; that attribution remains unresolved.
+See [L81 results](tasks/L81-audio-render-thread.md) for evidence, repeat
+measurements and the requested head-run follow-up.

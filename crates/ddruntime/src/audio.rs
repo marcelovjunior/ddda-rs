@@ -143,6 +143,7 @@ struct Voice {
     engine: u32,
     kind: u32,
     format: Format,
+    decode_format: ddaudio::Format,
     flags: u32,
     stage: u32,
     callback: u32,
@@ -181,6 +182,7 @@ pub(crate) struct Audio {
     effects: BTreeMap<u32, u32>,
     output: Option<SyncSender<AudioBlock>>,
     mixer: ddaudio::Mixer,
+    source_scratch: SourceScratch,
     /// The guest thread mixing a pass (L65): the mixer is out of this state
     /// meanwhile, and in parallel mode the pass runs without the guest lock.
     rendering: Option<u32>,
@@ -729,7 +731,8 @@ fn process(m: &mut dyn Mem, c: &mut Cpu, engine: u32) {
                 let n = samples.min(boundary.saturating_sub(b.cursor));
                 // Decode what the clock consumes now: once a buffer-end
                 // callback runs, the guest may reuse the memory.
-                feed(&mut s.mixer, &*m, id, &v.format, b.data, b.cursor, n);
+                s.source_scratch
+                    .feed(&mut s.mixer, &*m, id, &v.decode_format, b.data, b.cursor, n);
                 b.cursor += n;
                 v.played += n;
                 samples -= n;
@@ -780,19 +783,47 @@ fn process(m: &mut dyn Mem, c: &mut Cpu, engine: u32) {
 
 /// Decodes frames `first .. first + n` of a source buffer at guest `data`
 /// into the voice's mixer input.
-fn feed(mixer: &mut ddaudio::Mixer, m: &dyn Mem, voice: u32, f: &Format, data: u32, first: u64, n: u64) {
-    if n == 0 {
-        return;
+#[derive(Default)]
+struct SourceScratch {
+    bytes: Vec<u8>,
+    frames: Vec<f32>,
+    adpcm: Vec<i16>,
+}
+
+impl SourceScratch {
+    // Shared by the audio state's sequential feed calls, never held across a
+    // guest callback. Memory is still read at consumption time, before the
+    // buffer-end callback may recycle it. Keep the single bulk read.
+    #[allow(clippy::too_many_arguments)]
+    fn feed(
+        &mut self,
+        mixer: &mut ddaudio::Mixer,
+        m: &dyn Mem,
+        voice: u32,
+        format: &ddaudio::Format,
+        data: u32,
+        first: u64,
+        n: u64,
+    ) {
+        if n == 0 {
+            return;
+        }
+        let spb = format.samples_per_block as u64;
+        let (block0, block1) = (first / spb, (first + n).div_ceil(spb));
+        let base = data.wrapping_add((block0 * format.block_align as u64) as u32);
+        self.bytes
+            .resize(((block1 - block0) * format.block_align as u64) as usize, 0);
+        m.read_bytes(base, &mut self.bytes);
+        self.frames.clear();
+        format.decode_with_scratch(
+            &self.bytes,
+            first - block0 * spb,
+            n,
+            &mut self.frames,
+            &mut self.adpcm,
+        );
+        mixer.feed(voice, format.channels, &self.frames);
     }
-    let format = f.dsp();
-    let spb = format.samples_per_block as u64;
-    let (block0, block1) = (first / spb, (first + n).div_ceil(spb));
-    let base = data.wrapping_add((block0 * f.align as u64) as u32);
-    let mut bytes = vec![0u8; ((block1 - block0) * f.align as u64) as usize];
-    m.read_bytes(base, &mut bytes);
-    let mut frames = Vec::new();
-    format.decode(&bytes, first - block0 * spb, n, &mut frames);
-    mixer.feed(voice, f.channels, &frames);
 }
 
 /// One voice of the graph as the mixer sees it, owned so that no runtime
@@ -1476,6 +1507,7 @@ fn create_voice(m: &mut dyn Mem, c: &mut Cpu, engine: u32, slot: u32) -> u32 {
             Voice {
                 engine,
                 kind,
+                decode_format: format.dsp(),
                 format,
                 flags,
                 stage,
@@ -1923,6 +1955,7 @@ fn voice<const SLOT: u32>(m: &mut dyn Mem, c: &mut Cpu) {
                     INVALID
                 } else {
                     v.format.rate = rate;
+                    v.decode_format.rate = rate;
                     0
                 }
             })
@@ -1930,4 +1963,192 @@ fn voice<const SLOT: u32>(m: &mut dyn Mem, c: &mut Cpu) {
         _ => unreachable!(),
     };
     ret(m, c, cleanup);
+}
+
+#[cfg(test)]
+mod feed_tests {
+    use super::*;
+    use crate::memory::{GuestMemory, READ, WRITE};
+    use ddaudio::{Kind, NoGuestEffects, Node, Send};
+
+    // The pre-L81 feed path, including fresh format/coefficient and buffer
+    // allocations. Synthetic signal: no game bytes or recordings embedded.
+    fn legacy_feed(mixer: &mut ddaudio::Mixer, m: &dyn Mem, f: &Format, first: u64, n: u64) {
+        if n == 0 {
+            return;
+        }
+        let format = f.dsp();
+        let spb = format.samples_per_block as u64;
+        let (b0, b1) = (first / spb, (first + n).div_ceil(spb));
+        let mut bytes = vec![0; ((b1 - b0) * f.align as u64) as usize];
+        m.read_bytes(0x10000 + (b0 * f.align as u64) as u32, &mut bytes);
+        let mut frames = Vec::new();
+        format.decode(&bytes, first - b0 * spb, n, &mut frames);
+        mixer.feed(1, f.channels, &frames);
+    }
+
+    fn fixture(channels: u32, adpcm: bool) -> (GuestMemory, Format) {
+        let f = Format {
+            tag: if adpcm { 2 } else { 1 },
+            channels,
+            rate: 48000,
+            align: if adpcm { 70 } else { 2 * channels },
+            bits: if adpcm { 4 } else { 16 },
+            samples_per_block: if adpcm { 128 } else { 1 },
+            coefs: if adpcm {
+                vec![(256, 0), (512, -256)]
+            } else {
+                vec![]
+            },
+        };
+        let mut m = GuestMemory::new();
+        m.map(0x10000, 0x10000, READ | WRITE).unwrap();
+        let mut bytes: Vec<u8> = (0..16384).map(|i| ((i * 73 + i / 17) & 255) as u8).collect();
+        if adpcm {
+            for b in bytes.chunks_exact_mut(70) {
+                b[0] &= 1;
+                b[1..3].copy_from_slice(&16i16.to_le_bytes());
+            }
+        }
+        for (i, byte) in bytes.into_iter().enumerate() { m.set_u8(0x10000 + i as u32, byte); }
+        (m, f)
+    }
+
+    fn graph(channels: u32) -> Vec<Node<'static>> {
+        vec![
+            Node {
+                id: 1,
+                kind: Kind::Source,
+                channels,
+                rate: 48000,
+                stage: 0,
+                running: true,
+                ratio: 1.0,
+                volume: 0.75,
+                channel_volumes: &[],
+                effects: vec![],
+                sends: vec![Send {
+                    dest: 2,
+                    matrix: None,
+                }],
+            },
+            Node {
+                id: 2,
+                kind: Kind::Mastering,
+                channels: 2,
+                rate: 48000,
+                stage: 0,
+                running: true,
+                ratio: 1.0,
+                volume: 1.0,
+                channel_volumes: &[],
+                effects: vec![],
+                sends: vec![],
+            },
+        ]
+    }
+
+    #[test]
+    fn reused_feed_matches_legacy_mixed_output() {
+        let mut scratch = SourceScratch::default();
+        for (ch, adpcm) in [(1, false), (2, false), (6, false), (1, true)] {
+            let (mut m, f) = fixture(ch, adpcm);
+            let format = f.dsp();
+            let (mut old, mut new) = (ddaudio::Mixer::new(), ddaudio::Mixer::new());
+            let mut nodes = graph(ch);
+            for pass in 0..24 {
+                // Uneven callback boundaries, loop-style backward seeks,
+                // an underrun and reused guest bytes, like streamed buffers.
+                let first = (pass * 37 % 500) as u64;
+                if pass == 12 {
+                    m.set_u8(0x10000 + 81, 93);
+                }
+                for (offset, n) in [(0, 127), (127, 1), (128, 352)] {
+                    let n = if pass == 7 { 0 } else { n };
+                    legacy_feed(&mut old, &m, &f, first + offset, n);
+                    scratch.feed(&mut new, &m, 1, &format, 0x10000, first + offset, n);
+                }
+                nodes[0].volume = if pass < 8 { 0.75 } else { 0.25 };
+                let a = old.render(&nodes, &mut NoGuestEffects).unwrap();
+                let b = new.render(&nodes, &mut NoGuestEffects).unwrap();
+                assert_eq!(
+                    a.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                    b.iter().map(|x| x.to_bits()).collect::<Vec<_>>()
+                );
+            }
+            let pointers = (
+                scratch.bytes.as_ptr(),
+                scratch.frames.as_ptr(),
+                scratch.adpcm.as_ptr(),
+            );
+            for _ in 0..10 {
+                scratch.feed(&mut new, &m, 1, &format, 0x10000, 0, 128);
+                new.render(&nodes, &mut NoGuestEffects);
+                assert_eq!(
+                    pointers,
+                    (
+                        scratch.bytes.as_ptr(),
+                        scratch.frames.as_ptr(),
+                        scratch.adpcm.as_ptr()
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual CPU microbenchmark; no game or GPU"]
+    fn benchmark_source_feed() {
+        use std::hint::black_box;
+        for (ch, adpcm) in [(1, false), (2, false), (6, false), (1, true)] {
+            let (m, f) = fixture(ch, adpcm);
+            let format = f.dsp();
+            let nodes = graph(ch);
+            let (mut old, mut new) = (ddaudio::Mixer::new(), ddaudio::Mixer::new());
+            let mut scratch = SourceScratch::default();
+            let (mut before, mut after) = (Vec::with_capacity(5000), Vec::with_capacity(5000));
+            for i in 0..5100 {
+                let first = (i % 128) as u64;
+                // Alternate ordering to limit shared-machine timing bias.
+                for optimized in if i % 2 == 0 { [false, true] } else { [true, false] } {
+                    let begin = Instant::now();
+                    if optimized {
+                        scratch.feed(
+                            &mut new,
+                            black_box(&m),
+                            1,
+                            black_box(&format),
+                            0x10000,
+                            first,
+                            480,
+                        );
+                    } else {
+                        legacy_feed(&mut old, black_box(&m), black_box(&f), first, 480);
+                    }
+                    let elapsed = begin.elapsed();
+                    if i >= 100 {
+                        if optimized {
+                            after.push(elapsed);
+                        } else {
+                            before.push(elapsed);
+                        }
+                    }
+                    // Drain outside the timed region; benchmark consumption,
+                    // not an ever-growing queue or the unchanged mixer.
+                    black_box(
+                        if optimized { &mut new } else { &mut old }.render(&nodes, &mut NoGuestEffects),
+                    );
+                }
+            }
+            before.sort_unstable();
+            after.sort_unstable();
+            let (before, after) = (before[2500], after[2500]);
+            eprintln!(
+                "feed channels={ch} adpcm={adpcm}: median before={:.1} ns after={:.1} ns speedup={:.2}x",
+                before.as_nanos() as f64,
+                after.as_nanos() as f64,
+                before.as_secs_f64() / after.as_secs_f64()
+            );
+        }
+    }
 }
