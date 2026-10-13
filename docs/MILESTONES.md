@@ -1,5 +1,22 @@
 # Milestones
 
+### L179 head: frame bound analysis, all draws native, semantic ports (2026-10-13)
+
+- Train 5 (combo38) 28.5 fps heavy scene, train 6 (combo39) **31.8** (rewrites off 25.1).
+  `DDDRAW_NATIVE_TARGETS=all` (now standard): verify 0 mismatches over ~5.4M draws in train 5;
+  train 6 takes all 5,364 draws/frame natively (refused 0), 1 float-register mismatch in
+  1.74M under investigation (claude-2); 13-34 D3D9-path calls/frame left (clears, StretchRect,
+  11 refused type-0 draws: claude-9).
+- mimalloc as ddplay's allocator (default feature); parallel-mode `write_bulk` stores 8 bytes
+  at a time; `DDRUNTIME_SEMANTIC_ONLY`/`_SKIP` select rewrites per address.
+- Semantic ports (DDRUNTIME_SEMANTIC=1): 0x00CD8760 find_identifier (devirtualized entry
+  walk, 4,000 randomized cases vs the port), 0x00DD42C0 dispatch_event (1,500 Unicorn-recorded
+  cases, research/native/record_dispatch.py), 0x005B31A0 find_sorted (2,000 cases,
+  research/native/record_find_sorted.py).
+- Frame (train 6 sync): main runs jobs ~13 ms and waits ~10.5 ms/frame at job joins (long
+  single jobs: the shadow job, L172); the render worker waits ~11 ms/frame for main; GPU ~37%.
+- Next: L172 parallel shadow (capture accepted; parallel replay needs CreateEventA), train 7.
+
 ### L177 semantic state commit and model mesh (2026-10-13)
 
 - Opt-in FEE320/FFC350/01145BF0 native semantic ports: **1,664 original
