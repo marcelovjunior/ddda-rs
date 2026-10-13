@@ -1154,3 +1154,17 @@ targets, and ordinary/step-enabled binding replacement. The 12-log audit found
 15 first-seen entries per run, including the six already-ported L130 readers;
 activation in a game run remains for head to verify. See
 `tasks/L136-ports-dispatch.md` for counts and their phase/frequency limits.
+
+### L143 backend worker storage
+
+The deferred FIFO stores common commands directly in preallocated channel
+slots. Arbitrary presentation/result hooks retain their existing callbacks;
+queue bounds, result fences, command marks and panic propagation are unchanged.
+The wgpu backend bulk-packs register ranges, reuses draw scratch lists, tracks
+resource use with sparse generation-stamped bits, and retains collision-safe
+derived-state memo entries (bounded to 8192). Pipeline keys cache their hash
+without changing full equality or persisted recipes. Cache misses, payload
+ownership and wgpu/driver work can still allocate. Tests, synthetic release
+measurements and the unresolved `_NLG_Return2` attribution are recorded in
+[L143 results](tasks/L143-backend-thread.md); gameplay image/FPS validation
+remains with head.
