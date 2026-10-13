@@ -1198,7 +1198,7 @@ loaded machine, best of rounds):
 | DrawIndexedPrimitive, clean | ~675-860 ns | ~425-475 ns |
 | SetVSConstantF(16) | 546 ns | ~190-290 ns |
 | SetTexture | 200 ns | ~150-250 ns |
-| allocations per iteration (clean / 4 KB dirty buffer) | 4 / 5 | 1 / 3 |
+| allocations per iteration (clean / 4 KB dirty buffer) | 2 / 5 | 1 / 3 |
 | 2 MB buffer locked, written, uploaded | ~620-860 us | ~250-290 us |
 
 Implemented and tested: ddruntime lib tests (View against the Mem,
