@@ -1,5 +1,21 @@
 # Milestones
 
+### L169 exact shadow traversal and setup (2026-10-13)
+
+- Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
+  `DDRUNTIME_SHADOW_PASS=1` (EFD240) preserve the original queue/serial
+  choice, callback order, guest state and x87 operations. Defaults off.
+- **420 original returns**, all **63 lifted basic blocks**, **15,660 paired
+  fault/access cases**, production GuestMemory serial/atomic replay pass.
+  Eight isolated tests pass; mtcore/ddports **20 pass / nine ignored**;
+  runtime light **255 pass / zero failures / seven ignored**.
+- Synthetic paired median gains: traversal **1.22–1.89x**, setup
+  **1.07–1.28x**. No gameplay/FPS claim. Shared nesting guard, lane-ordered
+  merge and callback mutations block a simple parallel traversal toggle.
+- Next: head combined native gate and independent same-route port A/B;
+  retain opt-ins until image/job-time acceptance. Evidence and divisibility
+  limits: `docs/tasks/L169-shadow.md`.
+
 ### L162c job distribution and host scheduling (2026-10-13)
 
 - c31 h0 150-frame census: main 65,186 callbacks, six workers
