@@ -33,6 +33,8 @@ pub mod machine;
 pub mod semantic;
 pub mod semantic_jobs;
 pub mod semantic_s4;
+pub mod semantic_s4_model;
+pub mod semantic_s4_player;
 pub mod semantic_instancing;
 pub mod semantic_draw;
 pub mod semantic_draw_c;

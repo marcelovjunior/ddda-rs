@@ -42,6 +42,16 @@ fn stack_args(target: u32) -> u32 {
         // 0x00E70710's callees: 0x00E6E230(ticks) and the vtable +0x64 hook
         // (0x30000164 in the vectors) take one argument, the rest none
         0x00e6_e230 | 0x3000_0164 => 1,
+        // 0x00B66B30's callees: 0x00B66320(state), 0x00B71B90(flag), 0x01054860(1),
+        // 0x00421ED0(index), 0x00E4B700(vector), 0x0081F8F0(object), the vtable
+        // +0x210/+0x70 hooks and the input getter (0x3000103c) take one argument
+        0x00b6_6320 | 0x00b7_1b90 | 0x0105_4860 | 0x0042_1ed0 | 0x00e4_b700 | 0x0081_f8f0 => 1,
+        0x3000_0210 | 0x3000_0070 | 0x3000_103c => 1,
+        0x007b_0580 => 3,
+        0x0081_fd10 | 0x0083_7980 => 2,
+        // 0x01054860's callees: 0x01054700(indices, count, flags), 0x00FFA620(0)
+        0x0105_4700 => 3,
+        0x00ff_a620 => 1,
         _ => 0,
     }
 }
@@ -102,7 +112,34 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             };
             let target_recorded = if paired { n(&trace[k]["target"]) } else { n(&trace[k]["target"]) };
             assert_eq!(target, target_recorded, "case {i}: call target");
-            assert_eq!(c.ecx, regs(call)[1], "case {i}: call ECX");
+            // callees that take their object in another register leave ECX undefined
+            let ecx_unused = matches!(
+                target,
+                0x0078_a730 | 0x0085_0440 | 0x0085_08c0 | 0x0081_f2d0 | 0x00b7_1b90 | 0x00b7_2360 | 0x007b_0580 | 0x0081_fd10
+                    | 0x0078_b4c0 | 0x0081_fc60 | 0x00b6_61f0 | 0x00b6_7930 | 0x00b7_2d30 | 0x00b6_6320 | 0x0081_f8f0 | 0x0083_7980
+            );
+            if !ecx_unused {
+                assert_eq!(c.ecx, regs(call)[1], "case {i}: call {target:x} ECX");
+            }
+            // the other registers the callee takes as inputs (0x00B66B30's callees)
+            let inputs: &[(usize, &str)] = match target {
+                0x0078_a730 | 0x0085_0440 | 0x0085_08c0 | 0x0081_f2d0 | 0x00b7_1b90 | 0x00b7_2360 => &[(6, "ESI")],
+                0x007b_0580 => &[(6, "ESI"), (7, "EDI")],
+                0x0081_fd10 => &[(7, "EDI")],
+                0x0078_b4c0 | 0x0081_fc60 | 0x00b6_61f0 | 0x00b6_7930 | 0x00b7_2d30 => &[(0, "EAX")],
+                0x00b6_6320 => &[(2, "EDX")],
+                _ => &[],
+            };
+            // vectors the callee reads through a pointer (0x00E4B700, 0x007B0580)
+            if let Some(data) = call.get("data") {
+                for (a, b) in pairs(data) {
+                    assert_eq!(m.u8(a), b, "case {i}: call {target:x} vector byte {a:x}");
+                }
+            }
+            for &(index, name) in inputs {
+                let got = [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi][index];
+                assert_eq!(got, regs(call)[index], "case {i}: call {target:x} {name}");
+            }
             assert_eq!(c.esp, regs(call)[4], "case {i}: call ESP");
             // What the callee reads: its return address, its three
             // arguments and the buffer the first two describe. The rest of
@@ -131,6 +168,10 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             }
             c.eax = regs(back)[0];
             c.esp = regs(back)[4];
+            // a float returned in ST0 (the input getter)
+            if let Some(bits) = trace[k].get("st0") {
+                c.st.push(n(bits));
+            }
             *position.borrow_mut() += if paired { 2 } else { 1 };
         })));
         body(&mut m, &mut c);
@@ -164,4 +205,43 @@ fn semantic_actor_update_matches_original() {
     let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L184/actor_update.json", mtcore::semantic_s4::actor_update, false);
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "only {n} cases");
     eprintln!("{n} ABI-level actor_update cases passed");
+}
+
+// verifies 0x00b66b30 (ABI level; void)
+#[test]
+fn semantic_player_post_update_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L184/player_post_update.json", mtcore::semantic_s4_player::player_post_update, false);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "only {n} cases");
+    eprintln!("{n} ABI-level player_post_update cases passed");
+}
+
+// verifies 0x01054860 (ABI level; void)
+#[test]
+fn semantic_model_refresh_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L184/model_refresh.json", mtcore::semantic_s4_model::model_refresh, false);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "only {n} cases");
+    eprintln!("{n} ABI-level model_refresh cases passed");
+}
+
+// The ports copy floats the way the original's `FLD m32; FSTP m32` pairs do:
+// a signalling NaN comes back quiet, everything else bit for bit (Unicorn,
+// which recorded the vectors, does not quiet it, so the vectors hold only
+// quiet NaNs). Checked here against the host's own x87.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn x87_float_copy_quiets_signalling_nans_only() {
+    let through_x87 = |bits: u32| -> u32 {
+        let mut out = 0u32;
+        // SAFETY: loads and stores one f32 through the x87 stack, leaving it balanced.
+        unsafe {
+            std::arch::asm!("fld dword ptr [{src}]", "fstp dword ptr [{dst}]", src = in(reg) &bits, dst = in(reg) &mut out);
+        }
+        out
+    };
+    for bits in [0x7f80_0001u32, 0xff80_0001, 0x7fa0_0000, 0x7fc0_0000, 0x7f80_0000, 0x0000_0001, 0x8000_0000, 0x3f80_0000, 0xffff_ffff] {
+        let expected = if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 { bits | 0x0040_0000 } else { bits };
+        assert_eq!(through_x87(bits), expected, "{bits:08x}");
+    }
 }
