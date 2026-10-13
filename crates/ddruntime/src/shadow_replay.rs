@@ -1417,6 +1417,23 @@ fn compare_replays(
         })
     };
     let mut poison_allowed = 0usize;
+    // A pointer to the recording context that ran the unit: the root context
+    // in the serial run, a lane context (in the private manager copy, the
+    // parallel run's first private range, +0xD40 + lane * LANE_BYTES) at the
+    // same offset in the parallel run: the same object, relocated.
+    let lane_contexts: Vec<u32> = results
+        .get(1)
+        .and_then(|r| r.4.first())
+        .map(|manager| (0..2).map(|lane| manager.start + 0xd40 + lane * LANE_BYTES).collect())
+        .unwrap_or_default();
+    let relocated_context = |a: &mtcore::shadow_lanes::Binding, b: &mtcore::shadow_lanes::Binding, offset: usize| -> bool {
+        let w = offset & !3;
+        let word = |x: &mtcore::shadow_lanes::Binding| x.bytes.get(w..w + 4).map(|v| u32::from_le_bytes(v.try_into().unwrap()));
+        let (Some(ws), Some(wp)) = (word(a), word(b)) else { return false };
+        ws.wrapping_sub(context) < LANE_BYTES
+            && lane_contexts.iter().any(|&lane| wp.wrapping_sub(lane) == ws.wrapping_sub(context))
+    };
+    let mut relocated_allowed = 0usize;
     let mut residue_allowed = |path: &[usize],
                                a: &mtcore::shadow_lanes::Binding,
                                b: &mtcore::shadow_lanes::Binding,
@@ -1424,6 +1441,10 @@ fn compare_replays(
      -> Result<(), String> {
         if residue_dependent(path, a, offset) {
             poison_allowed += 1;
+            return Ok(());
+        }
+        if relocated_context(a, b, offset) {
+            relocated_allowed += 1;
             return Ok(());
         }
         let at = offset as u32;
@@ -1546,7 +1567,10 @@ fn compare_replays(
         verdict.is_ok()
     };
     let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
-    eprintln!("parallel-shadow residue-dependent bytes allowed={poison_allowed} (definedness runs: {})", results.len() > 3);
+    eprintln!(
+        "parallel-shadow residue-dependent bytes allowed={poison_allowed} (definedness runs: {}); relocated context pointer bytes allowed={relocated_allowed}",
+        results.len() > 3
+    );
     if !residue.is_empty() {
         let first = &residue[0];
         eprintln!(
