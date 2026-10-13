@@ -1633,11 +1633,88 @@ mod address_wait {
     }
 }
 
+/// L172 (claude-9): which guest threads are blocked in a wait, and on which
+/// handles, for the parallel shadow window (crate::shadow_replay's publish
+/// mode), and the window's gate: while a window is open, a thread whose
+/// wait concerns one of the window's handles does not return to guest code
+/// until the window closes. Inactive (one relaxed load per wait) unless
+/// publish mode enabled it.
+pub(crate) mod waits {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::{Relaxed, SeqCst}};
+    use std::sync::{Condvar, Mutex};
+
+    pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
+    static BLOCKED: Mutex<Vec<(u32, Box<[u32]>)>> = Mutex::new(Vec::new());
+    /// the window: its owner (0: none) and the handles it guards
+    static OWNER: AtomicU32 = AtomicU32::new(0);
+    static GUARDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static CLOSED: Condvar = Condvar::new();
+
+    /// Registers the current thread as blocked on `handles` until dropped;
+    /// the drop passes the window's gate first.
+    pub(crate) struct Blocked(Option<u32>);
+
+    pub(crate) fn blocked(handles: &[u32]) -> Blocked {
+        if !ENABLED.load(Relaxed) {
+            return Blocked(None);
+        }
+        let tid = super::current_tid();
+        BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).push((tid, handles.into()));
+        Blocked(Some(tid))
+    }
+
+    impl Drop for Blocked {
+        fn drop(&mut self) {
+            let Some(tid) = self.0 else { return };
+            let mut list = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
+            let mine = list.iter().position(|(t, _)| *t == tid).map(|i| list[i].1.clone());
+            // the gate: a guarded wait stays registered until the window closes
+            if let Some(handles) = mine {
+                loop {
+                    let owner = OWNER.load(SeqCst);
+                    if owner == 0 || owner == tid {
+                        break;
+                    }
+                    let guarded = GUARDED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    if !handles.iter().any(|h| guarded.contains(h)) {
+                        break;
+                    }
+                    list = CLOSED.wait(list).unwrap_or_else(|e| e.into_inner());
+                }
+            }
+            if let Some(i) = list.iter().position(|(t, _)| *t == tid) {
+                list.swap_remove(i);
+            }
+        }
+    }
+
+    /// The handles each other thread is blocked on now.
+    pub(crate) fn others() -> Vec<(u32, Box<[u32]>)> {
+        let me = super::current_tid();
+        BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(t, _)| *t != me).cloned().collect()
+    }
+
+    /// Open the window guarding `handles` (false: another window is open).
+    pub(crate) fn open(handles: &[u32]) -> bool {
+        let me = super::current_tid();
+        *GUARDED.lock().unwrap_or_else(|e| e.into_inner()) = handles.to_vec();
+        OWNER.compare_exchange(0, me, SeqCst, SeqCst).is_ok()
+    }
+
+    /// Close the window and let the gated threads continue.
+    pub(crate) fn close() {
+        let _list = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
+        OWNER.store(0, SeqCst);
+        CLOSED.notify_all();
+    }
+}
+
 /// WaitForSingleObject(handle, ms).
 /// Events and semaphores wait without the service lock; mutexes and thread
 /// objects retain the service-locked path.
 pub fn wait_for_single_object(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, ms) = (arg(m, cpu, 0), arg(m, cpu, 1));
+    let _blocked = waits::blocked(&[h]);
     cpu.eax = match event_of(h) {
         Some((o, e)) => wait_event(o, &e, ms),
         None => match semaphore_of(h) {
@@ -1657,6 +1734,7 @@ pub fn wait_for_multiple_objects(m: &mut dyn Mem, cpu: &mut Cpu) {
     } else {
         let mut handles = [0; 64];
         for k in 0..n { handles[k as usize] = m.u32(p + 4 * k); }
+        let _blocked = waits::blocked(&handles[..n as usize]);
         cpu.eax = wait(&handles[..n as usize], all, ms);
     }
     ret(m, cpu, 16);

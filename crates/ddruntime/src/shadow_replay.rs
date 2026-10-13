@@ -36,6 +36,8 @@ static CAPTURE_START: OnceLock<std::time::Instant> = OnceLock::new();
 mod capture_file;
 #[path = "shadow_replay_sequences.rs"]
 mod sequences;
+#[path = "shadow_publish.rs"]
+mod publish;
 thread_local! {
     static IN_SHADOW: Cell<bool> = const { Cell::new(false) };
     static REPLAY: RefCell<Option<Rc<Replay>>> = const { RefCell::new(None) };
@@ -44,7 +46,7 @@ thread_local! {
 }
 
 pub(crate) fn enabled() -> bool {
-    let requested = std::env::var("DDRUNTIME_PARALLEL_SHADOW").as_deref() == Ok("1");
+    let requested = matches!(std::env::var("DDRUNTIME_PARALLEL_SHADOW").as_deref(), Ok("1") | Ok("publish"));
     assert!(
         !requested || cfg!(feature = "parallel-shadow"),
         "DDRUNTIME_PARALLEL_SHADOW requires the ddruntime/parallel-shadow Cargo feature"
@@ -97,6 +99,10 @@ fn shadow(memory: &mut dyn Mem, cpu: &mut Cpu) {
 fn schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
     // Registering this address also routes in-shard calls through the private
     // resolver. Ordinary execution retains the previous exact binding.
+    let private = publish::window_scheduler();
+    if private != 0 && cpu.ecx == private {
+        return publish::dispatch(memory, cpu);
+    }
     ORIGINAL.get().unwrap()[2](memory, cpu);
 }
 
@@ -484,6 +490,15 @@ fn scene_lights_normalized(m: &mut dyn Mem, cpu: &mut Cpu) {
     let body = *current().raw.get(&SCENE_LIGHTS).expect("0x0049B1A0 body");
     body(m, cpu);
 }
+/// The publication test run's DBE560 (DDRUNTIME_PARALLEL_SHADOW_TEST_PUBLISH):
+/// the window's private scheduler goes to publish::dispatch.
+fn replay_publish_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
+    if cpu.ecx == publish::window_scheduler() {
+        publish::dispatch(memory, cpu)
+    } else {
+        private_schedule(memory, cpu)
+    }
+}
 fn resolve(target: u32) -> LiftFn {
     if target == SCENE_LIGHTS && NORMALIZE.load(std::sync::atomic::Ordering::Relaxed) {
         return scene_lights_normalized;
@@ -501,6 +516,7 @@ fn resolve(target: u32) -> LiftFn {
         });
     }
     match target {
+        SCHEDULE if publish::window_scheduler() != 0 => replay_publish_schedule,
         SCHEDULE => private_schedule,
         0x00da7db0 => private_command_capacity,
         crate::fastmem::MEMCPY => crate::fastmem::memcpy,
@@ -806,17 +822,32 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     if index == 0 {
         eprintln!("parallel-shadow first scoped traversal");
     }
-    let first = std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    let count = std::env::var("DDRUNTIME_PARALLEL_SHADOW_COUNT")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(1)
-        .min(8);
-    if index < first || index - first >= count {
-        return original(memory, cpu);
+    let publishing = publish::enabled();
+    if publishing {
+        // S1 publication: a guard proof every Nth traversal, else the window
+        match publish::decide() {
+            publish::Decision::Serial => return original(memory, cpu),
+            publish::Decision::Parallel => {
+                if !publish::run(memory, cpu, original) {
+                    original(memory, cpu);
+                }
+                return;
+            }
+            publish::Decision::Proof => {}
+        }
+    } else {
+        let first = std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let count = std::env::var("DDRUNTIME_PARALLEL_SHADOW_COUNT")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(1)
+            .min(8);
+        if index < first || index - first >= count {
+            return original(memory, cpu);
+        }
     }
     eprintln!("parallel-shadow sample={index} capture begin");
     let incoming = cpu.clone();
@@ -972,6 +1003,9 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         replay_fixture(fixture, RAW.get().unwrap().clone())
     };
     eprintln!("parallel-shadow sample={index} audit={result:?} publish=serial");
+    if publishing {
+        publish::proof_result(&result);
+    }
     x86::ldmxcsr(result_mxcsr);
 }
 
@@ -1321,6 +1355,46 @@ fn compare_replays(
         }
         results.push(result);
     }
+    // the publication path (shadow_publish) on the same input, normalized,
+    // shared memory, units lane by lane: its stream must equal the proof's
+    // normalized parallel stream
+    let publish_test = if std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_TEST_PUBLISH").is_some() {
+        NORMALIZE.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::parallel_shadow::PRIVATE_FILL.store(0, std::sync::atomic::Ordering::Relaxed);
+        let (input, raw, mut cpu, stack) = (input.clone(), raw.clone(), incoming.clone(), stack.clone());
+        let handle = std::thread::Builder::new()
+            .name("shadow-replay-publish".into())
+            .stack_size(64 << 20)
+            .spawn(move || -> Result<mtcore::shadow_lanes::StreamSnapshot, String> {
+                let capacity = input.u32(context + 0x4c).saturating_mul(8).max(1);
+                let (input, scheduler_range) = input.private_arena(0x1c150).map_err(|e| format!("{e:?}"))?;
+                let (input, manager_range) = input.private_arena(0xd40 + 8 * LANE_BYTES).map_err(|e| format!("{e:?}"))?;
+                let (input, secondary_range) = input.private_arena(capacity).map_err(|e| format!("{e:?}"))?;
+                let storage = publish::Storage {
+                    scheduler: scheduler_range.start,
+                    manager: manager_range.start,
+                    secondary: (secondary_range.start, capacity),
+                };
+                let private = vec![scheduler_range, manager_range, secondary_range];
+                let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(Arc::new(input), ACCESS_LIMIT))));
+                with_replay(
+                    Replay { raw, memory: memory.clone(), stack, lane_count: 2, depth: 0, command_counter: None },
+                    |m| {
+                        x86::ldmxcsr(mxcsr);
+                        let result = publish::run_window(m, &mut cpu, resolve(TRAVERSE), &storage);
+                        ddnative_base::x87::park();
+                        x86::ldmxcsr(x86::MXCSR_DEFAULT);
+                        result?;
+                        let published = PublishedView { memory: m, private };
+                        capture_context(&published, context, Limits::default()).map_err(|e| format!("stream: {e:?}"))
+                    },
+                )
+            })
+            .map_err(|e| format!("start publish test: {e}"))?;
+        Some(handle.join().map_err(|_| "publish test panic".to_string())?)
+    } else {
+        None
+    };
     NORMALIZE.store(false, std::sync::atomic::Ordering::Relaxed);
     crate::parallel_shadow::PRIVATE_FILL.store(0, std::sync::atomic::Ordering::Relaxed);
     // the plain serial run only served the live check: compare the normalized
@@ -1648,6 +1722,15 @@ fn compare_replays(
         verdict.is_ok()
     };
     let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
+    if let Some(test) = &publish_test {
+        match test {
+            Ok(stream) => match results[1].1.first_difference(stream) {
+                None => eprintln!("parallel-shadow publish test: stream equals the proof's parallel stream ({} entries)", stream.entries.len()),
+                Some(d) => eprintln!("parallel-shadow publish test: stream differs from the proof's parallel stream: {d:?}"),
+            },
+            Err(e) => eprintln!("parallel-shadow publish test refused: {e}"),
+        }
+    }
     eprintln!(
         "parallel-shadow residue-dependent bytes allowed={poison_allowed} (definedness runs: {}); relocated context pointer bytes allowed={relocated_allowed}",
         poisoned_results.iter().filter(|r| r.is_some()).count()
