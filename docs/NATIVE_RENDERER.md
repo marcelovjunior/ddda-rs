@@ -52,6 +52,32 @@ a pipeline is built once per (shaders, input layout, blend, rasterizer,
 depth-stencil, target formats) and found by pointer afterwards, with no
 per-draw re-derivation.
 
+## A gameplay frame (measured)
+
+Capture `E:/ddda-re/captures/cap1.ddframe` (combo3, frames 7535-7555),
+analysed with `d3d9frame`'s `frame_stats` (L107):
+
+- ~5,350 draws in **~977 render passes** per frame.
+- ~900 of those passes are one-draw passes on tiny `64x8` / `64x16`
+  `A32B32G32R32F` targets, in loops of 38 or 70 iterations (a two-target
+  pass, then single-target ping-pong passes): an iterative GPU
+  simulation, not scene drawing (which system: open, L108/L111).
+- The scene itself: ~3,730 draws in ~15 passes on the `1920x1080`
+  colour target with `D24S8` depth; plus shadow/reflection targets
+  (`128`-`384`), full mip chains down to `1x1` (luminance), and
+  `8x8`/`32x32` half-float targets (tone mapping, bloom).
+- How often each part of a draw's state differs from the previous draw:
+  shaders 38%, declaration 29%, render states 5%, textures/samplers 55%,
+  vertex streams 60%, index buffer 22%, VS/PS constants 34%, targets 18%.
+- Shader constants that actually change per frame: ~250 KB (8,200 VS and
+  7,300 PS float4 registers); the translation uploads ~9 KB per draw
+  (~48 MB per frame).
+
+Consequences for the design: render-pass churn has to go (the
+simulation loop as compute or one batched pass); constants must be
+uploaded as deltas; pipelines must be keyed by state-object identity
+(render states rarely change, shaders and textures often).
+
 ## Plan
 
 1. **Map nDraw** (NR-A): the functions between nDraw objects and the

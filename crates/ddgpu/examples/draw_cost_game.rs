@@ -91,7 +91,7 @@ fn main() {
         let set = (k * 7) % 40 * 2;
         DrawCall {
             primitive: 4, primitives: 1, start: 3 * (k % 64), base_vertex: 0, min_index: 0, vertex_count: 192,
-            vertices: Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]),
+            vertices: Vertices::Streams(vec![(0, 0x300, 0, 24, 1)].into()),
             indices: Indices::Buffer(0x301, 101),
             vertex_shader: Some(vs.clone()),
             pixel_shader: Some(ps.clone()),

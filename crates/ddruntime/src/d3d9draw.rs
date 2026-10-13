@@ -283,16 +283,6 @@ pub(crate) fn target(surface: u32) -> Option<Target> {
     })
 }
 
-fn texture_binding(sampler: u32, resource: u32, states: [u32; 14]) -> Option<TextureBinding> {
-    objects(|o| match o.live.get(&resource).map(|x| &x.kind) {
-        Some(Kind::Texture { data, .. }) => Some(TextureBinding {
-            sampler, resource, kind: data.kind, format: data.format, width: data.width, height: data.height,
-            depth: data.depth, levels: data.levels, usage: data.usage, states,
-        }),
-        _ => None,
-    })
-}
-
 fn shader_tokens(shader: u32) -> Option<std::sync::Arc<[u32]>> {
     if shader == 0 {
         return None;
@@ -322,91 +312,9 @@ pub fn vertex_count(primitive: u32, primitives: u32) -> Option<u32> {
     })
 }
 
-/// The draw's state snapshot, after flushing every dirty resource it reads.
-fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, base_vertex: i32, min_index: u32,
-            vertex_count: u32, vertices: Option<Vertices>, indices: Option<Indices>) -> DrawCall {
-    // what the draw reads, flushed first (flushing changes no device state)
-    let (reads, read_count, rts, ds) = with_device(dev, |d| {
-        let state = &d.state;
-        // SetTexture accepts 16 pixel + displacement + 4 vertex samplers;
-        // state has 16 streams, one index buffer, and 4 render targets.
-        let mut reads = [0; 21 + 16 + 1 + 4];
-        let mut count = 0;
-        for resource in state.textures.values().copied()
-            .chain(state.streams.iter().map(|s| s.0).filter(|&b| b != 0))
-            .chain((state.indices != 0 && indices.is_none()).then_some(state.indices))
-            .chain(d.render_targets.iter().copied().filter(|&s| s != 0)) {
-            reads[count] = resource;
-            count += 1;
-        }
-        (reads, count, d.render_targets, d.depth_stencil)
-    });
-    flush_reads(m, reads[..read_count].iter().copied());
-    // the state the draw carries, read in place (L78: the whole device
-    // state, every map of it, was cloned for each draw)
-    struct Read {
-        textures: Vec<(u32, u32, [u32; 14])>,
-        render_states: d3d9cmd::RenderStateList,
-        vertices: Vertices,
-        indices: u32,
-        shaders: (u32, u32),
-        declaration: u32,
-        fvf: u32,
-        vs: std::sync::Arc<d3d9cmd::Constants>,
-        ps: std::sync::Arc<d3d9cmd::Constants>,
-        viewport: [u32; 6],
-        scissor: [i32; 4],
-    }
-    let r = with_device(dev, |d| {
-        let state = &d.state;
-        let mut textures: Vec<(u32, u32, [u32; 14])> = state.textures.iter().map(|(&smp, &res)| {
-            (smp, res, std::array::from_fn(|t| state.sampler.get(&(smp, t as u32)).copied().unwrap_or(0)))
-        }).collect();
-        textures.sort_unstable_by_key(|t| t.0);
-        Read {
-            textures,
-            // in state order already
-            render_states: state.render.shared(),
-            vertices: vertices.unwrap_or_else(|| Vertices::Streams(
-                state.streams.iter().enumerate().filter(|(_, s)| s.0 != 0)
-                    .map(|(k, s)| (k as u32, s.0, s.1, s.2, state.stream_freq[k])).collect(),
-            )),
-            indices: state.indices,
-            shaders: (state.vertex_shader, state.pixel_shader),
-            declaration: state.declaration,
-            fvf: state.fvf,
-            vs: state.vs.clone(),
-            ps: state.ps.clone(),
-            viewport: state.viewport,
-            scissor: state.scissor,
-        }
-    });
-    let textures: Vec<TextureBinding> = r.textures.iter().filter_map(|&(smp, res, states)| texture_binding(smp, res, states)).collect();
-    let indices = indices.unwrap_or_else(|| if r.indices == 0 {
-        Indices::None
-    } else {
-        let format = objects(|o| match o.live.get(&r.indices).map(|x| &x.kind) {
-            Some(Kind::Buffer { data, .. }) => data.format,
-            _ => 101,
-        });
-        Indices::Buffer(r.indices, format)
-    });
-    DrawCall {
-        primitive, primitives, start, base_vertex, min_index, vertex_count, vertices: r.vertices, indices,
-        vertex_shader: shader_tokens(r.shaders.0),
-        pixel_shader: shader_tokens(r.shaders.1),
-        declaration: declaration(r.declaration),
-        fvf: r.fvf,
-        vs_constants: r.vs,
-        ps_constants: r.ps,
-        textures,
-        render_states: r.render_states,
-        viewport: r.viewport,
-        scissor: r.scissor,
-        targets: std::array::from_fn(|k| target(rts[k])),
-        depth: target(ds),
-    }
-}
+#[path = "d3d9snapshot.rs"]
+pub(crate) mod snapshot_groups;
+use snapshot_groups::snapshot;
 
 fn in_scene(dev: u32) -> bool {
     with_device(dev, |d| d.state.in_scene)
@@ -454,6 +362,8 @@ pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// index buffer) unset.
 fn reset_after_up(dev: u32, indices: bool) {
     let (old_vb, old_ib) = with_device(dev, |d| {
+        d.state.draw_dirty |= snapshot_groups::STREAMS;
+        if indices { d.state.draw_dirty |= snapshot_groups::INDICES; }
         let vb = std::mem::replace(&mut d.state.streams[0], (0, 0, 0)).0;
         let ib = if indices { std::mem::replace(&mut d.state.indices, 0) } else { 0 };
         (vb, ib)
