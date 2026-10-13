@@ -1,5 +1,18 @@
 # Milestones
 
+### L146 combo24 native gate (2026-10-13)
+
+- Frozen production `006dcd96`: **104 passed / zero failed / nine ignored**
+  in the expanded required-vector play gate. Store128 `7eddfd1d` and L130
+  `a2d0407e` / `0ce6de79` are GREEN. Inventory retains five existing gaps.
+- Combined L143/L141 renderer: **38 distinct GPU tests pass / three ignored**;
+  all 150 state and 200 target cases run. A 60-second cache-test timeout
+  passes its isolated retry in 53.12 s. CPU/runtime checks remain pending.
+- All 33 shards rebuilt, artifact wall span **225.51 s**, rlibs **434.81 MiB**.
+  No game/FPS/image acceptance claim. Details: `docs/tasks/L146-gate-c24.md`.
+- Next: finish combined CPU/runtime checks, then separately gate L142 flat
+  memory before promoting the measured x87/flag codegen experiments.
+
 ### L139 combo21 combined native gate (2026-10-13)
 
 - FPS line `335318fc` plus x87 discard `f4bfb866` and L130 FEDB80/FEDC00/
