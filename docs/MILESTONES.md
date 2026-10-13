@@ -1,5 +1,20 @@
 # Milestones
 
+### L153 game-thread synchronization (2026-10-13)
+
+- Opt-in service/site/handle census and scheduler job histograms; fan-out
+  join identified at return 0x00DBE66D. Initialization creates seven workers
+  plus main; actual participation and residual join time await head capture.
+- Opt-in event cache and address waits; shared-table microbench 5.64–7.34x,
+  event ping-pong mixed. No game/FPS gain claimed. Default single-object
+  polls avoid vectors; abandoned mutex and invalid multiwait-count handling
+  corrected. TLS/general waits remain service-lock serialized.
+- Final light: 220 pass / inherited gamma and Present timing failures /
+  6 ignored; focused all-opt-ins sync gate 24 pass, including Present timing.
+  Four parser tests pass. Details: `docs/tasks/L153-sync.md`.
+- Next: head profile-on same-route census, then profile-off matched
+  cache/futex A/B and image acceptance before changing defaults.
+
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)
 

@@ -364,14 +364,20 @@ impl Registry {
             Binding::Integer(f) => self.run_integer(f, m, cpu, target),
             Binding::Device(f, guest) => self.run_service_as(f, m, cpu, target, guest, false, true),
             Binding::DeviceState(f) => self.run_device_state(f, m, cpu, target),
-            Binding::Lifted(f) => f(m, cpu),
+            Binding::Lifted(f) => {
+                let sample = if crate::threads::sync_profile::enabled() {
+                    crate::threads::sync_profile::begin_job(target, m, cpu)
+                } else { None };
+                f(m, cpu);
+                if let Some(sample) = sample { crate::threads::sync_profile::finish_job(sample); }
+            },
         }
     }
 
     fn run_integer(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         // Only the audited x86-64 Windows runtime/allocator/scheduler path
         // supports this contract. Diagnostics format floats and do host I/O.
-        if !cfg!(all(windows, target_arch = "x86_64")) || crate::threads::stats::on() || trace::on() {
+        if !cfg!(all(windows, target_arch = "x86_64")) || crate::threads::stats::on() || trace::on() || crate::threads::sync_profile::enabled() {
             return self.run_service(f, m, cpu, target, false, false);
         }
         // Keep the Cpu mirror current as for every other service, but the
@@ -452,6 +458,9 @@ impl Registry {
         // a service runs holding the guest lock in parallel mode
         // (crate::threads); an API call is also where a guest thread's time
         // slice may end
+        let sync_sample = if crate::threads::sync_profile::enabled() {
+            crate::threads::sync_profile::begin(self.names.get(&target).map(String::as_str), target, m, cpu)
+        } else { None };
         let stats = crate::threads::stats::on().then(|| {
             let name = self.names.get(&target).cloned().unwrap_or_else(|| format!("{target:#010x}"));
             crate::threads::stats::start(name)
@@ -468,6 +477,10 @@ impl Registry {
         drop(scope);
         drop(lock);
         drop(stats);
+        if let Some(sample) = sync_sample { sample.finish(cpu.eax); }
+        if crate::threads::sync_profile::enabled() {
+            crate::threads::sync_profile::presented(self.names.get(&target).map(String::as_str), cpu.eax);
+        }
         // (the register as the guest's again; loaded only if it differs)
         if x86::stmxcsr() != cpu.mxcsr.0 {
             x86::ldmxcsr(cpu.mxcsr.0);

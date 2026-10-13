@@ -1273,3 +1273,28 @@ be written while older disjoint ranges are executing. Ring reuse waits for
 ordered submission and GPU completion. Other devices retain staged uploads.
 This remains opt-in: host-memory GPU cost and ring-wrap stalls need head's
 game acceptance. Final validation status: `docs/tasks/L148-vk-frontend.md`.
+
+
+## L153 synchronization census and candidates
+
+`DDRUNTIME_SYNC_PROFILE=1` reports completed sync services by guest thread,
+return site and argument, with inclusive wall ns, observed primitive versus
+service-lock contention, timeouts and duration histograms. Successful
+producer Presents give the frame denominator; `scripts/sync_profile.py`
+subtracts complete snapshots. It also times the four scheduler indirect job
+calls and identifies the residual wait-all join at 0x00DBE66D. Census timing
+includes instrumentation; do performance acceptance with the census off.
+
+`DDRUNTIME_SYNC_CACHE=1` removes the event table RwLock on warm lookup hits
+using bounded thread caches with close epochs and unique session identities.
+`DDRUNTIME_SYNC_FUTEX=1` uses WaitOnAddress for contended parallel single-event
+waits outside the guest lock. Both are off by default: table-contention
+microbenchmarks improve, but event ping-pong timings are mixed and game
+image/FPS acceptance is pending. General multiwait and TLS paths retain their
+existing lock model. Default single-object polls avoid vectors/clock reads;
+invalid multiwait counts fail, and terminating guest mutex owners now produce
+WAIT_ABANDONED on the next successful acquisition.
+
+Tests, measured ranges, Win32 references and inherited semantic limits are
+in `docs/tasks/L153-sync.md`. Implemented/tested is distinct from game
+comparison; no L153 game run has yet been performed by the agent.
