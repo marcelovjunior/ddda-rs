@@ -167,16 +167,28 @@ pub struct DeviceState {
 /// The render states by number, kept sorted: a draw carries them in order
 /// as they are (L78: a hash map was collected and sorted for every draw, a
 /// BTreeMap walked node by node).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct RenderStates {
-    list: d3d9cmd::RenderStateList,
+    list: Vec<(u32, u32)>,
     // Index + 1, with zero meaning absent. Unusual state IDs use binary search.
     positions: [u8; 256],
+    /// The copy draws share (L97), made by the first draw after a change: a
+    /// SetRenderState only edits `list` (L101: a copy-on-write list cost two
+    /// atomic operations per call).
+    shared: std::cell::OnceCell<d3d9cmd::RenderStateList>,
 }
 
 impl Default for RenderStates {
-    fn default() -> Self { Self { list: Default::default(), positions: [0; 256] } }
+    fn default() -> Self { Self { list: Vec::new(), positions: [0; 256], shared: Default::default() } }
 }
+
+impl PartialEq for RenderStates {
+    fn eq(&self, other: &Self) -> bool {
+        self.list == other.list
+    }
+}
+
+impl Eq for RenderStates {}
 
 impl RenderStates {
     fn position(&self, state: u32) -> Option<usize> {
@@ -194,10 +206,14 @@ impl RenderStates {
     /// Set a state; the value it had.
     pub fn insert(&mut self, state: u32, value: u32) -> Option<u32> {
         match self.position(state) {
-            // the same value: no copy of a list draws still share
+            // the same value: the shared copy stays valid
             Some(i) if self.list[i].1 == value => Some(value),
-            Some(i) => Some(std::mem::replace(&mut self.list[i].1, value)),
+            Some(i) => {
+                self.shared.take();
+                Some(std::mem::replace(&mut self.list[i].1, value))
+            }
             None => {
+                self.shared.take();
                 let i = self.list.binary_search_by_key(&state, |e| e.0).unwrap_err();
                 self.list.insert(i, (state, value));
                 for (i, &(key, _)) in self.list.iter().enumerate() {
@@ -219,7 +235,7 @@ impl RenderStates {
 
     /// The list itself, shared (a draw keeps it; L97).
     pub fn shared(&self) -> d3d9cmd::RenderStateList {
-        self.list.clone()
+        self.shared.get_or_init(|| self.list.clone().into()).clone()
     }
 }
 
