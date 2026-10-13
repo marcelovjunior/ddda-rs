@@ -1,5 +1,26 @@
 # Milestones
 
+### L145 outer inflate candidate (2026-10-13)
+
+- Whole original-layout `cf02e0` translation, opt-in `DDRUNTIME_ZLIB_PORT=1`:
+  **217 streams / 12,893 original-instruction returns match** registers,
+  defined flags, stack, state, window and output. Samples every one of the
+  install's 144 ARC classes; synthetic save, raw/gzip and random splits.
+- Runtime light: **205 pass / inherited fullscreen gamma failure / 5 ignored**.
+  Large-buffer microbenchmarks are mixed (including regressions); a tiny-buffer
+  repetitive stream improves 1.63x. No whole-loading gain established.
+- Head c23: 8.0195 s outer time is inclusive; fast decoder 4.9350 s,
+  Adler 0.7229 s, window 0.4669 s. Outer plus untracked helpers: ~1.8947 s.
+  Allocation census overflowed 99.58% of bytes; captured startup ranks cannot
+  identify gameplay allocation leaders. Details: `docs/tasks/L145-inflate.md`.
+- Head-requested fast decoder follow-up: `DDRUNTIME_ZLIB_FAST=1` page access
+  and ordered forward copies pass **632 leaf cases x3 configurations** plus
+  **217 streams / 12,893 returns**, with and without the new outer port.
+  Real ARC whole/chunked microbench **1.59–1.69x** over current decoder;
+  repetitive synthetic **3.11–4.47x**. Fast light **207 pass / gamma failure /
+  5 ignored**, plus final three access checks and parallel-policy replay.
+- Next: head's matched **FAST=0/1, PORT=0** loading A/B; both remain opt-in.
+
 ### L140 loading costs (2026-10-13)
 
 - Exact opt-in Adler helper: 45 original-instruction cases pass, including
