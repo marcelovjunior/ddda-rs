@@ -5,6 +5,24 @@ use ddnative_base::{
 };
 use std::io::{Cursor, Read};
 
+#[test]
+fn inflate_registration_defaults_on_and_respects_explicit_override() {
+    let mut ports = Vec::new();
+    ddruntime::archive_inflate::install(&mut ports);
+    let disabled = std::env::var("DDRUNTIME_ARCHIVE_INFLATE").as_deref() == Ok("0");
+    assert_eq!(ports.len(), usize::from(!disabled));
+    if !disabled {
+        assert_eq!(ports[0].0, 0x00cf2cb0);
+    }
+    fn explicit(_: &mut dyn Mem, c: &mut Cpu) { c.eax = 42; }
+    let mut ports = vec![(0x00cf2cb0, explicit as ddnative_base::x86::LiftFn)];
+    ddruntime::archive_inflate::install(&mut ports);
+    assert_eq!(ports.len(), 1);
+    let mut c = Cpu::default();
+    ports[0].1(&mut Sparse::default(), &mut c);
+    assert_eq!(c.eax, 42);
+}
+
 fn word(c: &mut Cursor<Vec<u8>>) -> u32 {
     let mut bytes = [0; 4];
     c.read_exact(&mut bytes).unwrap();

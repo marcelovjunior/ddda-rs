@@ -59,6 +59,54 @@ new measurement, not this branch's baseline.
 
 ## Results
 
+### L109c: boot cost continuation (2026-10-13)
+
+Branch `task/L109c-boot`, base `task/fps-line`. Head's updated brief
+(board 11084) drops fast boot entirely: original logo/movie timing remains,
+and head presses Enter through the game's own input path for run tests.
+
+| Process-relative boundary | instr1 | combo6a cold | combo6b warm |
+|---|---:|---:|---:|
+| Guest start | 0.718 s | 0.794 s | 0.725 s |
+| Device created | -- | 1.491 s | 1.466 s |
+| First guest Present | 6.002 s | 5.837 s | 5.858 s |
+| Movie reader open | 16.095 s | 14.617 s | 14.638 s |
+| Movie reader release | 44.805 s | 44.824 s | 44.786 s |
+| Visible title / main menu | unmeasured | unmeasured | unmeasured |
+
+The **5.043 / 5.134 s guest-start-to-first-Present** gaps are mostly
+unattributed by existing counters. Cold combo6a has unchanged completed
+I/O and inflate totals between 2.023 and 5.024 s: 32 reads / 3.73 MB /
+9.3 ms inclusive, 21 zlib calls / 120.7 ms. There are **zero GPU modules
+and pipelines** through that interval. Warm combo6b has the same plateau
+(4.2 ms reads, 127.5 ms inflate); its precompile finished 538 pipelines
+by 2.025 s. Completed shader creation, reads and inflate do not explain
+the plateau. Totals exclude unfinished calls and overlap across threads.
+
+The 2,979 boot archive inflates now total **1.39 s**, versus instr1's
+**4.85 s**. This is decoder reduction, not a 3.46 s first-Present saving.
+Later all-zlib totals reach **11.04 / 11.03 s** for 27,135 calls, versus
+**1.592 / 1.580 s** for the archive subset's 3,740 calls. Nonarchive zlib
+is a separate remaining cost, not evidence for the pre-Present gap.
+
+Head's `profile_boot1.txt` / `boot1.log` (11034): main-thread CPU 7.5 s
+of 9.1 s, 62.4% inclusive under sSceneExt constructor `0x0049adc0`, 60%
+under geometry builder `0x00fe9580`. A nested `0x012eb690` symbol suggests
+Vorbis, but FE9580's original disassembly constructs subdivided geometry
+and has no call to that entry. Private split helper/public symbol
+attribution needs resolution before selecting a readable port. The
+profiled run's slower first Present is not an optimization comparison.
+
+The inflate port was **already default-on in fps-line**; production
+registration stays unchanged. **632 original exact-machine cases** pass
+again with vectors required. New registration regression passes with the
+environment unset and `DDRUNTIME_ARCHIVE_INFLATE=0`, and verifies explicit
+override precedence. Read-ahead stays **off by default**; its sequential
+regression has not been fixed. No shard or game run by this agent.
+
+Next: exact geometry/Vorbis boot attribution, original-verified port of
+the actual hotspot, and head's visible title/menu/save-loading milestones.
+
 ### Continuation: readable inflate fast loop (2026-10-13)
 
 Rebased onto `task/fps-line`; baseline instrumentation/read scratch is
