@@ -143,6 +143,7 @@ impl App {
             .name("guest main thread".into())
             .stack_size(256 << 20)
             .spawn(move || {
+                ddruntime::load_log::timeline::register_main_thread();
                 let status = |s: String| {
                     let _ = proxy.send_event(GameEvent::Status(s));
                 };
@@ -370,6 +371,11 @@ impl ApplicationHandler<GameEvent> for App {
 }
 
 fn main() {
+    ddruntime::load_log::timeline::set_gpu_snapshot(|| {
+        let p = ddgpu::pipeline_stats();
+        [p.modules, p.module_time.as_nanos() as u64, p.translate_time.as_nanos() as u64,
+            p.pipelines, p.pipeline_time.as_nanos() as u64]
+    });
     ddruntime::load_log::start();
     // L103: the x87 live slot among the TEB's 64 direct TLS slots, before
     // any GPU driver DLL takes them

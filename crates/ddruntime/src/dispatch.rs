@@ -377,6 +377,7 @@ impl Registry {
         // Keep the Cpu mirror current as for every other service, but the
         // integer body and service lock/scope do not change the live register.
         cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
+        let _load_sample = crate::load_log::timeline::ServiceSample::begin();
         let lock = crate::threads::service_lock_free();
         let scope = crate::threads::ServiceScope::enter_with_tail(false);
         f(m, cpu);
@@ -393,6 +394,7 @@ impl Registry {
         }
         // L22: Rust runs under the host default MXCSR, as in run_service_as
         let guest = x86::stmxcsr();
+        let _load_sample = crate::load_log::timeline::ServiceSample::begin();
         cpu.mxcsr = x86::Mxcsr(guest);
         if guest != x86::MXCSR_DEFAULT {
             x86::ldmxcsr(x86::MXCSR_DEFAULT);
@@ -435,6 +437,7 @@ impl Registry {
     /// order.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_service_as(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32, locked: bool, tail: bool, device: bool) {
+        let _load_sample = crate::load_log::timeline::ServiceSample::begin();
         // L22: a service is Rust: it runs under the host default MXCSR and
         // the guest's (live while lifted code runs) waits in cpu.mxcsr, so
         // neither sees nor changes the other's rounding or sticky flags.

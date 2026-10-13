@@ -6,6 +6,8 @@ since process start). Draw counts alone cannot identify a menu or loading
 screen. Movie times measure reader lifetime, not a fixed visible duration.
 """
 import argparse
+import hashlib
+import json
 from dataclasses import dataclass
 import math
 from pathlib import Path
@@ -52,7 +54,7 @@ def phases(events):
     """Adjacent observed milestones; no inferred time zero for missing logs."""
     last = None
     for event in events:
-        if event.name in TOTALS or event.name in {"stage_probe", "timing_unavailable"}:
+        if event.name in TOTALS or event.name in {"stage_probe", "timing_unavailable", "zlib_helper", "zlib_caller", "zlib_caller_overflow", "interval"}:
             continue
         yield event, None if last is None else event.time - last
         last = event.time
@@ -98,6 +100,16 @@ def render(events):
     for key, start, end in movie_spans(events):
         duration = f"{end - start:.3f} s" if start is not None and end is not None else "incomplete"
         out.append(f"- reader {key[0]}, stream {key[1]}: {duration}")
+    intervals = [e for e in events if e.name == "interval"]
+    if intervals:
+        out += ["", "Runtime code-state intervals (not proof of visible UI/input readiness):",
+                "| From | To | Wall (s) | Zlib (s, inclusive) | File reads (s) | Pipelines (s) |",
+                "|---|---|---:|---:|---:|---:|"]
+        for event in intervals:
+            f = event.fields
+            costs = [f"{int(f[k])/1e9:.6f}" if f.get(k, "").isdigit() else "unavailable"
+                     for k in ["wall_ns", "zlib_ns", "read_ns", "pipeline_ns"]]
+            out.append("| " + " | ".join([f.get("from", "?"), f.get("to", "?")] + costs) + " |")
     out += ["", "Last cumulative samples (inclusive service/thread time; do not add to wall time):"]
     latest = {e.name: e for e in events if e.name in TOTALS}
     for name, event in latest.items():
@@ -146,11 +158,45 @@ def render_legacy(text):
     return "\n".join(out) + "\n" if probes else render([])
 
 
+def snapshot(events, time):
+    """Last independent cumulative sample at/before a process-clock boundary."""
+    values, samples = {}, {}
+    for event in events:
+        if event.time > time:
+            break
+        group = event.name
+        if event.name == "zlib_helper":
+            group += ":" + event.fields["address"]
+        elif event.name not in TOTALS:
+            continue
+        samples[group] = event.time
+        for key, value in event.fields.items():
+            if key != "address":
+                try:
+                    values[group + "." + key] = int(value)
+                except ValueError:
+                    pass
+    return values, samples
+
+
+def interval(events, start, end):
+    before, _ = snapshot(events, start)
+    after, samples = snapshot(events, end)
+    # Zero is justified only by an actual process-start record.
+    origin = start == 0 and any(e.name == "process_start" and e.time == 0 for e in events)
+    delta = {key: value - before.get(key, 0) for key, value in after.items()
+             if origin or key in before}
+    return {"start": start, "end": end, "wall_s": end-start,
+            "sample_age_s": {k: round(end-v, 6) for k, v in samples.items()},
+            "delta": delta}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log", type=Path)
     parser.add_argument("--mark", action="append", default=[])
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--at", help="Comma-separated process-clock boundaries; emit JSON counter deltas")
     args = parser.parse_args()
     text = args.log.read_text(encoding="utf-8-sig", errors="replace")
     events = parse(text)
@@ -163,7 +209,20 @@ def main():
             add_mark(events, mark)
         except ValueError as error:
             parser.error(str(error))
-    report = render(events) if events else render_legacy(text)
+    if args.at:
+        try:
+            times = [float(t) for t in args.at.split(",")]
+            if len(times) < 2 or any(not math.isfinite(t) or t < 0 for t in times) or any(b <= a for a, b in zip(times, times[1:])):
+                raise ValueError("--at needs at least two increasing nonnegative times")
+            if not any(e.name == "process_start" for e in events):
+                raise ValueError("--at requires a process-start anchor")
+        except ValueError as error:
+            parser.error(str(error))
+        report = json.dumps({"sha256": hashlib.sha256(args.log.read_bytes()).hexdigest(),
+            "warning": "inclusive overlapping costs; old counters lag boundaries; no inferred UI labels",
+            "intervals": [interval(events, a, b) for a, b in zip(times, times[1:])]}, indent=2) + "\n"
+    else:
+        report = render(events) if events else render_legacy(text)
     if args.output:
         args.output.write_text(report, encoding="utf-8")
     else:

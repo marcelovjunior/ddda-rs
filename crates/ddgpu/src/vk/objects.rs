@@ -172,6 +172,7 @@ impl Context {
         if self.modules.contains_key(&key) {
             return Ok(());
         }
+        let translation_started = std::time::Instant::now();
         let module = naga::front::wgsl::parse_str(wgsl).map_err(|e| e.emit_to_string(wgsl))?;
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
@@ -179,10 +180,12 @@ impl Context {
         )
         .validate(&module)
         .map_err(|e| e.to_string())?;
+        crate::pipelines::translated(translation_started);
         // Source is the exact translated module already accepted by wgpu on
         // this device. hal applies its same SPIR-V binding/coordinate options.
         unsafe {
             let device = self.device.as_hal::<Vulkan>().ok_or("not Vulkan")?;
+            let module_started = std::time::Instant::now();
             let module = device
                 .create_shader_module(
                     &hal::ShaderModuleDescriptor {
@@ -196,6 +199,7 @@ impl Context {
                     }),
                 )
                 .map_err(|e| e.to_string())?;
+            crate::pipelines::module_created(module_started);
             self.modules
                 .insert(key, Arc::new(Object::new(&self.device, module)));
         }
@@ -311,6 +315,7 @@ impl Context {
         };
         unsafe {
             let device = self.device.as_hal::<Vulkan>().ok_or("not Vulkan")?;
+            let pipeline_started = std::time::Instant::now();
             let raw = device
                 .create_render_pipeline(&hal::RenderPipelineDescriptor {
                     label: None,
@@ -339,6 +344,7 @@ impl Context {
                     cache: None,
                 })
                 .map_err(|e| e.to_string())?;
+            crate::pipelines::pipeline_created(pipeline_started);
             let vertex_layouts = key
                 .buffers
                 .iter()
