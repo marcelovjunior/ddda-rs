@@ -40,8 +40,20 @@ fn main() {
             bench(|i| m.fast_set_u32(pt, 0x100000 + ((i * 4) & 0xffffc) + offset, i), n, &format!("fast_set_u32/{label}"));
         }
         bench(|i| { bb(m.fast_u32(pt, 0x100fff + ((i & 255) * PAGE))); }, n, "fast_u32/straddle");
+        bench(|i| m.fast_set_u32(pt, 0x100fff + ((i & 255) * PAGE), i), n, "fast_set_u32/straddle");
+        bench(|i| { bb(m.fast_u8(pt, 0x100000 + (i & 0xfffff))); }, n, "fast_u8/hit");
         bench(|i| { bb(m.fast_u32(None, 0x100000 + ((i * 4) & 0xffffc))); }, n, "fast_u32/trait");
+        bench(|i| m.fast_set_u32(None, 0x100000 + ((i * 4) & 0xffffc), i), n, "fast_set_u32/trait");
+        bench(|i| { bb(m.fast_u8(None, 0x100000 + (i & 0xfffff))); }, n, "fast_u8/trait");
+        // A permission miss uses this synthetic Mem's byte-wise fallback.
+        // It deliberately does not panic: fault-unwind cost is not accessor cost.
+        unsafe { pt.unwrap().as_ref().set_perm(0x100, 0); }
+        bench(|i| { bb(m.fast_u32(pt, 0x100000 + ((i * 4) & 0xffc))); }, n, "fast_u32/permission-miss");
+        bench(|i| m.fast_set_u32(pt, 0x100000 + ((i * 4) & 0xffc), i), n, "fast_set_u32/permission-miss");
+        bench(|i| { bb(m.fast_u8(pt, 0x100000 + (i & 0xfff))); }, n, "fast_u8/permission-miss");
+        unsafe { pt.unwrap().as_ref().set_perm(0x100, READ | WRITE); }
     }
+    if std::env::var_os("HELPER_MEMORY_ONLY").is_some() { return; }
     let mut fl = Flags::default();
     bench(|i| { bb(Flags::new(SUB, i, 100, i.wrapping_sub(100), 32)); }, n, "Flags::new");
     for bits in [32, 8, 16] {
