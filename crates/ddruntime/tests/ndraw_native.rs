@@ -307,6 +307,29 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
             eprintln!("{what}: {:.3} us", t.elapsed().as_secs_f64() * 1e6 / n as f64);
         };
         let mem = &s.mem;
+        // the guest words a draw from the caches reads (every read through
+        // the counted slow path: no page table)
+        struct Counted<'a>(&'a dyn Mem, std::cell::Cell<u32>);
+        impl Mem for Counted<'_> {
+            fn u8(&self, a: u32) -> u8 {
+                self.1.set(self.1.get() + 1);
+                self.0.u8(a)
+            }
+            fn set_u8(&mut self, _: u32, _: u8) {
+                unreachable!()
+            }
+            fn u32(&self, a: u32) -> u32 {
+                self.1.set(self.1.get() + 4);
+                self.0.u32(a)
+            }
+            fn u16(&self, a: u32) -> u16 {
+                self.1.set(self.1.get() + 2);
+                self.0.u16(a)
+            }
+        }
+        let counted = Counted(mem, std::cell::Cell::new(0));
+        std::hint::black_box(draw_call(&counted, &info, &mut caches, CONTEXT, record, 1).unwrap());
+        eprintln!("guest bytes a draw from the caches reads: {}", counted.1.get());
         time("draw_call from the caches", &mut || {
             std::hint::black_box(draw_call(mem, &info, &mut caches, CONTEXT, record, 1).unwrap());
         });
@@ -328,6 +351,9 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
                 ddruntime::ndraw_native::send_draws(std::mem::take(&mut run));
             }
         });
+        // the backend is the null one now: the sections below compare with
+        // the D3D9 path's recorded draws, which it does not record
+        return;
     }
 
     // a binding whose VS reads c0..c7 and writes c0..c5 (another binding,
