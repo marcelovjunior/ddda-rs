@@ -42,9 +42,10 @@ fn regs(v: &Value) -> [u32; 8] {
     r.try_into().unwrap()
 }
 
-/// Everything but the popped stack scratch (the 4 KiB below the returned ESP).
+/// Everything but the popped stack scratch (the 8 KiB below the returned
+/// ESP: 0x0109DAC0's frame alone is 0x1474 bytes).
 fn compared(a: u32, esp: u32) -> bool {
-    !(esp.wrapping_sub(0x1000)..esp).contains(&a)
+    !(esp.wrapping_sub(0x2000)..esp).contains(&a)
 }
 
 fn vectors(name: &str) -> Option<Value> {
@@ -58,6 +59,14 @@ fn vectors(name: &str) -> Option<Value> {
 }
 
 fn abi_cases(data: &Value, body: LiftFn) -> usize {
+    abi_cases_checking(data, body, true)
+}
+
+/// `all_registers`: every register at a guest call must match; otherwise
+/// ECX and ESP (with the pushed words and memory), what an MSVC callee
+/// can depend on (it saves EBX, EBP, ESI, EDI before using them, and
+/// reads EAX and EDX only as arguments where its convention says so).
+fn abi_cases_checking(data: &Value, body: LiftFn, all_registers: bool) -> usize {
     let cases = data["cases"].as_array().unwrap();
     for (i, case) in cases.iter().enumerate() {
         let entry = n(&case["entry"]);
@@ -78,8 +87,12 @@ fn abi_cases(data: &Value, body: LiftFn) -> usize {
             let back = &trace[k + 1];
             let at = regs(call);
             assert_eq!(target, n(&call["target"]), "{entry:#x} case {i} (seed {seed_at}): call {k} target");
-            assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi], at,
-                       "{entry:#x} case {i} (seed {seed_at}): registers at call {}", k / 2);
+            if all_registers {
+                assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi], at,
+                           "{entry:#x} case {i} (seed {seed_at}): registers at call {}", k / 2);
+            } else {
+                assert_eq!([c.ecx, c.esp], [at[1], at[4]], "{entry:#x} case {i} (seed {seed_at}): ECX/ESP at call {}", k / 2);
+            }
             let pushed = n(&call["pushed"]);
             for (&a, &b) in &pairs(&call["memory"]) {
                 if compared(a, esp) || (at[4]..at[4].wrapping_add(pushed)).contains(&a) {
@@ -141,4 +154,23 @@ fn nearest_object_matches_original() {
     let n = abi_cases(&data, mtcore::game_scan::nearest_object);
     assert!(n >= 1300, "{n} cases");
     eprintln!("0x0049E920: {n} ABI-level cases passed");
+}
+
+// verifies 0x0109D480 (ABI level; its leaf callback and its fallback for
+// slots from 0x19 are checked guest calls with replayed effects)
+#[test]
+fn query_boxes_matches_original() {
+    let Some(data) = vectors("boxes.json") else { return };
+    let n = abi_cases_checking(&data, mtcore::tree_query::query_boxes, false);
+    assert!(n >= 1400, "{n} cases");
+    eprintln!("0x0109D480: {n} ABI-level cases passed");
+}
+
+// verifies 0x0109DAC0 (ABI level, as 0x0109D480)
+#[test]
+fn query_box_matches_original() {
+    let Some(data) = vectors("sat.json") else { return };
+    let n = abi_cases_checking(&data, mtcore::tree_query::query_box, false);
+    assert!(n >= 1400, "{n} cases");
+    eprintln!("0x0109DAC0: {n} ABI-level cases passed");
 }

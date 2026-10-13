@@ -68,6 +68,8 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         ports.push((0x0049_e920, mtcore::game_scan::nearest_object));
         ports.push((0x0041_72c0, mtcore::game_scan::scan_unlocks));
         ports.push((0x00d1_b840, mtcore::game_scan::segment_hits_box));
+        ports.push((0x0109_d480, mtcore::tree_query::query_boxes));
+        ports.push((0x0109_dac0, mtcore::tree_query::query_box));
     }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.

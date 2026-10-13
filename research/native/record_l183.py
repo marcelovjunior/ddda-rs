@@ -40,7 +40,9 @@ REGS = [getattr(x, 'UC_X86_REG_' + n) for n in ('EAX', 'ECX', 'EDX', 'EBX', 'ESP
 NEAREST, NEAREST_END = 0x49E920, 0x49EC39
 SCAN, SCAN_END = 0x4172C0, 0x41746C
 SEGMENT, SEGMENT_END = 0xD1B840, 0xD1BC52
-RANGES = {NEAREST: NEAREST_END, SCAN: SCAN_END, SEGMENT: SEGMENT_END}
+BOXES, BOXES_END = 0x109D480, 0x109DABD
+SAT, SAT_END = 0x109DAC0, 0x10A0300
+RANGES = {NEAREST: NEAREST_END, SCAN: SCAN_END, SEGMENT: SEGMENT_END, BOXES: BOXES_END, SAT: SAT_END}
 UNLOCK = 0x5B4800
 
 
@@ -58,17 +60,18 @@ class Oracle:
         uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
         uc.ctl_set_tcg_buffer_size(16 * 1024 * 1024)
         self.entry, self.end = entry, RANGES[entry]
-        for page in sorted({entry & ~0xFFF, (self.end - 1) & ~0xFFF, *image_pages}):
+        for page in sorted({*range(entry & ~0xFFF, self.end, 0x1000), *image_pages}):
             uc.mem_map(page, 0x1000)
             uc.mem_write(page, h.code(page, 0x1000))
         for address, size in ((BASE, SIZE), (STACK, STACK_SIZE), (h.RET, 0x1000), (CODE_GETTERS, 0x1000), (STUBS, 0x1000)):
             uc.mem_map(address, size)
         self.stubs = dict(stubs)
-        self.pops = {NEAREST: 0x1c, SCAN: 4, SEGMENT: 0}[entry]
+        self.pops = {NEAREST: 0x1c, SCAN: 4, SEGMENT: 0, BOXES: 0x14, SAT: 0x14}[entry]
         for address in self.stubs:
             if not STUBS <= address < STUBS + 0x1000:
                 uc.mem_map(address & ~0xFFF, 0x1000)
             uc.mem_write(address, b'\xc3')
+        self.helpers = []
         self.active = False
         uc.hook_add(UC_HOOK_MEM_READ, self.read)
         uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
@@ -129,6 +132,8 @@ class Oracle:
         if CODE_GETTERS <= address < CODE_GETTERS + 0x1000:
             if uc.mem_read(address, 1)[0] == 0xB8:
                 self.remember(address, 6)
+            return
+        if any(a <= address < b for a, b in self.helpers):
             return
         if not self.entry <= address < self.end:
             self.escaped = address  # the original left its body (a moved return address)
@@ -429,6 +434,98 @@ class NearestOracle(Oracle):
         return False
 
 
+# --- 0x0109D480 / 0x0109DAC0 ---------------------------------------------------------
+
+DEPTHS, BUFFERS, CENTRE, SLACK = 0x18D5EE8, 0x18D5E20, 0x18D0630, 0x18D0660
+THIS, TREE, QUERY, RECORDS = (BASE + v for v in (0x100, 0x10000, 0x200, 0x40000))
+CALLBACKS = [STUBS + 0x100 + 0x10 * k for k in range(3)]
+
+
+class TreeOracle(Oracle):
+    def __init__(self, entry):
+        fallback = 0x109B820 if entry == BOXES else 0x109B930
+        super().__init__(entry, (0x18D0000, 0x18D5000, 0x422000, 0x12F2000),
+                         stubs={fallback: 0x14, **{cb: 0xC for cb in CALLBACKS}})
+        self.helpers = [(0x422F80, 0x422F95), (0x12F2280, 0x12F2300)]
+        self.fallback = fallback
+
+    def callee(self, address, sp, effects):
+        rng, uc = self.rng, self.uc
+        if address == self.fallback:
+            return rng.getrandbits(32)
+        r = rng.randrange(10)
+        if r == 0 and self.nodes:  # moves a child box of some node
+            n = rng.choice(self.nodes)
+            self.effect(n + 0x10 + 4 * rng.randrange(24), f32(rng.uniform(-20, 20)), effects)
+        elif r == 1:  # moves the query
+            self.effect(QUERY + 0x10 + 4 * rng.randrange(24 if self.entry == BOXES else 8), f32(rng.uniform(-20, 20)), effects)
+        return rng.choice([0, 0, 0, 0, 0, 0, 1, 0x100, rng.getrandbits(32)])
+
+    def run(self, seed):
+        uc, rng = self.uc, random.Random(seed)
+        self.rng = rng
+        uc.mem_write(BASE, rng.randbytes(SIZE))
+        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
+        uc.mem_write(0x18D5000, rng.randbytes(0x1000))
+
+        def word(a, v):
+            uc.mem_write(a, struct.pack('<I', v & 0xFFFFFFFF))
+
+        lane_scale = rng.randrange(6) == 0
+        for k in range(4):
+            word(CENTRE + 4 * k, f32(rng.choice([0.5, 0.25, 1.0]) if lane_scale else 0.5))
+            word(SLACK + 4 * k, f32(rng.choice([0.0, 1e-5, 0.01, 0.5])) if lane_scale or k == 0 else
+                 struct.unpack('<I', uc.mem_read(SLACK, 4))[0])
+        slot = rng.randrange(0x19) if rng.randrange(15) else rng.randrange(0x19, 0x40)
+        depth = rng.randrange(2)
+        word(DEPTHS + 4 * slot, depth) if slot < 0x19 else None
+        if slot < 0x19:
+            word(BUFFERS + 4 * (depth * 0x19 + slot), RECORDS)
+        word(THIS + 0x58, TREE)
+        count = rng.choice([1, 2, 3, 5, 9, 17, 40])
+        spread = rng.choice([2.0, 10.0, 40.0])
+        # integer boxes: faces meet exactly (the comparisons' equality)
+        exact = seed % 4 == 0
+        num = (lambda lo, hi: float(rng.randrange(int(lo), int(hi) + 1))) if exact else rng.uniform
+        self.nodes = [TREE + 0x70 * i for i in range(count)]
+        for i, n in enumerate(self.nodes):
+            w = rng.getrandbits(32) & ~0x88442211
+            idx = []
+            for k in range(4):
+                kind = rng.choice(['none', 'node', 'leaf', 'leaf', 'both']) if i + 1 < count else rng.choice(['none', 'leaf', 'leaf'])
+                if kind in ('node', 'both'):
+                    w |= 0x01 << (9 * k)
+                if kind in ('leaf', 'both'):
+                    w |= 0x10 << (9 * k)
+                idx.append(rng.randrange(i + 1, count) if kind in ('node', 'both') else rng.getrandbits(16))
+            word(n, w)
+            uc.mem_write(n + 4, struct.pack('<4H', *idx))
+            for k in range(4):
+                for axis in range(3):
+                    lo = num(-spread, spread)
+                    hi = lo + num(-1, spread)
+                    word(n + 0x10 + 0x10 * axis + 4 * k, f32(lo) if exact or rng.randrange(40) else any_float(rng))
+                    word(n + 0x40 + 0x10 * axis + 4 * k, f32(hi) if exact or rng.randrange(40) else any_float(rng))
+        if self.entry == BOXES:  # lanes of min x, y, z, then max (a splat, mostly)
+            for axis in range(3):
+                lo = num(-spread, spread)
+                hi = lo + num(0, spread)
+                for k in range(4):
+                    jitter = 0 if exact or rng.randrange(4) else rng.uniform(-1, 1)
+                    word(QUERY + 0x10 + 0x10 * axis + 4 * k, f32(lo + jitter))
+                    word(QUERY + 0x40 + 0x10 * axis + 4 * k, f32(hi + jitter) if rng.randrange(60) else any_float(rng))
+        else:
+            # a segment (its ends at +0x10 and +0x20, in any direction)
+            for axis in range(4):
+                word(QUERY + 0x10 + 4 * axis, f32(num(-spread, spread)) if exact or rng.randrange(60) else any_float(rng))
+                word(QUERY + 0x20 + 4 * axis, f32(num(-spread, spread)))
+        args = [QUERY, rng.getrandbits(32), rng.choice(CALLBACKS), rng.getrandbits(32), slot]
+        case = self.start(rng, args, ecx=THIS)
+        if case is not None:
+            case.update(seed=seed)
+        return case
+
+
 def write(out, cases):
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(dict(
@@ -455,7 +552,7 @@ def record(oracle, n, out, expected_missing=()):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--dir', default='E:/ddda-re/notes/native-L183')
-    p.add_argument('--only', choices=('segment', 'scan', 'nearest'))
+    p.add_argument('--only', choices=('segment', 'scan', 'nearest', 'boxes', 'sat'))
     p.add_argument('-n', type=int, default=1500)
     a = p.parse_args()
     d = Path(a.dir)
@@ -470,6 +567,10 @@ def main():
                [('0x4172fa', '0x417438'), ('0x417349', '0x417438'), ('0x417383', '0x417430'), ('0x417326', '0x417328')])
     if a.only in (None, 'nearest'):
         record(NearestOracle(), a.n, d / 'nearest.json')
+    if a.only in (None, 'boxes'):
+        record(TreeOracle(BOXES), a.n, d / 'boxes.json')
+    if a.only in (None, 'sat'):
+        record(TreeOracle(SAT), a.n, d / 'sat.json')
 
 
 if __name__ == '__main__':

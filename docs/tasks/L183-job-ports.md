@@ -88,7 +88,61 @@ Recorder notes:
 - Unicorn keeps translations of code rewritten between runs. The getter
   page's cache is dropped each run.
 
+## Batch 2 (also `DDRUNTIME_SCAN=1`), crates/mtcore/src/tree_query.rs
+
+The two box queries of the collision AABB tree that 0x010A8570 calls.
+They are the leaves under `dispatch_geometry` and the main thread's
+0x01166C00 / 0x00472AD0 subtrees.
+
+- **0x0109D480** tests an axis-aligned box per lane.
+- **0x0109DAC0** tests a segment (its ends at +0x10 and +0x20) against
+  the children's boxes. It uses the face axes and the segment-edge cross
+  axes, with a per-lane slack.
+
+Both share one walk:
+
+- The record stack is global memory, one buffer per slot and nesting
+  depth, so its records are compared.
+- Each passing leaf gets a guest callback `fn(arg, index, 0)` (`ret 0xc`,
+  ctx in ECX); the walk ends on the first nonzero result.
+- A slot from 0x19 up falls back to a guest call.
+
+| Port | Cases | Lifted ns/call | Port ns/call | Gain |
+|---|---|---|---|---|
+| 0x0109D480 | 1,500 (242 guest calls) | 331 | 98 | 3.4x |
+| 0x0109DAC0 | 3,000 (463 guest calls) | 1,781 | 294 | 6x |
+
+The bench figures are rough: its leaf-callback stub restored ESP wrongly
+in that run, so callback-heavy cases are approximate.
+
+Tests:
+
+- Every branch is covered.
+- At guest calls, ECX, ESP, the pushed words and memory must match (an
+  MSVC callee depends on nothing else). The test file's scratch window is
+  8 KiB, because 0x0109DAC0's own frame is 0x1474 bytes.
+- 9 mutations: 7 caught. The 2 survivors are equivalent:
+  - `result |=` vs `=`: the result is 0 before every call.
+  - the node-bit byte mask `0xff` vs `0x0f`: the bits sit in the low
+    nibble.
+
+Recorder notes:
+
+- 0x0109DAC0 spans four code pages, runs `__alloca_probe` (0x012F2280),
+  and calls 0x00422F80, an x87 fabs that quiets a signalling NaN.
+- Its centre/slack constants (0x018D0630/0x018D0660) are zero in the
+  image and set at run time. The recorder uses 0.5 and small slacks,
+  sometimes per lane.
+- The record-buffer table runs into the depth counters after 50 entries,
+  so depths are 0 or 1.
+
 ## Results
 
 - Batch 1: tested in isolation (above). Not run in game. Needs a train
   run with `DDRUNTIME_SCAN=1`.
+- Batch 2: tested in isolation (above). Not run in game. The head moved
+  claude-9 to L172 at this point. Next candidates if L183 resumes:
+  - 0x00D53730 (box clamp, x87 return);
+  - the Rust cost in `intern_dependency_keys_with` (43 job-thread
+    samples);
+  - 0x00FF2EE0, 0x00FEB1F0, 0x00FE66A0.
