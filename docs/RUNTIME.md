@@ -878,6 +878,22 @@ worker. A worker panic disconnects producers/results rather than leaving them
 waiting indefinitely. Test coverage and measurement limits are recorded in
 `tasks/L89-backend-worker.md`; gameplay FPS must be measured by the head.
 
+## L110 native device checkpoint (2026-10-13)
+
+`ddgpu::native` adds immutable state/resource handles, cached pipelines and
+texture sets, separate recorders with generation-aware constant rings,
+coalesced range updates and redundant draw-state filtering. The D3D9 path
+is unchanged. Four Vulkan image tests match full/compact synthetic native
+draws exactly to the D3D9 backend and host D3D9 driver; five CPU tests pass.
+Matched native medians: full blocks 3.839, compact 1.692, compact range
+updates 1.433 us/draw including upload/finish/submit. The <2 us synthetic
+target is met; full-frame/gameplay equality is not claimed.
+
+The wgpu/ash interop readback probe passes using separate ordered command
+encoders and explicit resource transitions; raw and normal commands cannot
+share one encoder in wgpu 29.0.4. See `docs/tasks/L110-native-device.md` for
+ownership limits, benchmark conditions and the L119 integration handoff.
+
 
 
 ### L90 compact shader constants (2026-10-13)

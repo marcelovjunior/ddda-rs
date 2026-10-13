@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod cache;
+pub mod native;
 mod pipelines;
 mod shader_cache;
 mod pipeline_log;

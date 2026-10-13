@@ -27,6 +27,23 @@
   alternating 1,000-call rounds. No whole-loading speedup claim.
 - Next: head's load-log/same-save comparison, baseline `45b89e6f`,
   readable leaf selectable with `DDRUNTIME_ARCHIVE_INFLATE=0/1`.
+### L110 native backend floor (2026-10-13)
+
+- Optimized 5,000-draw/40-pipeline/200-group synthetic Vulkan floor,
+  including finish + submit: **wgpu 0.884, reused bundles 0.386, ash 0.326
+  us/draw**. Uniform data prefilled; no texture sampling/gameplay claim.
+- 900 one-draw clear passes: **7.146 / 7.151 / 1.351 us/pass**, respectively.
+  Bundles reduce repeated draw processing but do not remove pass overhead.
+- Native API: **4 GPU tests pass**, including full/compact exact D3D9/host
+  comparisons and texture/constants/ring checks; **5 CPU tests pass**.
+- Matched 5,000-draw native workload: full **3.839**, compact **1.692**,
+  compact range updates **1.433 us/draw**, including upload/finish/submit
+  (three alternating repeats). Minimal shaders; no gameplay/FPS claim.
+- wgpu-owned texture/buffer -> raw Vulkan/hal -> wgpu readback passes with
+  separate ordered encoders; mixing raw and normal encoding in one fails.
+- Current-base runtime light suite **167 pass / 1 existing gamma-reset
+  failure / 2 ignored**. Next: L119 integration and one captured-pass oracle.
+  Details and limitations: `docs/tasks/L110-native-device.md`.
 
 ### L111 nDraw executor observer (2026-10-13)
 
