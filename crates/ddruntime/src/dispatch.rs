@@ -204,6 +204,9 @@ impl Registry {
             if crate::critical_jobs::enabled() {
                 crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
             }
+            if std::env::var_os("DDRUNTIME_JOB_PARTICIPANTS").is_some() {
+                crate::job_participants::install(ports, &ddnative::generated::lifted::bodies());
+            }
             if crate::ndraw_stats::enabled() {
                 crate::ndraw_stats::wrap_executor(ports, &ddnative::generated::lifted::bodies());
             }

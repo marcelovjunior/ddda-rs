@@ -42,6 +42,35 @@
   inherited gamma failure / six ignored**. No game or speedup claim.
 - Next: head corrected census/trace capture, then exact hot-inner A/B.
   Source map, hashes and limits: `docs/tasks/L158-critical-jobs.md`.
+### L162 original job participation and wake diagnostics (2026-10-13)
+
+- Opt-in `DDRUNTIME_JOB_PARTICIPANTS=1..8` calls original `00DBD620`
+  after construction; original CPU/eight clamp and frame activation remain.
+  No cap patch. Intended head A/B: seven vs eight participants, main included.
+- Wake analyzer reports per-batch jobs/participants, callback gaps,
+  final-job solo tails and join overlaps; **13 parser tests pass**.
+  Signaled lanes are distinct from active participation (one-job bypass).
+- Full light gate **234 reported passes / two inherited failures / seven
+  ignored**; Present timing passes its isolated retry, gamma remains.
+  Both new ABI/configuration tests pass. Actual wake latency and
+  performance/image acceptance pending. No speculative sync fix.
+- Next: head capture with L158 and this setter, exact env in
+  `docs/tasks/L162-job-wake.md`; analyze matched 7/8 joins and hashes.
+
+### L160 job worker sizing and wake analysis (2026-10-13)
+
+- Original constructor caps participation at min(CPUs,8), minus one for
+  counts >=4: 8/12/16 CPUs all select **main + six active workers**.
+  Seven foreground workers are allocated; a separate background pool has
+  up to eight. More reported CPUs cannot enable the proposed larger pool.
+- Producers mix per-participant and per-object work with dynamic claiming;
+  the scheduler does not split a long callback. Runtime already reports
+  host logical CPU count in parallel mode; ddplay requests a 1 ms timer.
+- Offline L158 signal/wait/first-job pairing: **seven tests pass**. Actual
+  wake latency remains pending head capture; aggregate wait durations are
+  not wake delays. No runtime behavior change or game/shard run.
+- Next: head L158 trace capture, cache/futex 0/0 versus 1/1, with exact
+  binary/env hashes. Details: `docs/tasks/L160-job-threads.md`.
 
 ### L153 game-thread synchronization (2026-10-13)
 

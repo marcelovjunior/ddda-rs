@@ -1,5 +1,20 @@
 # Phase 1 runtime proposal (R01)
 
+## L160 job CPU sizing and wake diagnostics
+
+Parallel `GetSystemInfo` reports host logical processors capped at 32;
+serial mode reports one. The game's foreground job constructor caps at
+eight participants and subtracts one for counts >=4, so 8/12/16 reported
+CPUs all select main plus six workers. CPU-count inflation cannot create
+the requested larger pool. No CPU-count override or scheduler patch is
+included. See [L160 evidence](tasks/L160-job-threads.md).
+
+`scripts/job_wake.py <private L158 trace> --min-frame N` reports correlated
+SetEvent-entry to worker-wait-return and first-callback delays, rejecting
+incomplete/ambiguous/lossy batches. It requires L158 wake records; the L153
+aggregate service census alone cannot measure wake latency. Seven offline
+tests pass; live game latency and performance acceptance await head runs.
+
 ## L140 opt-in loading diagnostics and acceleration
 
 `DDRUNTIME_ZLIB_ADLER=1` substitutes the exact native `0x00cf34d0`
@@ -1485,3 +1500,11 @@ The combined ARC microbenchmark improves 4.1-13.6%; FAST=2 alone is mixed.
 Modern-library parity and actual loading/image/control acceptance remain
 unestablished. Sources, hashes, measurements and limits:
 [task L156](tasks/L156-inflate-fast.md).
+## L162 job participant diagnostic
+
+`DDRUNTIME_JOB_PARTICIPANTS=1..8` invokes original `00DBD620` after sMain
+construction. It sets configured participation (main included), subject to
+the original CPU/eight cap; the normal frame-start path activates it.
+Absent preserves defaults. It neither patches caps nor changes CPU reporting.
+See `docs/tasks/L162-job-wake.md` for exact 7/8 capture env, verification
+status and the `scripts/job_wake.py` per-join latency/tail report.
