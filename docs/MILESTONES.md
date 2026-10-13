@@ -1,5 +1,19 @@
 # Milestones
 
+### L139 combo21 combined native gate (2026-10-13)
+
+- FPS line `335318fc` plus x87 discard `f4bfb866` and L130 FEDB80/FEDC00/
+  FED200 candidates: combined pin `981fb77a` is **GREEN**, **100 tests
+  passed / zero failures / seven benchmark ignores**. All 33 generated
+  crates rebuilt; expanded required-vector supplements and inventory pass.
+- Per-candidate correctness GREEN: `f4bfb866`, `382e5f35`, `4d53d724`,
+  `546a052d`. Existing five inventory gaps remain. No agent game/GPU run.
+- Head's c21 profile: main word loads/stores account for 23.9%/8.3% of
+  180 busy samples; similar shares on job threads. An isolated multiword
+  helper experiment is next; no new helper/FPS gain claimed yet.
+- Next: opt0/opt1 caller measurements, exact ordered-access tests and a
+  separate gate for retained work. `docs/tasks/L139-gate-c21.md`.
+
 ### L134 x87 helper follow-up, next batch (2026-10-13)
 
 - Discarding x87 callers omit unused PUSHFQ/POP capture; public flag-returning
