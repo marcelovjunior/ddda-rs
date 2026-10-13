@@ -1,5 +1,49 @@
 # Milestones
 
+### L177 semantic state commit and model mesh (2026-10-13)
+
+- Opt-in FEE320/FFC350/01145BF0 native semantic ports: **1,664 original
+  returns** pass ABI replay including heap/live stack. Reachable FEE320
+  instructions **761/761**, FFC350 **440/440**, material wrapper **17/17**.
+- Eleven isolated tests pass, including opt2 baseline, serial/atomic Pages
+  and deliberate heap corruption rejection. Runtime light **260 pass /
+  zero failures / seven ignored**; mtcore/ddports **35 pass / nine ignored**.
+  Guest x87 precision/rounding retained.
+- Synthetic median paired gains **1.665x / 2.126x / 1.102x** respectively;
+  callee seams and shared-host noise limit attribution. No gameplay claim.
+- Next: head accumulated semantic train and real shadow-job/image gate.
+  Details, hashes and limitations: `docs/tasks/L177-semantic-state-commit.md`.
+
+### L174b semantic model palette and culled instances (2026-10-13)
+
+- Opt-in SEMANTIC ports FFC9F0/1140180 retain original guest seams;
+  prior 10655A0 is retained. Requested integration base 1fcd6330 merged.
+- 247 original returns pass sparse/serial/atomic Pages and isolated opt2
+  lifted replay. Instruction coverage 641/644 and 824/824; signaling-NaN
+  x87 oracle boundary documented, hardware behavior retained.
+- 24/24 paired scenario medians improve: model 1.188–1.485x, instancing
+  1.248–1.914x. No game/shard run or FPS claim. Evidence and private hashes:
+  `docs/tasks/L174-semantic-draw-b.md`, continuation Results.
+- Runtime light rerun: 260 passed, zero failed, seven ignored. Default
+  and SEMANTIC/JOB_HASH/JOB_LOOKUP registration checks pass. Full mtcore
+  and ddports gate: 38 passed, zero failed, 11 ignored.
+- Next: head combined semantic train and matched critical-job/image gate.
+
+### L174 semantic material draw and dependency hash (2026-10-13)
+
+- `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
+  and 1066C60 pass selection; original guest callees retained. Defaults
+  unchanged; hash override takes precedence over JOB_HASH without duplicates.
+- 1,168 original synthetic returns pass ABI checks in sparse, serial Pages
+  and atomic Pages modes. Both isolated opt2 lifted draw bodies pass all
+  640 draw vectors; 197/197 and 377/377 original instructions covered.
+- 24/24 draw benchmark scenario medians improve: apply 1.546–2.111x,
+  selection 1.221–1.507x. Shared-host isolated results, no FPS/image claim.
+  Evidence and limitations: `docs/tasks/L174-semantic-draw-b.md`.
+- Runtime light: 255 pass, zero failures, seven ignored. Five ABI mutation
+  variants are rejected, including corrupted and extra heap writes below ESP.
+- Next: head merges registrations and validates the combined semantic train
+  against the native gate and matched image/critical-job capture.
 ### L169 exact shadow traversal and setup (2026-10-13)
 
 - Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
@@ -41,6 +85,49 @@
 - Family split posted to head: codex-7 FED480/EA5B50, codex-9 DB63E0/EFD240
   and split proof, codex-11 FEE320 evaluation. Next: isolated original
   oracles/microbenchmarks before one integration train. See L162 brief.
+### L175 semantic material and package leaves (2026-10-13)
+
+- Opt-in EA23F0/FED190/E0F3C0/01008200 native semantic ports: **2,226
+  original returns** pass ABI replay; EA23F0 reaches **712/712 decoded
+  instructions**, both growth sites, NaNs and unaligned/aliased inputs.
+- Seven isolated tests pass, including heap-corruption rejection, opt2 lifted bodies and serial/atomic
+  Pages. Runtime light **255 pass / zero failures / seven ignored**.
+- Median paired synthetic gains EA23F0 **1.512x**, E0F3C0 **2.734x**,
+  01008200 **1.141x**; some individual samples regress, FED190 mixed
+  across runs. mtcore/ddports **26 pass / zero failures / nine ignored**.
+  No game/image/FPS claim. Details: `docs/tasks/L175-semantic-draw-c.md`.
+- Next: head accumulated train with `DDRUNTIME_SEMANTIC=1`, then real
+  job/image acceptance. Virtual/growth callees remain recorded mock seams
+  in isolated tests; full gameplay comparison remains open.
+### L174 semantic material draw and dependency hash (2026-10-13)
+
+- `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
+  and 1066C60 pass selection; original guest callees retained. Defaults
+  unchanged; hash override takes precedence over JOB_HASH without duplicates.
+- 1,168 original synthetic returns pass ABI checks in sparse, serial Pages
+  and atomic Pages modes. Both isolated opt2 lifted draw bodies pass all
+  640 draw vectors; 197/197 and 377/377 original instructions covered.
+- 24/24 draw benchmark scenario medians improve: apply 1.546–2.111x,
+  selection 1.221–1.507x. Shared-host isolated results, no FPS/image claim.
+  Evidence and limitations: `docs/tasks/L174-semantic-draw-b.md`.
+- Runtime light: 255 pass, zero failures, seven ignored. Five ABI mutation
+  variants are rejected, including corrupted and extra heap writes below ESP.
+- Next: head merges registrations and validates the combined semantic train
+  against the native gate and matched image/critical-job capture.
+### L173 semantic model draw leaves (2026-10-13)
+
+- Native FF1920/FF14D0/FEFB90 under `DDRUNTIME_SEMANTIC=1`: 480 original
+  ABI returns pass, including all heap writes and external call arguments.
+  Seven isolated checks pass with lifted/semantic serial/atomic Pages;
+  runtime light 255 pass, zero failures, seven ignored.
+- Median isolated gains across four cases: FF1920 1.07–2.02x,
+  FF14D0 2.25–2.56x, FEFB90 1.48–1.67x. Synthetic callees; no gameplay or
+  FPS acceptance. x87 signaling-NaN emulator limit documented.
+- Head EA5320 follow-up: 302 originals pass head/strict ABI harnesses and
+  isolated lift; callback spheres and heap writes included. Leaf oracle
+  rejects three deliberate below-stack heap corruptions.
+- Next: head combined train/image acceptance. Evidence and reproduction:
+  `docs/tasks/L173-semantic-draw-a.md`.
 
 ### L162c job distribution and host scheduling (2026-10-13)
 

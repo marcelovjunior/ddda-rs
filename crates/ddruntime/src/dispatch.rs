@@ -201,6 +201,15 @@ impl Registry {
         ddports::ensure_with(|ports| {
             crate::archive_inflate::install(ports);
             crate::procedural_geometry::install(ports);
+            // L171: semantic 0x00E12A20 keeps the original body for its rare branch
+            if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
+                let bodies = ddnative::generated::lifted::bodies();
+                if let Some(&(_, original)) = bodies.iter().find(|(a, _)| *a == 0x00e1_2a20) {
+                    let _ = ddports::mtcore::semantic::E12A20_ORIGINAL.set(original);
+                    ports.retain(|p| p.0 != 0x00e1_2a20);
+                    ports.push((0x00e1_2a20, ddports::mtcore::semantic::shader_lookup));
+                }
+            }
             if crate::critical_jobs::enabled() {
                 crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
             }
@@ -526,9 +535,10 @@ impl Registry {
         // L101: the bindings this thread called, direct-mapped by address
         // (the registry no longer changes once shared, so they never go
         // stale): a hit skips the map lookup
-        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 256]> = Box::new([const { std::cell::Cell::new(None) }; 256]);
+        // L171: 4096 entries (256 thrashed on the game's call mix)
+        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 4096]> = Box::new([const { std::cell::Cell::new(None) }; 4096]);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
-            let slot = &cache[((target >> 2) ^ (target >> 10)) as usize & 255];
+            let slot = &cache[((target >> 2) ^ (target >> 14)) as usize & 4095];
             if let Some((t, b)) = slot.get() {
                 if t == target {
                     return me.run_binding(b, m, cpu, target);

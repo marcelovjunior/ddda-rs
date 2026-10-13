@@ -1,5 +1,47 @@
 # Phase 1 runtime proposal (R01)
 
+## L174b semantic model palette and culled instances
+
+`DDRUNTIME_SEMANTIC=1` also selects `00FFC9F0` model palette setup and
+`01140180` instancing-culling submission. The two native callers preserve
+guest call seams, scalar SSE ordering, command records and live memory.
+247 original synthetic returns pass sparse and serial/atomic Pages replay
+and the isolated opt2 lifted baseline. Paired scenario medians improve
+1.188–1.485x and 1.248–1.914x respectively; gameplay acceptance is pending.
+The prior `010655A0` port is retained. See the
+[L174b results and x87 oracle limitation](tasks/L174-semantic-draw-b.md).
+
+## L174 semantic material draw and dependency hash
+
+`DDRUNTIME_SEMANTIC=1` replaces E0E5E0 dependency hashing, 10655A0 material
+application and 1066C60 pass selection with ABI-level native Rust, keeping
+the original guest callees. It takes precedence over JOB_HASH at E0E5E0.
+1,168 synthetic original returns match in sparse and serial/atomic Pages
+memory; the isolated opt2 lifted draw bodies match the same 640 draw cases.
+All live memory is checked, including heap addresses below the guest stack.
+Draw benchmark medians improve 1.221–2.111x; this is isolated caller cost,
+not an FPS or image acceptance result. Defaults and inventory totals stay
+unchanged. Head-owned integration/game acceptance is next. See
+[L174 evidence and reproduction](tasks/L174-semantic-draw-b.md).
+## L173 semantic model-draw leaves
+
+`DDRUNTIME_SEMANTIC=1` additionally replaces FF1920 (shadow draw copies),
+FF14D0 (extra material passes), and FEFB90 (render-target/viewport binding).
+480 original ABI cases and production serial/atomic memory replay pass;
+runtime light 255 pass, zero failures, seven ignored. Full train and live
+image/per-job acceptance remain head-owned. See
+[L173 evidence](tasks/L173-semantic-draw-a.md) for isolated timings and
+the x87 signaling-NaN oracle limitation.
+## L177 semantic draw commit and model mesh
+
+`DDRUNTIME_SEMANTIC=1` also replaces FEE320, FFC350 and 01145BF0 with
+native draw-context commit, model-mesh and material-wrapper functions.
+All 1,664 isolated original returns match heap/live-stack ABI checks,
+opt2 lifted replay, and serial/atomic Pages; runtime light 260 pass.
+Synthetic median paired gains are 1.665x/2.126x/1.102x. Guest x87 modes
+and SSE operation order are preserved. Gameplay/image acceptance remains
+with the head's train; see [L177 evidence](tasks/L177-semantic-state-commit.md).
+
 ## L168 guest-memory backing experiment
 
 `DDNATIVE_BACKING=regions` opts into 2 MiB-aligned host regions with lazy
