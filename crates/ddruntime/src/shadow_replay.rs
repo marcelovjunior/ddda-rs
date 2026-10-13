@@ -67,6 +67,12 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
         ports.retain(|(a, _)| *a != address);
         ports.push((address, body));
     }
+    eprintln!(
+        "parallel-shadow installed capture=v2 first={} count={} dump={:?}",
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST").unwrap_or_else(|_| "0".into()),
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_COUNT").unwrap_or_else(|_| "1".into()),
+        std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP")
+    );
 }
 
 struct ShadowScope(bool);
@@ -76,6 +82,8 @@ impl Drop for ShadowScope {
     }
 }
 fn shadow(memory: &mut dyn Mem, cpu: &mut Cpu) {
+    static ENTERED: std::sync::Once = std::sync::Once::new();
+    ENTERED.call_once(|| eprintln!("parallel-shadow entered shadow={SHADOW:#x}"));
     let _scope = ShadowScope(IN_SHADOW.with(|v| v.replace(true)));
     ORIGINAL.get().unwrap()[0](memory, cpu);
 }
@@ -503,9 +511,14 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
 fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     let original = ORIGINAL.get().unwrap()[1];
     if !IN_SHADOW.with(Cell::get) {
+        static OUTSIDE: std::sync::Once = std::sync::Once::new();
+        OUTSIDE.call_once(|| eprintln!("parallel-shadow traversal outside shadow scope"));
         return original(memory, cpu);
     }
     let index = SAMPLE.fetch_add(1, Relaxed);
+    if index == 0 {
+        eprintln!("parallel-shadow first scoped traversal");
+    }
     let first = std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -518,6 +531,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     if index < first || index - first >= count {
         return original(memory, cpu);
     }
+    eprintln!("parallel-shadow sample={index} capture begin");
     let incoming = cpu.clone();
     let mxcsr = x86::stmxcsr();
     let context = memory.u32(cpu.esp + 4);

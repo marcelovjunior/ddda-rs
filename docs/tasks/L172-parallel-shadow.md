@@ -155,6 +155,14 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Head capture run cap172 reached gameplay but produced zero files and zero
+parallel-shadow lines. Hook installation, first shadow entry, first scoped/
+unscoped traversal and sample start now log explicitly to distinguish a
+missing environment switch from a routing/selection failure. Awaiting launch
+receipt and rerun. Pre-service full feature-light gate:277 passed,0 failed,
+7 ignored; final focused replay gate:10 passed both with/without feature.
+
+
 Serialized synthetic end-to-end replay now checks four ordered query entries
 and rejects command, resource, MXCSR and unsupported-target mutations. Private
 Enter/LeaveCriticalSection resolves only from captured IAT slots referenced

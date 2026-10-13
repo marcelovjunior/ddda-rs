@@ -2,6 +2,11 @@
 
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
+- Head cap172 reached gameplay but returned zero captures/hook lines.
+  Added installation and entry diagnostics; launch receipt/rerun pending.
+  Full feature-light before service addition277/0/7; final replay10PASS
+  with and without feature. Next: diagnose missing hook activation.
+
 - Publication preflight: 11 executor tests pass, including three new
   all-before-store checks. Complete serialized synthetic replay and private
   uncontended critical-section model: 10 replay tests pass, including
