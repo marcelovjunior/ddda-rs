@@ -1246,9 +1246,15 @@ fn compare_replays(
             return Err(format!("origins differ or not float: {ca:x?} / {cb:x?}"));
         }
         if results[0].2.contains_key(&ca.source) || results[1].2.contains_key(&cb.source) {
+            let word = |x: &mtcore::shadow_lanes::Binding| {
+                let w = offset & !3;
+                x.bytes.get(w..w + 4).map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            };
             return Err(format!(
-                "written by a traversal: serial {:#x} {} parallel {:#x} {}",
-                ca.source, results[0].2.contains_key(&ca.source), cb.source, results[1].2.contains_key(&cb.source)
+                "written by a traversal: stage {} section {} c{} byte {}: serial {:#x} {} ({:?}) parallel {:#x} {} ({:?})",
+                ca.stage, ca.section, ca.register, ca.byte,
+                ca.source, results[0].2.contains_key(&ca.source), word(a),
+                cb.source, results[1].2.contains_key(&cb.source), word(b)
             ));
         }
         // the stage's shader handle: metadata (+0x10 vertex, +0x14 pixel),
