@@ -332,3 +332,10 @@ cover disjoint claims, wraparound, unchanged input, and ordinary-access
 refusal before any child writes are absorbed:35 focused pass/0 failed.
 Next: head offline-example rebuild and replay48124; no new game needed.
 Production publication/equality remain OPEN.
+
+2026-10-13 head build3a4dfe16/c78206fc replay48124: serial/live66
+PASS;175 jobs; now refuses AtomicConflict64306CB8. Ordinary cursor
+access exists, so the atomic-only ownership assumption is not accepted.
+Moved refusal to PrivateMemory read/write site to preserve its caller
+backtrace; end-of-batch ownership check remains.35 focused tests pass.
+Next: offline rebuild/replay identifies the exact ordinary access.
