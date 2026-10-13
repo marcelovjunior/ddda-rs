@@ -40,7 +40,7 @@ CONST_PAGES = (0x014F0000, 0x014F9000, 0x0150A000, 0x01521000, 0x01531000, 0x016
 ACOS, SIN, COS, ASIN, ATAN2 = 0x012F161F, 0x012F0906, 0x012F0A55, 0x012F0D4C, 0x012F1109
 SIN0, COS0 = 0x012F1E8A, 0x012F2042  # double sin(0.0), cos(0.0): answered silently
 SILENT = (SIN0, COS0)
-RECORDED = (ACOS, SIN, COS, ASIN, ATAN2)
+RECORDED = (SIN, COS)  # acosf, asinf and atan2 run as the original's code (the port computes them natively)
 TABLE = 0x26000000
 VF58 = 0x30000058
 THIS, OUT, MODEL, VTABLE = 0x20000000, 0x21000000, 0x22000000, 0x22001000
@@ -154,18 +154,20 @@ class Oracle:
     def __init__(self):
         self.covered = set()
         uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
-        for base, size in CODE_RANGES:
-            uc.mem_map(base, size)
-            uc.mem_write(base, h.code(base, size))
-        for page in CONST_PAGES:
-            uc.mem_map(page, 0x1000)
-            uc.mem_write(page, h.code(page, 0x1000))
-        stubs = list(RECORDED) + list(SILENT) + [VF58]
-        for page in sorted({a & ~0xFFF for a in stubs}):
-            if not any(b <= page < b + n for b, n in CODE_RANGES) and page not in CONST_PAGES:
-                uc.mem_map(page, 0x1000)
-        for address in stubs:
-            uc.mem_write(address, b'\xc3')
+        # the whole exe image: the pose routines and the CRT's sinf/cosf run
+        # as the original's code (the port computes them natively), except
+        # for arguments the port hands back to the guest (see code())
+        for va, data in h.image()[1]:
+            lo, hi = va & ~0xFFF, (va + len(data) + 0xFFF) & ~0xFFF
+            uc.mem_map(lo, hi - lo)
+            uc.mem_write(va, data)
+        for address in list(RECORDED) + [SILENT[0], SILENT[1], VF58]:
+            if address in (SIN, COS):
+                continue
+            if address != VF58:
+                uc.mem_write(address, b'\xc3')
+        uc.mem_map(VF58 & ~0xFFF, 0x1000)
+        uc.mem_write(VF58, b'\xc3')
         for base, size in ((THIS, 0x1000), (OUT, 0x1000), (MODEL, 0x2000), (JOINTS, 0x1000), (ROOT, 0x1000),
                            (SRC, 0x1000), (TABLE, 0x1000), (STACK, 0x10000), (h.RET, 0x1000)):
             uc.mem_map(base, size)
@@ -196,9 +198,12 @@ class Oracle:
             uc.emu_stop()
             return
         stubs = RECORDED + SILENT + (VF58,)
-        if address not in stubs:
+        if address in (SIN, COS):
+            v = from_bits(self.xmm(0) & 0xFFFFFFFF)
+            if not (math.isfinite(v) and abs(v) >= 8192.0):
+                return  # the real sinf/cosf runs (the port handles all but large finite arguments)
+        elif address not in stubs:
             self.covered.add(address)
-            assert any(b <= address < b + n for b, n in CODE_RANGES), hex(address)
             return
         esp = uc.reg_read(x.UC_X86_REG_ESP)
         back = struct.unpack('<I', uc.mem_read(esp, 4))[0]
@@ -242,8 +247,9 @@ class Oracle:
                 q[0] = rng.uniform(-1e-3, 1e-3)
             n = math.sqrt(sum(a * a for a in q))
             return [a / n for a in q]
-        if mode < 0.2:
-            return rng.choice(([0.0] * 4, [0, 0, 0, 1.0], [math.nan, 0, 0, 1.0], [0.5, 0.5, 0.5, 0.5], [1.0, 1.0, 1.0, 1.0]))
+        if mode < 0.3:
+            return rng.choice(([0.0] * 4, [0, 0, 0, 1.0], [math.nan, 0, 0, 1.0], [0.5, 0.5, 0.5, 0.5], [1.0, 1.0, 1.0, 1.0],
+                                [0, 1.0, 0, 1.0], [0, 2.0, 0, 2.0], [0, 0.7071068, 0, 0.7071068], [0, 0.70710683, 0, 0.70710683], [0, -1.0, 0, 1.0], [0.3, -1.0, 0.2, 1.0], [0.3, 1.0, 0.2, 1.0], [-0.4, -1.0, 0.1, 1.0], [-0.4, 1.0, 0.1, 1.0]))
         return random_quat(rng)
 
     def case(self, seed):
@@ -268,7 +274,7 @@ class Oracle:
         uc.mem_write(THIS + 0x74, bytes([suppressed]))
         # the pose source's two angles (degrees)
         angles = (0.0, -0.0, 1e-9, 0.01, -0.01, 0.5, -0.5, 3.0, -3.0, 20.0, -20.0, 45.0, -45.0, 90.0, 179.0, 1000.0,
-                  math.nan, math.inf)
+                  math.nan, math.inf, 9000.0, -90000.0)
         for off in (0x538, 0x53C):
             a = rng.choice(angles + (rng.uniform(-60, 60), rng.uniform(-60, 60), rng.uniform(-5, 5), 0.0, 0.0))
             uc.mem_write(SRC + off, struct.pack('<f', a))
@@ -343,8 +349,11 @@ def main():
     if len(sys.argv) > 3:
         starts = [int(l.split(':')[0], 16) for l in open(sys.argv[3]) if l[:8].strip() and l[8:9] == ':']
         missed = [hex(a) for a in starts if a not in oracle.covered]
-        print(f'{len(starts) - len(missed)}/{len(starts)} instructions run; never run: {missed}')
-    json.dump(dict(function='0x00872420', cases=cases), open(out, 'w'))
+        print(f"{len(starts) - len(missed)}/{len(starts)} run; never run outside 0x82ab89..0x82afaa:", [a for a in missed if not (0x82ab89 <= int(a,16) <= 0x82afaa)])
+    # the CRT tables atan2/asinf read (private: never committed): the port's reciprocal
+    # estimate is the host's, so it can read a different table entry than this run did
+    table = h.code(0x0144C640, 0x0144DE60 - 0x0144C640)
+    json.dump(dict(function='0x00872420', cases=cases, table_base=0x0144C640, table=list(table)), open(out, 'w'))
     print(f'{n} cases, {calls} calls -> {out}')
     print(by_target)
 
