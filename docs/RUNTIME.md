@@ -1201,3 +1201,19 @@ ownership and wgpu/driver work can still allocate. Tests, synthetic release
 measurements and the unresolved `_NLG_Return2` attribution are recorded in
 [L143 results](tasks/L143-backend-thread.md); gameplay image/FPS validation
 remains with head.
+
+
+### L148 Vulkan frontend (checkpoint, opt-in)
+
+DDGPU_VK=1 memoizes raw/fallback binding records by retained derived-state
+and texture-list identities, skips memoization for feedback snapshots, and
+clears on resource release. Raw draws retain shared records; buffer ownership
+and descriptor resource sets are collected per pass. The common one-stream
+record requires no separate vertex-list allocation.
+
+Uniform constants use cached coherent host-visible Vulkan memory where
+available. Managed wgpu import owns allocation lifetime; fresh ranges may
+be written while older disjoint ranges are executing. Ring reuse waits for
+ordered submission and GPU completion. Other devices retain staged uploads.
+This remains opt-in: host-memory GPU cost and ring-wrap stalls need head's
+game acceptance. Final validation status: `docs/tasks/L148-vk-frontend.md`.
