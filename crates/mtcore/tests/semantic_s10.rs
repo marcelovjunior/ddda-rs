@@ -163,3 +163,20 @@ fn semantic_apply_param_block_matches_original() {
     let (cases, made) = run_cases(&vectors("param_block.json"), mtcore::semantic_s10::apply_param_block, false, &callees);
     eprintln!("{cases} ABI-level param_block cases passed; calls {made:x?}");
 }
+
+// verifies 0x007ffcc0 (ABI level; EAX = the final virtual call's result)
+#[test]
+fn semantic_submit_pass_records_matches_original() {
+    let c = |target, stack_args| Callee { target, reads: &[ECX, ESI, EDI], stack_args };
+    let callees = [
+        c(0x00ff_14d0, 0),
+        c(0x00fe_d190, 2),
+        c(0x00ea_23f0, 2),
+        c(0x3000_0014, 4),
+        c(0x3000_0018, 1),
+        c(0x3000_001c, 4),
+        c(0x3000_0020, 3),
+    ];
+    let (cases, made) = run_cases(&vectors("pass_records.json"), mtcore::semantic_s10::submit_pass_records, true, &callees);
+    eprintln!("{cases} ABI-level pass_records cases passed; calls {made:x?}");
+}
