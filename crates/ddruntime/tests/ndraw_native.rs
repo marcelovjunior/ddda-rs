@@ -259,7 +259,11 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     // the native draw carries the same state
     let id = identity(&s.mem, record);
     assert_eq!((id.blend.address, id.depth.address, id.raster.address, id.raster_flip), (blend, depth_state, raster, false));
-    let n = native_draw(&native, id, &mut caches).expect("native");
+    let n = native_draw(&native, &first.binding, id, &mut caches).expect("native");
+    // the banks' arrays are made once: the next draw of the binding shares them
+    let again = native_draw(&native, &first.binding, id, &mut caches).expect("native");
+    assert!(std::sync::Arc::ptr_eq(&n.vs_constants, &again.vs_constants));
+    assert!(std::sync::Arc::ptr_eq(&n.ps_constants, &again.ps_constants));
     assert_eq!(&n.state.render_states[..], &native.render_states[..]);
     assert_eq!(&n.vs_constants.floats[0].registers[..], &native.vs_constants.f[..]);
     assert_eq!(n.vs_constants.floats[0].first, 0);

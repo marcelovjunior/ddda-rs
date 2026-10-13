@@ -79,13 +79,13 @@ fn draw(blend: bool, scissor: bool, depth: bool, colour: [f32; 4]) -> NativeDraw
             format: 101,
         }),
         vs_constants: Default::default(),
-        ps_constants: NativeConstants {
+        ps_constants: Arc::new(NativeConstants {
             floats: vec![NativeFloatWrite {
                 first: 0,
                 registers: vec![colour.map(f32::to_bits)].into(),
             }],
             ..Default::default()
-        },
+        }),
         viewport: [0, 0, 8, 8, 0, 1f32.to_bits()],
         scissor: scissor.then_some([1, 2, 6, 7]),
         primitive: 4,
@@ -233,7 +233,7 @@ fn native_job_encoding_cost() {
         let mut pass = job(seed.clone(),&t,None).passes.remove(0);
         pass.draws = (p*draws/passes..(p+1)*draws/passes).map(|i| {
             let mut d = seed.clone();
-            d.ps_constants.floats[0].registers = vec![[(i%17) as f32/16.0,(i%13) as f32/12.0,0.25,1.0].map(f32::to_bits)].into();
+            Arc::make_mut(&mut d.ps_constants).floats[0].registers = vec![[(i%17) as f32/16.0,(i%13) as f32/12.0,0.25,1.0].map(f32::to_bits)].into();
             d
         }).collect();
         j.passes.push(pass);
@@ -244,7 +244,7 @@ fn native_job_encoding_cost() {
     let churn = std::env::var("L152_CHURN").as_deref() == Ok("1");
     let mut alternate = j.clone();
     for d in alternate.passes.iter_mut().flat_map(|p| &mut p.draws) {
-        Arc::make_mut(&mut d.ps_constants.floats[0].registers)[0][2] = 0.75f32.to_bits();
+        Arc::make_mut(&mut Arc::make_mut(&mut d.ps_constants).floats[0].registers)[0][2] = 0.75f32.to_bits();
     }
     assert!(backend.native(alternate.clone()).is_ok());
     let alternate_expected = backend.read_back(&t).unwrap();
@@ -362,7 +362,7 @@ fn native_job_rejection_is_atomic_and_recovers() {
     let before = backend.read_back(&t).unwrap();
     let good = draw(false, false, false, [1.0, 0.0, 0.0, 1.0]);
     let mut bad = good.clone();
-    bad.ps_constants = NativeConstants::default();
+    bad.ps_constants = Default::default();
     let mut j = job(good.clone(), &t, None);
     j.passes[0].clear_colour = Some(0xff00ff00);
     j.passes[0].draws.push(bad);
@@ -509,7 +509,7 @@ fn native_resident_jobs_follow_async_finisher_and_skip_unchanged_uploads() {
     assert_eq!(backend.native_job_stats().upload_bytes, uploaded);
     let expected = backend.read_back(&t).unwrap();
     let mut green = red.clone();
-    green.ps_constants.floats[0].registers = vec![[0.0f32, 1.0, 0.0, 1.0].map(f32::to_bits)].into();
+    Arc::make_mut(&mut green.ps_constants).floats[0].registers = vec![[0.0f32, 1.0, 0.0, 1.0].map(f32::to_bits)].into();
     assert!(backend.native(job(green, &t, None)).is_ok());
     assert!(backend.native_job_stats().upload_bytes > uploaded);
     let changed = backend.read_back(&t).unwrap();

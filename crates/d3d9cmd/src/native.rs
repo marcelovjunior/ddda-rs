@@ -70,8 +70,10 @@ pub struct NativeDraw {
     pub textures: Arc<[TextureBinding]>,
     pub streams: Arc<[NativeStream]>,
     pub indices: Option<NativeIndices>,
-    pub vs_constants: NativeConstants,
-    pub ps_constants: NativeConstants,
+    /// Shared by the draws of a constant bank (an unchanged bank is the
+    /// same Arc: a consumer may tell it by pointer).
+    pub vs_constants: Arc<NativeConstants>,
+    pub ps_constants: Arc<NativeConstants>,
     /// x, y, width, height, minimum/maximum depth IEEE f32 bits.
     pub viewport: [u32; 6],
     /// D3D rectangle: left, top, right, bottom (not width/height).

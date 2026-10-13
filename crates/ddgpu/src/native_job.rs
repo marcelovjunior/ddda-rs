@@ -426,7 +426,7 @@ pub(crate) struct Worker {
     constants: FxMap<n::Shader, n::ConstantBuffer>,
     /// the register arrays last applied to each constant buffer (held, so
     /// a pointer compare is exact): the same arrays are not applied again
-    applied: FxMap<n::ConstantBuffer, NativeConstants>,
+    applied: FxMap<n::ConstantBuffer, Arc<NativeConstants>>,
     shaders: FxMap<(usize, n::Stage), ShaderEntry>,
     inputs: FxMap<InputKey, InputEntry>,
     fixed: FxMap<NativeStateIdentity, Vec<FixedEntry>>,
@@ -1178,7 +1178,7 @@ impl Worker {
                 for (stage, updates) in [&d.ps_constants, &d.vs_constants].into_iter().enumerate() {
                     let shader = p.shaders[stage];
                     let c = constants[&shader];
-                    if !applied.get(&c).is_some_and(|last| same_arrays(last, updates)) {
+                    if !applied.get(&c).is_some_and(|last| Arc::ptr_eq(last, updates) || same_arrays(last, updates)) {
                         apply_constants(
                             &mut recorder,
                             c,
@@ -1532,27 +1532,17 @@ impl ConstantReads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Indexed triangle strips: the index format on the pipeline whatever
+    /// the MinIndex/NumVertices hint says, as the D3D9 path (L141); indexed
+    /// line strips and unknown formats refused; other primitives none.
     #[test]
-    fn strip_restart_exclusion_uses_declared_index_range_without_wrapping() {
-        for primitive in [5] {
-            assert_eq!(
-                native_strip_index(primitive, Some(101), 0, 65535).unwrap(),
-                Some(wgpu::IndexFormat::Uint16)
-            );
-            assert!(native_strip_index(primitive, Some(101), 0, 65536).is_err());
-            assert!(native_strip_index(primitive, Some(101), 65534, 1).is_ok());
-            assert!(native_strip_index(primitive, Some(101), 65535, 1).is_err());
-            assert!(native_strip_index(primitive, Some(101), 0, 0).is_err());
-            assert_eq!(
-                native_strip_index(primitive, Some(102), 0, u32::MAX).unwrap(),
-                Some(wgpu::IndexFormat::Uint32)
-            );
-            assert!(native_strip_index(primitive, Some(102), u32::MAX - 1, 1).is_ok());
-            assert!(native_strip_index(primitive, Some(102), u32::MAX - 1, 2).is_err());
-            assert!(native_strip_index(primitive, Some(102), u32::MAX, u32::MAX).is_err());
-            assert!(native_strip_index(primitive, Some(100), 0, 3).is_err());
-            assert_eq!(native_strip_index(primitive, None, 0, 0).unwrap(), None);
+    fn strip_index_format_follows_the_d3d9_path_whatever_the_range_hint() {
+        for (min_index, vertex_count) in [(0, 65535), (0, 65536), (65534, 1), (65535, 1), (0, 0), (u32::MAX, u32::MAX)] {
+            assert_eq!(native_strip_index(5, Some(101), min_index, vertex_count).unwrap(), Some(wgpu::IndexFormat::Uint16));
+            assert_eq!(native_strip_index(5, Some(102), min_index, vertex_count).unwrap(), Some(wgpu::IndexFormat::Uint32));
         }
+        assert!(native_strip_index(5, Some(100), 0, 3).is_err());
+        assert_eq!(native_strip_index(5, None, 0, 0).unwrap(), None);
         assert!(native_strip_index(3, Some(101), 0, 3).is_err());
         assert_eq!(native_strip_index(4, Some(101), 0, 65536).unwrap(), None);
     }

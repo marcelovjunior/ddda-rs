@@ -80,13 +80,13 @@ fn fixture(backend: &mut WgpuBackend, target: &Target) -> (NativeJob, DrawCall) 
         .into(),
         indices: None,
         vs_constants: Default::default(),
-        ps_constants: NativeConstants {
+        ps_constants: Arc::new(NativeConstants {
             floats: vec![NativeFloatWrite {
                 first: 0,
                 registers: vec![colour].into(),
             }],
             ..Default::default()
-        },
+        }),
         viewport: [0, 0, 8, 8, 0, 1f32.to_bits()],
         scissor: None,
         primitive: 4,
@@ -156,7 +156,7 @@ fn native_shadow_loads_pre_oracle_pixels_and_never_changes_visible_output() {
     let target = target();
     let (job, oracle) = fixture(&mut backend, &target);
     let mut mismatched = job.clone();
-    mismatched.passes[0].draws[0].ps_constants.floats[0].registers =
+    Arc::make_mut(&mut mismatched.passes[0].draws[0].ps_constants).floats[0].registers =
         vec![[0.0f32, 1.0, 0.0, 0.5].map(f32::to_bits)].into();
     for (id, job) in [(100, job), (101, mismatched)] {
         backend.clear(&clear(&target));

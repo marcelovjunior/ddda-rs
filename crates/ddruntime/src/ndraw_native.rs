@@ -599,6 +599,9 @@ pub struct BindingPart {
     constants: [Arc<Constants>; 2],
     /// per stage: float, int and bool registers written
     written: [([u64; 4], u16, u16); 2],
+    /// the banks as native register arrays, made by the first native draw
+    /// (shared by every draw of the part, across frames while unchanged)
+    native: std::sync::OnceLock<[Arc<NativeConstants>; 2]>,
 }
 
 /// A shader binding's state as the full apply sets it (0x00DAA8B0 with
@@ -705,7 +708,13 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
     let part = match previous {
         Some(p) if Arc::ptr_eq(&p.meta, &meta) && p.alpha == alpha && p.written == written
             && *p.constants[0] == banks[0] && *p.constants[1] == banks[1] => p.clone(),
-        _ => Arc::new(BindingPart { meta, alpha, constants: [Arc::new(banks[0].clone()), Arc::new(banks[1].clone())], written }),
+        _ => Arc::new(BindingPart {
+            meta,
+            alpha,
+            constants: [Arc::new(banks[0].clone()), Arc::new(banks[1].clone())],
+            written,
+            native: Default::default(),
+        }),
     };
     c.banks = banks;
     Ok(part)
@@ -1043,8 +1052,6 @@ pub struct Caches {
     /// native fixed state by identity and render-state list (its address:
     /// the list is held in `states`)
     native_fixed: FxMap<(NativeStateIdentity, u64), Arc<NativeFixedState>>,
-    /// native register arrays by constant bank (held)
-    native_constants: FxMap<usize, (Arc<Constants>, NativeConstants)>,
     // this frame's
     /// shader bindings by address, with the frame they were last built
     /// or checked in (kept across frames: an unchanged binding keeps its
@@ -1524,7 +1531,12 @@ pub fn identity(m: &dyn Mem, record: u32) -> NativeStateIdentity {
 /// A taken draw as a native draw: the DrawCall's state; the constants as
 /// one write of each bank the DrawCall carries (every register the shaders
 /// read, see draw_call).
-pub fn native_draw(d: &DrawCall, identity: NativeStateIdentity, caches: &mut Caches) -> Result<NativeDraw, Refusal> {
+pub fn native_draw(
+    d: &DrawCall,
+    binding: &BindingPart,
+    identity: NativeStateIdentity,
+    caches: &mut Caches,
+) -> Result<NativeDraw, Refusal> {
     let Vertices::Streams(streams) = &d.vertices else { return Err(Refusal::Device) };
     // non-instanced: every stream steps once per vertex
     if streams.iter().any(|s| s.4 != 1) {
@@ -1536,26 +1548,23 @@ pub fn native_draw(d: &DrawCall, identity: NativeStateIdentity, caches: &mut Cac
     let state = caches.native_fixed.entry((identity, d.render_states.address())).or_insert_with(|| {
         Arc::new(NativeFixedState { identity, render_states: d.render_states.iter().copied().collect::<Vec<_>>().into() })
     }).clone();
-    // one set of register arrays per constant bank (banks are shared by the
-    // draws of a binding, across frames while unchanged), so the worker can
-    // tell an unchanged bank by its pointer
-    let mut constants = |c: &Arc<Constants>| {
-        let key = Arc::as_ptr(c) as usize;
-        if let Some((_, n)) = caches.native_constants.get(&key) {
-            return n.clone();
-        }
-        if caches.native_constants.len() > 8192 {
-            caches.native_constants.clear();
-        }
-        let n = NativeConstants {
-            floats: vec![NativeFloatWrite { first: 0, registers: c.f.as_slice().into() }],
-            ints: vec![NativeIntWrite { first: 0, registers: c.i.as_slice().into() }],
-            bools: vec![NativeBoolWrite { first: 0, registers: c.b.as_slice().into() }],
-        };
-        // the bank is held, so its address is not reused while cached
-        caches.native_constants.insert(key, (c.clone(), n.clone()));
-        n
-    };
+    // one set of register arrays per constant bank, made once and held by
+    // the binding's part (banks are shared by the draws of a binding, across
+    // frames while unchanged), so the worker can tell an unchanged bank by
+    // its pointer
+    debug_assert!(Arc::ptr_eq(&d.vs_constants, &binding.constants[0]) && Arc::ptr_eq(&d.ps_constants, &binding.constants[1]));
+    let [vs_constants, ps_constants] = binding
+        .native
+        .get_or_init(|| {
+            binding.constants.each_ref().map(|c| {
+                Arc::new(NativeConstants {
+                    floats: vec![NativeFloatWrite { first: 0, registers: c.f.as_slice().into() }],
+                    ints: vec![NativeIntWrite { first: 0, registers: c.i.as_slice().into() }],
+                    bools: vec![NativeBoolWrite { first: 0, registers: c.b.as_slice().into() }],
+                })
+            })
+        })
+        .clone();
     let scissor = d.render_states.iter().any(|&(s, v)| s == 174 && v != 0);
     Ok(NativeDraw {
         state,
@@ -1563,13 +1572,14 @@ pub fn native_draw(d: &DrawCall, identity: NativeStateIdentity, caches: &mut Cac
         pixel_shader,
         declaration: d.declaration.clone(),
         textures: d.textures.clone(),
-        streams: streams.iter().map(|s| NativeStream { stream: s.0, resource: s.1, offset: s.2, stride: s.3 }).collect::<Vec<_>>().into(),
+        // an exact-length iterator: the slice allocated once
+        streams: streams.iter().map(|s| NativeStream { stream: s.0, resource: s.1, offset: s.2, stride: s.3 }).collect(),
         indices: match d.indices {
             Indices::Buffer(resource, format) => Some(NativeIndices { resource, format }),
             _ => None,
         },
-        vs_constants: constants(&d.vs_constants),
-        ps_constants: constants(&d.ps_constants),
+        vs_constants,
+        ps_constants,
         viewport: d.viewport,
         scissor: scissor.then_some(d.scissor),
         primitive: d.primitive,
@@ -1861,7 +1871,7 @@ impl Native {
                 t.taken += 1;
                 Taken::Handled
             }
-            Ok(Decoded { call: d, shadow, binding }) => match native_draw(&d, identity(m, record), &mut g.caches) {
+            Ok(Decoded { call: d, shadow, binding }) => match native_draw(&d, &binding, identity(m, record), &mut g.caches) {
                 Err(r) => {
                     *t.refused.entry(r).or_default() += 1;
                     Taken::Default
@@ -2471,6 +2481,7 @@ mod tests {
             alpha: None,
             constants: [Arc::new(bank(vs, 256)), Arc::new(bank(ps, 224))],
             written: [(mask(vs), 0, 0), (mask(ps), 0, 0)],
+            native: Default::default(),
         })
     }
 
