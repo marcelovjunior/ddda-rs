@@ -142,6 +142,10 @@
   to private captures (v3 readable); head-only fresh capture requested.
   State-difference diagnostics run independently of first stream refusal;
   all memory/stream acceptance gates remain strict.
+  Head #14487/#14488 requests claude-9 takeover; full HANDOFF with exact
+  commands and remaining proof/publication gates is in the task brief.
+  Latest428e3fc0 diagnostic:66 serial/live entries,175 jobs,64 rebased
+  headers; shader padding refusal persists, state gate remains strict.
   Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)
