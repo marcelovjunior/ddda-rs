@@ -120,6 +120,10 @@
   Confirmed DA7D80 InterlockedExchangeAdd dependency now uses tracked private
   memory;33 focused tests pass. Offline-example rebuild/replay next.
   Existing sample has one job at t23s; AFTER_MS=60000 selects later work.
+- Gameplay capture serial/live66 PASS,175 jobs complete both private lanes.
+  Merge finds shared command cursor dependency; transaction-local atomic
+  counter now preserves original allocation semantics and rejects ordinary
+  cursor accesses.35 focused pass. Next: offline rebuild/replay48124.
 - Rebuilt original replay passes serial/live6, then refuses fresh command
   page0x64d31820. DA7D70 current arena now preseeded from runtime pointer
   and capacity;34 focused tests pass. Next: delayed head recapture with

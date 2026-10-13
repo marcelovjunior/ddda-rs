@@ -204,6 +204,7 @@ pub(crate) enum Reject {
     },
     ThreadStart,
     UnsupportedTarget(u32),
+    AtomicConflict(u32),
     UnsupportedScheduler(u32),
     IncoherentInput(u32),
     PublicationConflict(u32),
@@ -354,6 +355,15 @@ pub(crate) struct LaneResult<T> {
     pub(crate) range: Range<usize>,
     pub(crate) output: T,
     memory: LaneMemory,
+}
+
+impl<T> LaneResult<T> {
+    /// A separately synchronized service may own a field only if no callback
+    /// also accessed it through ordinary memory. Do not suppress dependencies.
+    pub(crate) fn touches(&self, range: Range<u32>) -> bool {
+        self.memory.reads.borrow().range(range.clone()).next().is_some()
+            || self.memory.writes.range(range).next().is_some()
+    }
 }
 
 /// Ordered contiguous partitions, not work stealing: FED3B0 concatenates

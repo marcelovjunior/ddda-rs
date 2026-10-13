@@ -315,3 +315,20 @@ DDRUNTIME_PARALLEL_SHADOW=1 DDRUNTIME_PARALLEL_SHADOW_AFTER_MS=60000
 DDRUNTIME_PARALLEL_SHADOW_FIRST=0 DDRUNTIME_PARALLEL_SHADOW_COUNT=1
 DDRUNTIME_PARALLEL_SHADOW_DUMP=E:/ddda-re/notes/native-L172/replay.
 Still no original parallel equality, production publication or TRAIN READY.
+
+2026-10-13 gameplay capture shadow-48124-0 (16,223,235 bytes), head
+fca9c47d build: serial/live66 entries PASS, private scheduler175 jobs. Both
+callback lanes complete; merge refuses renderer command cursor64306CB9.
+Closed with a transaction-local shared atomic counter for the exact
+sRender+33DC8 InterlockedExchangeAdd used by DA7D80. Claims preserve
+return-old/wrapping semantics and synchronize only within this replay;
+allocation capacity checks remain in the original DA7D70 body. Ordinary
+reads or writes of that counter by any lane reject with AtomicConflict.
+All other read/write dependencies stay checked; only after successful
+merge is the counter stored once in parent private memory. Allocation
+order may vary across workers, as with the original atomic allocator;
+strict consumed-stream comparison is still mandatory. Synthetic tests
+cover disjoint claims, wraparound, unchanged input, and ordinary-access
+refusal before any child writes are absorbed:35 focused pass/0 failed.
+Next: head offline-example rebuild and replay48124; no new game needed.
+Production publication/equality remain OPEN.
