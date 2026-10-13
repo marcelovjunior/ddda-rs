@@ -321,6 +321,15 @@ impl Session {
                 }
                 self.images.entry(resource).or_default().insert(index, u);
             }
+            Upload::BufferRange { resource, size, offset, bytes } => {
+                // the stored bytes patched (zero where the buffer had none)
+                let mut whole = self.buffers.remove(&resource).unwrap_or_default();
+                whole.resize(size as usize, 0);
+                let at = (offset as usize).min(whole.len());
+                let end = (at + bytes.len()).min(whole.len());
+                whole[at..end].copy_from_slice(&bytes[..end - at]);
+                return self.upload(Upload::Buffer { resource, bytes: whole });
+            }
             Upload::Buffer { resource, bytes } => {
                 if let Some(b) = self.vertex_buffers.remove(&resource) {
                     release(b);

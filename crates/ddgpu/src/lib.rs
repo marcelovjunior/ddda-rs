@@ -2988,7 +2988,7 @@ impl GraphicsBackend for WgpuBackend {
     fn upload(&mut self, mut upload: Upload) {
         // recorded draws read the old contents: submit them first
         let resource = match &upload {
-            Upload::Buffer { resource, .. } | Upload::Image { resource, .. } => *resource,
+            Upload::Buffer { resource, .. } | Upload::BufferRange { resource, .. } | Upload::Image { resource, .. } => *resource,
         };
         if self.open_uses.borrow().contains(&resource) {
             self.flush();
@@ -3016,6 +3016,36 @@ impl GraphicsBackend for WgpuBackend {
                     }
                 }
             }
+            Upload::BufferRange { resource, size, offset, bytes } => {
+                let at = *offset as usize;
+                if self.native_sim {
+                    if let Some(v) = self.small_buffers.get_mut(resource) {
+                        let end = (at + bytes.len()).min(v.len());
+                        if at < end {
+                            v[at..end].copy_from_slice(&bytes[..end - at]);
+                        }
+                    }
+                }
+                let gpu_size = (*size as u64).next_multiple_of(4).max(4);
+                match self.buffers.get(resource) {
+                    Some(b) if b.size() == gpu_size => {
+                        upload_data::pad_buffer(bytes);
+                        self.wait_finisher();
+                        self.queue.write_buffer(b, at as u64, bytes);
+                    }
+                    _ => {
+                        // no buffer of that size (a backend that missed the
+                        // whole upload): the rest reads zero
+                        let mut whole = vec![0u8; *size as usize];
+                        let end = (at + bytes.len()).min(whole.len());
+                        if at < end {
+                            whole[at..end].copy_from_slice(&bytes[..end - at]);
+                        }
+                        let b = self.inline_buffer(&whole, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX);
+                        self.buffers.insert(*resource, b);
+                    }
+                }
+            }
             Upload::Image { resource, .. } => {
                 if self.textures.contains_key(resource) {
                     self.write_image(&upload);
@@ -3029,7 +3059,7 @@ impl GraphicsBackend for WgpuBackend {
             }
         }
         // the bytes are written (wgpu copied them): the recorder reuses them
-        let (Upload::Buffer { bytes, .. } | Upload::Image { bytes, .. }) = upload;
+        let (Upload::Buffer { bytes, .. } | Upload::BufferRange { bytes, .. } | Upload::Image { bytes, .. }) = upload;
         d3d9cmd::bytes::give(bytes);
     }
 

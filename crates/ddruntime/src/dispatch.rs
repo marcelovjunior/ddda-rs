@@ -430,13 +430,26 @@ impl Registry {
         if guest != x86::MXCSR_DEFAULT {
             x86::ldmxcsr(x86::MXCSR_DEFAULT);
         }
-        let lock = crate::threads::service_lock_free();
-        let scope = crate::threads::ServiceScope::enter_with_tail(false);
-        let d3d = crate::d3d9dev::device_lock();
-        f(m, cpu);
-        drop(d3d);
-        drop(scope);
-        drop(lock);
+        let rt = crate::runtime::pin();
+        if crate::threads::parallel_in(&rt) {
+            // L144: in parallel mode the lock-free service lock does nothing
+            // and the service scope guards nothing a device-state method can
+            // reach (preemption is serial-only; the service tail is never
+            // released while the D3D lock is held, threads::unlocked): the
+            // D3D lock alone, on the one pin
+            let d3d = crate::d3d9dev::device_lock_pinned(rt);
+            f(m, cpu);
+            drop(d3d);
+        } else {
+            drop(rt);
+            let lock = crate::threads::service_lock_free();
+            let scope = crate::threads::ServiceScope::enter_with_tail(false);
+            let d3d = crate::d3d9dev::device_lock();
+            f(m, cpu);
+            drop(d3d);
+            drop(scope);
+            drop(lock);
+        }
         if x86::stmxcsr() != cpu.mxcsr.0 {
             x86::ldmxcsr(cpu.mxcsr.0);
         }

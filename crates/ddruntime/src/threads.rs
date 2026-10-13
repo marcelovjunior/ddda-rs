@@ -639,6 +639,12 @@ pub(crate) fn service() -> ServiceLock {
 /// A lock-free service's entry (crate::dispatch::Binding::LockFree): no
 /// lock in parallel mode; in the serial mode the API call where a time
 /// slice may end, as for any service.
+/// Whether `rt` runs in parallel mode (crate::dispatch's device-state fast
+/// path).
+pub(crate) fn parallel_in(rt: &Runtime) -> bool {
+    ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) && rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn service_lock_free() -> ServiceLock {
     if !ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed)
         || !runtime::with(|rt| rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed))

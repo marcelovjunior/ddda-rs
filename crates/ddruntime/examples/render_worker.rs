@@ -120,7 +120,11 @@ fn pixel_shader(n: u32) -> Vec<u32> {
 
 struct Null;
 impl d3d9cmd::GraphicsBackend for Null {
-    fn upload(&mut self, _: d3d9cmd::Upload) {}
+    fn upload(&mut self, u: d3d9cmd::Upload) {
+        // as ddgpu: the written bytes go back to the recorder (L144)
+        let (d3d9cmd::Upload::Buffer { bytes, .. } | d3d9cmd::Upload::BufferRange { bytes, .. } | d3d9cmd::Upload::Image { bytes, .. }) = u;
+        d3d9cmd::bytes::give(bytes);
+    }
     fn draw(&mut self, _: &d3d9cmd::DrawCall) {}
     fn clear(&mut self, _: &d3d9cmd::ClearCall) {}
     fn present(&mut self, _: &d3d9cmd::Target) {}
@@ -193,10 +197,14 @@ fn main() {
     }
     assert_eq!(com(mem, dev, 41, &[]), 0); // BeginScene
 
-    // RW_LOOP=ps|tex|draw|addref: one call in a loop for RW_SECS seconds
-    // (default 10), timed without per-call clock reads; for a profiler
+    // RW_LOOP=ps|tex|draw|addref|lock2m: one call in a loop for RW_SECS
+    // seconds (default 10), timed without per-call clock reads; for a
+    // profiler. lock2m: lock 4 KB of a 2 MB dynamic vertex buffer (a moving
+    // window, as a ring buffer), write it, unlock and draw from it: the
+    // draw uploads what the lock made dirty.
     if let Ok(what) = std::env::var("RW_LOOP") {
         let secs: f64 = std::env::var("RW_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
+        let big = out(mem, dev, 26, &[2 << 20, 0x208, 0, 0, OUT, 0]);
         ddruntime::threads::without_lock(|| {
             let t = Instant::now();
             let mut calls = 0u64;
@@ -206,11 +214,24 @@ fn main() {
                         "ps" => assert_eq!(com(mem, dev, 109, &[0, DATA, 4]), 0),
                         "tex" => assert_eq!(com(mem, dev, 65, &[0, textures[(k % 6) as usize]]), 0),
                         "draw" => assert_eq!(com(mem, dev, 82, &[4, 0, 0, 1000, 0, 300]), 0),
+                        "lock2m" => {
+                            if k == 0 {
+                                assert_eq!(com(mem, dev, 100, &[0, big, 0, 32]), 0);
+                            }
+                            let at = (k % 512) * 4096;
+                            assert_eq!(com(mem, big, 11, &[at, 4096, OUT, if at == 0 { 0x2000 } else { 0x1000 }]), 0);
+                            let p = mem.u32(OUT);
+                            for w in (0..4096).step_by(64) {
+                                mem.set_u32(p + w, k ^ w);
+                            }
+                            assert_eq!(com(mem, big, 12, &[]), 0);
+                            assert_eq!(com(mem, dev, 82, &[4, 0, 0, 1000, 0, 300]), 0);
+                        }
                         "addref" => {
                             com(mem, textures[(k % 6) as usize], 1, &[]);
                             com(mem, textures[(k % 6) as usize], 2, &[]);
                         }
-                        other => panic!("RW_LOOP={other}: ps, tex, draw or addref"),
+                        other => panic!("RW_LOOP={other}: ps, tex, draw, addref or lock2m"),
                     }
                 }
                 calls += 10_000;

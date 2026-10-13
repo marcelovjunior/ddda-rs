@@ -235,6 +235,14 @@ impl<W: Write> Writer<W> {
                 let id = self.blob(bytes)?;
                 e.u32(id);
             }
+            Cmd::Upload(Upload::BufferRange { resource, size, offset, bytes }) => {
+                e.u8(13);
+                for v in [*resource, *size, *offset] {
+                    e.u32(v);
+                }
+                let id = self.blob(bytes)?;
+                e.u32(id);
+            }
             Cmd::Draw(d) => {
                 e.u8(2);
                 self.draw(&mut e, d)?;
@@ -701,6 +709,10 @@ impl Dec<'_> {
             1 => {
                 let resource = self.u32()?;
                 Command::Upload(Upload::Buffer { resource, bytes: self.blob()?.to_vec() })
+            }
+            13 => {
+                let (resource, size, offset) = (self.u32()?, self.u32()?, self.u32()?);
+                Command::Upload(Upload::BufferRange { resource, size, offset, bytes: self.blob()?.to_vec() })
             }
             2 => Command::Draw(self.draw()?),
             3 => {

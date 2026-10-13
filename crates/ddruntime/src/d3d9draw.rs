@@ -156,6 +156,21 @@ fn read_bytes(m: &dyn Mem, at: u32, len: u32) -> Vec<u8> {
     v
 }
 
+/// A buffer's upload: only its locked bytes (aligned out to 4 bytes) when
+/// that is not the whole buffer (L144: a draw after a small lock re-read and
+/// re-uploaded megabytes).
+fn buffer_upload(m: &dyn Mem, resource: u32, img: &Image) -> Upload {
+    if let Some((lo, hi)) = img.pending {
+        let lo = lo & !3;
+        let hi = hi.next_multiple_of(4).min(img.size);
+        if lo > 0 || hi < img.size {
+            let bytes = if lo < hi { read_bytes(m, img.shadow + lo, hi - lo) } else { Vec::new() };
+            return Upload::BufferRange { resource, size: img.size, offset: lo, bytes };
+        }
+    }
+    Upload::Buffer { resource, bytes: read_bytes(m, img.shadow, img.size) }
+}
+
 fn image_upload(m: &dyn Mem, resource: u32, index: u32, format: u32, img: &Image) -> Upload {
     Upload::Image {
         resource, index, format, width: img.width, height: img.height, depth: img.depth, pitch: img.pitch, slice: img.slice,
@@ -198,7 +213,7 @@ pub(super) fn upload_reads(m: &dyn Mem, out: Vec<(u32, u32, u32, Image)>) {
     for (resource, index, format, img) in out {
         let load_start = (index != u32::MAX).then(crate::load_log::begin).flatten();
         let u = if index == u32::MAX {
-            Upload::Buffer { resource, bytes: read_bytes(m, img.shadow, img.size) }
+            buffer_upload(m, resource, &img)
         } else {
             image_upload(m, resource, index, format, &img)
         };
@@ -252,7 +267,11 @@ fn collect_dirty(o: &mut crate::d3d9dev::Objects, resource: u32, out: &mut Vec<(
         }
         Some(Kind::Buffer { data, .. }) => {
             if std::mem::take(&mut data.image.dirty) && data.image.shadow != 0 {
-                out.push((resource, u32::MAX, 0, data.image.clone()));
+                // the locked bytes (L144), unless the buffer never went up whole
+                let mut img = data.image.clone();
+                img.pending = std::mem::take(&mut data.image.pending).filter(|_| data.image.uploaded);
+                data.image.uploaded = true;
+                out.push((resource, u32::MAX, 0, img));
             }
             return;
         }

@@ -75,6 +75,12 @@ pub struct Image {
     pub shadow: u32,
     pub locks: u32,
     pub dirty: bool,
+    /// A buffer's bytes locked since its last upload (L144: the next upload
+    /// sends only those once the whole buffer has gone up once); None: the
+    /// whole image.
+    pub pending: Option<(u32, u32)>,
+    /// Whether the whole buffer has been uploaded.
+    pub uploaded: bool,
 }
 
 impl Image {
@@ -629,6 +635,12 @@ pub fn buffer_lock(m: &mut dyn Mem, cpu: &mut Cpu) {
         let base = img.shadow(m);
         img.locks += 1;
         m.set_u32(out, base + offset);
+        // the bytes the caller may write (size 0: to the end)
+        let end = if size == 0 { img.size } else { offset + size };
+        img.pending = Some(match img.pending {
+            Some((lo, hi)) => (lo.min(offset), hi.max(end)),
+            None => (offset, end),
+        });
         D3D_OK
     };
     buffer(this, |b| b.image = img);

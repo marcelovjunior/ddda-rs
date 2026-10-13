@@ -32,6 +32,11 @@ pub enum Upload {
     /// volume level) or a standalone surface (`index` 0).
     Image { resource: u32, index: u32, format: u32, width: u32, height: u32, depth: u32, pitch: u32, slice: u32, bytes: Vec<u8> },
     Buffer { resource: u32, bytes: Vec<u8> },
+    /// Part of a buffer (L144): `bytes` at byte `offset` of the buffer of
+    /// `size` bytes, the rest unchanged. `offset` is a multiple of 4, and
+    /// so is the length unless the part ends the buffer. The buffer's first
+    /// upload is whole; a backend that lacks it takes the rest as zero.
+    BufferRange { resource: u32, size: u32, offset: u32, bytes: Vec<u8> },
 }
 
 #[derive(Clone, Debug, PartialEq)]

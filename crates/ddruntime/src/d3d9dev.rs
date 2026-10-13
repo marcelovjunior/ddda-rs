@@ -337,7 +337,12 @@ pub(crate) fn holds_device_lock() -> bool {
 pub(crate) struct DeviceLock(crate::runtime::Pinned);
 
 pub(crate) fn device_lock() -> DeviceLock {
-    let rt = crate::runtime::pin();
+    device_lock_pinned(crate::runtime::pin())
+}
+
+/// [`device_lock`] with the runtime already pinned (L144: one pin for a
+/// device-state call).
+pub(crate) fn device_lock_pinned(rt: crate::runtime::Pinned) -> DeviceLock {
     rt.d3d.acquire();
     // (the deferred list first: asking about the guest lock takes its mutex)
     if rt.d3d_deferred.load(std::sync::atomic::Ordering::Relaxed) && crate::threads::holds_guest_lock() {
