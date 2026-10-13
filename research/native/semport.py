@@ -448,7 +448,114 @@ class Fn:
                 leaders.add(self.insns[k + 1].address)
         return sorted(leaders)
 
+    def structure(self):
+        """Blocks in address order with their forward-label / loop structure,
+        or None when the CFG is not a forward DAG plus natural loops."""
+        leaders = self.blocks()
+        starts = sorted(leaders)
+        blocks = []
+        for n, a in enumerate(starts):
+            end = starts[n + 1] if n + 1 < len(starts) else 1 << 40
+            blocks.append([i for i in self.insns if a <= i.address < end])
+        index = {a: n for n, a in enumerate(starts)}
+        forward_targets = {}   # target index -> set of source indices
+        loops = {}             # header index -> last back-edge source index
+        for n, b in enumerate(blocks):
+            last = b[-1]
+            if last.mnemonic in JCC or last.mnemonic == 'jmp':
+                t = index[last.operands[0].imm]
+                if t > n:
+                    forward_targets.setdefault(t, set()).add(n)
+                else:
+                    loops[t] = max(loops.get(t, -1), n)
+        # label opening position: start of the innermost loop containing the target, else 0
+        labels = {}
+        for t, sources in forward_targets.items():
+            inner = [h for h, e in loops.items() if h < t <= e]
+            op = max(inner) if inner else 0
+            if any(not (op <= src < t) for src in sources):
+                return None
+            labels[t] = op
+        # loops must nest properly with each other
+        spans = sorted((h, e) for h, e in loops.items())
+        for (h1, e1) in spans:
+            for (h2, e2) in spans:
+                if h1 < h2 <= e1 < e2:
+                    return None
+        return blocks, index, forward_targets, loops, labels
+
+    def generate_structured(self, doc, st):
+        blocks, index, forward_targets, loops, labels = st
+        o = []
+        w = o.append
+        w(doc)
+        w('#[allow(unused_assignments, unused_variables, unused_mut, unused_labels, unreachable_code, clippy::all)]')
+        w(f'pub fn {self.name}(m: &mut dyn Mem, c: &mut Cpu) {{')
+        w('    let pg = Pages::of(m);')
+        w('    let (mut eax, mut ecx, mut edx, mut ebx, mut esp, mut ebp, mut esi, mut edi) = (c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi);')
+        w('    let mut xmm = c.xmm.map(|v| v.map(f32::from_bits));')
+        if self.frame is not None:
+            w(f'    let mut fr = [0f32; {self.frame // 4}];')
+        w('    let (mut cf, mut zf, mut sf, mut of_, mut pf) = (false, false, false, false, false);')
+        w('    //LDDECL')
+        ind = '    '
+        starts = [b[0].address for b in blocks]
+        for n, b in enumerate(blocks):
+            self.cache.clear()
+            # close the labelled blocks that end here
+            if n in forward_targets:
+                w(ind[:-4 * 0] + '    ' * 0 + '    } // end of the jumps to block ' + f'{starts[n]:08x}')
+            if n in loops:
+                w(f"    'l{starts[n]:08x}: loop {{")
+            # open labelled blocks whose region starts here (outermost = farthest target first)
+            for t in sorted((t for t, op in labels.items() if op == n), reverse=True):
+                w(f"    'b{starts[t]:08x}: {{")
+            for i in b:
+                w(f'        // {i.address:08x}: {i.mnemonic} {i.op_str}')
+                mn = i.mnemonic
+                if mn in JCC or mn == 'jmp':
+                    t = index[i.operands[0].imm]
+                    jump = f"break 'b{starts[t]:08x};" if t > n else f"continue 'l{starts[t]:08x};"
+                    if mn == 'jmp':
+                        w(f'        {jump}')
+                    else:
+                        w(f'        if {JCC[mn]} {{ {jump} }}')
+                elif mn == 'ret':
+                    k = i.operands[0].imm if i.operands else 0
+                    w(f'        esp = esp.wrapping_add(4 + {k});')
+                    w('        (c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi) = (eax, ecx, edx, ebx, esp, ebp, esi, edi);')
+                    w('        c.xmm = xmm.map(|v| v.map(f32::to_bits));')
+                    w('        return;')
+                elif mn == 'call':
+                    nxt = i.address + i.size
+                    op = i.operands[0]
+                    target = f'0x{op.imm:08x}u32' if op.type == X86_OP_IMM else self.get(i, op)
+                    self.cache.clear()
+                    w(f'        let target: u32 = {target};')
+                    w(f'        esp = esp.wrapping_sub(4); pg.set_u32(m, esp, 0x{nxt:08x});')
+                    w('        (c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi) = (eax, ecx, edx, ebx, esp, ebp, esi, edi);')
+                    w('        c.xmm = xmm.map(|v| v.map(f32::to_bits));')
+                    w('        call_ext(m, c, target);')
+                    w('        (eax, ecx, edx, ebx, esp, ebp, esi, edi) = (c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi);')
+                    w('        xmm = c.xmm.map(|v| v.map(f32::from_bits));')
+                else:
+                    for line in self.tr(i):
+                        w('        ' + line)
+            # close loops that end with this block (inner first)
+            for h in sorted((h for h, e in loops.items() if e == n), reverse=True):
+                w(f"        break 'l{starts[h]:08x};")
+                w('    }')
+        w('    unreachable!();')
+        w('}')
+        decl = ' '.join(f'let mut ld{k} = 0u32;' for k in range(self.cache_vars))
+        o = [line.replace('    //LDDECL', '    ' + decl) for line in o]
+        return '\n'.join(o) + '\n'
+
     def generate(self, doc):
+        st = self.structure()
+        if st is not None:
+            return self.generate_structured(doc, st)
+        print('irreducible: using the pc dispatcher')
         leaders = self.blocks()
         o = []
         w = o.append

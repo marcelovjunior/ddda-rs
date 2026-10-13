@@ -7,6 +7,10 @@ use ddnative_base::{
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+thread_local! {
+    static LENIENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[derive(Default)]
 struct Memory {
     bytes: BTreeMap<u32, u8>,
@@ -14,7 +18,12 @@ struct Memory {
 }
 impl Mem for Memory {
     fn u8(&self, a: u32) -> u8 {
-        *self.bytes.get(&a).unwrap_or_else(|| panic!("unrecorded read {a:x}"))
+        match self.bytes.get(&a) {
+            Some(v) => *v,
+            // a callee's input byte the port never wrote: the guest had zero there
+            None if LENIENT.with(|l| l.get()) => 0,
+            None => panic!("unrecorded read {a:x}"),
+        }
     }
     fn set_u8(&mut self, a: u32, v: u8) {
         self.bytes.insert(a, v);
@@ -51,6 +60,9 @@ fn stack_args(target: u32) -> u32 {
         0x0081_fd10 | 0x0083_7980 => 2,
         // 0x01054860's callees: 0x01054700(indices, count, flags), 0x00FFA620(0)
         0x0105_4700 => 3,
+        // 0x00B72360's callees: 0x00DE45C0 (ten arguments), 0x00DE4710 and 0x00DEA870 (four)
+        0x00de_45c0 => 10,
+        0x00de_4710 | 0x00de_a870 => 4,
         // 0x0081FD10's callee 0x00421ED0(index)
 
         0x00ff_a620 => 1,
@@ -61,7 +73,6 @@ fn stack_args(target: u32) -> u32 {
 /// As `abi_cases`, for a body that makes guest calls: each recorded call
 /// must see the recorded memory (its arguments and the buffers they point
 /// at) and ECX; the recorded callee's effects and EAX are then replayed.
-#[allow(dead_code)]
 fn abi_cases_with_calls(path: &str, body: LiftFn) -> usize {
     abi_cases_with_calls_ret(path, body, true)
 }
@@ -117,7 +128,7 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             // callees that take their object in another register leave ECX undefined
             let ecx_unused = matches!(
                 target,
-                0x0078_a730 | 0x0085_0440 | 0x0085_08c0 | 0x0081_f2d0 | 0x00b7_1b90 | 0x00b7_2360 | 0x007b_0580 | 0x0081_fd10
+                0x012f_0906 | 0x012f_0a55 | 0x012f_0d4c | 0x012f_1109 | 0x0078_a730 | 0x0085_0440 | 0x0085_08c0 | 0x0081_f2d0 | 0x00b7_1b90 | 0x00b7_2360 | 0x007b_0580 | 0x0081_fd10
                     | 0x0078_b4c0 | 0x0081_fc60 | 0x00b6_61f0 | 0x00b6_7930 | 0x00b7_2d30 | 0x00b6_6320 | 0x0081_f8f0 | 0x0083_7980
             );
             if !ecx_unused {
@@ -132,10 +143,21 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
                 0x00b6_6320 => &[(2, "EDX")],
                 _ => &[],
             };
+            // XMM lanes the callee reads (the CRT math functions take floats in XMM0/XMM1)
+            if let Some(list) = call.get("xmm") {
+                for entry in list.as_array().unwrap() {
+                    let (reg, lane, want) = (n(&entry[0]) as usize, n(&entry[1]) as usize, n(&entry[2]));
+                    assert_eq!(c.xmm[reg][lane], want, "case {i}: call {target:x} XMM{reg} lane {lane}");
+                }
+            }
             // vectors the callee reads through a pointer (0x00E4B700, 0x007B0580)
             if let Some(data) = call.get("data") {
                 for (a, b) in pairs(data) {
-                    assert_eq!(m.u8(a), b, "case {i}: call {target:x} vector byte {a:x}");
+                    // a byte the port never touched stays whatever the guest had (zero in the recording)
+                    LENIENT.with(|l| l.set(true));
+                    let got = m.u8(a);
+                    LENIENT.with(|l| l.set(false));
+                    assert_eq!(got, b, "case {i}: call {target:x} vector byte {a:x}");
                 }
             }
             for &(index, name) in inputs {
@@ -170,6 +192,12 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             }
             c.eax = regs(back)[0];
             c.esp = regs(back)[4];
+            // XMM lanes the callee returns
+            if let Some(list) = back.get("xmm") {
+                for entry in list.as_array().unwrap() {
+                    c.xmm[n(&entry[0]) as usize][n(&entry[1]) as usize] = n(&entry[2]);
+                }
+            }
             // a float returned in ST0 (the input getter)
             if let Some(bits) = trace[k].get("st0") {
                 c.st.push(n(bits));
@@ -255,4 +283,22 @@ fn semantic_joint_rebase_matches_original() {
     let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L184/joint_rebase.json", mtcore::semantic_s4_joint::joint_rebase, false);
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "only {n} cases");
     eprintln!("{n} ABI-level joint_rebase cases passed");
+}
+
+// verifies 0x0078a730 (ABI level; void)
+#[test]
+fn semantic_aim_update_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L184/actor_aim.json", mtcore::semantic_s4_aim::aim_update, false);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "only {n} cases");
+    eprintln!("{n} ABI-level aim_update cases passed");
+}
+
+// verifies 0x00b72360 (ABI level; returns AL)
+#[test]
+fn semantic_probe_ground_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/player_probe.json", mtcore::semantic_s4_probe::probe_ground);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "only {n} cases");
+    eprintln!("{n} ABI-level probe_ground cases passed");
 }
