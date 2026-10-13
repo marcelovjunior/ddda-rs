@@ -1,5 +1,18 @@
 # Milestones
 
+### L129 lifted flag liveness (2026-10-13)
+
+- L73 local dead flags already present; restored missing direct predicates
+  and added conservative whole-function successor proofs plus single-use
+  CMP/TEST native comparisons. Calls/exits and unknown paths retain flags.
+- Hot sample44: **2,445 flag setters**, existing local pass removes872;
+  new pass removes544 more including334 fusions (**57.9% total**).
+- **23 focused tests pass**, including two compiled121-input full-state /
+  memory-order fixtures and edge-case predicate comparisons. Original
+  lifted-vector gate, compile effects and gameplay remain unverified.
+- Next: head batches regeneration/gate with codex-6 float fusion, then
+  loading/render profile comparison. Details: `docs/tasks/L129-dead-flags.md`.
+
 ### L122 gameplay pass map (2026-10-13)
 
 - Frame7539: **951 target runs / 5,295 draws**, including **864 SoftBody

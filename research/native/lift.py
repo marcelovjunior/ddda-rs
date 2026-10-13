@@ -2877,8 +2877,13 @@ def rust_fn(addr, name, arms):
     traced = os.environ.get("LIFT_TRACE", "").lower() in (f"0x{addr:x}", f"{addr:x}")
     body = None if traced else straight_line(addr, arms)  # a trace needs the block loop
     if body is not None:
-        return "\n".join([*header, "    " + cpu_arm(body, start=addr), "}", ""])
+        lowered_body = cpu_arm(body, start=addr)
+        if LEAN:
+            lowered_body = lean_emission.function_flags([lowered_body])[0]
+        return "\n".join([*header, "    " + lowered_body, "}", ""])
     lowered = [cpu_arm(a) for a in arms]
+    if LEAN:
+        lowered = lean_emission.function_flags(lowered)
     # L73: a large dispatcher becomes part functions (lean_emission.py)
     split = None if traced or not LEAN else lean_emission.split_function(addr, lowered)
     if split is not None:

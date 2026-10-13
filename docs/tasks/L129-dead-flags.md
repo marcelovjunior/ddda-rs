@@ -33,3 +33,55 @@ go and `heavy.py` with `HEAVY_BIG=1`; only head runs the game.
 
 Next: CFG dead-flag analysis and direct single-consumer comparisons,
 then head's integration regeneration/gate and matched gameplay profile.
+
+### Step 2: whole-function liveness and single-condition fusion
+
+- `rust_fn` applies a conservative successor analysis before dispatcher
+  splitting; `rust_step` and `LIFT_LEAN=0` remain literal. Literal direct
+  edges only; the least fixed point starts with flags live, so cycles
+  without a proven overwrite retain flags. Both conditional successors
+  must overwrite before any read. Calls, returns, unknown transfers,
+  partial writes, variable shifts and INC/DEC's carried CF stay barriers.
+- CMP/TEST immediately followed by one Jcc/SETcc/CMOVcc can become native
+  integer comparisons when flags are dead afterwards. Width masks and
+  signed operand casts preserve 8/16/32-bit comparison semantics; each
+  operand is evaluated once in original order. CMOV's eager memory load
+  stays in place. Unsupported predicates and arithmetic destinations are
+  conservatively retained. No flags are assumed clobbered by an ABI:
+  `x86::call_lifted`/`call_ext` share the entire Cpu with callees.
+- **23 focused tests pass** after the `rust_fn` hook: existing 15 and
+  eight new tests. Two compiled 121-input fixtures compare final Cpu,
+  memory, memory-event order and call-boundary state; direct predicate
+  truth tables additionally compare against real `Flags` helpers over
+  15 edge values per operand, all supported widths and condition aliases.
+- Static sample: all named functions in `profile_boot1.txt`, DAB480's
+  direct callees, DAA5F0 and FE9580: **44 functions / 1,793 blocks /
+  2,445 flag setters / 941 condition consumers**. Existing L73 removes
+  **872 (35.7%)** setters; this pass removes **544 more**, including
+  **334 fused comparisons**. Together **1,416 / 2,445 (57.9%)**.
+  Counts are static sites, not dynamic profile weights.
+
+| Function | Setters | Existing local dead | Additional removed | Fused |
+|---|---:|---:|---:|---:|
+| DAB480 | 179 | 61 | 43 | 33 |
+| DAA5F0 | 43 | 15 | 8 | 8 |
+| FE9580 | 110 | 41 | 6 | 1 |
+| 012EB690 | 75 | 19 | 15 | 10 |
+| 00CF34D0 | 58 | 44 | 3 | 2 |
+
+`research/native/measure_dead_flags.py` streams the private lift cache
+without retaining the full 392 MB JSON. Reproduce with `--profile
+E:/ddda-re/notes/runs/profile_boot1.txt`; `--all` surveys all functions.
+The scratchpad `profile_combo9.txt` path was requested from head but has
+not been located. Initial verbose candidate source was 2% larger; final
+compact emission size and compilation effect still need measurement.
+
+**Not verified yet:** regenerated original lifted vectors, full native
+gate, shard compile time, original image/gameplay and FPS. Head requested
+to batch this with codex-6 `cd080ced` in the next regeneration. No game,
+GPU or shard build/run performed by this agent.
+
+Next: head integrates both commits, regenerates under `heavy.py` with
+`HEAVY_BIG=1`, runs `scripts/native_gate.sh`, and compares loading/render
+profiles with the same image and scene. Do not treat static savings as
+an FPS claim.
