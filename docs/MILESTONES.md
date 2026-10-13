@@ -1,5 +1,20 @@
 # Milestones
 
+### L155 combo25 save-load ranking (2026-10-13)
+
+- Head FAST=0/1: stage-200 request to first stage update **8.176676 ->
+  7.429188 s** (-9.14%), same **1,739 reads / 207.6 MB / 8,544 inflates**.
+  Inclusive zlib **6.097 -> 5.101 s**; read services **0.279 -> 0.297 s**;
+  zero pipeline creations in that interval. Keep exact FAST=1 selected,
+  PORT=0; no new speculative archive scheduling or default change.
+- Menu-exit callback to first gameplay Present **15.504909 -> 14.583692 s**
+  (-0.921217 s), not confirmed input/display readiness. Neither run enters
+  old `00532110`; raw title chain verifies the PC bypass. L151 preparation
+  remains a boot candidate, not the dominant warm-cache save-load cost.
+- **15 parser tests pass**, both 39-interval logs ranked with hashes and
+  nested/parallel costs kept distinct. Next: head repeat/logging-off FAST
+  acceptance and resource-worker profiling. `docs/tasks/L155-saveload.md`.
+
 ### L155 save-load source map (2026-10-13)
 
 - One resource FIFO worker already overlaps reads with up to three entry

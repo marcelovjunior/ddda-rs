@@ -102,13 +102,94 @@ startup; shader-created hints prioritize them. Draws retain the original
 creation path on absent/in-flight/failed/mismatched recipes. See L151 for
 seven CPU, 22 transport/capture and six image-test receipts and controls.
 
+## Combo25 transition ranking
+
+Head's `E:/ddda-re/notes/runs/run_c25z0.log` and `run_c25z1.log`, received
+2026-10-13, correspond to requested FAST=0/1. SHA-256 respectively:
+
+- `9164b09f62e458d77095b0e94ef00ba887c9beaf81151d7cc4e2cefd13989fc4`
+- `5d9a943afc8523471d544b81a5e41cdb32d6c61c518b6cd3368c5f832957866c`
+
+Both observed title chains are `00531A20 -> 00532FB0 -> 00532DC0 ->
+00532AE0 -> 00533030 -> 00531E60 -> 005330E0`. Neither enters `00532110`.
+`00531A20` result 0x10 selects `00532FB0` (with `+4C=1`); use its next
+callback observation as **menu-exit code boundary**, not an exact button
+timestamp. Both request GameMain DTI `0198CDF0`, then stage-200 DTI
+`0198D038`. The frame marker still does not establish player control.
+
+All durations below use transition deltas/recorded boundary timestamps,
+not one-second counter interpolation. Costs are inclusive and overlap.
+
+| Save-route interval, in execution order | FAST=0 wall s | FAST=1 wall s | Evidence / ranking |
+|---|---:|---:|---|
+| Menu-exit callback to GameMain request | 2.061829 | 2.133696 | Pawn/UI/handover; no clear improvement. |
+| GameMain request to stage-200 request | 1.950414 | 1.808417 | Zlib 1.230908 -> 0.977693 s; reads 0.083647 -> 0.082293 s. |
+| Stage-200 request to first stage update | **8.176676** | **7.429188** | Largest resource interval. Same **1,739 reads / 207,624,009 bytes / 8,544 inflate calls**; inclusive zlib **6.097463 -> 5.100967 s**, fast **4.355018 -> 3.452870 s**, reads **0.279481 -> 0.296713 s**, pipelines **zero**. |
+| First stage update to first gameplay Present | 3.315990 | 3.212391 | Initialization/countdowns/fades plus a later resource gate; pipelines only 0.090014 -> 0.038299 s. |
+| Entire menu-exit callback to first gameplay Present | **15.504909** | **14.583692** | **0.921217 s / 5.94% shorter** in this pair; zlib 7.827719 -> 6.496661 s; read services 0.393112 -> 0.405912 s. A code-boundary observation, not logging-off/player-control acceptance. |
+
+The stage resource interval improves **0.747488 s / 9.14%**. Its loader
+class CPU is **18.640625 -> 17.359375 s**, main **4.562500 -> 4.562500 s**,
+jobs **6.031250 -> 5.453125 s**. Summed loader CPU can exceed wall because
+it combines the FIFO and decode workers. The 17.36 CPU s versus 5.10 s
+inclusive zlib indicates substantial remaining loader work, but subtracting
+wall-call totals from CPU does **not** identify an exclusive parsing cost.
+Need worker stack samples before choosing the next resource-parser port.
+
+| Boot/menu interval, ranked by FAST=1 wall | FAST=0 wall s | FAST=1 wall s | Interpretation |
+|---|---:|---:|---|
+| Menu callback `00531A20` to menu exit | 7.616889 | 7.627426 | No zlib or ARC I/O; UI/input residence is not removable loading work. |
+| First Present to title-area request | 6.653523 | 7.230824 | Boot resource zlib 1.039458 -> 0.614176 s, but wall grows; pipeline scheduling differs. Cannot credit a whole-interval FAST gain. |
+| Movie end to `00532660` | 7.722078 | 7.001224 | Save/title flow: same 9,861 inflate calls, zlib 0.289595 -> 0.180735 s, substantial other work/waits. |
+| Movie start to `005325E0` callback | 6.556928 | 6.573603 | Movie/UI transition; preserve original timing. |
+| `00532C40` to menu callback `00531A20` | 2.121741 | 1.204314 | No zlib; variation is not evidence of decoder improvement. |
+| GPU initialization transition interval | 0.663501 | 0.661364 | Distinct from game loading. |
+
+Process to first Present is **2.581583 -> 2.149065 s**, with cumulative
+pipeline **0.835666 -> 0.578110 s** and module **0.557985 -> 0.428306 s**.
+Those totals include background warmup; they are not additive wall time.
+Process to actual menu callback `00531A20` is **26.079046 -> 24.578226 s**;
+first gameplay Present **49.200844 -> 46.789344 s**. Different boot/UI
+durations prevent attributing that entire 2.411500 s difference to FAST.
+The earlier `main_menu` label at `005325E0` is menu flow, not visible menu.
+
+### Selected exact improvement and next runs
+
+Select the existing **`DDRUNTIME_ZLIB_FAST=1`, `DDRUNTIME_ZLIB_PORT=0`**
+candidate. It attacks the largest identified cost and now has matched-stage
+evidence. L145 already supplies **632 original-instruction leaf cases x3
+implementations** and **217 whole streams / 12,893 returns** (fast-only and
+combined), including register/defined-flag/state/window/output checks.
+Keep it opt-in until head's repeat, logging-off and image/input acceptance.
+No new archive scheduling, sleeps, original state transitions or defaults
+are changed in L155. The separately available outer port is not selected:
+its earlier large-buffer measurements include regressions.
+
+L151 remains the exact opt-in **boot** candidate (`DDGPU_PIPELINE_THREADS`
+and `DDGPU_SHADER_PREFETCH`). These warm-cache save intervals contain no
+module creations and only 38 ms of pipeline calls after menu exit for FAST=1;
+they no longer support pipeline preparation as the top save-load action.
+Do not conflate earlier c23 cold first-draw costs with this run.
+
+Head run request: repeat FAST=0/1, PORT=0 with identical cache namespace,
+temperature, save, route and all other options; collect accepted Continue
+and first controllable timestamps/images; then run the accepted candidate
+with LOAD_LOG off. Separately test L151 threads=1/2 with FAST fixed, using
+its required seeded recipe namespace and prefetch A/B protocol. A per-archive
+request trace and resource-worker stack capture were requested on the board;
+aggregate counters cannot supply the complete per-save ordered filename list.
+
 ## Results
 
-Implemented/tested: separate example build repair `5da79cfb`; all examples
-build. Source scheduling map complete at the static-evidence level above.
+Implemented/tested: separate example repair `5da79cfb`, all ddgpu examples
+build; source map `f2ff4ef1`; `load_timeline.py --rank-intervals` emits raw
+transition deltas ranked by wall duration, preserving state IDs, availability
+flags and nested counters. **15 parser tests pass**, including missing/bad
+durations, timestamp rounding, stable order and no periodic-sample mixing.
+Both c25 logs parse successfully with **39 transition intervals each**.
+
 The merged L151 light build compiled in 1m06s; tests are held by head's
-combo25 pause, not reported as passed. Combo25
-`run_c25z0.log`/`run_c25z1.log` not yet present at the initial inspection.
-No save-specific ordered manifest, interval ranking, end-to-end gain or
-original-game image comparison claimed yet. Next: rank completed head logs
-before selecting the next exact intervention.
+combo25 pause, not yet reported as passed. No agent game/GPU/shard run,
+push, game-data commit or installation change. No full per-save filename
+manifest or original-game image/control comparison claimed. Next: complete
+light validation after pause and head's repeated/logging-off FAST acceptance.
