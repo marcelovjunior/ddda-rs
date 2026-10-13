@@ -203,6 +203,12 @@ impl<T> D3dCell<T> {
     }
 
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        // A surrounding DeviceLock already keeps this cell alive and locked.
+        // Borrow checking remains active; no depth/HELD bookkeeping is needed
+        // for a borrow whose lifetime ends before that surrounding guard.
+        if self.owner.load(std::sync::atomic::Ordering::Acquire) == THREAD_KEY.with(|k| *k) {
+            return f(&mut self.cell.borrow_mut());
+        }
         struct Release<'a, T>(&'a D3dCell<T>);
         impl<T> Drop for Release<'_, T> {
             fn drop(&mut self) {
@@ -230,7 +236,7 @@ pub(crate) fn device_lock() -> DeviceLock {
     rt.d3d.acquire();
     let lock = DeviceLock(rt);
     // (the deferred list first: asking about the guest lock takes its mutex)
-    if objects(|o| !o.deferred.is_empty()) && crate::threads::holds_guest_lock() {
+    if lock.0.d3d.with(|o| !o.deferred.is_empty()) && crate::threads::holds_guest_lock() {
         destroy_deferred();
     }
     lock
@@ -1176,6 +1182,31 @@ mod tests {
     use crate::session::{Outcome, Session};
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn scoped_cell_borrows_preserve_outer_lock_and_unwind_checks() {
+        let cell = D3dCell::<u32>::default();
+        cell.acquire();
+        let depth = cell.depth.get();
+        let held = HELD.with(|h| h.get());
+        cell.with(|value| *value = 7);
+        assert_eq!(cell.depth.get(), depth);
+        assert_eq!(HELD.with(|h| h.get()), held);
+        let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cell.with(|_| cell.with(|_| ()));
+        }));
+        assert!(nested.is_err(), "nested mutable borrows must still fail");
+        assert_eq!(cell.with(|v| *v), 7);
+        assert_eq!(cell.depth.get(), depth);
+        cell.release();
+        assert_eq!(cell.owner.load(Ordering::Acquire), 0);
+        assert_eq!(HELD.with(|h| h.get()), held - 1);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cell.with(|_| panic!("unwind an outer borrow"));
+        })).is_err());
+        assert_eq!(cell.owner.load(Ordering::Acquire), 0);
+        assert_eq!(cell.with(|v| *v), 7);
+    }
 
     const SCRATCH: u32 = 0x7EFF_0000;
     const PP: u32 = SCRATCH + 0x200;

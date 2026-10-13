@@ -348,7 +348,7 @@ pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     let (dev, ty) = (a[0], a[1]);
     cpu.eax = match vertex_count(ty, a[6]) {
-        Some(_) if in_scene(dev) && with_device(dev, |d| d.state.indices != 0) => {
+        Some(_) if with_device(dev, |d| d.state.in_scene && d.state.indices != 0) => {
             let d = snapshot(m, dev, ty, a[6], a[5], a[2] as i32, a[3], a[4], None, None);
             backend_unlocked(|b| b.draw(&d));
             D3D_OK

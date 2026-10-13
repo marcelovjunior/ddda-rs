@@ -61,6 +61,17 @@
   `docs/tasks/L109-loading.md`.
 - Next: head-run unskipped boot/menu/save baseline using
   `DDRUNTIME_LOAD_LOG=1`, then same-save before/after phase comparison.
+### L118 dense D3D9 state and snapshot access (2026-10-13)
+
+- Dense sampler/stage banks and render-state indices preserve presence, unusual
+  IDs and immutable draw payloads. Scoped device borrows avoid repeated lock
+  bookkeeping; dirty snapshots avoid temporary Vec growth.
+- Three paired debug dirty-sampler draw medians **49.71 -> 29.97 us**, allocations
+  **8 -> 6** including COM test buffers. Clean draw timings overlap; no FPS claim.
+- Runtime light suite **158 passed / one fullscreen-gamma Reset failure /
+  one ignored**; new map-equivalence, snapshot-retention and lock-unwind checks
+  pass. No game/shard/GPU runs. Details: `docs/tasks/L118-d3d9-render-thread.md`.
+- Next: head combo4 gameplay/image comparison and renewed render-thread profile.
 
 ### L90 shared draw payloads (2026-10-13)
 
