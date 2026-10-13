@@ -140,3 +140,113 @@ function totals stay unchanged: all three replace already lifted functions.
 No full native gate or live image/frame-time comparison run by this agent.
 Next action: head merges the semantic train and runs its combined native
 gate and matched image/critical-job acceptance with SEMANTIC off/on.
+
+## L174b continuation (2026-10-13)
+
+User-assigned follow-up: `010655A0`, `00FFC9F0`, `01140180`. Merged the
+requested fps-line commit `1fcd6330` as `0b6c220d`, retaining both sides'
+additive modules, registrations and milestones. `010655A0` was already
+complete in `f83388b6`; its implementation and evidence above are retained.
+New source, tests and recorder stay in the same owned L174 files.
+
+### New implementations and original evidence
+
+- `prepare_model_palette` (`00FFC9F0`, uModel::vf25): original base setup,
+  resource/key binding, palette lock/unlock, row-to-column matrix output,
+  alternate texture selection and final parameter allocation/copy. Uses
+  Pages and named native locals. The matrix dot product executes ordered
+  scalar SSE in one inline assembly block per output, preserving operand
+  order, rounding and NaN payload selection without FMA. The final four
+  parameters retain original x87 FLD/FSTP via the existing hardware helper.
+- `draw_culled_instances` (`01140180`, cInstancingCulling::vf16): up to
+  three selected ranges, optional secondary material, sphere-to-box bounds,
+  command and sort records, copied parameter templates and final reset.
+  Original virtual bounds/material calls, state flush, growth and memcpy
+  remain explicit guest seams at their original stack/resume addresses.
+- Both registrations are under `DDRUNTIME_SEMANTIC=1`. Defaults and
+  inventory function totals are unchanged. No game or shard build.
+
+| Function | Original returns | Decoded instructions reached | ABI modes |
+|---|---:|---:|---|
+| FFC9F0 | 133 | 641/644 | sparse, serial Pages, atomic Pages |
+| 1140180 | 114 | 824/824 | sparse, serial Pages, atomic Pages |
+
+The isolated opt2 lifted bodies independently pass all **247** cases.
+Combined L174 corpus: **1,415 returns** in each of the three memory modes.
+The isolated harness reports **eight passed / zero failed / two ignored**.
+Existing five corruption-rejection checks remain enabled. External seams
+compare this/target/stack/arguments, initialized objects, and earlier heap
+writes; bounds calls also compare the pointed-to 32-byte stack bounds.
+No original callee implementation or real gameplay recording is claimed.
+
+The FFC9F0 uncovered instructions are two skipped alignment instructions
+(`FFCF28`, `FFCF2F`) and the null alternate-texture write (`FFD475`), whose
+earlier non-null guard is not invalidated by this corpus. This is measured
+instruction coverage, not an exhaustive path/alias claim. Model cases cover
+empty/one/eight matrices, both threshold branches, null lock/output,
+allocation growth, countdown decrement, callee-modified counts, overlap
+with the matrix/transform inputs, infinities, NaNs, all four SSE rounding
+modes and denormal flushing. Instancing cases cover all eight visibility
+masks, both material passes, empty ranges, recording flags, growth in both
+loops/template copies, four stack alignments, tagged table pointers,
+non-finite bounds, and callee mutations that invalidate bindings and limits.
+
+**Oracle limitation found and retained:** Unicorn fails to quiet signaling
+NaNs in the final x87 FLD/FSTP copy; both the isolated lift and the semantic
+port execute hardware x87 and produce the quiet result. The rejected raw
+corpus remains private as `model-x87-snan-unicorn.json`. Admitted vectors
+keep signaling NaNs in the SSE matrix inputs, but use a finite value for
+the final x87 copy in those four cases. No comparator was relaxed and no
+hardware behavior was changed to match Unicorn. A hardware-oracle recording
+of that x87 signaling-NaN boundary remains outside these admitted vectors.
+
+### Isolated timings
+
+Same seven alternating pairs / six scenarios / two Pages modes methodology
+as the first batch, 500 timed calls per variant and pair. The fixture reset
+and Cpu construction are outside the timed interval; synthetic guest-call
+effects are replayed identically. Benchmarks now load each case's recorded
+MXCSR, including denormal modes, and restore the host value afterward.
+
+| Function | Serial median range | Atomic median range |
+|---|---:|---:|
+| FFC9F0 | 1.230–1.447x | 1.188–1.485x |
+| 1140180 | 1.248–1.847x | 1.380–1.914x |
+
+**24/24 scenario medians improve** versus isolated opt2 lifted bodies.
+Individual pairs regress under shared-host noise; no FPS/image claim.
+Logs: `model-bench-final.log`, `instance-bench-final.log` under
+`C:/ddda-targets/L174`. A first matrix draft used separate scalar helper
+calls; the retained ordered-dot implementation passes the same corpus and
+reduces that overhead. Final ABI log: `l174b-final-abi.log`.
+
+### Private artifacts and reproduction
+
+- `E:/ddda-re/notes/native-L174/00ffc9f0.json`, SHA-256
+  `64182b0114a97cd1c202b3547266b056cc46e409771d4dcd2fed18ac438600ef`.
+- `E:/ddda-re/notes/native-L174/01140180.json`, SHA-256
+  `4297504193b39946833b5fbbcbc8ac01b3b8fd36668fd385df644d4feb646bc2`.
+- `l174_vectors.py --model` / `--instances` record only the requested
+  original function using research Python under heavy.py. No window opens.
+- `python research/native/l174_check.py` extracts four bodies (including
+  their split helpers) into the private standalone crate; no shard builds.
+- Set `L174_BENCH_ENTRY=ffc9f0` or `1140180`, then run
+  `python research/native/l174_check.py --bench` for each bounded benchmark.
+- All cargo commands use `CARGO_TARGET_DIR=C:/ddda-targets/L174`,
+  `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`.
+
+Runtime light suite with two test threads: **260 passed, zero failed,
+seven ignored** (`l174b-runtime2.log`). The initial fully concurrent run
+failed its Present timing assertion; the complete reduced-concurrency
+rerun, including that assertion, passed. Head-owned combined integration
+and matched critical-job/image acceptance remain next.
+
+Default registration test and the combined
+`DDRUNTIME_SEMANTIC=1 DDRUNTIME_JOB_HASH=1 DDRUNTIME_JOB_LOOKUP=1` test pass
+with unique addresses and the expected semantic precedence. Registration
+log: `l174b-registration.log`. Python scripts compile; `git diff --check`
+passes. Only source, tests and documentation are committed.
+
+Full `mtcore` + `ddports` crate gate: **38 passed, zero failed, 11 ignored**
+(`l174b-crates.log`). Final source also passes the independent release ABI
+replay after the cdecl cursor-lifetime review (`l174b-final-abi.log`).

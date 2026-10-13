@@ -14,6 +14,36 @@
 - Next: head accumulated semantic train and real shadow-job/image gate.
   Details, hashes and limitations: `docs/tasks/L177-semantic-state-commit.md`.
 
+### L174b semantic model palette and culled instances (2026-10-13)
+
+- Opt-in SEMANTIC ports FFC9F0/1140180 retain original guest seams;
+  prior 10655A0 is retained. Requested integration base 1fcd6330 merged.
+- 247 original returns pass sparse/serial/atomic Pages and isolated opt2
+  lifted replay. Instruction coverage 641/644 and 824/824; signaling-NaN
+  x87 oracle boundary documented, hardware behavior retained.
+- 24/24 paired scenario medians improve: model 1.188–1.485x, instancing
+  1.248–1.914x. No game/shard run or FPS claim. Evidence and private hashes:
+  `docs/tasks/L174-semantic-draw-b.md`, continuation Results.
+- Runtime light rerun: 260 passed, zero failed, seven ignored. Default
+  and SEMANTIC/JOB_HASH/JOB_LOOKUP registration checks pass. Full mtcore
+  and ddports gate: 38 passed, zero failed, 11 ignored.
+- Next: head combined semantic train and matched critical-job/image gate.
+
+### L174 semantic material draw and dependency hash (2026-10-13)
+
+- `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
+  and 1066C60 pass selection; original guest callees retained. Defaults
+  unchanged; hash override takes precedence over JOB_HASH without duplicates.
+- 1,168 original synthetic returns pass ABI checks in sparse, serial Pages
+  and atomic Pages modes. Both isolated opt2 lifted draw bodies pass all
+  640 draw vectors; 197/197 and 377/377 original instructions covered.
+- 24/24 draw benchmark scenario medians improve: apply 1.546–2.111x,
+  selection 1.221–1.507x. Shared-host isolated results, no FPS/image claim.
+  Evidence and limitations: `docs/tasks/L174-semantic-draw-b.md`.
+- Runtime light: 255 pass, zero failures, seven ignored. Five ABI mutation
+  variants are rejected, including corrupted and extra heap writes below ESP.
+- Next: head merges registrations and validates the combined semantic train
+  against the native gate and matched image/critical-job capture.
 ### L169 exact shadow traversal and setup (2026-10-13)
 
 - Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and

@@ -1,4 +1,4 @@
-"""Extract only L174's two lifted bodies for ABI replay/paired benchmarks.
+"""Extract only L174's four lifted bodies for ABI replay/paired benchmarks.
 
 Private generated source stays under --out. No ddlift shard is compiled.
 The isolated lifted bodies use opt2, the semantic ports/base use opt3.
@@ -16,13 +16,16 @@ def main():
     p.add_argument('--bench',action='store_true')
     args=p.parse_args()
     repo=Path(__file__).resolve().parents[2]
-    source=(repo/'crates/ddlift/lift_00/src/generated/lifted_031.rs').read_text()
     bodies=[]
-    for address in (0x10655a0,0x1066c60):
+    addresses=(0x10655a0,0x1066c60,0xffc9f0,0x1140180)
+    for address in addresses:
+        filename={0xffc9f0:'lift_31/src/generated/lifted_041.rs',0x1140180:'lift_02/src/generated/lifted_023.rs'}.get(address,'lift_00/src/generated/lifted_031.rs')
+        source=(repo/'crates/ddlift'/filename).read_text()
         matches=re.findall(rf'(?:pub )?fn f_{address:08x}(?:_p\d+)?\(.*?\n\}}',source,re.S)
         assert matches,hex(address)
         body=re.sub(r'x86::call_local\(m, cpu, (0x[0-9A-F]+), super::lifted::f_[0-9a-f]+\)',r'x86::call_ext(m, cpu, \1)','\n'.join(matches))
         body=body.replace('x86::call_lifted(', 'x86::call_ext(')
+        body=re.sub(r'x86::call_local\(m, cpu, (0x[0-9A-F]+), crate::platform::\w+\)',r'x86::call_ext(m, cpu, \1)',body)
         body=body.replace('crate::mem::','ddnative_base::mem::')
         assert 'super::' not in body
         bodies.append(body)
@@ -33,9 +36,9 @@ def main():
     dependencies='\n'.join(f'{n}={{path="{(repo/"crates"/n).as_posix()}"}}' for n in ('mtcore','ddnative-base','ddnative-host'))
     (out/'Cargo.toml').write_text('[package]\nname="l174-check"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[dependencies]\n'+dependencies+'\nserde_json="1"\n[profile.release]\nopt-level=2\n'+''.join(f'[profile.release.package.{n}]\nopt-level=3\n' for n in ('mtcore','ddnative-base','ddnative-host')))
     test=(repo/'crates/mtcore/tests/semantic_draw_b.rs').read_text()
-    test=test.replace('// L174_BASELINES', '0x10655a0 => Some(l174_check::f_010655a0),\n0x1066c60 => Some(l174_check::f_01066c60),')
+    test=test.replace('// L174_BASELINES', '\n'.join(f'0x{a:x} => Some(l174_check::f_{a:08x}),' for a in addresses))
     test+='\n#[test]\nfn isolated_lifted_originals() { ddnative_host::install();\n'
-    for address in (0x10655a0,0x1066c60):
+    for address in addresses:
         test+=f'verify("E:/ddda-re/notes/native-L174/{address:08x}.json",l174_check::f_{address:08x});\n'
     test+='}\n'
     (out/'tests/abi.rs').write_text(test)
