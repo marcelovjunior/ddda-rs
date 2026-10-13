@@ -756,27 +756,81 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         }
     }
     // the same as the binding's part of an earlier frame: that part; else
-    // a new part, keeping an unchanged stage's bank (one bank copied when
-    // only the other stage's registers changed)
+    // a part of the same content seen lately (L180: the game's bindings
+    // move between frames, their content mostly does not), else a new part,
+    // keeping an unchanged stage's bank
     let part = match previous {
-        Some(p) if Arc::ptr_eq(&p.meta, &meta) && p.alpha == alpha && p.written == written
-            && *p.constants[0] == banks[0] && *p.constants[1] == banks[1] => p.clone(),
-        _ => Arc::new(BindingPart {
-            meta,
-            alpha,
-            // a changed bank moves into the part (the scratch bank starts
-            // over: an allocation, not a copy of the whole bank)
-            constants: std::array::from_fn(|stage| match previous {
-                Some(p) if *p.constants[stage] == banks[stage] => p.constants[stage].clone(),
-                _ => Arc::new(std::mem::take(&mut banks[stage])),
-            }),
-            written,
-            native: Default::default(),
-            uncovered,
-        }),
+        Some(p) if same_part(p, &meta, alpha, &written, &banks) => p.clone(),
+        _ => {
+            let key = content_key(&meta, alpha, &written, &banks);
+            match c.by_content.get_mut(&key) {
+                Some((seen, p)) if same_part(p, &meta, alpha, &written, &banks) => {
+                    *seen = c.frame;
+                    p.clone()
+                }
+                _ => {
+                    let part = Arc::new(BindingPart {
+                        meta,
+                        alpha,
+                        // a changed bank moves into the part (the scratch bank
+                        // starts over: an allocation, not a copy of the bank)
+                        constants: std::array::from_fn(|stage| match previous {
+                            Some(p) if *p.constants[stage] == banks[stage] => p.constants[stage].clone(),
+                            _ => Arc::new(std::mem::take(&mut banks[stage])),
+                        }),
+                        written,
+                        native: Default::default(),
+                        uncovered,
+                    });
+                    c.by_content.insert(key, (c.frame, part.clone()));
+                    part
+                }
+            }
+        }
     };
     c.banks = banks;
     Ok(part)
+}
+
+/// Whether part `p` is what these decoded values make.
+fn same_part(p: &BindingPart, meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64; 4], u16, u16); 2], banks: &[Constants; 2]) -> bool {
+    Arc::ptr_eq(&p.meta, meta) && p.alpha == alpha && p.written == *written && *p.constants[0] == banks[0] && *p.constants[1] == banks[1]
+}
+
+/// A binding's content key (L180): its metadata, alpha test and the
+/// registers it writes, with their values (a hash; `same_part` decides).
+fn content_key(meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64; 4], u16, u16); 2], banks: &[Constants; 2]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = crate::fasthash::FxHasher::default();
+    h.write_usize(Arc::as_ptr(meta) as usize);
+    h.write_u64(alpha.map_or(u64::MAX, |(f, r)| (f as u64) << 32 | r as u64));
+    for (stage, (floats, ints, bools)) in written.iter().enumerate() {
+        let bank = &banks[stage];
+        for (word, &mask) in floats.iter().enumerate() {
+            h.write_u64(mask);
+            let mut m = mask;
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                if let Some(r) = bank.f.get(n) {
+                    h.write_u64(r[0] as u64 | (r[1] as u64) << 32);
+                    h.write_u64(r[2] as u64 | (r[3] as u64) << 32);
+                }
+            }
+        }
+        h.write_u32(*ints as u32 | (*bools as u32) << 16);
+        for n in 0..16 {
+            if ints >> n & 1 != 0 {
+                let r = bank.i[n];
+                h.write_u64(r[0] as u32 as u64 | (r[1] as u32 as u64) << 32);
+                h.write_u64(r[2] as u32 as u64 | (r[3] as u32 as u64) << 32);
+            }
+            if bools >> n & 1 != 0 {
+                h.write_u32(bank.b[n]);
+            }
+        }
+    }
+    h.finish()
 }
 
 /// A draw whose binding leaves float registers its shaders read unwritten:
@@ -989,6 +1043,27 @@ impl Mirror {
                 .flatten()
                 .map(|info| TextureBinding { sampler: stage_of(i), resource: h, states: m.rows[i], ..info })
         });
+        // a list of the same content used lately (L180: the draws' texture
+        // sets repeat; no allocation, and no drop later)
+        let key = {
+            use std::hash::Hasher;
+            let mut h = crate::fasthash::FxHasher::default();
+            for t in found.iter().flatten() {
+                h.write_u32(t.sampler);
+                h.write_u32(t.resource);
+                h.write_u32(t.format ^ t.width << 8 ^ t.height << 20);
+                for &s in &t.states {
+                    h.write_u32(s);
+                }
+            }
+            h.finish()
+        };
+        if let Some((seen, list)) = c.texture_lists.get_mut(&key) {
+            if list.iter().eq(found.iter().flatten()) {
+                *seen = c.frame;
+                return list.clone();
+            }
+        }
         // the slots bound, in order: an exact-length iterator, so the slice
         // is allocated once (no Vec first)
         let mut at = [0u8; 21];
@@ -999,7 +1074,9 @@ impl Mirror {
                 n += 1;
             }
         }
-        at[..n].iter().map(|&i| found[i as usize].clone().unwrap()).collect()
+        let list: Arc<[TextureBinding]> = at[..n].iter().map(|&i| found[i as usize].clone().unwrap()).collect();
+        c.texture_lists.insert(key, (c.frame, list.clone()));
+        list
     }
 }
 
@@ -1021,9 +1098,11 @@ fn shadow_samplers(g: &G, ctx: u32, binding: u32, meta: &MetaPart, info: &FrameI
                     let words = |o: u32| -> [u32; 3] { std::array::from_fn(|k| g.u32(o.wrapping_add(0x30 + 4 * k as u32))) };
                     let new = words(sampler);
                     let old_words = (old != 0).then(|| words(old));
-                    for c in mtstate::packed(mtstate::SAMPLER, &new, old_words.as_ref().map(|w| &w[..]), Some(slot.stage), info.filtering) {
-                        sh.sampler_states.push((c.args[0], c.args[1], c.args[2]));
-                    }
+                    // (no Vec of calls: L180)
+                    let stage = slot.stage;
+                    mtstate::packed_each(mtstate::SAMPLER, &new, old_words.as_ref().map(|w| &w[..]), Some(stage), info.filtering, |state, value| {
+                        sh.sampler_states.push((stage, state, value))
+                    });
                 }
                 sh.write(cache, sampler);
             }
@@ -1232,6 +1311,12 @@ pub struct Caches {
     bindings: FxMap<u32, (u64, Result<Arc<BindingPart>, Refusal>)>,
     /// the banks a binding's constants are read into
     banks: [Constants; 2],
+    /// binding parts by content (`content_key`), with the frame they were
+    /// last used in: a binding at a new address with content seen lately
+    /// takes that part (no allocation, and no drop later)
+    by_content: FxMap<u64, (u64, Arc<BindingPart>)>,
+    /// texture lists by content, with the frame they were last used in
+    texture_lists: FxMap<u64, (u64, Arc<[TextureBinding]>)>,
     /// stream and target bindings by address, with the frame they were last
     /// built in (kept across frames: `kept_part`)
     streams: FxMap<u32, (u64, Result<Arc<StreamPart>, Refusal>)>,
@@ -1252,8 +1337,13 @@ impl Caches {
     /// (with the D3D lock held).
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
-        if self.bindings.len() > 16384 {
-            self.bindings.clear();
+        // bindings and contents unused for three frames go (every eighth
+        // frame; L180: clearing the whole table dropped every part at once)
+        if self.frame % 8 == 0 {
+            let frame = self.frame;
+            self.bindings.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.by_content.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.texture_lists.retain(|_, (seen, _)| *seen + 3 > frame);
         }
         if self.streams.len() > 16384 {
             self.streams.clear();
@@ -2252,6 +2342,28 @@ mod tests {
         }
     }
 
+    /// L180: bindings at other addresses with the same content take the
+    /// same part (the game's bindings move between frames); other content
+    /// (here the alpha test) a part of its own.
+    #[test]
+    fn bindings_at_new_addresses_with_the_same_content_share_a_part() {
+        let mut m = TestMem::default();
+        for binding in [0x1000, 0x3000, 0x5000] {
+            m.set_u32(binding + 8, 0x2000);
+        }
+        m.set_u32(0x5000, 0x18_0000 | 2 << 3 | 7 << 11);
+        let b = binding_writing(0, 0, 0);
+        let mut c = Caches::default();
+        c.metas.insert(0x2000, b.meta.clone());
+        let g = G::new(&m);
+        let first = binding_part(&g, &mut c, 0x1000, None).ok().unwrap();
+        let moved = binding_part(&g, &mut c, 0x3000, None).ok().unwrap();
+        assert!(Arc::ptr_eq(&first, &moved));
+        let other = binding_part(&g, &mut c, 0x5000, None).ok().unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        assert_eq!(other.alpha, Some((3, 7)));
+    }
+
     /// Parts kept across frames: the same frame's part from the map; a new
     /// frame builds again and keeps the earlier part (the same Arc) when
     /// equal, a new one when changed; refusals are kept too.
@@ -2708,6 +2820,8 @@ mod tests {
         }
         let all = mirror.textures(&Shadow::default(), &mut c);
         assert_eq!(all.len(), 21);
+        // L180: the same content again: the same list
+        assert!(Arc::ptr_eq(&all, &mirror.textures(&Shadow::default(), &mut c)));
         for (i, t) in all.iter().enumerate() {
             assert_eq!((t.sampler, t.resource, t.states), (stage_of(i), 0x1000 + i as u32, [i as u32; 14]));
         }
