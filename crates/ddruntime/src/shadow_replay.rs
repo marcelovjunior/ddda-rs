@@ -333,6 +333,7 @@ impl Mem for PrivateMemory {
     }
     fn set_u8(&mut self, a: u32, v: u8) {
         reject_unsynchronized_counter_access(a);
+        report_watch(a, v);
         self.0.borrow_mut().set_u8(a, v);
     }
 }
@@ -417,7 +418,37 @@ fn private_command_capacity(m: &mut dyn Mem, cpu: &mut Cpu) {
         .expect("original command capacity helper");
     original(m, cpu);
 }
+thread_local! {
+    /// Debug (DDRUNTIME_PARALLEL_SHADOW_WATCH): the functions this thread
+    /// entered most recently, newest last.
+    static RECENT: RefCell<std::collections::VecDeque<u32>> = RefCell::new(std::collections::VecDeque::new());
+}
+/// Debug: guest addresses whose writes are reported
+/// (DDRUNTIME_PARALLEL_SHADOW_WATCH=hex,hex...).
+fn watched() -> &'static [u32] {
+    static WATCH: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    WATCH.get_or_init(|| {
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_WATCH")
+            .map(|v| v.split(',').filter_map(|w| u32::from_str_radix(w.trim().trim_start_matches("0x"), 16).ok()).collect())
+            .unwrap_or_default()
+    })
+}
+fn report_watch(a: u32, v: u8) {
+    if watched().iter().any(|&w| a & !3 == w & !3) {
+        let recent: Vec<String> = RECENT.with(|r| r.borrow().iter().map(|t| format!("{t:#x}")).collect());
+        eprintln!("parallel-shadow watch {:?} write {a:#x} = {v:#04x} after {}", std::thread::current().id(), recent.join(" "));
+    }
+}
 fn resolve(target: u32) -> LiftFn {
+    if !watched().is_empty() {
+        RECENT.with(|r| {
+            let mut r = r.borrow_mut();
+            if r.len() == 12 {
+                r.pop_front();
+            }
+            r.push_back(target);
+        });
+    }
     match target {
         SCHEDULE => private_schedule,
         0x00da7db0 => private_command_capacity,
@@ -1317,8 +1348,8 @@ fn compare_replays(
                 x.bytes.get(w..w + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
             };
             return Err(format!(
-                "shader {handle:#x} may read c{register} component {component} (serial {:#x?} written {}, parallel {:#x?} written {}): {lines:?}; float constants {table:?}",
-                word(a), results[0].2.contains_key(&ca.source), word(b), results[1].2.contains_key(&cb.source)
+                "shader {handle:#x} may read c{register} component {component} (serial {:#x?} at {:#x} written {}, parallel {:#x?} at {:#x} written {}): {lines:?}; float constants {table:?}",
+                word(a), ca.source, results[0].2.contains_key(&ca.source), word(b), cb.source, results[1].2.contains_key(&cb.source)
             ));
         }
         // later draws of the stream, until the register is uploaded again
