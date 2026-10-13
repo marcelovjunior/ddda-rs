@@ -1043,6 +1043,23 @@ fn compare_replays(
     if observed.entries.len() <= input.u32(context + 0x48) as usize {
         return Err("traversal appended no commands; existing stream is not shadow acceptance".into());
     }
+    // EXPERIMENT (DDRUNTIME_PARALLEL_SHADOW_ZERO_ARENA=1, debug only): both
+    // executions start from a command arena whose free space (cursor to
+    // capacity) is zero, so fresh allocations hold no residue from earlier
+    // frames. The serial replay then cannot match the live run, which still
+    // had the residue: that check only reports.
+    let zero_arena = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_ZERO_ARENA").is_some();
+    let input = if zero_arena {
+        let render = input.u32(0x018d08f4);
+        let index = input.u32(render + 0x33db8);
+        let base = input.u32(render + 0x33dc0 + index * 4);
+        let (cursor, capacity) = (input.u32(render + 0x33dc8), input.u32(render + 0x33dcc));
+        let zeros: BTreeMap<u32, u8> = (base + cursor..base + capacity).map(|a| (a, 0)).collect();
+        eprintln!("parallel-shadow EXPERIMENT zeroed command arena {:#x}..{:#x}", base + cursor, base + capacity);
+        Arc::new(input.with_writes(&zeros))
+    } else {
+        input
+    };
     let abi = |c: &Cpu| [c.eax, c.ebx, c.esi, c.edi, c.ebp, c.esp];
     let scratch = stack.start..outgoing.esp;
     let verify_serial = |result: &ReplayResult| -> Result<(), String> {
