@@ -113,7 +113,15 @@ a separate uninstrumented profile with `sample_profile.py --seconds 30 --hz
   44.9/265.2/550.7 ns. Shared-load local evidence, not a gameplay claim.
 - Timed reporting now waits for in-flight accepted stack captures before its
   one-shot snapshot. Standalone allocator/parser tests remain **3 pass**.
-- Allocation fixes and head gameplay evidence pending. Head ownership question
-  #12744 explicitly lists the four proposed ndraw hunks; file not edited.
+- Isolated runtime candidate (own target directory; original dependency paths,
+  workspace edition 2021, `--no-default-features --lib ndraw_native::tests`):
+  **11 pass / 1 ignored**, including the four new regression tests. No source
+  edits to the claimed repository file and no shards compiled. The first
+  temporary manifest mistakenly used edition 2024; corrected to the repository's
+  2021 before the successful test run.
+- Allocation fixes and head gameplay evidence pending. Head ownership questions
+  #12744 / #12831 explicitly list the four proposed ndraw hunks; file not edited.
+  Blocker #12877 records the missing ownership decision and live census. The
+  tested patch is `C:/ddda-targets/L154/ndraw_candidate.patch` until integrated.
 - Next: head captures worker census; coordinate ndraw allocation hunks, rank
   measured sites, and gate targeted fixes. No FPS or image comparison claim.

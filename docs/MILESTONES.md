@@ -8,7 +8,8 @@
   GPU **26 pass / 2 ignored / 2 bounded timeouts**. Runtime baseline **208 pass /
   3 fail / 5 ignored**; two timing failures pass isolated, inherited gamma remains.
 - No shard build or game run. c24/c25 heap time shares cannot rank counts/bytes.
-- Next: head gameplay census and ndraw hunk agreement; candidate tests prepared.
+- Isolated four-hunk ndraw candidate: **11 tests pass / 1 ignored**; repository
+  file awaits owner agreement. Next: head hunk decision and gameplay census.
   Protocol and limitations: `docs/tasks/L154-worker-alloc.md`.
 
 ### L139 combo21 combined native gate (2026-10-13)
