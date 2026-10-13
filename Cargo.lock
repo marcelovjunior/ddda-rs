@@ -2761,9 +2761,6 @@ name = "ddlift-hot-00"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
- "mtcore",
- "mtframe",
- "mtmath",
 ]
 
 [[package]]
