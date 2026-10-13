@@ -81,4 +81,24 @@ Next: head integration train and matched image/per-job acceptance.
 ## Priority follow-up from head (#14007)
 
 Record EA5320 draw-mesh vectors to `native-L171/draw_mesh.json` and run the
-head's `semantic_draw::draw_mesh` in isolation. Results pending.
+head's `semantic_draw::draw_mesh` in isolation.
+
+`record_l173_mesh.py` records 302 cases across fixed/dynamic LOD, quality
+1/2/3, sort modes 0x10/0xe/3, primitive depth, bounds callback, pass filters,
+material switches, command-buffer growth, flags 0x100/0x50 and both early
+exits. Different primitive LOD masks make selection observable. External
+material/grow seams have explicit recorded heap effects and randomized
+volatile returns. No game data is copied into the repo.
+
+`check_l173_mesh.py` snapshots a pinned commit from `task/L171-semantic`
+into private scratch and runs its ABI harness with mesh call arities and
+the below-stack heap fix, then L173's stricter per-call memory/sphere check.
+An additional isolated lifted-body replay validates the recorder itself.
+EA5320 is void, so incidental EAX is excluded here as in the head's harness.
+
+Initial 302-case replay stopped on an unrecorded incoming argument for an
+early-return path. The recorder now includes the complete known incoming
+ABI frame (28 bytes) instead of only arguments read by that original path.
+Corrected recording and final replay are waiting for the head's paused
+game comparison; no semantic equivalence claim yet. Head source compiled
+at `fb948fc26080c6bbc3272979ff5f093bfc94ddcc`.
