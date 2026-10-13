@@ -20,6 +20,36 @@ fn double(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.esp += 4;
 }
 
+fn nested_emulation(m: &mut dyn Mem, cpu: &mut Cpu) {
+    Registry::new().call(m, cpu, CODE + 0x100).expect("nested emulation");
+}
+
+#[test]
+fn nested_fallback_keeps_the_outer_engine_state() {
+    std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");
+    let mut m = GuestMemory::new();
+    m.map(CODE, 0x3000, READ | WRITE).unwrap();
+    m.map(STACK - 0x1000, 0x1000, READ | WRITE).unwrap();
+    // mov eax,1; call SERVICE; add eax,3; ret. The service reenters
+    // fallback while the outer engine is suspended at the call boundary.
+    let mut code = vec![0xB8, 1, 0, 0, 0, 0xE8];
+    code.extend((SERVICE - (CODE + 10)).to_le_bytes());
+    code.extend([0x83, 0xC0, 3, 0xC3]);
+    for (i, b) in code.into_iter().enumerate() { m.set_u8(CODE + i as u32, b); }
+    for (i, b) in [0x83, 0xC0, 2, 0xC3].into_iter().enumerate() {
+        m.set_u8(CODE + 0x100 + i as u32, b);
+    }
+    let mut registry = Registry::new();
+    registry.insert(SERVICE, Binding::Service(nested_emulation)).unwrap();
+    for _ in 0..32 {
+        let mut cpu = Cpu { esp: STACK - 0x100, ..Cpu::default() };
+        m.set_u32(cpu.esp, RETURN);
+        registry.call(&mut m, &mut cpu, CODE).expect("outer emulation");
+        assert_eq!(cpu.eax, 6);
+        assert_eq!(cpu.esp, STACK - 0xFC);
+    }
+}
+
 #[test]
 fn untranslated_code_runs_in_the_emulator_with_call_outs() {
     std::env::set_var("DDRUNTIME_EMU_FALLBACK", "1");

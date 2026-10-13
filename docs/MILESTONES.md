@@ -2,14 +2,19 @@
 
 ### L109d memory ownership diagnostics (2026-10-13)
 
-- Head reports 2.6 -> 15.7–17 GB private memory at save load; cause remains
-  unmeasured. L109c process/guest counters are ready in `e7099da7`.
+- Head's c18 run reaches 17.05 GiB private memory with only ~0.64 GiB live
+  Rust allocations. Unicorn 2.0.1 commits 1 GiB per cached engine and its
+  strong hook ownership prevents teardown, reproduced CPU-only.
 - New opt-in `DDPLAY_ALLOC_LOG=1` measures live Rust requested bytes and
   4 KiB aligned allocations through the unchanged System allocator.
   Standalone off/on tests cover allocation, zeroing, realloc and real global
   allocator startup. No game run by agent.
-- Next: head's combined process/guest/Rust counter run, then an attributed
-  memory fix; save-load time follows. `docs/tasks/L109d-memory.md`.
+- Pin Unicorn 2.1.1, x86 only, with a 32 MiB translation cache: two-engine
+  commitment 2,153,340,928 -> 10,113,024 bytes; after drop 561,152 bytes.
+  Six fallback state/call tests pass before/after; light suite 194 pass,
+  one inherited fullscreen-gamma failure, four ignored. No game A/B yet.
+- Next: head integrates and repeats memory/image/save-load timing run;
+  profile remaining load time afterward. `docs/tasks/L109d-memory.md`.
 
 ### L129 combined integer/float flag fusion gate (2026-10-13)
 

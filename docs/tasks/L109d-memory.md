@@ -65,7 +65,60 @@ upload bytes; pending image uploads retain owned buffers until first GPU
 use or resource release. These are candidates, not measured causes. Backend
 and transport diagnostic hunks are being coordinated with their owners.
 
-Next action: head captures save load with both log switches. Compare the
-rise in private commitment, Rust-owned bytes, aligned page bytes and live
-guest pages before selecting the allocation path to change. Save-load
-optimization remains behind memory attribution.
+### Emulator allocation fix
+
+Head's `run_c18mem.log` / `c18mem_private.log` show process private memory
+reaching 17.05 GiB, while Rust live requested bytes stay around 0.64 GiB
+(peak 765,697,504 bytes); aligned guest-page allocations reach 422,445,056
+bytes. This excludes live Rust buffers as the dominant owner. Process/guest
+`memory_totals` were not present in this run; the external process sampler
+supplies private commitment.
+
+Pinned Unicorn 2.0.1's `qemu/accel/tcg/translate-all.c` uses a 1 GiB default
+translation buffer on 64-bit hosts, allocated with Windows
+`MEM_RESERVE | MEM_COMMIT`. Runtime retains an engine per thread/nesting
+level. Its Rust hooks also hold strong `Rc` references back to the engine,
+preventing destruction after the external owner drops. Both mechanisms
+were reproduced without guest/game execution:
+
+| CPU-only two-engine probe | 2.0.1 | 2.1.1, 32 MiB cache |
+|---|---:|---:|
+| Private-byte increase, both alive | 2,153,340,928 | 10,113,024 |
+| Increase after dropping both | 2,153,340,928 | 561,152 |
+
+The runtime now pins upstream **2.1.1**, builds only x86, and sets each
+translation cache to **32 MiB before CPU initialization**, matching the
+existing vector harness's host-cache policy. This is not a game constant.
+Unicorn regenerates evicted translations. The newer Windows allocator
+commits code pages on demand and Rust hooks use weak ownership. Thread-local
+pooling and independent nested engines remain intact. No game instruction,
+guest allocation lifetime, renderer setting or original boot hold changes.
+`emu_engine_created` load-log events expose cumulative engine creation and
+the configured per-engine cache budget (not a live committed-byte gauge).
+
+Six emulator integration tests pass before and after: register/stack/FS
+call-outs, repeated reuse, hot loops, 100,000 short calls, x87/SSE state and
+new nested fallback coverage. The isolated memory probe passes; a unit
+test reads back the actual cache budget. Single unpaired short-call times
+were 2.005 s old / 2.333 s new on the shared host; no CPU speedup is claimed.
+Logs are under `C:/ddda-targets/L109d-emu-*`; no shards or game were run.
+
+Full serial `cargo test -p ddruntime --no-default-features --features emu
+--no-fail-fast -- --test-threads=1`: **194 passed, one inherited fullscreen
+gamma failure, four ignored** (`L109d-light.log`). The gamma Reset result
+is the same pre-existing 2289436780-versus-0 failure; no check was changed.
+
+2.1.1 builds using the existing toolchain. Later upstream packaging adds
+an unconditional symlink step that fails on this machine; no registry
+source patch or elevated privilege is required for the chosen pin.
+
+Head's c18 combined build records guest start **0.751034 s**, first Present
+**1.743526 s**, and exact geometry call **70.703 ms**. This improves the
+earlier combined boot boundary (5.84–5.86 s), but is not an isolated A/B.
+Title/main-menu and post-fix save-load/gameplay timings remain unmeasured.
+
+Next action: head integrates this change and captures the same save load
+with `DDPLAY_ALLOC_LOG=1 DDRUNTIME_LOAD_LOG=1` and the external private-byte
+sampler, then compares image, process memory and visible phase timings.
+Codex-10's separate `2a5ad811` removes six hot fallback duration readers;
+remaining save-load CPU work should be profiled after both changes land.

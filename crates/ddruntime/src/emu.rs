@@ -144,6 +144,70 @@ fn scratch_write(uc: &mut Emu, addr: u32, bytes: &[u8]) {
 
 type Emu = Unicorn<'static, Data>;
 
+// Host translation-cache policy, not a game constant. Matches the original-
+// instruction vector harness's TCG_BUFFER. Unicorn regenerates evicted blocks.
+// 2.0.1 committed 1 GiB per engine on Windows and its Rust hooks retained
+// strong reference cycles; 2.1.1 provides this control and weak hook ownership.
+const TRANSLATION_CACHE_BYTES: u32 = 32 << 20;
+static ENGINES_CREATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn set_translation_cache(uc: &mut Emu) {
+    use unicorn_engine::{ffi::uc_ctl, unicorn_const::{uc_error, ControlType}};
+    // SAFETY: Unicorn 2.1.1 uc_ctl_set_tcg_buffer_size takes exactly one
+    // uint32_t argument. Set before the first API that initializes the CPU.
+    let control = ControlType::UC_CTL_TCG_BUFFER_SIZE as u32 | ControlType::UC_CTL_IO_WRITE as u32 | (1 << 26);
+    assert_eq!(unsafe { uc_ctl(uc.get_handle(), control, TRANSLATION_CACHE_BYTES) }, uc_error::OK);
+}
+
+#[cfg(all(test, windows))]
+mod allocation_test {
+    use super::*;
+
+    #[test]
+    fn translation_cache_budget_is_applied_before_initialization() {
+        use unicorn_engine::{ffi::uc_ctl, unicorn_const::{uc_error, ControlType}};
+        let uc = new_instance();
+        let mut actual = 0u32;
+        let control = ControlType::UC_CTL_TCG_BUFFER_SIZE as u32 | ControlType::UC_CTL_IO_READ as u32 | (1 << 26);
+        // SAFETY: the read form writes one uint32_t to this live local.
+        assert_eq!(unsafe { uc_ctl(uc.get_handle(), control, &mut actual) }, uc_error::OK);
+        assert_eq!(actual, TRANSLATION_CACHE_BYTES);
+    }
+
+    fn private_bytes() -> usize {
+        #[repr(C)]
+        #[derive(Default)]
+        struct Counters { cb: u32, faults: u32, sizes: [usize; 9] }
+        #[link(name = "kernel32")]
+        unsafe extern "system" { fn GetCurrentProcess() -> *mut std::ffi::c_void; }
+        #[link(name = "psapi")]
+        unsafe extern "system" {
+            fn GetProcessMemoryInfo(p: *mut std::ffi::c_void, c: *mut Counters, n: u32) -> i32;
+        }
+        let mut c = Counters::default();
+        c.cb = std::mem::size_of::<Counters>() as u32;
+        // SAFETY: PROCESS_MEMORY_COUNTERS_EX layout and current-process pseudo handle.
+        assert_ne!(unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) }, 0);
+        c.sizes[8]
+    }
+
+    #[test]
+    #[ignore = "isolated process commitment diagnostic; run with --test-threads=1 --nocapture"]
+    fn two_engine_private_commitment() {
+        let before = private_bytes();
+        let first = new_instance();
+        let one = private_bytes();
+        let second = new_instance();
+        let two = private_bytes();
+        eprintln!("emu private bytes: first={} second={} total={}",
+            one.saturating_sub(before), two.saturating_sub(one), two.saturating_sub(before));
+        drop((first, second));
+        eprintln!("emu private bytes after drop={}", private_bytes().saturating_sub(before));
+        assert!(two.saturating_sub(before) < 128 << 20, "two engines must not commit GiB-sized buffers");
+        assert!(private_bytes().saturating_sub(before) < 32 << 20, "hook ownership must release engines");
+    }
+}
+
 thread_local! {
     /// Idle emulator instances of this thread. One instance per nesting level
     /// is kept: each owns a large translation buffer, so creating one per call
@@ -161,6 +225,7 @@ fn new_instance() -> Emu {
     let data = Data { registry: 0, pages: 0, mapped: HashMap::new(), ret: 0, entry_esp: 0, resume: 0, exit: None, fault: None,
                       scratch: Box::new([0; 0x1000]), fs: None };
     let mut uc = Unicorn::new_with_data(Arch::X86, Mode::MODE_32, data).expect("unicorn");
+    set_translation_cache(&mut uc);
     uc.mem_map(STUBS as u64, 0x1000, Permission::ALL).expect("stub page");
     let scratch = uc.get_data_mut().scratch.as_mut_ptr();
     // SAFETY: the box lives as long as the instance and never moves
@@ -221,7 +286,7 @@ fn new_instance() -> Emu {
     .expect("memory hook");
 
     // returns and call-outs, at block starts inside the guest
-    uc.add_block_hook(|uc, addr, _| {
+    uc.add_block_hook(1, 0, |uc, addr, _| {
         let a = addr as u32;
         if a >= STUBS {
             return;
@@ -244,6 +309,9 @@ fn new_instance() -> Emu {
         let _ = uc.emu_stop();
     })
     .expect("block hook");
+    let created = ENGINES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    crate::load_log::event("emu_engine_created", format_args!(
+        "engines_created={created} translation_cache_bytes={TRANSLATION_CACHE_BYTES}"));
     uc
 }
 

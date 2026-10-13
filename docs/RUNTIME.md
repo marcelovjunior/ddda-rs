@@ -22,6 +22,14 @@ allocations from process commitment. Driver allocations and allocator
 overhead are excluded; snapshots are approximate across concurrent threads.
 See [memory investigation](tasks/L109d-memory.md).
 
+The optional diagnostic emulator pins Unicorn 2.1.1 with a 32 MiB translated
+code cache per thread/nesting engine. The previous 2.0.1 allocated 1 GiB
+per engine and leaked hook ownership; the CPU-only two-engine private-memory
+probe improves 2.153 GB -> 10.1 MB, with 0.56 MB left after drop. Six emulator
+state/call tests pass before and after. Whole-game memory and image A/B
+remain with head. `emu_engine_created` reports cumulative engine creation
+under the load-log switch.
+
 ReadFileEx optionally caches immutable install archives with
 `DDRUNTIME_FILE_READ_AHEAD=1`: 256 KiB forward windows, 8 MiB retained
 buffer capacity per runtime, overlay/writable files excluded. It remains
