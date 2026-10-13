@@ -83,7 +83,11 @@
   limits: `docs/tasks/L169-shadow.md`.
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
-- Captured real outer-lane input privately:1,632 pages/13,226 write bytes.
+- Complete real capture:1,633 pages/13,226 write bytes. Original serial/live
+  proof passes for6 entries; parallel stops at CreateEventA. Manager inline
+  lane1 aliases the parent; private manager copy now prevents clobbering.
+  33 focused shadow tests pass; offline-example rebuild/replay next.
+- Earlier capture identified null nested secondary sort storage.
   FED200 gives child contexts a null secondary sort arena. Replay now
   provides bounded private storage; FED3B0 output must not retain any
   reference into it. All shared memory/resource/ABI gates remain strict.
