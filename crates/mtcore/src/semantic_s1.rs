@@ -213,3 +213,232 @@ pub fn update_effect_timers(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(12);
 }
+
+/// Calls the virtual method at vtable slot 0x3c of the runtime's tuning-value
+/// object (`[[0x018FA4BC] + 0xB8754]`) with `index` and returns its x87
+/// result as a float; 0.0 when the runtime has no such object. `frame` is
+/// the original's stack pointer at its call sites.
+fn tuning_value(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, index: u32, back: u32) -> f32 {
+    let runtime = pg.u32(m, 0x018f_a4bc);
+    let object = pg.u32(m, runtime.wrapping_add(0xb8754));
+    if object == 0 {
+        return 0.0;
+    }
+    let method = pg.u32(m, pg.u32(m, object).wrapping_add(0x3c));
+    call_from(m, c, pg, frame, object, &[index], back, |m, c| ddnative_base::x86::call_ext(m, c, method));
+    // fstp dword: the value leaves the x87 stack as a float
+    let bits = c.st.top_f32().unwrap_or(0);
+    c.st.pop();
+    f32::from_bits(bits)
+}
+
+// Translated from 0x0084c0a0 (DDDA.exe 2017-12-13 Steam), uCharacterBase::vf92.
+/// 0x0084C0A0, `character->update_frame()` (thiscall, plain `ret`): the
+/// per-frame update of a character (virtual 92 of uCharacterBase).
+///
+/// 1. Frame time. The delta time `this[0x14]` is scaled for this frame: 0
+///    while the freeze flag (`this[0x26A0] & 0x800`) is set and
+///    `this[0x2864] >= 1.0` (which also sets bit 0 of `this[0x1DE0]` once,
+///    tracked by the byte `this[0x286D]`; leaving the freeze clears it), and
+///    times `this[0x27B0]` under flag 0x1000 (unless the player-flag byte
+///    `this[0x206D] & 1` is set with `this[0x2DD4] == 0xE4`).
+/// 2. Speed blend `this[0x29A8]` (default 1.0). With any of
+///    `this[0x2368] & 0x80001C`, the blend between `this[0x29A4]` and
+///    `this[0x29A0]` (or 0.95) follows the speed `this[0x29B4]` against two
+///    tuning values (indexes 10 and 11 of the runtime's tuning object,
+///    [`tuning_value`]) and 25.0; the state at `this + 0x2A90` is asked
+///    through 0x00423B80 when `this[0x2B30]` is set. The player flag forces
+///    the blend to 1.0 when 0x00B809D0 (`this->has_action(0x70)`) says so.
+/// 3. The scaled time (blend times scale, times the one-shot factor
+///    `this[0x2DB0]` armed by `this[0x2DAE]`) is stored in `this[0x2EEC]`
+///    and as `this[0x14]` while the base model update 0x00886210 runs, then
+///    the original delta time is put back. Then 0x0081F280 (when
+///    `this[0x2E74]` is set) and 0x0080B450 (`this + 0x2E40`) run, and the
+///    two action-slot bits `this[0x494] & 0x80/0x100` call 0x004219A0 with
+///    the slot ids at `this[0x484] + 0xE/0x10`.
+/// 4. The timer `this[0x2EA8]` counts down by the delta time (calling
+///    0x004215E0 with `this[0x2EAC]`) under byte flags 0x206C/0x206E, and
+///    for slots 9 and 10 newly set in `this[0x494]` (against `this[0x4A4]`)
+///    the vector `this[0xE0..0xF0]` is handed to 0x00CADE50 for the slot's
+///    id, inside the global instance's lock (EnterCriticalSection through
+///    the import at 0x0139D160, leave at 0x0139D164).
+pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let at = |o: u32| this.wrapping_add(o);
+    // the original's frame after its prologue and three pushes; its calls are made here
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x34 + 12);
+    let vector = frame.wrapping_add(0x20);
+    c.ebp = entry.wrapping_sub(4);
+    c.edi = this;
+    let one = float(pg, m, 0x0153_19b8);
+
+    // 1. frame time
+    let dt = float(pg, m, at(0x14));
+    let mut scaled = dt;
+    if pg.u32(m, at(0x26a0)) & 0x800 != 0 && float(pg, m, at(0x2864)) >= one {
+        scaled = 0.0;
+        if pg.u8(m, at(0x286d)) == 0 {
+            let v = pg.u32(m, at(0x1de0)) | 1;
+            pg.set_u32(m, at(0x1de0), v);
+        }
+        pg.set_u8(m, at(0x286d), 1);
+    } else {
+        if pg.u8(m, at(0x286d)) != 0 {
+            let v = pg.u32(m, at(0x1de0)) & 0xffff_fffe;
+            pg.set_u32(m, at(0x1de0), v);
+        }
+        pg.set_u8(m, at(0x286d), 0);
+    }
+    if pg.u32(m, at(0x26a0)) & 0x1000 != 0 && !(pg.u8(m, at(0x206d)) & 1 != 0 && pg.u32(m, at(0x2dd4)) == 0xe4) {
+        scaled = float(pg, m, at(0x27b0)) * scaled;
+    }
+
+    // 2. speed blend
+    set_float(pg, m, at(0x29a8), one);
+    if pg.u32(m, at(0x2368)) & 0x80_001c != 0 {
+        let speed = float(pg, m, at(0x29b4));
+        let mut plain = pg.u32(m, at(0x2b30)) == 0;
+        if !plain {
+            c.esi = at(0x2a90);
+            c.eax = 0;
+            call_from(m, c, pg, frame, 0, &[], 0x0084_c1b2, |m, c| ddnative_base::x86::call_ext(m, c, 0x0042_3b80));
+            plain = c.eax & 0x0c00_2000 == 0;
+            if !plain {
+                let low = tuning_value(m, c, pg, frame, 10, 0x0084_c1da);
+                let t = if speed >= low {
+                    let high = tuning_value(m, c, pg, frame, 11, 0x0084_c213);
+                    let t = speed / high;
+                    if t > one { one } else { t }
+                } else {
+                    0.0
+                };
+                let (rest, target) = (float(pg, m, at(0x29a4)), float(pg, m, at(0x29a0)));
+                set_float(pg, m, at(0x29a8), (target - rest) * (one - t) + rest);
+            }
+        }
+        if plain {
+            let start = float(pg, m, 0x014f_a314);
+            if speed >= start {
+                let high = tuning_value(m, c, pg, frame, 11, 0x0084_c2bb);
+                let t = (speed - start) / (high - start);
+                let t = if t > one { one } else { t };
+                let rest = float(pg, m, at(0x29a4));
+                // the original blends towards 0.95 in double precision
+                let target = f64::from_bits(((pg.u32(m, 0x0161_d594) as u64) << 32) | pg.u32(m, 0x0161_d590) as u64);
+                let blend = (target - rest as f64) * ((one - t) as f64) + rest as f64;
+                set_float(pg, m, at(0x29a8), blend as f32);
+            }
+        }
+    }
+    if pg.u8(m, at(0x206d)) & 1 != 0 {
+        c.edx = 0x70;
+        c.eax = 0;
+        call_from(m, c, pg, frame, this, &[], 0x0084_c343, |m, c| ddnative_base::x86::call_ext(m, c, 0x00b8_09d0));
+        if c.eax & 0xff != 0 {
+            set_float(pg, m, at(0x29a8), one);
+        }
+    }
+
+    // 3. scaled time, base model update
+    let one_shot = pg.u8(m, at(0x2dae)) != 0;
+    let mut time = float(pg, m, at(0x29a8)) * scaled;
+    if one_shot {
+        time *= float(pg, m, at(0x2db0));
+    }
+    pg.set_u8(m, at(0x2dae), 0);
+    set_float(pg, m, at(0x2db0), one);
+    set_float(pg, m, at(0x2eec), time);
+    set_float(pg, m, at(0x14), time);
+    call_from(m, c, pg, frame, this, &[], 0x0084_c391, |m, c| ddnative_base::x86::call_ext(m, c, 0x0088_6210));
+    let attachment = pg.u32(m, at(0x2e74));
+    set_float(pg, m, at(0x14), dt);
+    if attachment != 0 {
+        c.eax = attachment;
+        call_from(m, c, pg, frame, this, &[], 0x0084_c3ab, |m, c| ddnative_base::x86::call_ext(m, c, 0x0081_f280));
+    }
+    c.eax = at(0x2e40);
+    call_from(m, c, pg, frame, this, &[], 0x0084_c3b6, |m, c| ddnative_base::x86::call_ext(m, c, 0x0080_b450));
+    let (mut bit, mut word) = (0x80u32, 0xeu32);
+    loop {
+        if pg.u32(m, at(0x494)) & bit != 0 {
+            let table = pg.u32(m, at(0x484));
+            let id = if table == 0 { 0 } else { pg.u16(m, word.wrapping_add(table)) as u32 };
+            let instance = pg.u32(m, 0x018d_0b6c);
+            c.ebx = bit;
+            c.esi = word;
+            c.eax = pg.u32(m, at(0x210c));
+            call_from(m, c, pg, frame, id, &[instance, id, this, this], 0x0084_c3f2, |m, c| {
+                ddnative_base::x86::call_ext(m, c, 0x0042_19a0)
+            });
+        }
+        word += 2;
+        bit = bit.rotate_left(1);
+        if word > 0x10 {
+            break;
+        }
+    }
+    c.ebx = bit;
+    c.esi = word;
+
+    // 4. countdown timer, per-slot vectors
+    if pg.u8(m, at(0x206c)) & 0x80 != 0 || pg.u8(m, at(0x206e)) & 0x10 != 0 {
+        let timer = float(pg, m, at(0x2ea8));
+        if timer > 0.0 {
+            let id = pg.u32(m, at(0x2eac));
+            let v = timer - float(pg, m, at(0x14));
+            let instance = pg.u32(m, 0x018d_0b6c);
+            set_float(pg, m, at(0x2ea8), v);
+            c.eax = instance;
+            call_from(m, c, pg, frame, 0, &[id, this, 0], 0x0084_c43f, |m, c| ddnative_base::x86::call_ext(m, c, 0x0042_15e0));
+        } else {
+            set_float(pg, m, at(0x2ea8), 0.0);
+        }
+    }
+    let flags = pg.u8(m, at(0x206d));
+    if flags & 2 != 0 || flags & 1 == 0 {
+        for slot in 9u32..=10 {
+            let now = pg.u32(m, at(0x494));
+            let before = pg.u32(m, at(0x4a4));
+            if (((before ^ now) & now) >> (slot & 31)) & 1 == 0 {
+                continue;
+            }
+            // the slot's vector, copied to the frame (the callee reads it)
+            for k in 0..4 {
+                let v = pg.u32(m, at(0xe0 + 4 * k));
+                pg.set_u32(m, vector.wrapping_add(4 * k), v);
+            }
+            let table = pg.u32(m, at(0x484));
+            let id = if table == 0 { 0 } else { pg.u16(m, table.wrapping_add(slot * 2)) as u32 };
+            let instance = pg.u32(m, 0x018d_0b6c);
+            c.ebx = instance;
+            let locked = |m: &dyn Mem| pg.u8(m, instance.wrapping_add(0x1c)) != 0 || pg.u8(m, 0x018d_0bb0) != 0;
+            if locked(m) {
+                let enter = pg.u32(m, 0x0139_d160);
+                call_from(m, c, pg, frame, 0, &[instance.wrapping_add(4)], 0x0084_c4fe, |m, c| {
+                    ddnative_base::x86::call_ext(m, c, enter)
+                });
+            }
+            if pg.u32(m, instance.wrapping_add(0xce0)) != 0 {
+                let handlers = pg.u32(m, instance.wrapping_add(0xcf8));
+                if handlers != 0 {
+                    let list = pg.u32(m, handlers.wrapping_add(0x70));
+                    c.eax = pg.u32(m, list.wrapping_add(id.wrapping_mul(4)));
+                    call_from(m, c, pg, frame, 0, &[slot.wrapping_sub(7), vector], 0x0084_c52e, |m, c| {
+                        ddnative_base::x86::call_ext(m, c, 0x00ca_de50)
+                    });
+                }
+            }
+            if locked(m) {
+                let leave = pg.u32(m, 0x0139_d164);
+                call_from(m, c, pg, frame, 0, &[instance.wrapping_add(4)], 0x0084_c547, |m, c| {
+                    ddnative_base::x86::call_ext(m, c, leave)
+                });
+            }
+        }
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4);
+}

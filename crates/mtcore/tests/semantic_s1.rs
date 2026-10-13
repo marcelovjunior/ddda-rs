@@ -34,10 +34,28 @@ fn regs(v: &Value) -> [u32; 8] {
     r.try_into().unwrap()
 }
 
+/// The registers (eax ecx edx ebx esp ebp esi edi = 0..7) the callee reads as
+/// inputs; the others are leftovers the port need not reproduce.
+fn call_inputs(target: u32) -> &'static [usize] {
+    match target {
+        0x0042_9680 => &[1, 2],
+        0x0042_3b80 => &[6],                                   // ESI = state
+        0x0081_f280 | 0x0080_b450 | 0x0042_19a0 | 0x0042_15e0 | 0x00ca_de50 => &[0], // EAX
+        0x00b8_09d0 => &[1, 2],
+        0x0088_6210 | 0x3000_0000 => &[1],
+        _ => &[],
+    }
+}
+
 /// Stack arguments of the callees the vectors record (thiscall: ECX is
 /// checked separately).
 fn stack_args(target: u32) -> u32 {
     match target {
+        0x0042_3b80 | 0x0081_f280 | 0x0080_b450 | 0x0088_6210 | 0x00b8_09d0 => 0,
+        0x3000_0000 | 0x3000_0010 | 0x3000_0020 => 1, // tuning virtual, Enter/LeaveCriticalSection
+        0x0042_19a0 => 4,
+        0x0042_15e0 => 3,
+        0x00ca_de50 => 2,
         0x0042_9680 => 3, // effect request sink (0x005D1AF0)
         _ => 2, // virtual calls in these corpora take (joint, model)
     }
@@ -85,7 +103,10 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             };
             let target_recorded = if paired { n(&trace[k]["target"]) } else { n(&trace[k]["target"]) };
             assert_eq!(target, target_recorded, "case {i}: call target");
-            assert_eq!(c.ecx, regs(call)[1], "case {i}: call ECX");
+            let have = [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi];
+            for &r in call_inputs(target) {
+                assert_eq!(have[r], regs(call)[r], "case {i}: call {target:x} input register {r}");
+            }
             assert_eq!(c.esp, regs(call)[4], "case {i}: call ESP");
             // What the callee reads: its return address, its three
             // arguments and the buffer the first two describe. The rest of
@@ -121,6 +142,9 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             }
             c.eax = regs(back)[0];
             c.esp = regs(back)[4];
+            if let Some(bits) = back.get("st0") {
+                c.st.push(n(bits)); // a float returned in ST0
+            }
             *position.borrow_mut() += if paired { 2 } else { 1 };
         })));
         body(&mut m, &mut c);
@@ -154,4 +178,13 @@ fn semantic_effect_timers_matches_original() {
     let n = abi_cases_full("E:/ddda-re/notes/native-L184/effect_timers.json", mtcore::semantic_s1::update_effect_timers, false, &[]);
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
     eprintln!("{n} ABI-level effect-timer cases passed");
+}
+
+// verifies 0x0084c0a0 (ABI level; void)
+#[test]
+fn semantic_character_frame_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L184/character_frame.json", mtcore::semantic_s1::update_character_frame, false, &[]);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
+    eprintln!("{n} ABI-level character-frame cases passed");
 }
