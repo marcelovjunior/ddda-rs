@@ -225,9 +225,40 @@ pub fn initialize_critical_section_and_spin_count(m: &mut dyn Mem, cpu: &mut Cpu
     ret(m, cpu, 8);
 }
 
-// EnterCriticalSection and LeaveCriticalSection: crate::threads (L86,
-// atomics on the section's words).
-pub use crate::threads::{enter_critical_section, leave_critical_section};
+/// KERNEL32 `EnterCriticalSection(cs)` (stdcall): takes ownership or
+/// recurses; while another guest thread owns it, waits without the guest
+/// lock (crate::threads) until it is released. LockCount counts the
+/// owner's entries (waiters are not counted in it).
+pub fn enter_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let cs = arg(m, cpu, 0);
+    let me = crate::threads::current_tid();
+    loop {
+        let owner = m.u32(cs.wrapping_add(12));
+        if owner == 0 || owner == me {
+            break;
+        }
+        crate::threads::block_on(&[crate::threads::key::critical_section(cs)], None);
+    }
+    m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_add(1));
+    m.set_u32(cs.wrapping_add(8), m.u32(cs.wrapping_add(8)).wrapping_add(1));
+    m.set_u32(cs.wrapping_add(12), me);
+    ret(m, cpu, 4);
+}
+
+/// KERNEL32 `LeaveCriticalSection(cs)` (stdcall): undoes one Enter.
+pub fn leave_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let cs = arg(m, cpu, 0);
+    let rec = m.u32(cs.wrapping_add(8));
+    assert!(rec > 0 && m.u32(cs.wrapping_add(12)) == crate::threads::current_tid(),
+            "LeaveCriticalSection({cs:#x}) without a matching Enter");
+    m.set_u32(cs.wrapping_add(8), rec - 1);
+    m.set_u32(cs.wrapping_add(4), m.u32(cs.wrapping_add(4)).wrapping_sub(1));
+    if rec == 1 {
+        m.set_u32(cs.wrapping_add(12), 0);
+        crate::threads::signal_key(crate::threads::key::critical_section(cs));
+    }
+    ret(m, cpu, 4);
+}
 
 /// KERNEL32 `DeleteCriticalSection(cs)` (stdcall): nothing to release.
 pub fn delete_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
@@ -310,8 +341,8 @@ pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
     ("KERNEL32.dll", "DecodePointer", encode_pointer),
     ("KERNEL32.dll", "InitializeCriticalSection", initialize_critical_section),
     ("KERNEL32.dll", "InitializeCriticalSectionAndSpinCount", initialize_critical_section_and_spin_count),
-    ("KERNEL32.dll", "EnterCriticalSection", crate::threads::enter_critical_section),
-    ("KERNEL32.dll", "LeaveCriticalSection", crate::threads::leave_critical_section),
+    ("KERNEL32.dll", "EnterCriticalSection", enter_critical_section),
+    ("KERNEL32.dll", "LeaveCriticalSection", leave_critical_section),
     ("KERNEL32.dll", "DeleteCriticalSection", delete_critical_section),
     ("KERNEL32.dll", "IsProcessorFeaturePresent", is_processor_feature_present),
     ("KERNEL32.dll", "SetUnhandledExceptionFilter", set_unhandled_exception_filter),
@@ -368,16 +399,6 @@ pub const LOCK_FREE: &[(&str, &str)] = &[
     ("KERNEL32.dll", "GetCurrentProcess"),
     ("KERNEL32.dll", "IsDebuggerPresent"),
     ("WINMM.dll", "timeGetTime"),
-    // L86: critical sections (atomics on the guest's words) and events
-    // (host atomics); a wait for any other object takes the lock itself
-    ("KERNEL32.dll", "InitializeCriticalSection"),
-    ("KERNEL32.dll", "InitializeCriticalSectionAndSpinCount"),
-    ("KERNEL32.dll", "EnterCriticalSection"),
-    ("KERNEL32.dll", "LeaveCriticalSection"),
-    ("KERNEL32.dll", "DeleteCriticalSection"),
-    ("KERNEL32.dll", "SetEvent"),
-    ("KERNEL32.dll", "ResetEvent"),
-    ("KERNEL32.dll", "WaitForSingleObject"),
 ];
 
 /// Map the heap region and bind every service at its address.
