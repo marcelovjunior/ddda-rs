@@ -1,0 +1,15 @@
+[package]
+name = "ddports"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The readable ports and mods, registered over their lifted bodies at
+# startup (L60). No shard depends on this crate or on the ports, so editing
+# a port rebuilds the port, this crate and the runtime, not the shards.
+[dependencies]
+ddnative-base = { path = "../ddnative-base" }
+mtmath = { path = "../mtmath" }
+mtcore = { path = "../mtcore" }
+mtframe = { path = "../mtframe" }

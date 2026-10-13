@@ -488,15 +488,38 @@ fn run_micro() {
         let mut acc = 0usize;
         for k in 0..N as usize {
             let a = targets[k % targets.len()];
-            let f = if cached { x86::lifted_target(a) } else { x86::lifted_target_uncached(a) };
+            let f = if cached { ddnative_host::lifted_target(a) } else { x86::lifted_target_uncached(a) };
             acc = acc.wrapping_add(f as usize);
         }
         let ns = t.elapsed().as_secs_f64() * 1e9 / N as f64;
         println!("call_lifted target resolution, {name}: {ns:.2} ns ({acc:#x})");
     }
+    // an in-shard call (L60): call_local's override bit test against the
+    // plain direct call it guards, to a function that only returns
+    fn nothing(_: &mut dyn Mem, cpu: &mut Cpu) {
+        cpu.eax = cpu.eax.wrapping_add(1);
+    }
+    let mut mem = ddnative_base::mem::Sparse::default();
+    let local = targets[0];
+    for (name, checked) in [("direct", false), ("call_local", true)] {
+        let mut cpu = Cpu::default();
+        let t = Instant::now();
+        for _ in 0..N {
+            if checked {
+                x86::call_local(&mut mem, &mut cpu, std::hint::black_box(local), std::hint::black_box(nothing as LiftFn));
+            } else {
+                std::hint::black_box(nothing as LiftFn)(&mut mem, &mut cpu);
+            }
+        }
+        let ns = t.elapsed().as_secs_f64() * 1e9 / N as f64;
+        println!("in-shard call, {name}: {ns:.2} ns ({})", cpu.eax);
+    }
 }
 
 fn main() {
+    // the readable ports over their lifted bodies, as the runtime has them (L60)
+    ddnative_host::install();
+    ddports::ensure();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|k| args.get(k + 1)).cloned();

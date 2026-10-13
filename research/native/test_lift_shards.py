@@ -21,8 +21,10 @@ class ShardTests(unittest.TestCase):
             repo = Path(tmp)
             (repo / "Cargo.toml").write_text('[workspace]\nresolver="2"\nmembers=["crates/*", "crates/ddlift/lift_*"]\nexclude=["crates/ddlift"]\n[workspace.package]\nedition="2021"\nlicense="MIT"\npublish=false\n')
             shutil.copytree(root / "crates/ddnative-base", repo / "crates/ddnative-base")
-            # Shards depend on mtmath (L24), mtcore (L33) and mtframe (L39);
-            # with no PORTS table, gen wires nothing.
+            # L74: the slow paths' policy (lifted code needs it installed)
+            shutil.copytree(root / "crates/ddnative-host", repo / "crates/ddnative-host")
+            # The facade (ddnative) still names mtmath; the shards depend on
+            # no port crate (L60: ports are registered overrides).
             for crate in ("mtmath", "mtcore", "mtframe"):
                 (repo / f"crates/{crate}/src").mkdir(parents=True)
                 (repo / f"crates/{crate}/Cargo.toml").write_text(f'[package]\nname="{crate}"\nversion="0.1.0"\nedition.workspace=true\n')
@@ -73,6 +75,7 @@ class ShardTests(unittest.TestCase):
             (native / 'tests/shards.rs').write_text(r'''
 use ddnative::{generated::lifted, mem::Sparse, x86::{self, Cpu}};
 #[test] fn nested_direct_calls_and_external_boundary() {
+    ddnative_host::install();
     let mut m = Sparse::default(); let mut c = Cpu::default();
     x86::set_ext_calls(Some(Box::new(|_, c, t| { assert_eq!(t, 0x900000); c.eax *= 7; })));
     // Public entry initializes itself, without requiring all() first.
@@ -92,10 +95,36 @@ use ddnative::{generated::lifted, mem::Sparse, x86::{self, Cpu}};
     x86::set_ext_calls(None);
 }
 ''')
+            # L60: an override registered by address replaces the lifted body
+            # for an in-shard call (0x500000 -> 0x500010), a cross-shard
+            # call and the facade's all(); its own process (the registration
+            # is once per process)
+            (native / 'tests/overrides.rs').write_text(r'''
+use ddnative::{generated::lifted, mem::{Mem, Sparse}, x86::{self, Cpu, LiftFn}};
+fn hundred(_: &mut dyn Mem, c: &mut Cpu) { c.eax += 100; }
+#[test] fn an_override_replaces_the_body_for_every_caller() {
+    ddnative_host::install();
+    x86::set_overrides(&[(0x500010, hundred as LiftFn)]);
+    x86::set_ext_calls(Some(Box::new(|_, c, t| { assert_eq!(t, 0x900000); c.eax *= 7; })));
+    let mut m = Sparse::default(); let mut c = Cpu::default();
+    lifted::f_00500000(&mut m, &mut c);
+    assert_eq!(c.eax, 700);
+    let mut c = Cpu::default();
+    x86::call_lifted(&mut m, &mut c, 0x500010);
+    assert_eq!(c.eax, 100);
+    let all = lifted::all();
+    let f = all.iter().find(|e| e.0 == 0x500010).unwrap().1;
+    assert!(std::ptr::fn_addr_eq(f, hundred as LiftFn));
+    let body = lifted::bodies().into_iter().find(|e| e.0 == 0x500010).unwrap().1;
+    let mut c = Cpu::default(); body(&mut m, &mut c); assert_eq!(c.eax, 3); // the body edited above
+    x86::set_ext_calls(None);
+}
+''')
             env = dict(os.environ, CARGO_BUILD_JOBS="2", CARGO_INCREMENTAL="0",
                        CARGO_TARGET_DIR=str(repo / 'target'))
             # Each synthetic workspace is isolated; never compile the real batch here.
-            run = subprocess.run(['cargo', 'test', '-p', 'ddnative', '--test', 'shards', '--offline'], cwd=repo, env=env, capture_output=True, text=True)
+            run = subprocess.run(['cargo', 'test', '-p', 'ddnative', '--test', 'shards', '--test', 'overrides', '--offline'],
+                                 cwd=repo, env=env, capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
     def test_inventory_scans_shards_and_ignores_obsolete_modules(self):

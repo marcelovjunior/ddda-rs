@@ -1111,19 +1111,105 @@ order: the recorded inputs must match what the Rust reads), add it to
 
 `python scripts/inventory.py summary` gives the live count.
 
-### Readable ports wired over lifted bodies (L24)
+### Overrides: readable ports and mods (L60)
 
-The MT math library has readable, verified ports in `crates/mtmath`
-(docs/MATH.md): 29 functions, 1,497 call sites. Each has an adapter with
-the lifted ABI listed in `crates/mtmath/src/abi.rs` `PORTS`; `lift.py gen`
-writes `pub use mtmath::abi::f_X` into the shard mod.rs (an explicit
-import shadows the lifted glob), so direct calls, `call_lifted` and
-`lifted::all()` reach the port; the lifted body stays as `replaced::f_X`.
-Tests: `crates/mtmath/tests/differential.rs` (lifted vectors + edge
-vectors, `research/native/vectors_math.py`);
+A readable port or a mod replaces the lifted function at an address
+without recompiling a shard. The shards depend only on `ddnative-base`;
+every call between lifted functions goes through overridable dispatch:
+
+| call | generated as | cost when not overridden |
+|---|---|---|
+| to another shard | `x86::call_lifted(m, cpu, ADDR)` | the per-thread resolved-target cache, behind the `call_lifted` hook (L74) |
+| within the shard | `x86::call_local(m, cpu, ADDR, f_X)` | one bit test (a predictable branch), then the direct call |
+| to a platform model | `x86::call_local(m, cpu, ADDR, platform::X)` | the same |
+| indirect, through the runtime | `Registry` from `lifted::all()` | none (resolved when the registry is built) |
+
+`x86::set_overrides(&[(address, fn)])` registers the overrides once,
+before any lifted target is resolved. It sets one bit per 16 bytes of
+code; `call_local` takes the cold path only where a bit is set,
+`lifted_target` (the resolver behind `call_lifted`) consults the
+overrides first, and the facade's `lifted::all()` lists an override in
+place of the body (`lifted::bodies()` lists the bodies themselves).
+
+`crates/ddports` registers the readable ports, each crate's `abi::PORTS`
+(mtmath, docs/MATH.md; mtcore, docs/CORE.md; mtframe, docs/FRAME_RATE.md),
+and any mods: `ddports::set_mods(vec![(0x00AB_CDEF, my_fn)])` before the
+session starts; `ddports::ensure()` (called by the runtime's
+`Registry::with_lifted_program` and by ddperf) installs them. A mod at a
+ported address replaces the port.
+
+**The mod workflow.** Write the function with the lifted ABI
+(`fn(&mut dyn Mem, &mut Cpu)`, starting at the original's entry with the
+return address at `[esp]` and ending with its `ret`; `mtcore::machine`
+has the helpers), register it, and rebuild `ddplay`: only the changed
+crate, `ddports`, the runtime and the binary recompile. For a verified
+port, add the adapter to its crate's `PORTS`; its differential test
+(`crates/mtmath/tests/differential.rs` and the others) replays it
+against the lifted vectors, and `lift.py gen` checks that it has a body.
 `research/native/math_liveness.py` checks callers never read an
-unreproduced xmm lane. The MT core library (L33, `crates/mtcore`,
-docs/CORE.md) is wired the same way; `lift.py` reads both crates' `PORTS`.
+unreproduced xmm lane.
+
+**Runtime policy lives outside the shards.** Editing `ddnative-base`
+recompiles every shard, so it holds only mechanism; the policy is
+installed at run time:
+- the lifted program's resolver (`set_lifted_lookup`) and the overrides;
+- the preemption point: `call_lifted` calls the runtime's hook while
+  `ddnative_host::PREEMPT` is set, and the hook keeps its own rate
+  (`ddruntime::threads::preempt`, once per 1,024 calls);
+- the platform models: called through `call_local` at their addresses,
+  so a runtime service registered there replaces a model; the per-thread
+  `platform::redirect` to `call_ext` works as before.
+- the slow paths of calls and x87 state, in `crates/ddnative-host`
+  (next section).
+
+### The stable kernel and ddnative-host (L74)
+
+Cargo rebuilds every crate that depends on a crate whenever any of its
+source changes, inline code or not. Before L74 the x87 live/park fixes
+(L62, L62b), the preemption point (L57) and the dispatch cache lived in
+`ddnative-base`, so each of them rebuilt the 32 shards (about 6 minutes
+of `play-fast`). Now `ddnative-base` holds only what the shards compile
+against, and `ddnative_base::hooks` declares the rest as function
+pointers that `crates/ddnative-host` installs at startup:
+
+| stays in ddnative-base (inline in the shards or their ABI) | in ddnative-host (behind `hooks::Hooks`) |
+|---|---|
+| `Cpu`, `Flags` and the flag semantics, `Mem` and the page-table fast accessors | `call_lifted`: the preemption point, the per-thread dispatch cache, the miss path |
+| x87 instruction execution, with the inline check that the state is live (TEB slot `x87::LIVE_SLOT`) | x87 `acquire`, `park`, the spill table, the image of a held state, the TEB slot's allocation |
+| `call_local`'s override bit test, the override registry, `lifted_target_uncached` | `ddnative_host::lifted_target` (the cached resolver), `PREEMPT`, `set_preempt_hook` |
+| the platform models and `platform::redirect` (the runtime picks what to redirect) | |
+
+Editing `ddnative-host` rebuilds it, `ddruntime` and the binary; no
+shard. Changing a hook's signature, or anything left in `ddnative-base`,
+still rebuilds every shard, so keep tuning out of it.
+
+Every process that runs lifted code calls `ddnative_host::install()`
+first (idempotent): the runtime's `Registry::install`, ddperf, and every
+test that runs lifted code or x87 instructions. Without it, lifted code
+panics with a message that says so. The single-file rustc harnesses in
+`research/native` take both crates as `#[path]` modules
+(`research/native/rust_base.py`).
+
+Hook cost (`research/native/hookbench`, a stand-in shard at the shard's
+opt-level, ddnative-base and ddnative-host at 3, best of 15 runs of
+10 million calls; the call loop alone is 8.4 ns at opt-level 0, 1.5 ns
+at opt-level 1):
+
+| a cross-shard call, caller at | before (inline cache) | before, not inlined | after (hook) |
+|---|---|---|---|
+| opt-level 0 | 22.9 ns | 24.2 ns | 8.4 ns |
+| opt-level 1 | 1.5 ns | 2.6 ns | 2.8 ns |
+
+`x86::call_lifted` is a non-inline trampoline. With the caller at
+opt-level 0 it now runs at opt-level 3, instead of as unoptimised local
+copies of itself, the cache lookup and `LocalKey::with`. At opt-level 1
+LLVM did not inline the old `#[inline]` version either: the load-game
+profile shows `call_lifted` as its own symbol in ddlift_15. So the
+opt-level-1 shards pay about 0.2 ns per call more than before. The
+dispatch cache is found through a TEB TLS slot, as the x87 live check
+(L62b) is. With a `thread_local!` the same hook cost 4.9 ns at
+opt-level 1. x87 instructions take the same inline path as before; only
+the slow paths (acquiring and parking a state) are indirect calls.
 
 ## Exact x87 arithmetic (L05)
 

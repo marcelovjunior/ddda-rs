@@ -122,6 +122,7 @@ fn cpu_regs(cpu: &Cpu) -> [u32; 8] {
 // verifies 0x00CFD5E0 0x00CFD890 0x00CFDB10 0x00D00690 0x00D006C0
 #[test]
 fn ports_replay_the_lifted_vectors() {
+    ddnative_host::install();
     let Some(cases) = vectors("math_lift") else { return };
     let mut seen = std::collections::BTreeSet::new();
     for c in &cases {
@@ -192,6 +193,7 @@ fn windows(v: &Value) -> BTreeMap<u32, u8> {
 // verifies 0x00CFD5E0 0x00CFD890 0x00CFDB10 0x00D00690 0x00D006C0
 #[test]
 fn ports_match_the_original_on_edge_cases() {
+    ddnative_host::install();
     let Some(cases) = vectors("math_edge") else { return };
     let mut seen = std::collections::BTreeSet::new();
     let mut failures = Vec::new();

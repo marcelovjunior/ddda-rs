@@ -73,7 +73,7 @@ fn original(m: &mut dyn Mem, cpu: &mut Cpu, addr: u32) {
     // the lifted program's lookup (idempotent; its first call sets it too)
     #[cfg(feature = "game")]
     ddnative::generated::lifted::init();
-    ddnative_base::x86::lifted_target(addr)(m, cpu);
+    ddnative_host::lifted_target(addr)(m, cpu);
 }
 
 fn set_low8(r: u32, v: u32) -> u32 {

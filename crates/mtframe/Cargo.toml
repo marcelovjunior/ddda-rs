@@ -11,4 +11,5 @@ mtcore = { path = "../mtcore" }
 mtmath = { path = "../mtmath" }
 
 [dev-dependencies]
+ddnative-host = { path = "../ddnative-host" }
 serde_json = "1"

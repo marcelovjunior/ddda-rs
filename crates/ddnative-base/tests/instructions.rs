@@ -424,6 +424,7 @@ fn word_max_min_and_byte_shifts_match_cpu() {
 
 #[test]
 fn added_x87_forms_match_cpu() {
+    ddnative_host::install();
     use ddnative_base::x87::X87;
     // fldpi; fld1; fpatan; fstp m64  vs the host
     let mut st = X87::default();
@@ -450,6 +451,7 @@ fn added_x87_forms_match_cpu() {
 
 #[test]
 fn x87_fnsave_frstor_match_cpu() {
+    ddnative_host::install();
     // L46: the guest FNSAVE image against the host's own FNSAVE of the same
     // state (control/status/tag words, reserved words, registers), the
     // FNINIT state it leaves, and FRSTOR's tag recomputation. The WOW64

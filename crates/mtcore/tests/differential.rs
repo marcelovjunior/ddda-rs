@@ -70,6 +70,7 @@ fn entry(r: [u32; 8]) -> Cpu {
 /// The exe's CRC table equals the one computed from the polynomial.
 #[test]
 fn crc_table_matches_the_exe() {
+    ddnative_host::install();
     let Some(t) = read("core_tables") else { return };
     let bytes: Vec<u8> = hex_bytes(t["crc_table"].as_str().unwrap()).collect();
     for (i, w) in bytes.chunks(4).enumerate() {
@@ -120,6 +121,7 @@ fn replay_lift_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
 // verifies 0x00CF76C0 0x00D01B60
 #[test]
 fn ports_replay_the_lifted_vectors() {
+    ddnative_host::install();
     let Some(cases) = vectors("core_lift") else { return };
     let mut seen = std::collections::BTreeSet::new();
     let mut failures = Vec::new();
@@ -260,6 +262,7 @@ fn replay_edge_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
 // verifies 0x00CF76C0 0x00D01B60
 #[test]
 fn ports_match_the_original_on_edge_cases() {
+    ddnative_host::install();
     let Some(cases) = vectors("core_edge") else { return };
     let mut seen = std::collections::BTreeSet::new();
     let mut failures = Vec::new();

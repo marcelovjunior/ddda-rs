@@ -1,0 +1,26 @@
+# L74 hook cost: a lifted call through ddnative-base's hook table against
+# the inline dispatch cache it replaced. This crate stands in for a shard,
+# so it has its own workspace and opt-level; ddnative-base and
+# ddnative-host build at 3 as in the play profiles. Run (from anywhere):
+#   CARGO_TARGET_DIR=C:/ddda-targets/<task>/hookbench cargo run --release \
+#     --manifest-path research/native/hookbench/Cargo.toml
+# and set the opt-level below to 0 or 1 (the play-fast shards' levels).
+[package]
+name = "hookbench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+ddnative-base = { path = "../../../crates/ddnative-base" }
+ddnative-host = { path = "../../../crates/ddnative-host" }
+
+[profile.release]
+opt-level = 3
+lto = "off"
+debug = 0
+
+[profile.release.package.hookbench]
+opt-level = 1

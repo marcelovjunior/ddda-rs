@@ -1,7 +1,7 @@
 """Terminal fixtures end to end: the recorder's terminal-v1 case replayed by the
 generated lifted.rs template against the real emitter's Rust for that body.
 
-Builds a throwaway crate on ddnative-base and serde_json only (cargo --offline,
+Builds a throwaway crate on ddnative-base, ddnative-host and serde_json only (cargo --offline,
 the workspace lock), not the lifted shards. Skips without cargo.
 """
 import gc
@@ -71,6 +71,7 @@ class TerminalReplay(unittest.TestCase):
             (tmp / 'Cargo.toml').write_text(
                 '[package]\nname = "terminal_check"\nversion = "0.0.0"\nedition = "2021"\n[workspace]\n'
                 f'[dependencies]\nddnative-base = {{ path = "{(ROOT / "crates/ddnative-base").as_posix()}" }}\n'
+                f'ddnative-host = {{ path = "{(ROOT / "crates/ddnative-host").as_posix()}" }}\n'
                 'serde_json = "1"\n')
             (tmp / 'src').mkdir()
             (tmp / 'src/lib.rs').write_text('')

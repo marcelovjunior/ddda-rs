@@ -9,7 +9,9 @@ publish.workspace = true
 [dependencies]
 unicorn-engine = { version = "=2.0.1", optional = true }
 ddnative-base = { path = "../ddnative-base" }
+ddnative-host = { path = "../ddnative-host" }
 ddnative = { path = "../ddnative", optional = true }
+ddports = { path = "../ddports", optional = true }
 # `crt-check` (L67): only the two shards holding the CRT routines, for
 # tests/crtfast.rs against their lifted originals without building all 32
 ddlift-05 = { path = "../ddlift/lift_05", optional = true }
@@ -26,7 +28,7 @@ hostdisplay = { path = "../hostdisplay" }
 # runtime builds and tests its services alone: a session still loads the exe
 # and binds every service, and a call into game code stops as untranslated.
 default = ["game"]
-game = ["dep:ddnative"]
+game = ["dep:ddnative", "dep:ddports"]
 crt-check = ["dep:ddlift-05", "dep:ddlift-06"]
 # `emu`: the diagnostic emulator fallback for untranslated functions
 # (src/emu.rs, L51; also needs DDRUNTIME_EMU_FALLBACK=1 at run time).
