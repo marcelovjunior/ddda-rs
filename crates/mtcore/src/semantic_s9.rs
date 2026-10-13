@@ -366,3 +366,53 @@ pub fn model_upload_state(m: &mut dyn Mem, c: &mut Cpu) {
     u.set_state(0x2248, new, 0x40a, 0x40a);
     u.c.esp = entry.wrapping_add(8);
 }
+
+/// 0x00FF1310, `ctx->set_fade(value)` (thiscall, `ret 4`, void): set the
+/// draw context's fade value (`+0x17C`, compared as a float: only a changed
+/// value, or a NaN, counts as a change) and republish the fade block.
+///
+/// On a change the value is stored and a new constant block (the size of
+/// the descriptor `[[ctx + 0x18] + 0x568]`'s `u16` count x4, 16-byte
+/// aligned) is taken from the context's arena (`+0x24` cursor, `+0x28`
+/// limit; a full arena is refilled from the page allocator 0x00DA7D70, or
+/// left empty when that fails), the previous block (`+0xCC8`) is copied
+/// into it, the value is written at `block + 0x10`, the block becomes the
+/// current one and dirty bit 0 (`+0x154`) is set.
+// Translated from 0x00FF1310 (DDDA.exe 2017-12-13 Steam)
+pub fn set_fade(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let ctx = c.ecx;
+    let value_bits = pg.u32(m, entry.wrapping_add(4));
+    let field = |offset: u32| ctx.wrapping_add(offset);
+    c.esp = entry.wrapping_add(8);
+    if f32::from_bits(pg.u32(m, field(0x17c))) == f32::from_bits(value_bits) {
+        return;
+    }
+    pg.set_u32(m, field(0x17c), value_bits);
+    let descriptor = pg.u32(m, pg.u32(m, field(0x18)).wrapping_add(0x568));
+    let words = pg.u16(m, descriptor.wrapping_add(0x18)) as u32;
+    let size = (words * 4 + 0xf) & !0xf;
+    if pg.u32(m, field(0x24)).wrapping_add(size) > pg.u32(m, field(0x28)) {
+        let chunk = size.wrapping_add(0xfff) & !0xfff;
+        // The original's frame at this call: entry - 16 (four saved registers).
+        let page_allocator = pg.u32(m, 0x018d_08f4);
+        let frame = entry.wrapping_sub(16);
+        let block = crate::semantic::call_from(m, c, pg, frame, page_allocator, &[chunk], 0x00ff_1372, |m: &mut dyn Mem, c: &mut Cpu| {
+            ddnative_base::x86::call_ext(m, c, 0x00da_7d70)
+        });
+        pg.set_u32(m, field(0x24), block);
+        pg.set_u32(m, field(0x28), if block == 0 { 0 } else { block.wrapping_add(chunk) });
+        c.esp = entry.wrapping_add(8);
+    }
+    let block = pg.u32(m, field(0x24));
+    pg.set_u32(m, field(0x24), block.wrapping_add(size));
+    let previous = pg.u32(m, field(0xcc8));
+    copy_guest(m, pg, block, previous, words * 4);
+    // the original re-reads its argument after the copy
+    let value_bits = pg.u32(m, entry.wrapping_add(4));
+    pg.set_u32(m, field(0xcc8), block);
+    let dirty = pg.u32(m, field(0x154)) | 1;
+    pg.set_u32(m, field(0x154), dirty);
+    pg.set_u32(m, block.wrapping_add(0x10), value_bits);
+}

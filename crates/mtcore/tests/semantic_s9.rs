@@ -80,7 +80,7 @@ fn abi_cases(path: &str, body: LiftFn) -> usize {
 /// checked separately).
 fn stack_args(target: u32) -> u32 {
     match target {
-        0x00fe_d890 | 0x00ff_1310 => 1,
+        0x00fe_d890 | 0x00ff_1310 | 0x00da_7d70 => 1,
         0x00fe_66a0 | 0x2500_0000 => 4,
         0x0105_4690 => 0,
         0x3000_0000 => 0, // find_sorted vectors: the count stub
@@ -218,4 +218,13 @@ fn model_upload_state_matches_original() {
     let n = abi_cases_full("E:/ddda-re/notes/native-L184/model_upload_state.json", mtcore::semantic_s9::model_upload_state, false, &[0x012e_fea0]);
     assert!(n >= 1000, "{n} cases");
     eprintln!("{n} ABI-level model_upload_state cases passed");
+}
+
+// verifies 0x00ff1310 (ABI level; void; the CRT memcpy is done natively)
+#[test]
+fn set_fade_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L184/set_fade.json", mtcore::semantic_s9::set_fade, false, &[0x012e_fea0]);
+    assert!(n >= 1000, "{n} cases");
+    eprintln!("{n} ABI-level set_fade cases passed");
 }
