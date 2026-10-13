@@ -532,3 +532,226 @@ pub fn refresh_actor_slots(m: &mut dyn Mem, c: &mut Cpu) {
     }
     finish(c)
 }
+
+// ---------------------------------------------------------------------------
+// 0x00C88380: nDraw::DDMaterialStd::vf12, the standard material's state sync
+// ---------------------------------------------------------------------------
+
+/// The draw state ("render context") a material writes its bindings into.
+/// Every binding slot is two words: its value at `slot` and a tag at
+/// `slot + 4`. With the record flag (`byte [ctx + 0x5c] & 0x80`) set, every
+/// change first pushes the old (value, tag) pair onto the undo journal at
+/// `ctx + 0x30C7C` (12-byte entries: code, value, tag; count at `ctx +
+/// 0x6C`). `ctx + 0x154` collects dirty bits: 1 = values, 2 = tags.
+struct RenderContext {
+    pg: Pages,
+    ctx: u32,
+}
+
+impl RenderContext {
+    fn word(&self, m: &dyn Mem, offset: u32) -> u32 {
+        self.pg.u32(m, self.ctx.wrapping_add(offset))
+    }
+
+    fn set_word(&self, m: &mut dyn Mem, offset: u32, v: u32) {
+        self.pg.set_u32(m, self.ctx.wrapping_add(offset), v);
+    }
+
+    /// `ctx[0x154] |= bits`.
+    fn mark_dirty(&self, m: &mut dyn Mem, bits: u32) {
+        let v = self.word(m, 0x154) | bits;
+        self.set_word(m, 0x154, v);
+    }
+
+    /// Records the slot's current (value, tag) in the undo journal under
+    /// `code`, when recording is on.
+    fn journal(&self, m: &mut dyn Mem, code: u32, slot: u32) {
+        if self.pg.u8(m, self.ctx.wrapping_add(0x5c)) & 0x80 == 0 {
+            return;
+        }
+        let count = self.word(m, 0x6c);
+        let entry = 0x30c7c_u32.wrapping_add(count.wrapping_mul(12));
+        self.set_word(m, entry, code);
+        let (value, tag) = (self.word(m, slot), self.word(m, slot + 4));
+        self.set_word(m, entry + 4, value);
+        self.set_word(m, entry + 8, tag);
+        let count = self.word(m, 0x6c);
+        self.set_word(m, 0x6c, count.wrapping_add(1));
+    }
+
+    /// A binding that follows a source value: when `slot` differs from
+    /// `[[ctx + 0x20] + source]`, journal it, take the value, set its tag and
+    /// mark both dirty bits.
+    fn follow(&self, m: &mut dyn Mem, slot: u32, source: u32, journal_code: u32, tag: u32) {
+        let shared = self.word(m, 0x20);
+        let current = self.word(m, slot);
+        if current == self.pg.u32(m, shared.wrapping_add(source)) {
+            return;
+        }
+        self.journal(m, journal_code, slot);
+        let shared = self.word(m, 0x20);
+        let v = self.pg.u32(m, shared.wrapping_add(source));
+        self.set_word(m, slot, v);
+        self.set_word(m, slot + 4, tag);
+        self.mark_dirty(m, 3);
+    }
+
+    /// Releases a binding: when its value is set, journal it, clear value
+    /// and tag (tag change marks 2) and mark 1.
+    fn release(&self, m: &mut dyn Mem, slot: u32, journal_code: u32) {
+        if self.word(m, slot) == 0 {
+            return;
+        }
+        self.journal(m, journal_code, slot);
+        self.set_word(m, slot, 0);
+        if self.word(m, slot + 4) != 0 {
+            self.set_word(m, slot + 4, 0);
+            self.mark_dirty(m, 2);
+        }
+        self.mark_dirty(m, 1);
+    }
+
+    /// Binds texture `texture` (or none) to a sampler slot when it differs
+    /// from the slot's: journal, stamp the texture with `frame + 1` (+4), set
+    /// the slot value and the tag `[texture + 0xC] | kind`.
+    fn bind_texture(&self, m: &mut dyn Mem, slot: u32, journal_code: u32, texture: u32, frame: u32, kind: u32) {
+        if self.word(m, slot) == texture {
+            return;
+        }
+        self.journal(m, journal_code, slot);
+        let mut tag = 0;
+        if texture != 0 {
+            self.pg.set_u32(m, texture.wrapping_add(4), frame.wrapping_add(1));
+            self.set_word(m, slot, texture);
+            tag = self.pg.u32(m, texture.wrapping_add(0xc)) | kind;
+        } else {
+            self.set_word(m, slot, 0);
+        }
+        if self.word(m, slot + 4) != tag {
+            self.set_word(m, slot + 4, tag);
+            self.mark_dirty(m, 2);
+        }
+        self.mark_dirty(m, 1);
+    }
+
+    /// Re-copies the constant block `[[ctx + 0x18] + holder]` (u16 word count
+    /// at +0x18) held in `ctx[field]` into fresh frame memory from the
+    /// context's bump allocator (`ctx[0x24]`, limit `ctx[0x28]`, grown by
+    /// 0x00FED890 `ctx->grow(bytes)`), and marks dirty bit 1. Returns the new
+    /// copy. `memcpy` (0x012EFEA0) is done natively.
+    fn recopy_block(&self, m: &mut dyn Mem, c: &mut Cpu, frame: u32, holder: u32, field: u32, grow_back: u32) -> u32 {
+        let pg = self.pg;
+        let block = pg.u32(m, self.word(m, 0x18).wrapping_add(holder));
+        let bytes = ((pg.u16(m, block.wrapping_add(0x18)) as u32) * 4 + 0xf) & 0xffff_fff0;
+        if self.word(m, 0x24).wrapping_add(bytes) > self.word(m, 0x28) {
+            c.ebx = bytes;
+            call_from(m, c, pg, frame, self.ctx, &[bytes], grow_back, |m, c| ddnative_base::x86::call_ext(m, c, 0x00fe_d890));
+        }
+        let copy = self.word(m, 0x24);
+        self.set_word(m, 0x24, copy.wrapping_add(bytes));
+        let size = (pg.u16(m, block.wrapping_add(0x18)) as u32) * 4;
+        let source = self.word(m, field);
+        for k in (0..size).step_by(4) {
+            let v = pg.u32(m, source.wrapping_add(k));
+            pg.set_u32(m, copy.wrapping_add(k), v);
+        }
+        self.set_word(m, field, copy);
+        self.mark_dirty(m, 1);
+        copy
+    }
+}
+
+// Translated from 0x00c88380 (DDDA.exe 2017-12-13 Steam), nDraw::DDMaterialStd::vf12.
+/// 0x00C88380, `material->sync(ctx, arg) -> result` (thiscall, `ret 8`): the
+/// standard material's per-draw state sync into the draw context `ctx`
+/// (`DDMaterialStd::vf12`). By the material's mode (`this[0xA4]`):
+/// - mode 2: follows the shared state's values (`[ctx + 0x20] + 0x27B8..`,
+///   seven bindings at `ctx + 0x29B0`) and releases the 16 slots at
+///   `ctx + 0x1B90`; `arg` becomes 0x14;
+/// - always: the mode-dependent binding at `ctx + 0x2EB0`, the bindings at
+///   `ctx + 0x2BB8`, `0x2DA8`, `0x2D78` and the releases at `0x1C50`,
+///   `0x1CA8`;
+/// then runs the base class sync 0x01145BF0 `(this, ctx, arg)` and, by mode:
+/// - not 0: binds the five textures `this[0xD0..0xE4]` to the sampler slots
+///   at `ctx + 0x2068` (stamped with the frame counter `[0x018D2CE8]`); when
+///   the material has not the flag `0x75A5334B` it sets the two parameters
+///   0x54408001 = 0.0 and 0x54409001 = 1.0; and re-copies the constant block
+///   `0xC2C` into frame memory, whose float at +0x6C is set by the flag
+///   `0x64C43356` (mode 3 also clears +0x48);
+/// - 0: releases the five sampler slots;
+/// then re-copies the constant blocks 0xC08, 0x7B8 and 0xC1C.
+/// Returns the base class result.
+pub fn sync_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let ctx = pg.u32(m, entry.wrapping_add(4));
+    let mut arg = pg.u32(m, entry.wrapping_add(8));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // the original's frame after its five pushes
+    let frame = entry.wrapping_sub(20);
+    let rc = RenderContext { pg, ctx };
+    (c.ebx, c.ebp, c.esi, c.edi) = (this, 1, ctx, 0);
+    let mode = |m: &dyn Mem| pg.u32(m, this.wrapping_add(0xa4));
+
+    if mode(m) == 2 {
+        for i in 0..7 {
+            rc.follow(m, 0x29b0 + 8 * i, 0x27b8 + 8 * i, 0x4f7 + i, 0x4f7 + i);
+        }
+        for j in 0..16 {
+            rc.release(m, 0x1b90 + 8 * j, 0x333 + j);
+        }
+        arg = 0x14;
+    }
+    if mode(m) == 1 {
+        rc.follow(m, 0x2eb0, 0x2cb8, 0x597, 0x597);
+    } else {
+        rc.follow(m, 0x2eb0, 0x2cc8, 0x597, 0x950a_6599);
+    }
+    rc.follow(m, 0x2bb8, 0x29c0, 0x538, 0x538);
+    rc.release(m, 0x1c50, 0x34b);
+    rc.follow(m, 0x2da8, 0x2bb0, 0x576, 0x576);
+    rc.follow(m, 0x2d78, 0x2b80, 0x570, 0x570);
+    rc.release(m, 0x1ca8, 0x356);
+
+    c.ebx = this;
+    let result = call_from(m, c, pg, frame, this, &[ctx, arg], 0x00c8_94ed, |m, c| ddnative_base::x86::call_ext(m, c, 0x0114_5bf0));
+    let query = |m: &mut dyn Mem, c: &mut Cpu, id: u32, back: u32| {
+        call_from(m, c, pg, frame, this, &[id], back, |m, c| ddnative_base::x86::call_ext(m, c, 0x0106_6af0))
+    };
+    if mode(m) != 0 {
+        const SAMPLER_KINDS: [u32; 5] = [0xe700_7000, 0x83b0_f000, 0x1295_9000, 0x93d3_a000, 0x999e_7000];
+        let frame_counter = pg.u32(m, 0x018d_2ce8);
+        for (i, kind) in SAMPLER_KINDS.into_iter().enumerate() {
+            let texture = pg.u32(m, this.wrapping_add(0xd0 + 4 * i as u32));
+            rc.bind_texture(m, 0x2068 + 8 * i as u32, 0x3ce + i as u32, texture, frame_counter, kind);
+        }
+        if query(m, c, 0x75a5_334b, 0x00c8_989b) == 0 {
+            for (parameter, value_back) in [(0x5440_8001u32, 0x00c8_98b4u32), (0x5440_9001, 0x00c8_98ce)] {
+                let value = if parameter == 0x5440_8001 { 0 } else { pg.u32(m, 0x0153_19b8) };
+                call_from(m, c, pg, frame, this, &[parameter, value], value_back, |m, c| {
+                    ddnative_base::x86::call_ext(m, c, 0x0106_71f0)
+                });
+            }
+        }
+        let copy = rc.recopy_block(m, c, frame, 0xc2c, 0x1a50, 0x00c8_98fb);
+        if copy != 0 {
+            let on = query(m, c, 0x64c4_3356, 0x00c8_9944) != 0;
+            let weight = if on { pg.u32(m, 0x0153_19b8) } else { 0 };
+            pg.set_u32(m, copy.wrapping_add(0x6c), weight);
+            if mode(m) == 3 {
+                pg.set_u32(m, copy.wrapping_add(0x48), 0);
+            }
+        }
+    } else {
+        for i in 0..5 {
+            rc.release(m, 0x2068 + 8 * i, 0x3ce + i);
+        }
+    }
+    rc.recopy_block(m, c, frame, 0xc08, 0x1a08, 0x00c8_9c74);
+    rc.recopy_block(m, c, frame, 0x7b8, 0x1168, 0x00c8_9ccb);
+    rc.recopy_block(m, c, frame, 0xc1c, 0x1a30, 0x00c8_9d22);
+    c.eax = result;
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(12);
+}
