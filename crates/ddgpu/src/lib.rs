@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 mod cache;
 mod compute_quads;
+mod backend_data;
 mod encode;
 pub mod vk;
 pub mod native;
@@ -43,18 +44,8 @@ use std::future::Future;
 
 /// Pack raw register bits without a per-component loop on little-endian
 /// hosts. Arrays of four u32 have no padding and every input byte is valid.
-fn copy_float_registers(dst: &mut [u8], registers: &[[u32; 4]]) {
-    assert_eq!(dst.len(), registers.len() * 16);
-    #[cfg(target_endian = "little")]
-    {
-        let bytes = unsafe { std::slice::from_raw_parts(registers.as_ptr().cast::<u8>(), dst.len()) };
-        dst.copy_from_slice(bytes);
-    }
-    #[cfg(target_endian = "big")]
-    for (out, word) in dst.chunks_exact_mut(4).zip(registers.iter().flatten()) {
-        out.copy_from_slice(&word.to_le_bytes());
-    }
-}
+#[cfg(test)]
+use backend_data::copy_registers as copy_float_registers;
 
 #[cfg(test)]
 mod constant_bytes_tests {
@@ -350,8 +341,8 @@ pub struct WgpuBackend {
     native_stats: NativeJobStats,
     native_comparisons: Option<native_job::Comparisons>,
     shader_identities: shader_identity::ShaderIdentities,
-    /// Derived draw state by what it derives from (L99), DRAW_MEMO slots.
-    memo: Vec<Option<DrawMemo>>,
+    /// Derived draw state by retained object identity and full value equality.
+    memo: backend_data::DrawMemo<DrawMemo>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     textures: cache::FxMap<u32, Tex>,
@@ -427,7 +418,9 @@ pub struct WgpuBackend {
     open: RefCell<Option<wgpu::CommandEncoder>>,
     open_draws: Cell<u32>,
     /// buffers and textures the open draws read
-    open_uses: RefCell<cache::FxSet<u32>>,
+    open_uses: RefCell<backend_data::ResourceUses>,
+    draw_buffers: Vec<(wgpu::Buffer, u64, u64, Option<u32>)>,
+    instance_streams: Vec<u32>,
     /// per stage (0 pixel, 1 vertex): the last block's constants and extra
     /// vec4s, its uniform ring offset and the ring generation it was
     /// written in (L78)
@@ -443,7 +436,7 @@ pub struct WgpuBackend {
     ps_inputs: cache::FxMap<u64, Vec<(u32, u32)>>,
     tex_layouts: cache::FxMap<(bool, SamplerKinds), wgpu::BindGroupLayout>,
     pipeline_layouts: cache::FxMap<(SamplerKinds, SamplerKinds), wgpu::PipelineLayout>,
-    pipelines: cache::FxMap<PipelineKey, wgpu::RenderPipeline>,
+    pipelines: cache::FxMap<backend_data::Hashed<PipelineKey>, wgpu::RenderPipeline>,
     vk: Option<vk::Context>,
     vk_pass: RefCell<Option<vk::Pass>>,
     tex_groups: cache::FxMap<TexGroupKey, wgpu::BindGroup>,
@@ -563,7 +556,6 @@ impl Drop for Finisher {
 
 /// The draw memo's size: one slot per (shaders, declaration, render-state
 /// list) hash; a collision derives again.
-const DRAW_MEMO: usize = 256;
 
 /// What try_draw derives before binding resources (L99).
 struct Derived {
@@ -749,9 +741,10 @@ impl WgpuBackend {
             submissions: Cell::new(0),
             open: RefCell::new(None),
             open_draws: Cell::new(0),
-            open_uses: RefCell::new(cache::FxSet::default()),
+            open_uses: RefCell::new(backend_data::ResourceUses::default()),
+            draw_buffers: Vec::new(), instance_streams: Vec::new(),
             shader_identities: Default::default(),
-            memo: (0..DRAW_MEMO).map(|_| None).collect(),
+            memo: Default::default(),
             last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX, 0), (Default::default(), Vec::new(), 0, u64::MAX, 0)]),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
@@ -1020,29 +1013,7 @@ impl WgpuBackend {
             self.uniforms.borrow_mut().restart();
         }
         let off = self.ring_fill(&self.uniforms, len as u64, UNIFORM_ALIGN, |dst| {
-            // plain loops over the vec4s: straight copies even where helpers
-            // stay out of line (the play profile's 64 codegen units)
-            fn put(dst: &mut [u8], v: [u32; 4]) {
-                for (d, w) in dst.chunks_exact_mut(4).zip(v) {
-                    d.copy_from_slice(&w.to_le_bytes());
-                }
-            }
-            let used = c.f.len().min(floats);
-            copy_float_registers(&mut dst[..used * 16], &c.f[..used]);
-            dst[used * 16..floats * 16].fill(0);
-            let mut at = floats * 16;
-            for v in c.i {
-                put(&mut dst[at..at + 16], v.map(|w| w as u32));
-                at += 16;
-            }
-            for b in c.b {
-                put(&mut dst[at..at + 16], [b, 0, 0, 0]);
-                at += 16;
-            }
-            for &v in extra {
-                put(&mut dst[at..at + 16], v);
-                at += 16;
-            }
+            backend_data::pack_constants(dst, c, floats, extra);
         }) as u32;
         last.0.clone_from(c);
         last.1.clear();
@@ -2099,7 +2070,8 @@ impl WgpuBackend {
             // D3DRS_MULTISAMPLEMASK: the samples a draw may write
             sample_mask: if samples > 1 { state(162) } else { !0 },
         };
-        if let Some(pipeline) = self.warmup.as_mut().and_then(|w| w.pipeline(&key)) {
+        let key = backend_data::Hashed::new(key, cache::FxHasher::default());
+        if let Some(pipeline) = self.warmup.as_mut().and_then(|w| w.pipeline(&key.key)) {
             if let std::collections::hash_map::Entry::Vacant(entry) = self.pipelines.entry(key.clone()) {
                 entry.insert(pipeline);
                 self.warm_hits += 1;
@@ -2123,8 +2095,8 @@ impl WgpuBackend {
                     self.pipeline_layouts.insert(layout_key.clone(), layout);
                 }
                 let pipeline = warmup::create_pipeline(&self.device, &self.pipeline_layouts[&layout_key], &vs_module, &ps_module,
-                    &key, self.pipeline_cache.as_ref().map(|p| &p.cache), "object-miss")?;
-                if let Some(warmup) = &self.warmup { warmup.record(&key, &ps_kinds, &vs_kinds); }
+                    &key.key, self.pipeline_cache.as_ref().map(|p| &p.cache), "object-miss")?;
+                if let Some(warmup) = &self.warmup { warmup.record(&key.key, &ps_kinds, &vs_kinds); }
                 if let Some(p) = &self.pipeline_cache {
                     p.created();
                 }
@@ -2134,7 +2106,7 @@ impl WgpuBackend {
                 pipeline
             }
         };
-        let vk_pipeline = self.vk.as_mut().and_then(|vk| vk.pipeline(&key, &ps_kinds, &vs_kinds)
+        let vk_pipeline = self.vk.as_mut().and_then(|vk| vk.pipeline(&key.key, &ps_kinds, &vs_kinds)
             .map_err(|e| eprintln!("DDGPU_VK pipeline fallback: {e}")).ok());
         Ok(Derived { vk_pipeline, ps_kinds, vs_kinds, layout1, layout2, depth_bias, streams, colour, depth, max_out, pipeline,
                      vs_floats: vs_iface.float_constants, ps_floats: ps_iface.float_constants })
@@ -2156,18 +2128,16 @@ impl WgpuBackend {
             let h = (p(Arc::as_ptr(vs) as *const u8 as usize) ^ p(Arc::as_ptr(ps) as *const u8 as usize).rotate_left(16)
                 ^ p(Arc::as_ptr(&d.declaration) as *const u8 as usize).rotate_left(32) ^ d.render_states.address().rotate_left(48))
                 .wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            (h >> 56) as usize % DRAW_MEMO
+            h
         };
-        if let Some(m) = &self.memo[slot] {
-            if Arc::ptr_eq(&m.vs, vs) && Arc::ptr_eq(&m.ps, ps) && Arc::ptr_eq(&m.declaration, &d.declaration)
+        if let Some(m) = self.memo.get(slot, |m| Arc::ptr_eq(&m.vs, vs) && Arc::ptr_eq(&m.ps, ps) && Arc::ptr_eq(&m.declaration, &d.declaration)
                 && m.states.ptr_eq(&d.render_states) && m.primitive == d.primitive && m.index_format == index_format
                 && m.ones == ones && m.instanced[..] == *instanced && m.targets == d.targets && m.depth == d.depth
-                && m.strides.iter().copied().eq(strides(d)) {
-                return Ok(m.derived.clone());
-            }
+                && m.strides.iter().copied().eq(strides(d))) {
+            return Ok(m.derived.clone());
         }
         let derived = Arc::new(self.derive(d, instanced)?);
-        self.memo[slot] = Some(DrawMemo {
+        self.memo.insert(slot, DrawMemo {
             vs: vs.clone(), ps: ps.clone(), declaration: d.declaration.clone(), states: d.render_states.clone(),
             primitive: d.primitive, index_format, ones, instanced: instanced.to_vec(),
             targets: d.targets.clone(), depth: d.depth.clone(), strides: strides(d).collect(),
@@ -2177,14 +2147,27 @@ impl WgpuBackend {
     }
 
     fn try_draw(&mut self, d: &DrawCall) -> Result<(), String> {
+        let mut buffers = std::mem::take(&mut self.draw_buffers);
+        let mut instanced = std::mem::take(&mut self.instance_streams);
+        let result = self.try_draw_buffered(d, &mut buffers, &mut instanced);
+        // Also recycle after an unsupported draw; never retain resource handles
+        // past the command (release/upload may follow immediately).
+        buffers.clear();
+        instanced.clear();
+        self.draw_buffers = buffers;
+        self.instance_streams = instanced;
+        result
+    }
+
+    fn try_draw_buffered(&mut self, d: &DrawCall, vbufs: &mut Vec<(wgpu::Buffer, u64, u64, Option<u32>)>, instanced: &mut Vec<u32>) -> Result<(), String> {
         let state = |s: u32| d.render_states.binary_search_by_key(&s, |&(k, _)| k).ok().map(|i| d.render_states[i].1).unwrap_or(0);
         let vs_tokens = d.vertex_shader.as_ref().ok_or("draws without a vertex shader (fixed function) are not implemented")?;
         let ps_tokens = d.pixel_shader.as_ref().ok_or("draws without a pixel shader (fixed function) are not implemented")?;
         if d.declaration.is_empty() {
             return Err("FVF draws are not implemented".into());
         }
-        let (instances, instanced) = instancing(d)?;
-        let x = self.derived(d, vs_tokens, ps_tokens, &instanced)?;
+        let instances = instancing(d, instanced)?;
+        let x = self.derived(d, vs_tokens, ps_tokens, instanced)?;
         let (ps_kinds, vs_kinds, layout1, layout2, streams) = (&x.ps_kinds, &x.vs_kinds, &x.layout1, &x.layout2, &x.streams);
         let (colour, depth, max_out, depth_bias, pipeline) = (&x.colour, &x.depth, x.max_out, x.depth_bias, &x.pipeline);
         // A texture sampled by a draw that also renders into it: D3D9 leaves
@@ -2328,7 +2311,6 @@ impl WgpuBackend {
         }
         let ps_extra = &ps_extra[..if depth_bias { 6 } else { 5 }];
         // vertex and index data
-        let mut vbufs = Vec::new();
         for &s in streams {
             match &d.vertices {
                 Vertices::Streams(v) => {
@@ -2593,15 +2575,15 @@ fn strides(d: &DrawCall) -> impl Iterator<Item = (u32, u32)> + '_ {
     streams.iter().map(|x| (x.0, x.3)).chain(inline)
 }
 
-fn instancing(d: &DrawCall) -> Result<(u32, Vec<u32>), String> {
+fn instancing(d: &DrawCall, instanced: &mut Vec<u32>) -> Result<u32, String> {
+    instanced.clear();
     const INDEXEDDATA: u32 = 0x4000_0000;
     const INSTANCEDATA: u32 = 0x8000_0000;
-    let Vertices::Streams(streams) = &d.vertices else { return Ok((1, vec![])) };
+    let Vertices::Streams(streams) = &d.vertices else { return Ok(1) };
     let geometry = streams.iter().find(|s| s.0 == 0).map(|s| s.4).unwrap_or(1);
     if geometry & INDEXEDDATA == 0 {
-        return Ok((1, vec![]));
+        return Ok(1);
     }
-    let mut instanced = Vec::new();
     for s in streams.iter() {
         if s.4 & INSTANCEDATA != 0 {
             if s.4 & 0x3FFF_FFFF != 1 {
@@ -2611,7 +2593,7 @@ fn instancing(d: &DrawCall) -> Result<(u32, Vec<u32>), String> {
         }
     }
     let count = if matches!(d.indices, Indices::None) { 1 } else { (geometry & 0x3FFF_FFFF).max(1) };
-    Ok((count, instanced))
+    Ok(count)
 }
 
 fn vertex_format(ty: u8) -> Option<(wgpu::VertexFormat, d3d9wgsl::InputType)> {
@@ -3073,7 +3055,7 @@ impl GraphicsBackend for WgpuBackend {
         self.last_group = Default::default();
         self.target_views.clear();
         // memo entries hold target views (L99)
-        self.memo.iter_mut().for_each(|m| *m = None);
+        self.memo.clear();
         self.textures.remove(&resource);
         self.pending.remove(&resource);
         self.buffers.remove(&resource);

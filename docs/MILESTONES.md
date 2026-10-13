@@ -2465,3 +2465,22 @@ opening (codex-31), route perf (codex-29).
 - 42 matched and three intentional mismatched target summaries; five explicit rejection diagnostics. Blended pre-pass loads, repeated shadows, mip attachments and D24S8 isolation checked; real targets unchanged, zero pending comparisons on test shutdown.
 - Runtime: 180 distinct passes across full suite plus isolated timing retry; one inherited fullscreen-gamma failure, three ignored. No checks weakened; no game/shard run or game image/FPS claim.
 - Next: head-run DDDRAW_NATIVE=compare gameplay and inspect mismatch/unverified/pending counts. Details: docs/tasks/L127-native-compare.md.
+
+
+### L143 backend worker CPU (2026-10-13)
+
+- Typed FIFO commands remove per-draw closure allocation; bulk constant
+  packing, recycled scratch, generation-stamped resource bits and collision-safe
+  derived-state memo retain the existing command/binding values and ordering.
+- Release synthetic median backend CPU **2.97 -> 1.97 us/draw**; direct
+  allocations **12.910 -> 0.162/draw**; deferred frame incl GPU wait
+  **5.30 -> 3.82 ms**. Queue transport **4,200,003 -> 2** allocations over
+  4.2 million draws. Shared-host fixture, no gameplay FPS claim.
+- **13 command + 24 CPU + 29 distinct GPU tests pass**, including all
+  150 render-state and 200 target-format cases. Light runtime **199 distinct
+  pass / inherited gamma failure / 5 ignored** after two isolated timing
+  retries. Additional cross-path GPU checks compile but await head's pause.
+- `_NLG_Return2` is not proven to be unwind cost: no per-command catch exists,
+  and the old profiler discards symbol displacement. Next: finish paused
+  checks; head integrates and measures gameplay plus raw-PC attribution.
+  Details: `docs/tasks/L143-backend-thread.md`.
