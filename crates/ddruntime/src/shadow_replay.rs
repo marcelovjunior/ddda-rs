@@ -1092,9 +1092,38 @@ fn compare_replays(
         }
         Ok(())
     };
+    // Residue sources for the definedness runs: the command arena's free
+    // space (fresh DA7D70 allocations) and the popped stack below the
+    // incoming ESP (uninitialized locals). Two extra serial runs fill them
+    // with 0x00 and 0xFF; a stream byte that changes with them depends on
+    // memory the original never initialized.
+    let residue: Vec<Range<u32>> = {
+        let render = input.u32(0x018d08f4);
+        let index = input.u32(render + 0x33db8);
+        let base = input.u32(render + 0x33dc0 + index * 4);
+        let (cursor, capacity) = (input.u32(render + 0x33dc8), input.u32(render + 0x33dcc));
+        // (the 256 KiB below ESP: deeper locals are not reached by the traversal)
+        vec![base.wrapping_add(cursor)..base.wrapping_add(capacity), stack.start.max(incoming.esp.saturating_sub(0x40000))..incoming.esp]
+    };
+    let poisoned = |input: &Arc<Snapshot>, fill: u8| -> Arc<Snapshot> {
+        let bytes: BTreeMap<u32, u8> = residue
+            .iter()
+            .flat_map(|r| r.clone())
+            .filter(|&a| input.probe(a, 1, true).is_ok())
+            .map(|a| (a, fill))
+            .collect();
+        Arc::new(input.with_writes(&bytes))
+    };
+    let definedness = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_NO_POISON").is_none();
+    let runs: Vec<(bool, Option<u8>)> = if definedness {
+        vec![(false, None), (true, None), (false, Some(0x00)), (false, Some(0xff))]
+    } else {
+        vec![(false, None), (true, None)]
+    };
     let mut results = Vec::new();
-    for parallel in [false, true] {
-        let (input, raw, mut cpu, stack) = (input.clone(), raw.clone(), incoming.clone(), stack.clone());
+    for (parallel, poison) in runs {
+        let input = poison.map_or_else(|| input.clone(), |fill| poisoned(&input, fill));
+        let (input, raw, mut cpu, stack) = (input, raw.clone(), incoming.clone(), stack.clone());
         let handle = std::thread::Builder::new()
             .name(format!("shadow-replay-{parallel}"))
             .stack_size(64 << 20)
@@ -1224,7 +1253,7 @@ fn compare_replays(
                 |e| format!("replay rejected: {e:?}"),
             )
         })??;
-        if !parallel {
+        if !parallel && poison.is_none() {
             if let Err(e) = verify_serial(&result) {
                 if !zero_arena {
                     return Err(e);
@@ -1355,11 +1384,44 @@ fn compare_replays(
     let mut counts = [0usize; 4]; // residue in both, written, in-bounds assumption, persisting
     let mut residue: Vec<(Vec<usize>, mtcore::shadow_lanes::ConstByte, u8, u8)> = Vec::new();
     let mut refused = 0;
+    fn entry_at<'a>(
+        stream: &'a mtcore::shadow_lanes::StreamSnapshot,
+        path: &[usize],
+    ) -> Option<&'a mtcore::shadow_lanes::Entry> {
+        let mut entries = &stream.entries;
+        for (depth, &index) in path.iter().enumerate() {
+            let entry = entries.get(index)?;
+            if depth + 1 == path.len() {
+                return Some(entry);
+            }
+            entries = &entry.record.children;
+        }
+        None
+    }
+    // Residue-dependent bytes: the serial runs with poisoned residue sources
+    // (results 2 and 3) disagree with the plain serial run there.
+    let residue_dependent = |path: &[usize], a: &mtcore::shadow_lanes::Binding, offset: usize| -> bool {
+        if results.len() < 4 {
+            return false;
+        }
+        let Some(serial) = entry_at(&results[0].1, path) else { return false };
+        let Some(index) = serial.record.bindings.iter().position(|x| std::ptr::eq(x, a)) else { return false };
+        results[2..4].iter().any(|run| {
+            entry_at(&run.1, path)
+                .and_then(|e| e.record.bindings.get(index))
+                .is_some_and(|x| x.bytes.len() == a.bytes.len() && x.bytes[offset] != a.bytes[offset])
+        })
+    };
+    let mut poison_allowed = 0usize;
     let mut residue_allowed = |path: &[usize],
                                a: &mtcore::shadow_lanes::Binding,
                                b: &mtcore::shadow_lanes::Binding,
                                offset: usize|
      -> Result<(), String> {
+        if residue_dependent(path, a, offset) {
+            poison_allowed += 1;
+            return Ok(());
+        }
         let at = offset as u32;
         let origin = |x: &mtcore::shadow_lanes::Binding| x.constants.iter().find(|(o, _)| *o == at).map(|&(_, c)| c);
         let (Some(ca), Some(cb)) = (origin(a), origin(b)) else {
@@ -1480,6 +1542,7 @@ fn compare_replays(
         verdict.is_ok()
     };
     let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
+    eprintln!("parallel-shadow residue-dependent bytes allowed={poison_allowed} (definedness runs: {})", results.len() > 3);
     if !residue.is_empty() {
         let first = &residue[0];
         eprintln!(
