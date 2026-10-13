@@ -10,7 +10,8 @@ Second: prototype raw Vulkan recording on the wgpu device/queue, sharing
 resources, and measure the bridge toward the 240 fps target.
 
 Scope: native ddgpu device/worker, native tests and benchmark; narrow
-results documentation. Never run the game, build shards, or push. GPU
+results documentation. The head/claude-2 coordination expanded transport
+scope to `d3d9cmd` for atomic fallback. Never run the game, build shards, or push. GPU
 checks require an unpaused machine, HEAVY_BIG slot and 60 s case timeout.
 Builds use `C:/ddda-targets/L133`, incremental off, at most four cargo jobs.
 
@@ -48,8 +49,9 @@ these numbers with earlier L110/L123 floor measurements.
 ## Results
 
 Combo17 native run fails worker acceptance: **63,496** asynchronous rejection
-messages; first 16 reasons are `native indexed strip restart unsupported`.
-Jobs include six passes / 253 draws. Producer "draws taken" and zero producer
+messages, **69,390 passes / 3,488,189 draws**; first 16 reasons are
+`native indexed strip restart unsupported`. Largest rejected job: 724 draws.
+Producer "draws taken" and zero producer
 rejections count enqueue success, not worker execution. The gameplay rate
 cannot establish native correctness or performance with these missing draws.
 
@@ -60,15 +62,102 @@ exactly once. No producer round trip; unsupported strips retain the guard.
 The API accepts draw-only jobs (clear/copy commands stay in FIFO separately).
 **12 d3d9cmd CPU tests pass**, four new: rejection ordering, nonblocking
 acceptance without duplicate draws, unsupported backend fallback and the
-draw-only contract. Producer integration is coordinated with claude-2.
+draw-only contract. Producer integration landed in claude-2's `4bcef3fa`
+batch (fallback cherry-pick `119fa79c`). Combo19 has no asynchronous
+lost-job ERROR lines. Worker diagnostics `ad244ca4` now count accepted and
+rejected jobs, draws and passes, cache sizes, uploads and bundle use, plus a
+bounded histogram of exact refusal strings. Counters reflect submissions,
+not GPU completion or image verification.
 
 Combo17 Compare mode records **zero** begin/submit/oracle/shadow operations.
 Root cause: `g.native` initialized only for Native, then `!g.native` selects
 the ordinary DrawCall branch before Compare. Reported to claude-2/codex-11;
-the head must rerun after their producer fix. Verify also reports sampler
-MAXANISOTROPY 16/4 mismatches; decoder correction belongs to claude-2.
+the head reran after their producer fix. Combo19 Verify has zero mismatches
+in all 11 summaries (last 430,660 compared/equal); final Compare totals are
+**42,880 matching attachment/aspect summaries / zero mismatches / 34,112
+unverified / zero pending**. Both Compare and Native's first 16 logged
+worker reasons remain the blanket indexed-strip rejection. Later reasons
+were suppressed, so a complete historical refusal histogram is unavailable.
+The new diagnostic histogram resolves this in the next run. Sampler
+MAXANISOTROPY 16/4 corrections belong to claude-2.
 
-Prototype CPU check passes; GPU comparison pending.
+### Bounded triangle-strip support
+
+Commit `ab4318c9` replaces the blanket indexed-strip refusal with a proof for
+triangle strips: D3D9 requires all used indices inside
+`[MinVertexIndex, MinVertexIndex + NumVertices)`, before adding BaseVertexIndex.
+Accept only nonempty intervals whose exclusive end is at most the fixed
+restart sentinel, computed in u64. Then no valid D3D9 index can trigger
+wgpu's restart behavior. Zero, overflowing and sentinel-containing ranges
+continue to refuse. Source: Microsoft's
+[DrawIndexedPrimitive contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-drawindexedprimitive).
+
+Read-only cap1 metadata census: 7,559 Presents / 1,852,360 draws;
+956,539 indexed strips, all TriangleStrip/u16. **956,101 (99.954%)** have
+restart-excluding ranges, **438** remain unproven. Reproduce with
+`python crates/ddgpu/examples/native_strip_census.py <capture>`; the script
+skips all compressed blobs and emits only aggregate metadata. A synthetic
+metadata fixture checks boundary, wide arithmetic, blob skipping and Present
+counting. The committed script reproduces those totals on cap1 and explicitly
+reports its one truncated tail record; totals cover the complete command
+prefix. No index contents were scanned; eligibility uses the API contract.
+
+The initial GPU control fixture incorrectly combined inline indices (the
+UP transport, with start zero) and start index one. This caused legacy/host
+mismatches before native drawing. Corrected to uploaded index buffers on
+both paths; the exact assertions remain. Earlier attribution to line
+rasterization was retracted. Indexed LineStrip remains outside this change's
+validated subset. The final native GPU gate passes
+six triangle-strip cases (u16/u32, nonzero start, negative base vertex, all
+three cull modes) against both legacy and host D3D9, plus four atomic
+fallback cases with blending and active-query ordering. All **seven worker
+GPU tests pass**, including the five existing resource/order/residency cases,
+in 0.34–0.57 s per test (HEAVY_BIG, unpaused, hard 60 s each). Log:
+`C:/ddda-targets/L133-worker-gpu.log`. No triangle-strip gameplay acceptance
+claimed yet; requested head Compare/Native run with `ab4318c9`.
+
+Combo20's actual worker histogram (before the strip fix): **62,805** indexed
+strip refusals, **3,502** active queries, **3,069** render-target sampler
+channel-fill cases, **2,213** depth-bias state 195 cases. The latter three
+remain explicit legacy fallback. Accepted subset: 475,136 submitted draws,
+7,997,432 uploaded bytes (**16.83 B/draw**), maximum reported 33 pipelines /
+25 texture sets. Five decreases in pipeline count establish at least five
+worker cache resets across the 101 snapshots. Added `worker_instances` counts
+reconstruction exactly in the next run. This accepted subset does not support
+an upload-volume bottleneck claim; full scene performance awaits strip uptake.
+
+**16 ddgpu CPU tests pass**, including range proof/overflow and bounded
+histogram accounting. Full runtime light suite (`--no-default-features
+--no-fail-fast`): **187 pass / one inherited fullscreen-gamma Reset failure /
+three ignored**, across 28 test/doc-test binaries. No shard build or game run.
+
+### Vulkan interop benchmark
+
+Prototype CPU check/build pass. **14 optimized Vulkan benchmark cases pass**,
+including **eight full-image comparisons** (1,024 RGBA bytes each, with
+rasterized pixels required). The eight shared-resource cases cover one
+draw, 43 draws / seven passes, and three repeats each of 5,000 draws / one
+pass and 900 draws / 900 passes. Each shared-resource frame is followed
+by ordinary wgpu readback. HEAVY_BIG, unpaused status checked before each
+case, 60 s hard timeout per process. Private log:
+`C:/ddda-targets/L133-gpu.log`.
+
+Exploratory medians of three 20-frame repeats (three warmup frames each),
+RTX 4060 / Vulkan / driver 610.62 / optimized play profile:
+
+| CPU measure | raw ash | ash + wgpu resources/submit | wgpu |
+|---|---:|---:|---:|
+| 5,000 draws, one pass (us/draw) | 0.326 | 0.354 | 1.129 |
+| 900 one-draw passes (us/pass) | 1.508 | 1.318 | 11.551 |
+
+Interop ranges: 0.340–0.380 us/draw and 1.303–2.048 us/pass. Raw ranges:
+0.325–0.391 and 1.481–1.509; wgpu ranges: 1.119–1.496 and 9.636–12.309.
+Shared-host scheduling is noisy and head's next game-window notice arrived
+near the end; treat these as exploratory shared-host ranges, not a stable
+production floor.
+The bridged path is feasible without raw queue submission, but these are
+prefilled-uniform backend floors, not the resident native workload or FPS.
+
 The oracle requires every RGBA byte to equal the wgpu reference and at
 least one rasterized pixel. Timing includes tracking/encoding, finish and
 submit; GPU waits and readbacks are outside the timed interval. The native
@@ -76,8 +165,10 @@ path has an additional transition from the preceding frame's readback.
 
 Unverified scope: sampled images, depth/stencil, MRT, MSAA, subresources,
 resource destruction in flight, production cache integration and concurrent
-finisher recording. No gameplay correctness or FPS claim. Head's combo17
-logs are pending; GPU work is held during its scheduled runs.
+finisher recording. No raw-backend gameplay correctness or FPS claim. Worker summaries
+now distinguish native submissions/rejections from producer enqueue counts,
+including upload bytes and pipeline/group cache sizes.
 
-Next action: finish CPU check, run the bounded image/performance gate when
-head releases the GPU, and handle combo17 findings first.
+Next action: head reruns Compare/Native with `ab4318c9` to measure the larger
+accepted subset. Further native coverage requires query, missing-channel
+sampler and depth-bias support; the current FIFO fallback preserves these draws.

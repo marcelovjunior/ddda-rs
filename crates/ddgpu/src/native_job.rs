@@ -369,6 +369,7 @@ pub struct NativeJobStats {
     pub dirty_registers: u64,
     pub bundle_builds: u64,
     pub bundle_hits: u64,
+    pub worker_instances: u64,
     /// Worker refusals, not producer enqueue failures. At most 64 exact
     /// reasons plus an overflow bucket, to bound diagnostic memory.
     pub rejection_reasons: std::collections::BTreeMap<String, u64>,
@@ -454,9 +455,9 @@ impl WgpuBackend {
                 .unwrap_or_default();
             // These are worker outcomes, unlike the producer's enqueue totals.
             // Submitted does not mean GPU-complete or image-verified.
-            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} pipelines={pipelines} texture_sets={texture_sets}",
+            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} worker_instances={} pipelines={pipelines} texture_sets={texture_sets}",
                 s.accepted, s.rejected, s.rejected_draws, s.rejected_passes, s.draws, s.passes, s.upload_bytes,
-                s.dirty_registers, s.bundle_builds, s.bundle_hits);
+                s.dirty_registers, s.bundle_builds, s.bundle_hits, s.worker_instances);
             if !s.rejection_reasons.is_empty() {
                 eprintln!("native-worker refusal histogram: {:?}", s.rejection_reasons);
             }
@@ -481,7 +482,10 @@ impl WgpuBackend {
         // Hand off earlier D3D9 draws. Native preparation/recording can overlap
         // their finish; wait before the first native constant queue write.
         self.flush_async();
-        let mut worker = self.native_worker.take().unwrap_or_else(|| Worker::new(self));
+        let mut worker = self.native_worker.take().unwrap_or_else(|| {
+            self.native_stats.worker_instances += 1;
+            Worker::new(self)
+        });
         let result = worker.run(self, &job, overrides);
         self.native_worker = Some(worker);
         let outcome = match result {
@@ -937,10 +941,12 @@ impl Worker {
                     5 => wgpu::PrimitiveTopology::TriangleStrip,
                     _ => return Err("native triangle fan unsupported".into()),
                 };
-                // Indexed strips have D3D9/wgpu restart differences. Defer them.
-                if d.indices.is_some() && matches!(d.primitive, 3 | 5) {
-                    return Err("native indexed strip restart unsupported".into());
-                }
+                let strip_index = native_strip_index(
+                    d.primitive,
+                    d.indices.map(|i| i.format),
+                    d.min_index,
+                    d.vertex_count,
+                )?;
                 let pipeline = self.device.create_pipeline(n::PipelineDesc {
                     vertex_shader: vs,
                     pixel_shader: ps,
@@ -953,7 +959,7 @@ impl Worker {
                     samples: 1,
                     sample_mask: !0,
                     topology,
-                    strip_index: None,
+                    strip_index,
                 })?;
                 // Texture allocations only change after release, which drops
                 // this worker. Retained Arc identities cannot be recycled.
@@ -1152,6 +1158,38 @@ fn state_value(state: &NativeFixedState, key: u32) -> u32 {
         .binary_search_by_key(&key, |x| x.0)
         .ok()
         .map_or(0, |i| state.render_states[i].1)
+}
+/// D3D9 requires every used index to be inside the declared MinVertexIndex /
+/// NumVertices interval, before adding BaseVertexIndex. When that interval
+/// excludes the fixed restart sentinel, wgpu's indexed strip is equivalent.
+/// Keep refusing zero/unproven/sentinel-containing intervals; do not assume
+/// that real index contents avoid the sentinel when the bound allows it.
+/// Source: Microsoft IDirect3DDevice9::DrawIndexedPrimitive, Remarks:
+/// https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-drawindexedprimitive
+fn native_strip_index(
+    primitive: u32,
+    format: Option<u32>,
+    min_index: u32,
+    vertex_count: u32,
+) -> Result<Option<wgpu::IndexFormat>, String> {
+    let Some(format) = format.filter(|_| matches!(primitive, 3 | 5)) else {
+        return Ok(None);
+    };
+    // This change covers the triangle strips observed in cap1. Indexed lines
+    // remain outside the validated native subset.
+    if primitive == 3 {
+        return Err("native indexed line strip unsupported".into());
+    }
+    let (format, restart) = match format {
+        101 => (wgpu::IndexFormat::Uint16, u16::MAX as u64),
+        102 => (wgpu::IndexFormat::Uint32, u32::MAX as u64),
+        _ => return Err("native index format unsupported".into()),
+    };
+    let end = u64::from(min_index) + u64::from(vertex_count);
+    if vertex_count == 0 || end > restart {
+        return Err("native indexed strip range may include restart index".into());
+    }
+    Ok(Some(format))
 }
 fn validate_fixed(state: &NativeFixedState) -> Result<(), String> {
     if state.render_states.windows(2).any(|p| p[0].0 >= p[1].0) {
@@ -1355,6 +1393,30 @@ impl ConstantReads {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn strip_restart_exclusion_uses_declared_index_range_without_wrapping() {
+        for primitive in [5] {
+            assert_eq!(
+                native_strip_index(primitive, Some(101), 0, 65535).unwrap(),
+                Some(wgpu::IndexFormat::Uint16)
+            );
+            assert!(native_strip_index(primitive, Some(101), 0, 65536).is_err());
+            assert!(native_strip_index(primitive, Some(101), 65534, 1).is_ok());
+            assert!(native_strip_index(primitive, Some(101), 65535, 1).is_err());
+            assert!(native_strip_index(primitive, Some(101), 0, 0).is_err());
+            assert_eq!(
+                native_strip_index(primitive, Some(102), 0, u32::MAX).unwrap(),
+                Some(wgpu::IndexFormat::Uint32)
+            );
+            assert!(native_strip_index(primitive, Some(102), u32::MAX - 1, 1).is_ok());
+            assert!(native_strip_index(primitive, Some(102), u32::MAX - 1, 2).is_err());
+            assert!(native_strip_index(primitive, Some(102), u32::MAX, u32::MAX).is_err());
+            assert!(native_strip_index(primitive, Some(100), 0, 3).is_err());
+            assert_eq!(native_strip_index(primitive, None, 0, 0).unwrap(), None);
+        }
+        assert!(native_strip_index(3, Some(101), 0, 3).is_err());
+        assert_eq!(native_strip_index(4, Some(101), 0, 65536).unwrap(), None);
+    }
     #[test]
     fn refusal_histogram_counts_exact_reasons_and_bounds_distinct_storage() {
         let mut stats = NativeJobStats::default();

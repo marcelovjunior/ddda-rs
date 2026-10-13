@@ -930,6 +930,22 @@ waiting indefinitely. Test coverage and measurement limits are recorded in
 
 ## L110 native device checkpoint (2026-10-13)
 
+L133 follow-up: combo17 native enqueue counts overstated execution: the
+worker rejected 63,496 jobs (3,488,189 draws), beginning with unsupported
+indexed strips. `GraphicsBackend::native_or_draw` carries original DrawCalls
+through the same FIFO and executes them once on atomic worker rejection.
+Twelve transport CPU tests and seven worker GPU tests pass. Producer integration
+is in claude-2's `4bcef3fa`; combo19 reports 42,880 matching attachment/aspect
+summaries with zero mismatches for the accepted subset. `ab4318c9` accepts
+triangle strips only when the declared D3D9 index range excludes the restart
+sentinel (six host-driver cases pass; covers 99.954% of cap1 strips by metadata).
+Its gameplay gate remains with head. Worker diagnostics report actual native
+submissions/rejections. The raw-Vulkan `ash-interop` benchmark records into
+wgpu command buffers, sharing targets and vertex/index buffers with explicit
+tracked transitions and wgpu submission. Eight full-image comparisons pass;
+production pipeline/descriptor integration remains open. See
+`tasks/L133-native-next.md` for measurements and limits.
+
 `ddgpu::native` adds immutable state/resource handles, cached pipelines and
 texture sets, separate recorders with generation-aware constant rings,
 coalesced range updates and redundant draw-state filtering. The D3D9 path
@@ -1125,3 +1141,16 @@ scheduling points remain; tracing/statistics select the full FP boundary.
 The step executor also honors this and the existing DeviceState policy.
 All other services retain their existing FP policy. Source audit, sampled
 costs, exactness tests and measurement limits: [L135](tasks/L135-x87-switch.md).
+## L136 readable ports through external dispatch (2026-10-13)
+
+Registry construction overlays the finalized `x86::overrides()` list after
+`lifted::all()`, including ports/mods without generated bodies. Each override
+is a `Binding::Lifted`; it replaces an existing body or entry step as well.
+Thus `call_ext` reaches the same override used by lifted direct calls, while
+unknown targets retain the existing emulator/unbound fallback. Interior SEH
+instruction entries and subsequent session service registration are retained.
+Two light regressions cover port-only initial/cached external calls, unknown
+targets, and ordinary/step-enabled binding replacement. The 12-log audit found
+15 first-seen entries per run, including the six already-ported L130 readers;
+activation in a game run remains for head to verify. See
+`tasks/L136-ports-dispatch.md` for counts and their phase/frequency limits.
