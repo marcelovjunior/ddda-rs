@@ -51,6 +51,8 @@ fn stack_args(target: u32) -> u32 {
         0x0081_fd10 | 0x0083_7980 => 2,
         // 0x01054860's callees: 0x01054700(indices, count, flags), 0x00FFA620(0)
         0x0105_4700 => 3,
+        // 0x0081FD10's callee 0x00421ED0(index)
+
         0x00ff_a620 => 1,
         _ => 0,
     }
@@ -244,4 +246,13 @@ fn x87_float_copy_quiets_signalling_nans_only() {
         let expected = if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 { bits | 0x0040_0000 } else { bits };
         assert_eq!(through_x87(bits), expected, "{bits:08x}");
     }
+}
+
+// verifies 0x0081fd10 (ABI level; void)
+#[test]
+fn semantic_joint_rebase_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L184/joint_rebase.json", mtcore::semantic_s4_joint::joint_rebase, false);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "only {n} cases");
+    eprintln!("{n} ABI-level joint_rebase cases passed");
 }
