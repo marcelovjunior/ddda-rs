@@ -4,25 +4,45 @@
 use ddnative_base::mem::{Mem, Pages};
 use ddnative_base::x86::Cpu;
 
-/// Copy `len` bytes from `src` to `dst` front to back, as the CRT memcpy
-/// (and `rep movsd`) does: whole runs inside a page are moved in bulk, the
-/// rest dword by dword through the memory trait.
-fn copy_guest(m: &mut dyn Mem, pg: Pages, mut dst: u32, mut src: u32, mut len: u32) {
-    while len != 0 {
-        let room = |a: u32| 0x1000 - (a & 0xfff);
-        let chunk = len.min(room(src)).min(room(dst));
-        if let (Some(from), Some(to)) = (pg.bytes(src, chunk as usize, 1), pg.bytes(dst, chunk as usize, 2)) {
+/// Copy `len` bytes from `src` to `dst` like the CRT memcpy, which behaves
+/// as memmove (overlap-safe): runs inside a page are moved in bulk, the
+/// rest byte by byte through the memory trait. When the destination starts
+/// inside the source the copy runs back to front.
+pub fn copy_guest(m: &mut dyn Mem, pg: Pages, dst: u32, src: u32, len: u32) {
+    let backward = dst.wrapping_sub(src) < len;
+    let mut done = 0u32;
+    while done < len {
+        // the next piece: [offset, offset + chunk) of the buffers
+        let left = len - done;
+        let (offset, chunk) = if backward {
+            let end = left;
+            // bytes from the previous page boundary up to the piece's end
+            let since_boundary = |a: u32| match a.wrapping_add(end) & 0xfff {
+                0 => 0x1000,
+                n => n,
+            };
+            let chunk = end.min(since_boundary(src)).min(since_boundary(dst));
+            (end - chunk, chunk)
+        } else {
+            let room = |a: u32| 0x1000 - (a.wrapping_add(done) & 0xfff);
+            (done, left.min(room(src)).min(room(dst)))
+        };
+        let (from, to) = (src.wrapping_add(offset), dst.wrapping_add(offset));
+        if let (Some(f), Some(t)) = (pg.bytes(from, chunk as usize, 1), pg.bytes(to, chunk as usize, 2)) {
             // SAFETY: `bytes` returned `chunk` bytes inside backed pages.
-            unsafe { std::ptr::copy(from, to, chunk as usize) };
+            unsafe { std::ptr::copy(f, t, chunk as usize) };
+        } else if backward {
+            for k in (0..chunk).rev() {
+                let b = pg.u8(m, from.wrapping_add(k));
+                pg.set_u8(m, to.wrapping_add(k), b);
+            }
         } else {
             for k in 0..chunk {
-                let b = pg.u8(m, src.wrapping_add(k));
-                pg.set_u8(m, dst.wrapping_add(k), b);
+                let b = pg.u8(m, from.wrapping_add(k));
+                pg.set_u8(m, to.wrapping_add(k), b);
             }
         }
-        src = src.wrapping_add(chunk);
-        dst = dst.wrapping_add(chunk);
-        len -= chunk;
+        done += chunk;
     }
 }
 

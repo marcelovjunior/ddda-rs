@@ -228,3 +228,62 @@ fn set_fade_matches_original() {
     assert!(n >= 1000, "{n} cases");
     eprintln!("{n} ABI-level set_fade cases passed");
 }
+
+/// Page-table backed memory, to run the bulk path of `copy_guest`.
+#[derive(Default)]
+struct Paged {
+    table: ddnative_base::mem::PageTable,
+}
+impl Mem for Paged {
+    fn page_table(&self) -> Option<std::ptr::NonNull<ddnative_base::mem::PageTable>> {
+        Some(std::ptr::NonNull::from(&self.table))
+    }
+    fn u8(&self, a: u32) -> u8 {
+        let p = self.table.page((a >> 12) as usize);
+        assert!(!p.is_null());
+        // SAFETY: the table owns the backed page.
+        unsafe { ddnative_base::mem::load_at(p.add((a & 4095) as usize), 1) as u8 }
+    }
+    fn set_u8(&mut self, a: u32, v: u8) {
+        let page = (a >> 12) as usize;
+        let p = self.table.backed_page(page);
+        self.table.set_perm(page, 3);
+        // SAFETY: the table owns the backed page.
+        unsafe { ddnative_base::mem::store_at(p.add((a & 4095) as usize), 1, v as u32) }
+    }
+}
+
+/// The native copy behaves like memmove for every overlap, across page
+/// boundaries, on page-backed memory and on the plain trait path.
+#[test]
+fn copy_guest_is_overlap_safe() {
+    let base = 0x3000_0000u32;
+    let mut seed = 0x9e37_79b9u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    for case in 0..600 {
+        let size = 0x3000usize;
+        let data: Vec<u8> = (0..size).map(|_| next() as u8).collect();
+        let len = [0, 1, 4, 0x144, 0x1000, 0x1234, 0x2000][next() as usize % 7] as usize;
+        let src = (next() as usize % 0x800) + if case % 2 == 0 { 0xff0 } else { 0 };
+        let dst = (src as i64 + (next() % 0x2000) as i64 - 0x1000).clamp(0, (size - len) as i64) as usize;
+        let src = src.min(size - len);
+        let mut want = data.clone();
+        want.copy_within(src..src + len, dst);
+        let paged_run = case % 2 == 0;
+        let mut paged = Paged::default();
+        let mut plain = Memory::default();
+        let m: &mut dyn Mem = if paged_run { &mut paged } else { &mut plain };
+        for (i, &b) in data.iter().enumerate() {
+            m.set_u8(base + i as u32, b);
+        }
+        let pg = ddnative_base::mem::Pages::of(m);
+        mtcore::semantic_s9::copy_guest(m, pg, base + dst as u32, base + src as u32, len as u32);
+        let got: Vec<u8> = (0..size).map(|i| m.u8(base + i as u32)).collect();
+        assert!(got == want, "case {case}: src {src:#x} dst {dst:#x} len {len:#x} paged {paged_run}");
+    }
+}
