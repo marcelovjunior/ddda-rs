@@ -22,13 +22,19 @@ invocation of existing game code, not a new translated setter.
 On the shared 16-logical-CPU host the requested 7/8 should configure
 main+6/main+7 workers. Actual activation and image/FPS acceptance await head.
 
-`scripts/job_wake.py` now includes per-batch queue count, inferred signaled
-participants, workers obtaining callbacks, jobs/participant, each worker's
+`scripts/job_wake.py` now includes per-batch queue count, signaled lanes,
+active participants (when supplied by L158), workers obtaining callbacks,
+jobs/participant, each worker's
 signal-to-wait and signal-to-first-callback latency, callback gaps while
 some callback remains unstarted, last callback identity, last callback's
 solo tail after all others finish, its overlap with each join wait, and
 last callback completion to batch end. Missing/lossy batches are rejected.
 The source trace SHA-256 is included in JSON.
+
+Wake count is not configured participation: `DBE599` bypasses worker wakes
+for a single queued job, and `DBE5E5` conditionally wakes each slot. Old
+traces without the Batch `participants` field therefore report null for
+active count and jobs/participant. L158 owner asked to add +98 at #13252.
 
 The gaps are **not proof of kernel idleness or unclaimed queue entries**:
 claiming and dispatch are outside callback boundaries. They include wake,
@@ -78,7 +84,7 @@ Codex-7 authorized narrow dispatch/lib integration (#13162).
 
 ## Verification / remaining work
 
-- 11 offline parser tests pass, including overlapping tails, gap clipping,
+- 13 offline parser tests pass, including overlapping tails, gap clipping,
   missing wakes and bad joins; original seven pairing guards retained.
 - Initial light library run: 86 passed / one inherited Present throughput
   timing failure / five ignored. Both new ABI/configuration tests passed.

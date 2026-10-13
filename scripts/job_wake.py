@@ -71,10 +71,12 @@ def batch_timeline(ident, batch, end, jobs, pairs, joins):
         if cursor < last_start:
             gaps.append({"tid": pair["tid"], "start": cursor, "end": last_start,
                          "ns": last_start - cursor})
+    participants = batch.get("participants")
     return {"batch": ident, "frame": batch["frame"], "queued": batch["queued"],
-            "signaled_workers": len(pairs), "participants": len(pairs) + 1,
+            "signaled_workers": len(pairs), "signaled_lanes_with_main": len(pairs) + 1,
+            "participants": participants,
             "workers_with_callbacks": sum(p["worker_jobs"] > 0 for p in pairs),
-            "jobs_per_participant": batch["queued"] / (len(pairs) + 1),
+            "jobs_per_participant": batch["queued"] / participants if participants else None,
             "batch_ns": end["ns"] - batch["ns"],
             "last_job": last, "last_job_solo_tail_ns":
                 last["end"] - solo_start if last else 0,
@@ -100,6 +102,9 @@ def analyze(records, min_frame=0):
             continue
         batch, end = group["Batch"][0], group["End"][0]
         if batch["frame"] < min_frame:
+            continue
+        if "participants" in batch and not 1 <= batch["participants"] <= 8:
+            rejected["invalid active participant count"] += 1
             continue
         # Cumulative loss is deliberately conservative: no inference after
         # the first dropped record, even if a subsequent batch looks whole.

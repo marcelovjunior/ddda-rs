@@ -57,10 +57,12 @@ class WakeTests(unittest.TestCase):
 
     def test_per_batch_tail_and_participation(self):
         records = fixture()
+        records[0][1]["participants"] = 7
         records.append(("Join", dict(id=2, start=155, end=195, result=0)))
         row = analyze(records)["batches"][0]
-        self.assertEqual(row["participants"], 2)
-        self.assertEqual(row["jobs_per_participant"], 0.5)
+        self.assertEqual(row["participants"], 7)
+        self.assertEqual(row["signaled_lanes_with_main"], 2)
+        self.assertEqual(row["jobs_per_participant"], 1 / 7)
         self.assertEqual(row["last_job_solo_tail_ns"], 20)
         self.assertEqual(row["last_job_to_batch_end_ns"], 20)
         self.assertEqual(row["join_waits"][0]["last_job_overlap_ns"], 20)
@@ -84,6 +86,18 @@ class WakeTests(unittest.TestCase):
         records = fixture()
         del records[2]
         self.assertFalse(analyze(records)["batches"])
+
+    def test_legacy_trace_does_not_confuse_signals_with_active_count(self):
+        row = analyze(fixture())["batches"][0]
+        self.assertIsNone(row["participants"])
+        self.assertIsNone(row["jobs_per_participant"])
+        self.assertEqual(row["signaled_lanes_with_main"], 2)
+
+    def test_invalid_active_count_is_rejected(self):
+        for count in [0, 9]:
+            records = fixture()
+            records[0][1]["participants"] = count
+            self.assertFalse(analyze(records)["batches"])
 
     def test_bad_join_does_not_generate_tail_attribution(self):
         records = fixture()
