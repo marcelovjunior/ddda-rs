@@ -2585,6 +2585,8 @@ mod tests {
             Some(Binding::Service(f)) => (f, true, false),
             Some(Binding::ServiceTail(f)) => (f, true, true),
             Some(Binding::LockFree(f)) => (f, false, false),
+            // L170: the Integer path as the dispatch runs it
+            Some(b @ Binding::Integer(_)) => return r.run_binding(b, m, c, target),
             _ => unreachable!(),
         };
         r.run_service(f, m, c, target, locked, tail);

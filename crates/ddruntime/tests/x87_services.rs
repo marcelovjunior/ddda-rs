@@ -67,6 +67,11 @@ fn audited_imports_preserve_live_extended_state_and_every_mxcsr_mode() {
                             "GetCurrentThreadId" => ddruntime::threads::current_tid(),
                             "InterlockedIncrement" => 10,
                             "InterlockedDecrement" => 8,
+                            // L170: TLS index OPERAND + offset is out of range
+                            // (ERROR_INVALID_PARAMETER, which GetLastError then
+                            // returns); SetLastError leaves eax
+                            "TlsGetValue" | "TlsSetValue" | "SetLastError" => 0,
+                            "GetLastError" => 87,
                             _ => 9,
                         };
                         assert_eq!(c.eax, expected, "{name}");
