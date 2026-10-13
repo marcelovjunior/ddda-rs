@@ -75,8 +75,14 @@ same finisher. This orders reused storage without a GPU wait. Worker and
 game-frame performance have not been measured; L123's 0.843 us number is its
 dedicated persistent-recorder benchmark, not this adapter.
 
-Persistent-recorder changes compile; final focused GPU gate is queued behind
-the shared HEAVY_BIG slot. Merged-base runtime light: **182 pass / one inherited
+Final persistent-recorder/finisher gate: **16 optimized Vulkan GPU tests pass**
+(six native API, five worker, five shadow integration), **14 CPU tests pass**.
+Individual GPU cases take 0.42-0.84 s wall time. Consecutive identical jobs
+upload no additional bytes; changed constants and async finisher ordering
+preserve output. The 32-pass shadow reuse case runs with async submit enabled;
+reductions wait for native submission, never GPU completion. Log:
+`C:/ddda-targets/L126-persistent-gpu.log`. Source `e3599f42` plus ordering fix
+`542111eb`; L127 test dependency `3818c5c0`. Merged-base runtime light: **182 pass / one inherited
 fullscreen gamma-reset failure / three ignored**. Log:
 `C:/ddda-targets/L126-runtime-all.log`.
 

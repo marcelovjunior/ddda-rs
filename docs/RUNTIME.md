@@ -995,9 +995,9 @@ The worker resolves live backend resources and prewarms identity-cached native
 objects. Recorder storage and constant handles persist across jobs; resident
 register deltas upload before the existing finisher receives the render encoder.
 Prior arena users must have submitted before queue writes; no GPU wait is used.
-Exact bundle reuse is opt-in via DDGPU_NATIVE_BUNDLES=1. Four initial GPU tests
-and 14 CPU tests pass; the persistent-recorder gate is pending. L127's five
-end-to-end shadow tests pass on its integration branch. Head's DDDRAW_NATIVE=1
+Exact bundle reuse is opt-in via DDGPU_NATIVE_BUNDLES=1. Final gate: 16 GPU
+tests (six API, five worker, five shadow) and 14 CPU tests pass, including
+consecutive-job zero-reupload and async shadow ordering. Head's DDDRAW_NATIVE=1
 image/FPS run remains pending. Details: tasks/L126-native-worker.md.
 
 ## L121 StretchRect recording (2026-10-13)
