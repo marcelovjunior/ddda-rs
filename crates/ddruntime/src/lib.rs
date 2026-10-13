@@ -14,6 +14,7 @@
 //! with its address instead of returning something made up.
 pub mod audio;
 pub mod archive_inflate;
+pub mod procedural_geometry;
 pub mod input;
 pub mod d3d9;
 pub mod d3d9copy;

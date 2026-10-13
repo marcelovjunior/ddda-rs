@@ -138,8 +138,57 @@ infinite, quiet/signaling NaN operands; both compare instructions; and
 seven rounding/DAZ/FTZ settings. Compiled at opt-level 1 without shards.
 This verifies the emission rule; affected original-function vectors,
 regeneration/native gate and game timing remain pending head integration.
-The whole readable FE9580 port requested alongside fusion is still work
-in progress. No geometry speedup or new boot-time result is claimed yet.
+The whole readable FE9580 port requested alongside fusion is described
+below. No new game boot-time result is claimed yet.
+
+`vectors_geometry.py` now records the complete original FE9580 with
+synthetic allocator, vertex-buffer, memset and string-comparison call
+boundaries. Three fixtures (subdivision 0 with no attributes, subdivision
+0/1 with Position/Normal/Tangent/Color/TexCoord/Tex-prefix/unknown fields,
+including mixed case) produce **6,155 boundary calls**. Isolated whole
+function replay at opt-level 1 passes for both pre-fusion and fused
+emission: GPRs, every XMM lane, defined arithmetic flags, stack, call
+entry/exit states, and all scratch/heap bytes. `bench_geometry.py` prepares
+the private replay crate without any ddlift dependency. Output stays in
+`E:/ddda-re/notes/native-L109c` / `C:/ddda-targets/L109c`.
+
+The recorder has since been extended to **12 fixtures / 18,499 boundary
+calls**, including depth two, empty layouts, allocation failure, signed
+zero, coincident geometry, subnormals, infinities and quiet/signaling NaNs.
+Unicorn's mixed SNaN/QNaN payload preference differs from physical x86:
+the literal pre-fusion lift failed identically to the port on that case.
+The recorder now executes each original SSE arithmetic/compare opcode on
+the physical CPU under the guest MXCSR while Unicorn retains original
+integer/control execution. Its Win64 adapter preserves host XMM6/7 and
+MXCSR, redirects only memory source operands, and reads opcodes from the
+player's executable. Exact payload and sticky exception checks remain.
+
+The complete readable **FE9580** port now passes all twelve fixtures:
+every call's GPR/XMM/defined flags/MXCSR/stack, complete scratch and heap,
+and final state. It retains cube/subdivision/projection/normal/tangent/UV
+construction, semantic dispatch, allocation and vertex-buffer callbacks.
+Unit values, vectors and semantic strings still come from guest memory.
+For finite normal coordinates or signed zero, an index locates coincident
+vertices instead of scanning all vertices for each triangle. Candidate
+and face accumulation order are retained; the final candidate always
+executes to preserve outgoing AH/XMM/loop flags. NaN, infinity or subnormal
+positions use the literal scan, preserving unordered/exception behavior.
+The index is local to this invocation; no geometry data is cached globally.
+
+`DDRUNTIME_GEOMETRY_PORT=1` opts in; **off by default** pending head A/B.
+Explicit overrides retain precedence, and telemetry wrappers include the
+port when enabled. Both registration modes and the whole original oracle
+pass in the runtime light test. Isolated before-fusion/after-fusion/port
+replays also pass all twelve cases. A single depth-two diagnostic sample
+was 21.46 / 10.97 / 1.02 ms, excluding callback checks; this is not a game
+timing or a stable benchmark (checks disturb caches, shared-host noise).
+Next: head's depth-four boot A/B and first-Present/title/menu marks.
+
+Final runtime light suite after the port: **174 passed / 1 failed /
+3 ignored**. The only failure remains the preexisting fullscreen gamma
+Reset assertion in `d3d9_device`; no checks were weakened. Targeted
+geometry tests pass with registration off and on. No shard or game build
+was performed by this agent; codex-7/head own the combined emitter gate.
 
 ### Continuation: readable inflate fast loop (2026-10-13)
 
