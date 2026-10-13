@@ -7,7 +7,11 @@ timing and frame counters. `scripts/load_timeline.py` produces a timeline;
 UI milestones require explicit head-observed timestamps. Service totals
 are inclusive across threads, not additive wall-time phases. Archive
 wrappers retain original code and registered overrides. See
-[timing boundaries and validation](tasks/L109-loading.md).
+[timing boundaries and validation](tasks/L109-loading.md). ReadFile and
+ReadFileEx reuse bounded per-thread host scratch for requests up to 128 KiB;
+they still read the file every time. Synthetic warm 128 KiB service time
+was 11.569 -> 9.643 us/call, allocations 1 -> 0. Whole-game phase timings
+remain pending head runs.
 
 ## L82 render service tails (2026-10-13)
 

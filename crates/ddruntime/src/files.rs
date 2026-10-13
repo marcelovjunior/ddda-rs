@@ -253,6 +253,55 @@ fn put_bytes(m: &mut dyn Mem, at: u32, data: &[u8]) {
     crate::fastmem::write_bulk(m, at, data);
 }
 
+// Host scratch only: no file contents survive as a cache. Each read still
+// reaches the host file and copies only the bytes the read actually returned.
+// 128 KiB is the input-buffer size used by rArchive::DecompressStream's read
+// (0x00e0d320, DDDA.exe 2017-12-13 Steam). Retention is a host memory policy,
+// not a guest limit: larger requests use a temporary allocation as before.
+const READ_SCRATCH_LIMIT: usize = 128 * 1024;
+thread_local! {
+    static READ_SCRATCH: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+fn with_read_scratch<R>(size: usize, use_buffer: impl FnOnce(&mut [u8]) -> R) -> R {
+    READ_SCRATCH.with(|scratch| {
+        if size <= READ_SCRATCH_LIMIT {
+            // A nested callback must not alias or panic on an outer read's
+            // buffer. Such a read gets its own allocation instead.
+            if let Ok(mut buffer) = scratch.try_borrow_mut() {
+                if buffer.len() < size {
+                    let additional = size - buffer.len();
+                    buffer.reserve_exact(additional);
+                    buffer.resize(size, 0);
+                }
+                return use_buffer(&mut buffer[..size]);
+            }
+        }
+        use_buffer(&mut vec![0; size])
+    })
+}
+
+#[cfg(test)]
+mod read_scratch_tests {
+    use super::*;
+
+    #[test]
+    fn nested_reads_and_unwind_do_not_alias_or_poison_scratch() {
+        with_read_scratch(128, |outer| {
+            outer.fill(0x55);
+            with_read_scratch(128, |inner| inner.fill(0xaa));
+            assert!(outer.iter().all(|&b| b == 0x55));
+        });
+        let caught = std::panic::catch_unwind(|| with_read_scratch(128, |_| panic!("guest fault")));
+        assert!(caught.is_err());
+        with_read_scratch(128, |buffer| buffer.fill(0x33));
+        READ_SCRATCH.with(|buffer| assert_eq!(buffer.borrow()[0], 0x33));
+        with_read_scratch(100_000, |_| {});
+        with_read_scratch(READ_SCRATCH_LIMIT, |_| {});
+        with_read_scratch(READ_SCRATCH_LIMIT + 1, |buffer| buffer.fill(0xff));
+        READ_SCRATCH.with(|buffer| assert!(buffer.borrow().capacity() <= READ_SCRATCH_LIMIT));
+    }
+}
+
 /// ReadFile(handle, buffer, count, read*, overlapped): synchronous reads
 /// only (an OVERLAPPED argument is refused until asynchronous I/O exists).
 pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
@@ -268,11 +317,11 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
     });
     let read = file.map(|mut file| {
         crate::threads::unlocked(|| {
-            let mut v = vec![0u8; count as usize];
-            let n = file.read(&mut v).unwrap_or(0);
-            v.truncate(n);
-            put_bytes(m, buf, &v);
-            n as u32
+            with_read_scratch(count as usize, |v| {
+                let n = file.read(v).unwrap_or(0);
+                put_bytes(m, buf, &v[..n]);
+                n as u32
+            })
         })
     });
     crate::load_log::read_done(load_started, read.unwrap_or(0) as u64);
@@ -314,10 +363,11 @@ pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
             if offset >= size {
                 return Err(ERROR_HANDLE_EOF);
             }
-            let mut v = vec![0u8; count.min((size - offset) as u32) as usize];
-            file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(&mut v)).map_err(|_| ERROR_HANDLE_EOF)?;
-            put_bytes(m, buf, &v);
-            Ok(v.len() as u32)
+            with_read_scratch(count.min((size - offset) as u32) as usize, |v| {
+                file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(v)).map_err(|_| ERROR_HANDLE_EOF)?;
+                put_bytes(m, buf, v);
+                Ok(v.len() as u32)
+            })
         })
     });
     crate::load_log::read_done(load_started, data.as_ref().copied().unwrap_or(0) as u64);

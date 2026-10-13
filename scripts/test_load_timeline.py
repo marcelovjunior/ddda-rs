@@ -1,5 +1,5 @@
 import unittest
-from load_timeline import add_mark, movie_spans, parse, phases, render
+from load_timeline import add_mark, movie_spans, parse, phases, render, render_legacy
 
 
 class TimelineTests(unittest.TestCase):
@@ -33,6 +33,16 @@ class TimelineTests(unittest.TestCase):
         result = render(events)
         self.assertIn("| 3.000 | 2.000 | 2 | 2000.0 |", result)
         self.assertIn("Unmeasured UI milestones", result)
+
+    def test_legacy_clocks_remain_explicit(self):
+        result = render_legacy("ddplay stage-probe t=99s draws/frame=4765 fps=11.0")
+        self.assertIn("NOT process start", result)
+        self.assertIn("| 99 | 4765 | 11.0 |", result)
+
+    def test_phase_duration_ignores_intervening_milestones(self):
+        events = parse("load-log t=0 event=process_start\nload-log t=5 event=first_window\nload-log t=8 event=main_menu")
+        self.assertIn("| Boot to main menu | 8.000 |", render(events))
+        self.assertIn("| Loading screen | unmeasured |", render(events))
 
 
 if __name__ == "__main__":
