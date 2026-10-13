@@ -723,6 +723,114 @@ impl Shadow {
     fn is_empty(&self) -> bool {
         self.sampler_states.is_empty() && self.textures.is_empty()
     }
+    fn clear(&mut self) {
+        self.ctx.clear();
+        self.sampler_states.clear();
+        self.textures.clear();
+    }
+    /// Drop what changes nothing: calls setting what the device (`mirror`)
+    /// already holds, context words already holding the value written
+    /// last. What stays has the same effect.
+    fn prune(&mut self, g: &G, mirror: &Mirror) {
+        let mut rows = mirror.rows;
+        let mut textures = mirror.textures;
+        self.sampler_states.retain(|&(t, ty, v)| match (slot_of(t), (ty as usize) < 14) {
+            (Some(i), true) => rows[i][ty as usize] != v && {
+                rows[i][ty as usize] = v;
+                true
+            },
+            _ => true,
+        });
+        self.textures.retain(|&(t, h)| match slot_of(t) {
+            Some(i) => textures[i] != h && {
+                textures[i] = h;
+                true
+            },
+            None => true,
+        });
+        // the last write of each word, where it changes the word
+        let mut last: Vec<(u32, u32)> = Vec::new();
+        for &(a, v) in &self.ctx {
+            match last.iter_mut().find(|w| w.0 == a) {
+                Some(w) => w.1 = v,
+                None => last.push((a, v)),
+            }
+        }
+        last.retain(|&(a, v)| g.u32(a) != v);
+        self.ctx.clear();
+        self.ctx.extend(last);
+    }
+}
+
+/// The device's sampler states and textures, stages 0..15 and 256..260,
+/// as of `epoch` (crate::d3d9state::sampler_epoch: every change bumps it).
+#[derive(Clone)]
+struct Mirror {
+    epoch: u64,
+    rows: [[u32; 14]; 21],
+    textures: [u32; 21],
+}
+
+fn slot_of(stage: u32) -> Option<usize> {
+    match stage {
+        0..=15 => Some(stage as usize),
+        256..=260 => Some(stage as usize - 240),
+        _ => None,
+    }
+}
+
+fn stage_of(slot: usize) -> u32 {
+    if slot < 16 { slot as u32 } else { slot as u32 + 240 }
+}
+
+impl Mirror {
+    fn load(device: u32) -> Option<Mirror> {
+        let epoch = crate::d3d9state::sampler_epoch();
+        objects(|o| match o.live.get(&device).map(|x| &x.kind) {
+            Some(Kind::Device(d)) => {
+                let s = &d.state;
+                let mut textures = [0; 21];
+                for (&t, &h) in &s.textures {
+                    if let Some(i) = slot_of(t) {
+                        textures[i] = h;
+                    }
+                }
+                Some(Mirror { epoch, rows: std::array::from_fn(|i| s.sampler.row(stage_of(i))), textures })
+            }
+            _ => None,
+        })
+    }
+
+    fn apply(&mut self, sh: &Shadow) {
+        for &(t, ty, v) in &sh.sampler_states {
+            if let (Some(i), true) = (slot_of(t), (ty as usize) < 14) {
+                self.rows[i][ty as usize] = v;
+            }
+        }
+        for &(t, h) in &sh.textures {
+            if let Some(i) = slot_of(t) {
+                self.textures[i] = h;
+            }
+        }
+    }
+
+    /// The bound textures with their sampler states after `sh`, as the
+    /// D3D9 path's snapshot builds them: by stage, objects that are not
+    /// live textures left out.
+    fn textures(&self, sh: &Shadow, c: &mut Caches) -> Arc<[TextureBinding]> {
+        let mut m = self.clone();
+        m.apply(sh);
+        let mut out = Vec::with_capacity(8);
+        for i in 0..21 {
+            let h = m.textures[i];
+            if h != 0 {
+                if let Some(info) = c.texture(h) {
+                    out.push(TextureBinding { sampler: stage_of(i), resource: h, states: m.rows[i], ..info });
+                }
+            }
+        }
+        out.into()
+    }
 }
 
 // Translated from 0x00DAA8B0 (DDDA.exe 2017-12-13 Steam): its sampler and
@@ -773,42 +881,6 @@ fn shadow_samplers(g: &G, ctx: u32, binding: u32, meta: &MetaPart, info: &FrameI
             }
         }
     }
-}
-
-/// The textures the device holds after `sh`, with their sampler states,
-/// as the D3D9 path's snapshot builds them (objects that are not live
-/// textures left out).
-fn device_textures(device: u32, sh: &Shadow, c: &mut Caches) -> Option<Arc<[TextureBinding]>> {
-    let mut bound: Vec<(u32, u32, [u32; 14])> = objects(|o| match o.live.get(&device).map(|x| &x.kind) {
-        Some(Kind::Device(d)) => {
-            let s = &d.state;
-            let mut v: Vec<(u32, u32, [u32; 14])> = s.textures.iter().map(|(&t, &h)| (t, h, s.sampler.row(t))).collect();
-            for &(t, h) in &sh.textures {
-                match v.iter_mut().find(|e| e.0 == t) {
-                    Some(e) => e.1 = h,
-                    None => v.push((t, h, s.sampler.row(t))),
-                }
-            }
-            Some(v)
-        }
-        _ => None,
-    })?;
-    for &(t, ty, value) in &sh.sampler_states {
-        if let Some(e) = bound.iter_mut().find(|e| e.0 == t) {
-            if let Some(x) = e.2.get_mut(ty as usize) {
-                *x = value;
-            }
-        }
-    }
-    bound.retain(|e| e.1 != 0);
-    bound.sort_unstable_by_key(|e| e.0);
-    let mut out = Vec::with_capacity(bound.len());
-    for (t, h, states) in bound {
-        if let Some(info) = c.texture(h) {
-            out.push(TextureBinding { sampler: t, resource: h, states, ..info });
-        }
-    }
-    Some(out.into())
 }
 
 /// A stream binding of this frame (0x00DAA7C0 with nothing applied).
@@ -947,10 +1019,12 @@ pub struct Caches {
     targets: FxMap<u32, Option<Target>>,
     textures: FxMap<u32, Option<TextureBinding>>,
     index_formats: FxMap<u32, Option<u32>>,
-    /// the device's texture list, valid while `texture_generation` is
-    /// unchanged (it changes with every sampler or texture call)
+    /// the device's sampler states and textures this frame, and its
+    /// texture list at an epoch (crate::d3d9state::sampler_epoch)
+    mirror: Option<Mirror>,
     texture_list: Option<(u64, Arc<[TextureBinding]>)>,
-    pub(crate) texture_generation: u64,
+    /// the sampler section's buffers, reused
+    scratch: Shadow,
 }
 
 impl Caches {
@@ -964,7 +1038,8 @@ impl Caches {
         self.targets.clear();
         self.textures.clear();
         self.index_formats.clear();
-        self.texture_generation += 1;
+        self.mirror = None;
+        self.texture_list = None;
         let device = objects(|o| match o.live.get(&info.device).map(|x| &x.kind) {
             Some(Kind::Device(d)) => {
                 let s = &d.state;
@@ -1136,18 +1211,27 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         }
     };
     // samplers and textures: what the apply would do on this context
-    let mut sh = Shadow::default();
+    let mut sh = std::mem::take(&mut c.scratch);
+    sh.clear();
     shadow_samplers(&g, context, shader, &b.meta, info, &mut sh);
+    // the device as it is (anything else that set a sampler state or a
+    // texture since: the default path's applies, moves the epoch)
+    if c.mirror.as_ref().is_none_or(|m| m.epoch != crate::d3d9state::sampler_epoch()) {
+        c.mirror = Some(Mirror::load(info.device).ok_or(Refusal::Device)?);
+    }
+    let mirror = c.mirror.take().unwrap();
+    sh.prune(&g, &mirror);
     let textures = match &c.texture_list {
-        Some((generation, list)) if *generation == c.texture_generation && sh.is_empty() => list.clone(),
+        Some((epoch, list)) if *epoch == mirror.epoch && sh.is_empty() => list.clone(),
         _ => {
-            let list = device_textures(info.device, &sh, c).ok_or(Refusal::Device)?;
+            let list = mirror.textures(&sh, c);
             if sh.is_empty() {
-                c.texture_list = Some((c.texture_generation, list.clone()));
+                c.texture_list = Some((mirror.epoch, list.clone()));
             }
             list
         }
     };
+    c.mirror = Some(mirror);
     // the draw
     if kind == 1 && s.indices == 0 {
         return Err(Refusal::NoIndices);
@@ -1192,19 +1276,26 @@ pub struct Decoded {
 
 /// Make a taken draw's sampler section effects: the context words and the
 /// device calls.
-pub fn commit(m: &mut dyn Mem, info: &FrameInfo, c: &mut Caches, sh: Shadow) {
-    for (a, v) in sh.ctx {
+pub fn commit(m: &mut dyn Mem, info: &FrameInfo, c: &mut Caches, mut sh: Shadow, textures: &Arc<[TextureBinding]>) {
+    for &(a, v) in &sh.ctx {
         m.set_u32(a, v);
     }
-    if !sh.sampler_states.is_empty() || !sh.textures.is_empty() {
-        c.texture_generation += 1;
+    if !sh.is_empty() {
+        for &(t, ty, v) in &sh.sampler_states {
+            crate::d3d9state::device_set_sampler_state(info.device, t, ty, v);
+        }
+        for &(t, h) in &sh.textures {
+            crate::d3d9state::device_set_texture(info.device, t, h);
+        }
+        // the device is what the mirror and the draw's list say now
+        if let Some(mirror) = c.mirror.as_mut() {
+            mirror.apply(&sh);
+            mirror.epoch = crate::d3d9state::sampler_epoch();
+            c.texture_list = Some((mirror.epoch, textures.clone()));
+        }
     }
-    for (t, ty, v) in sh.sampler_states {
-        crate::d3d9state::device_set_sampler_state(info.device, t, ty, v);
-    }
-    for (t, h) in sh.textures {
-        crate::d3d9state::device_set_texture(info.device, t, h);
-    }
+    sh.clear();
+    c.scratch = sh;
 }
 
 /// The constant registers taken draws wrote since the default path last
@@ -1542,8 +1633,6 @@ impl CommandSink for Native {
                 invalidate(m, g.info.device, context, &mut g.uploads);
                 g.handled = false;
             }
-            // the default path may set samplers and textures
-            g.caches.texture_generation += 1;
         }
         taken
     }
@@ -1619,7 +1708,7 @@ impl Native {
                 Taken::Default
             }
             Ok(Decoded { call: d, shadow, binding }) if self.mode == Mode::DrawCall || !g.native => {
-                commit(m, &g.info, &mut g.caches, shadow);
+                commit(m, &g.info, &mut g.caches, shadow, &d.textures);
                 g.uploads.add(&binding);
                 g.handled = true;
                 crate::d3d9draw::flush_reads(m, reads_of(&d));
@@ -1634,7 +1723,7 @@ impl Native {
                     Taken::Default
                 }
                 Ok(native) => {
-                    commit(m, &g.info, &mut g.caches, shadow);
+                    commit(m, &g.info, &mut g.caches, shadow, &d.textures);
                     g.uploads.add(&binding);
                     g.handled = true;
                     if self.mode == Mode::Compare {
@@ -1992,6 +2081,44 @@ mod tests {
             }
             assert_eq!(region(&b), region(&a), "case {case}: context");
         }
+    }
+
+    /// Pruning keeps exactly the calls and words that change something:
+    /// applying what is left to the device gives what applying everything
+    /// gives.
+    #[test]
+    fn pruning_drops_only_what_changes_nothing() {
+        let mut m = TestMem::default();
+        m.set_u32(0x100, 7);
+        m.set_u32(0x104, 9);
+        let mut rows = [[0u32; 14]; 21];
+        rows[0][10] = 4;
+        rows[17][5] = 2;
+        let mut textures = [0u32; 21];
+        textures[0] = 0xD000;
+        let mirror = Mirror { epoch: 1, rows, textures };
+        let mut sh = Shadow::default();
+        // the same value; a change; a change back (stays: it is the last
+        // word for the field); a vertex stage; textures likewise
+        sh.sampler_states.extend([(0, 10, 4), (0, 10, 16), (0, 11, 1), (257, 5, 2), (257, 6, 3)]);
+        sh.textures.extend([(0, 0xD000), (1, 0xD100), (257, 0)]);
+        sh.ctx.extend([(0x100, 7), (0x104, 1), (0x104, 9), (0x108, 3)]);
+        let mut all = mirror.clone();
+        all.apply(&sh);
+        let g = G::new(&m);
+        sh.prune(&g, &mirror);
+        assert_eq!(sh.sampler_states, vec![(0, 10, 16), (0, 11, 1), (257, 6, 3)]);
+        assert_eq!(sh.textures, vec![(1, 0xD100)]);
+        assert_eq!(sh.ctx, vec![(0x108, 3)]);
+        let mut pruned = mirror.clone();
+        pruned.apply(&sh);
+        assert_eq!((pruned.rows, pruned.textures), (all.rows, all.textures));
+        // nothing left when nothing changes
+        let mut again = Shadow::default();
+        again.sampler_states.extend([(0, 10, 16)]);
+        again.ctx.push((0x100, 7));
+        again.prune(&g, &pruned);
+        assert!(again.is_empty() && again.ctx.is_empty());
     }
 
     #[test]

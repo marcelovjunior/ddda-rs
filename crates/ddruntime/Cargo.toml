@@ -7,7 +7,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-unicorn-engine = { version = "=2.0.1", optional = true }
+# 2.1.1 fixes hook ownership and exposes a bounded translation cache; its
+# Windows static build does not require the symlink step in later releases.
+unicorn-engine = { version = "=2.1.1", default-features = false, features = ["arch_x86"], optional = true }
 ddnative-base = { path = "../ddnative-base" }
 ddnative-host = { path = "../ddnative-host" }
 ddnative = { path = "../ddnative", optional = true }

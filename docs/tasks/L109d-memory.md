@@ -65,7 +65,103 @@ upload bytes; pending image uploads retain owned buffers until first GPU
 use or resource release. These are candidates, not measured causes. Backend
 and transport diagnostic hunks are being coordinated with their owners.
 
-Next action: head captures save load with both log switches. Compare the
-rise in private commitment, Rust-owned bytes, aligned page bytes and live
-guest pages before selecting the allocation path to change. Save-load
-optimization remains behind memory attribution.
+### Emulator allocation fix
+
+Head's `run_c18mem.log` / `c18mem_private.log` show process private memory
+reaching 17.05 GiB, while Rust live requested bytes stay around 0.64 GiB
+(peak 765,697,504 bytes); aligned guest-page allocations reach 422,445,056
+bytes. This excludes live Rust buffers as the dominant owner. Process/guest
+`memory_totals` were not present in this run; the external process sampler
+supplies private commitment.
+
+Pinned Unicorn 2.0.1's `qemu/accel/tcg/translate-all.c` uses a 1 GiB default
+translation buffer on 64-bit hosts, allocated with Windows
+`MEM_RESERVE | MEM_COMMIT`. Runtime retains an engine per thread/nesting
+level. Its Rust hooks also hold strong `Rc` references back to the engine,
+preventing destruction after the external owner drops. Both mechanisms
+were reproduced without guest/game execution:
+
+| CPU-only two-engine probe | 2.0.1 | 2.1.1, 32 MiB cache |
+|---|---:|---:|
+| Private-byte increase, both alive | 2,153,340,928 | 10,113,024 |
+| Increase after dropping both | 2,153,340,928 | 561,152 |
+
+The runtime now pins upstream **2.1.1**, builds only x86, and sets each
+translation cache to **32 MiB before CPU initialization**, matching the
+existing vector harness's host-cache policy. This is not a game constant.
+Unicorn regenerates evicted translations. The newer Windows allocator
+commits code pages on demand and Rust hooks use weak ownership. Thread-local
+pooling and independent nested engines remain intact. No game instruction,
+guest allocation lifetime, renderer setting or original boot hold changes.
+`emu_engine_created` load-log events expose cumulative engine creation and
+the configured per-engine cache budget (not a live committed-byte gauge).
+
+Six emulator integration tests pass before and after: register/stack/FS
+call-outs, repeated reuse, hot loops, 100,000 short calls, x87/SSE state and
+new nested fallback coverage. The isolated memory probe passes; a unit
+test reads back the actual cache budget. Single unpaired short-call times
+were 2.005 s old / 2.333 s new on the shared host; no CPU speedup is claimed.
+Logs are under `C:/ddda-targets/L109d-emu-*`; no shards or game were run.
+
+Full serial `cargo test -p ddruntime --no-default-features --features emu
+--no-fail-fast -- --test-threads=1`: **194 passed, one inherited fullscreen
+gamma failure, four ignored** (`L109d-light.log`). The gamma Reset result
+is the same pre-existing 2289436780-versus-0 failure; no check was changed.
+
+2.1.1 builds using the existing toolchain. Later upstream packaging adds
+an unconditional symlink step that fails on this machine; no registry
+source patch or elevated privilege is required for the chosen pin.
+
+Head's c18 combined build records guest start **0.751034 s**, first Present
+**1.743526 s**, and exact geometry call **70.703 ms**. This improves the
+earlier combined boot boundary (5.84–5.86 s), but is not an isolated A/B.
+Title/main-menu and post-fix save-load/gameplay timings remain unmeasured.
+
+Next action: head integrates this change and captures the same save load
+with `DDPLAY_ALLOC_LOG=1 DDRUNTIME_LOAD_LOG=1` and the external private-byte
+sampler, then compares image, process memory and visible phase timings.
+Codex-10's separate `2a5ad811` removes six hot fallback duration readers;
+remaining save-load CPU work should be profiled after both changes land.
+
+### Remaining save-load measurement
+
+In c18's process-relative 32..45 s interval (not an inferred UI label),
+13,741 zlib calls take 7.147 s inclusive; archive-scoped inflates take only
+0.137 s, file reads 0.478 s for 278.5 MB, with no new pipelines. Ghidra's
+three callers of `0x00cf02e0` are archive `0x00e0d320`, save `0x00410180`,
+and resource-stream `0x00db92c0`. The latter polls `Sleep(1)` outside zlib
+while waiting for producer data, so that wait is outside zlib's timer.
+
+Under the existing load-log switch, `zlib_entry_totals` now separates calls
+and inclusive time by entry input/output sizes: input below six bytes,
+output below 258 bytes, both, neither, and null stream. These thresholds
+come from `0x00cf0e6f`'s guard before the already-ported fast decoder.
+They describe entry buffers, **not actual fast-leaf execution**: the outer
+state machine can consume bytes or return before reaching the guard.
+The wrapper preserves CPU/guest results; focused wrapper/threshold tests
+and nine parser tests cover this diagnostic. Next head run should pair
+these counters with the requested save-load CPU profile.
+
+### Allocation-free wide-register transfer
+
+The emulator boundary previously built eight XMM input vectors and read
+eight ST/eight XMM values through Unicorn's allocating long-register API.
+Use fixed stack arrays instead: aligned 16-byte read storage covers the
+documented 10-byte ST and 16-byte XMM register ABI, with identical copying
+into the existing CPU/FNSAVE image. This removes 24 owned heap buffers per
+state roundtrip. It does not change emulated code, engine pooling or hooks.
+
+All 16 register reads match Unicorn's allocating API byte-for-byte in the
+new test; the cache-budget test, six fallback integration tests and all
+54 unit tests pass (three ignored). `L109d-emu-stack-tests.log` records this
+focused recheck after the full light suite reported above.
+
+Four alternating old/new pairs pinned to CPU 2, existing debug test binaries:
+100,000 short calls median **2.641 s old / 1.679 s final** (36% lower).
+The initial upgrade without stack buffers measured **2.326 / 2.525 s** in
+an earlier paired batch. Shared-host noise means these batches should not
+be subtracted to estimate a precise allocation cost. The synthetic 3M
+iteration loop remains **81.3 / 161.1 ms** old/final: a remaining upgrade
+regression, reported to head, not hidden by the memory result. No game FPS
+or optimized-build speedup is claimed. Private logs:
+`L109d-emu-paired.log`, `L109d-emu-stack-paired.log` in the task target parent.

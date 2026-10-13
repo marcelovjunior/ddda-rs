@@ -341,12 +341,24 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
         let found = APIS.iter().chain(crate::win32::APIS).chain(crate::files::APIS).chain(crate::steam::APIS).chain(crate::d3d9::APIS).chain(crate::d3dx::APIS).chain(crate::user32::APIS).chain(crate::threads::APIS).chain(crate::text::APIS).chain(crate::system::APIS).chain(crate::registry::APIS).chain(crate::profile::APIS).chain(crate::input::APIS).chain(crate::audio::APIS).chain(crate::net::APIS).chain(crate::seh::APIS).find(|(d, n, _)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
         if let Some((_, _, f)) = found {
             let lock_free = LOCK_FREE.iter().any(|(d, n)| d.eq_ignore_ascii_case(&i.dll) && *n == i.name);
-            registry.insert(i.token, if lock_free { Binding::LockFree(*f) } else { Binding::Service(*f) })?;
+            let integer = i.dll.eq_ignore_ascii_case("KERNEL32.dll") && INTEGER_APIS.contains(&i.name.as_str());
+            registry.insert(i.token, if integer { Binding::Integer(*f) } else if lock_free { Binding::LockFree(*f) } else { Binding::Service(*f) })?;
             bound += 1;
         }
     }
     Ok(bound)
 }
+
+/// L135 audit: these bodies use only integer guest reads/writes, SeqCst
+/// atomics (including their unaligned fallback), or the current thread's
+/// integer TLS id. No callbacks, timers, waits, float conversion, or drivers.
+/// Keep this separate from LOCK_FREE: lock independence does not imply FPU
+/// independence. Any new call in these bodies needs this audit repeated.
+pub const INTEGER_APIS: &[&str] = &[
+    "EncodePointer", "DecodePointer", "GetCurrentThreadId",
+    "InterlockedIncrement", "InterlockedDecrement", "InterlockedExchange",
+    "InterlockedExchangeAdd", "InterlockedCompareExchange",
+];
 
 /// Imports whose services touch no runtime state (only guest memory, host
 /// atomics, the host clock or the caller's thread id): they run without

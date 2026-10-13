@@ -193,21 +193,16 @@ pub(crate) fn run(registry: &crate::dispatch::Registry, m: &mut dyn Mem, cpu: &m
     loop {
         let result = catch_unwind(AssertUnwindSafe(|| {
             let slot = cpu.esp;
-            let service = match registry.get(ip) {
-                Some(Binding::Service(f)) => Some((f, true, false, false)),
-                Some(Binding::ServiceTail(f)) => Some((f, true, true, false)),
-                Some(Binding::LockFree(f)) => Some((f, false, false, false)),
-                Some(Binding::Device(f, guest)) => Some((f, guest, false, true)),
-                Some(Binding::DeviceState(f)) => Some((f, false, false, true)),
-                _ => None,
-            };
-            let flow = if let Some((f, locked, tail, device)) = service {
+            let service = registry.get(ip).filter(|b| !matches!(b, Binding::Lifted(_)));
+            let flow = if let Some(binding) = service {
                 let target = m.u32(slot);
                 // L64: as Registry::call runs it (in parallel mode with the
                 // guest lock; it had run without, so file services of the
                 // CRT's stepped I/O functions raced other threads' services
                 // on the runtime's cells: "RefCell already borrowed")
-                registry.run_service_as(f, m, cpu, ip, locked, tail, device);
+                // L135: share the policy dispatch too, including the audited
+                // Integer and DeviceState paths which retain live x87 state.
+                registry.run_binding(binding, m, cpu, ip);
                 Flow::Return(target)
             } else if let Some(step) = registry.instruction(ip) {
                 match instruction(m, cpu, ip, |m, cpu| step(m, cpu, ip)) {

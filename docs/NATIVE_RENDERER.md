@@ -38,6 +38,8 @@ constant blocks from them again. That re-derivation is the cost:
 | combo19 compare | - | native passes pixel-exact: 9,984 matched, 0 mismatched (most jobs still rejected: strip restart) |
 | combo19 drawcall | 16.2 / 15.3-16.0 | exact sampler/texture section per taken draw (verify fix) |
 | combo19 DDDRAW_NATIVE=1 with fallback | 15.4 / 16.0-16.7 | 69 jobs, 3,507 draws/frame; rejected jobs drawn as DrawCalls |
+| combo20 default (drawcall default; +8 ports L130, L132b) | 19.1 / 28.7-30.0 | bound: wgpu-finish (wgpu-core encode + driver) 77% |
+| combo20 DDDRAW_NATIVE=1 | 17.0 / 17.3-18.0 | worker accepts 30% of jobs; refusals: strip restart 62,805, occlusion query 3,502, RT sampler fill 3,069, state 195 2,213 |
 
 (average / end of the run; L114, inlining the memory and flag helpers into
 the shards, gave no gain for 2.5x the compile time and was dropped.)
