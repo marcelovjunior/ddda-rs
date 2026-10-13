@@ -1,5 +1,22 @@
 # Milestones
 
+### L164 native backend constant processing (2026-10-13)
+
+- c29nat1 backend: 18.5 CPU seconds/30 seconds, 386 busy samples;
+  native preparation 86 inclusive samples, constant uploads 61, synchronous
+  scatter finish 27. Late counters: 52.23 draws/job, 318.54 upload bytes/draw,
+  one submit/job, no new pipelines/texture sets or resource resets.
+- Candidate defers scatter finish to the ordered encoder pool and skips
+  coverage bitmap scans for complete constant banks, retaining range errors.
+  Upload gates, source-slot tickets, draw order and submit count are unchanged.
+- GPU **43 + eight ordering checks pass**, same 96-job image hash. CPU
+  **30 pass / inherited strip-test failure / one ignored**; baseline reproduces
+  that failure. Runtime light **233 pass / inherited gamma failure / seven ignored**.
+- Paired raw-Vulkan median: 64-draw jobs **2.312 -> 2.216 us/draw**;
+  5,000-draw jobs **1.804 -> 1.832** (regression). Same bytes/submits/hashes;
+  no gameplay gain claimed. Next: head native VK=1 A/B and zero-mismatch
+  compare. Details and limitations: `docs/tasks/L164-native-backend.md`.
+
 ### L153 game-thread synchronization (2026-10-13)
 
 - Head combo26 late-game census: main plus six joined workers, about 69

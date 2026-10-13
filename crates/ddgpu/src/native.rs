@@ -1899,7 +1899,7 @@ impl<'a> Recorder<'a> {
     /// caller must order prior submissions before invoking this (queue writes
     /// happen here), submit the optional scatter before the render encoder,
     /// and submit both before reusing this recorder's GPU storage.
-    pub(crate) fn finish_parts(&mut self) -> (Option<wgpu::CommandBuffer>, Option<wgpu::CommandEncoder>) {
+    pub(crate) fn finish_parts(&mut self) -> (Option<wgpu::CommandEncoder>, Option<wgpu::CommandEncoder>) {
         self.end_pass();
         self.bundle_cache.truncate(self.bundle_cursor);
         self.bundle_cursor = 0;
@@ -1916,14 +1916,14 @@ impl<'a> Recorder<'a> {
     pub fn submit(&mut self) -> Option<wgpu::SubmissionIndex> {
         if self.raw.is_some() {
             let (upload, chunks) = self.finish_chunks();
-            if let Some(upload) = upload { self.device.queue.submit([upload]); }
+            if let Some(upload) = upload { self.device.queue.submit([upload.finish()]); }
             return (!chunks.is_empty()).then(|| crate::vk::submit(&self.device.queue, chunks.into_iter().flat_map(crate::vk::finish).collect()));
         }
         let (upload, encoder) = self.finish_parts();
         encoder.map(|encoder| {
             self.device
                 .queue
-                .submit(upload.into_iter().chain([encoder.finish()]))
+                .submit(upload.into_iter().map(wgpu::CommandEncoder::finish).chain([encoder.finish()]))
         })
     }
 }
