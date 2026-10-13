@@ -394,6 +394,7 @@ pub struct WgpuBackend {
     /// draws recorded, and render passes begun for them (L72)
     draws_recorded: Cell<u64>,
     passes_begun: Cell<u64>,
+    submissions: Cell<u64>,
     /// draws recorded and not yet submitted; submitted (with the ring
     /// bytes) before anything else touches the queue
     open: RefCell<Option<wgpu::CommandEncoder>>,
@@ -630,6 +631,7 @@ impl WgpuBackend {
             pass: RefCell::new(None),
             draws_recorded: Cell::new(0),
             passes_begun: Cell::new(0),
+            submissions: Cell::new(0),
             open: RefCell::new(None),
             open_draws: Cell::new(0),
             open_uses: RefCell::new(cache::FxSet::default()),
@@ -700,10 +702,21 @@ impl WgpuBackend {
         self.uniforms.borrow_mut().upload(&self.queue);
         self.inline.borrow_mut().upload(&self.queue);
         if let Some(enc) = enc {
-            self.queue.submit([enc.finish()]);
+            self.submit_encoder(enc);
         }
         self.open_draws.set(0);
         self.open_uses.borrow_mut().clear();
+    }
+
+    /// Backend queue submissions, including explicit readbacks and queries.
+    /// Present sinks submit independently and are not included.
+    pub fn submission_count(&self) -> u64 {
+        self.submissions.get()
+    }
+
+    fn submit_encoder(&self, enc: wgpu::CommandEncoder) {
+        self.queue.submit([enc.finish()]);
+        self.submissions.set(self.submissions.get() + 1);
     }
 
     /// End the open render pass: the encoder can record other commands
@@ -856,7 +869,7 @@ impl WgpuBackend {
             enc.resolve_query_set(&self.occlusion_sets[(s / OCCLUSION_SET) as usize], i..i + 1, &resolved, 256 * k as u64);
         }
         enc.copy_buffer_to_buffer(&resolved, 0, &read, 0, size);
-        self.queue.submit([enc.finish()]);
+        self.submit_encoder(enc);
         let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
         let done = state.clone();
         read.slice(..).map_async(wgpu::MapMode::Read, move |r| done.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release));
@@ -886,7 +899,7 @@ impl WgpuBackend {
             enc.resolve_query_set(&self.occlusion_sets[(s / OCCLUSION_SET) as usize], i..i + 1, &resolved, 256 * k as u64);
         }
         enc.copy_buffer_to_buffer(&resolved, 0, &read, 0, size);
-        self.queue.submit([enc.finish()]);
+        self.submit_encoder(enc);
         read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
         let data = read.slice(..).get_mapped_range();
@@ -1124,7 +1137,7 @@ impl WgpuBackend {
                 pass.draw(0..3, 0..1);
             }
         }
-        self.queue.submit([enc.finish()]);
+        self.submit_encoder(enc);
     }
 
     /// A multisampled colour texture resolved into a new single-sampled one
@@ -1164,7 +1177,7 @@ impl WgpuBackend {
                 depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
             });
         }
-        self.queue.submit([enc.finish()]);
+        self.submit_encoder(enc);
         Ok(dst)
     }
 
@@ -1291,7 +1304,7 @@ impl WgpuBackend {
                 pass.draw(0..3, 0..1);
             }
         }
-        self.queue.submit([enc.finish()]);
+        self.submit_encoder(enc);
         Ok(())
     }
 
@@ -1381,7 +1394,7 @@ impl WgpuBackend {
             pass.set_viewport(l as f32, t as f32, (r - l) as f32, (b - t) as f32, 0.0, 1.0);
             pass.draw(0..3, 0..1);
         }
-        self.queue.submit([enc.finish()]);
+        self.submit_encoder(enc);
         Ok(())
     }
 
@@ -1576,7 +1589,7 @@ impl WgpuBackend {
             wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(rt.height) } },
             wgpu::Extent3d { width: rt.width, height: rt.height, depth_or_array_layers: 1 },
         );
-        self.queue.submit([enc.finish()]);
+        self.submit_encoder(enc);
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
         let data = buffer.slice(..).get_mapped_range();
@@ -2504,7 +2517,7 @@ impl GraphicsBackend for WgpuBackend {
             wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
-        self.queue.submit([enc.finish()]);
+        self.submit_encoder(enc);
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
         let data = buffer.slice(..).get_mapped_range();
