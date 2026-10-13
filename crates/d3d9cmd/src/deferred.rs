@@ -9,6 +9,9 @@ use std::sync::{Arc, Mutex};
 
 type Work = Box<dyn FnOnce(&mut dyn GraphicsBackend) + Send>;
 
+/// Draws sent as one command at most.
+const BATCH: usize = 32;
+
 // The bounded channel allocates its slots once. Common commands live directly
 // in those slots instead of allocating/freeing an erased closure per command.
 // Only infrequent result/presentation hooks need the arbitrary callback arm.
@@ -60,6 +63,12 @@ impl Command {
 /// Dropping the adapter drains the stream and joins the worker.
 pub struct DeferredBackend {
     native_supported: bool,
+    /// Draws not yet sent (L144): a run of draws goes as one command, so
+    /// the channel's send, and the worker's wake-up, are paid once per
+    /// `BATCH` draws, not per draw (~45% of a draw's recording cost). Any
+    /// other command, a mark and the drop send them first: the order and
+    /// what a mark covers do not change.
+    pending: Vec<DrawCall>,
     sender: Option<SyncSender<Command>>,
     worker: Option<JoinHandle<()>>,
     presents: VecDeque<Receiver<()>>,
@@ -94,7 +103,7 @@ impl DeferredBackend {
             }
         }).expect("start D3D9 backend worker");
         Self {
-            native_supported, sender: Some(sender), worker: Some(worker), presents: VecDeque::new(), recorded: 0, executed,
+            native_supported, pending: Vec::new(), sender: Some(sender), worker: Some(worker), presents: VecDeque::new(), recorded: 0, executed,
             generation: HashMap::new(), asked: HashMap::new(), results: Default::default(),
         }
     }
@@ -104,6 +113,37 @@ impl DeferredBackend {
     }
 
     fn command(&mut self, command: Command) {
+        self.send_draws();
+        self.send(command);
+    }
+
+    /// Record a draw: sent with the next command, or with `BATCH` - 1 more.
+    fn push_draw(&mut self, draw: DrawCall) {
+        if self.pending.capacity() == 0 {
+            self.pending.reserve_exact(BATCH);
+        }
+        self.pending.push(draw);
+        if self.pending.len() == BATCH {
+            self.send_draws();
+        }
+    }
+
+    /// Send the pending draws: one alone as a draw (the vector is kept).
+    fn send_draws(&mut self) {
+        match self.pending.len() {
+            0 => {}
+            1 => {
+                let draw = self.pending.pop().unwrap();
+                self.send(Command::Draw(draw));
+            }
+            _ => {
+                let draws = std::mem::take(&mut self.pending);
+                self.send(Command::Draws(draws));
+            }
+        }
+    }
+
+    fn send(&mut self, command: Command) {
         // Before recording any part of a third frame, retire the oldest
         // Present. Waiting only at the third Present would allow its entire
         // frame's draws to get three frames ahead of the display.
@@ -146,6 +186,12 @@ impl DeferredBackend {
 impl Drop for DeferredBackend {
     fn drop(&mut self) {
         // Closing the sole producer lets the receiver finish all accepted work.
+        // (the pending draws first; a stopped worker is reported by the join)
+        if let Some(sender) = &self.sender {
+            if !self.pending.is_empty() {
+                let _ = sender.send(Command::Draws(std::mem::take(&mut self.pending)));
+            }
+        }
         drop(self.sender.take());
         if let Some(worker) = self.worker.take() {
             if let Err(panic) = worker.join() {
@@ -182,10 +228,10 @@ impl GraphicsBackend for DeferredBackend {
     }
     fn upload(&mut self, upload: Upload) { self.command(Command::Upload(upload)); }
     fn draw(&mut self, draw: &DrawCall) {
-        self.command(Command::Draw(draw.clone()));
+        self.push_draw(draw.clone());
     }
     fn draw_owned(&mut self, draw: DrawCall) {
-        self.command(Command::Draw(draw));
+        self.push_draw(draw);
     }
     fn draws(&mut self, draws: Vec<DrawCall>) {
         self.command(Command::Draws(draws));
@@ -246,7 +292,11 @@ impl GraphicsBackend for DeferredBackend {
     }
     fn release(&mut self, resource: u32) { self.command(Command::Release(resource)); }
     fn fence(&mut self) { self.result(|b| b.fence()); }
-    fn mark(&mut self) -> u64 { self.recorded }
+    fn mark(&mut self) -> u64 {
+        // the draws recorded so far are before the mark
+        self.send_draws();
+        self.recorded
+    }
     fn passed(&self, mark: u64) -> bool { self.executed.load(Ordering::Acquire) >= mark }
 }
 
@@ -363,6 +413,47 @@ mod tests {
         frame(&mut deferred, Some(unblock));
         drop(deferred); // must drain the final release and reused resource
         assert_eq!(*actual.lock().unwrap(), *expected.lock().unwrap());
+    }
+
+    #[test]
+    /// Single draws are sent in runs of at most BATCH (L144), before any
+    /// other command, a mark or the drop: the backend sees the same order,
+    /// and a mark covers every draw recorded before it.
+    fn single_draws_keep_their_place_and_marks_cover_them() {
+        let (mut deferred, log) = queue(8);
+        let t = target();
+        let draw = |start: u32| DrawCall {
+            primitive: 4, primitives: 1, start, base_vertex: 0, min_index: 0, vertex_count: 3,
+            vertices: Vertices::Inline { bytes: vec![0; 36], stride: 12 }, indices: Indices::None,
+            vertex_shader: None, pixel_shader: None, declaration: vec![].into(), fvf: 0,
+            vs_constants: Constants::default().into(), ps_constants: Constants::default().into(),
+            textures: vec![].into(), render_states: vec![].into(), viewport: [0; 6], scissor: [0; 4],
+            targets: [Some(t.clone()), None, None, None], depth: None,
+        };
+        let mut expect = Vec::new();
+        for k in 0..3 {
+            deferred.draw_owned(draw(k));
+            expect.push(format!("draw:{:?}", draw(k)));
+        }
+        deferred.release(1);
+        expect.push("release:1".to_string());
+        // more than a batch, then a mark
+        for k in 10..10 + 2 * BATCH as u32 + 5 {
+            deferred.draw(&draw(k));
+            expect.push(format!("draw:{:?}", draw(k)));
+        }
+        let mark = deferred.mark();
+        let t0 = std::time::Instant::now();
+        while !deferred.passed(mark) {
+            assert!(t0.elapsed().as_secs() < 10, "the mark covers the pending draws");
+            std::thread::yield_now();
+        }
+        assert_eq!(*log.lock().unwrap(), expect);
+        // the drop sends what is pending
+        deferred.draw_owned(draw(99));
+        expect.push(format!("draw:{:?}", draw(99)));
+        drop(deferred);
+        assert_eq!(*log.lock().unwrap(), expect);
     }
 
     #[test]

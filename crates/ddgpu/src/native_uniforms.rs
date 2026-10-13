@@ -12,10 +12,24 @@ pub(super) struct Uniforms {
 struct Resident {
     previous: Vec<u8>,
     updates: Vec<u8>,
-    source: wgpu::Buffer,
-    group: wgpu::BindGroup,
+    /// the scatter's sources, used in turn (L141): a job's deltas go to a
+    /// slot no batch still waiting for submission reads, so the job need
+    /// not wait for the finisher to submit everything before it
+    slots: Vec<Slot>,
+    next: usize,
+    /// the slot this job's upload used, to be tagged with its batch
+    used: Option<usize>,
     pipeline: wgpu::ComputePipeline,
 }
+/// A scatter source: its buffer and bind group (made, and grown, as the
+/// deltas need), and the finisher ticket of the batch that last read it.
+#[derive(Default)]
+struct Slot {
+    source: Option<(wgpu::Buffer, wgpu::BindGroup)>,
+    ticket: u64,
+}
+/// Scatter sources in turn.
+const SLOTS: usize = 4;
 impl Uniforms {
     pub fn new(device: &wgpu::Device, size: u64, resident: bool) -> Self {
         let usage = wgpu::BufferUsages::UNIFORM
@@ -36,12 +50,6 @@ impl Uniforms {
                 size * 5 / 4 + 16 <= device.limits().max_storage_buffer_binding_size as u64,
                 "resident constant arena exceeds storage binding limit"
             );
-            let source = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("native constant deltas"),
-                size: size * 5 / 4 + 16,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("native constant scatter"),
                 source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
@@ -66,25 +74,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 compilation_options: Default::default(),
                 cache: None,
             });
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("native constant scatter"),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: source.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: buffer.as_entire_binding(),
-                    },
-                ],
-            });
             Resident {
                 previous: vec![0; size as usize],
                 updates: Vec::new(),
-                source,
-                group,
+                slots: (0..SLOTS).map(|_| Slot::default()).collect(),
+                next: 0,
+                used: None,
                 pipeline,
             }
         });
@@ -136,15 +131,53 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let groups = (count as u32).div_ceil(64);
         let width = groups.min(device.limits().max_compute_workgroups_per_dimension);
         r.updates[4..8].copy_from_slice(&(width * 64).to_le_bytes());
-        queue.write_buffer(&r.source, 0, &r.updates);
+        // this job's slot (the caller waited for its ticket: `gate`)
+        let slot = &mut r.slots[r.next];
+        let needed = r.updates.len() as u64;
+        if slot.source.as_ref().is_none_or(|(b, _)| b.size() < needed) {
+            let source = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("native constant deltas"),
+                size: needed.next_power_of_two().max(4096),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("native constant scatter"),
+                layout: &r.pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: source.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: self.buffer.as_entire_binding() },
+                ],
+            });
+            slot.source = Some((source, group));
+        }
+        let (source, group) = slot.source.clone().unwrap();
+        queue.write_buffer(&source, 0, &r.updates);
+        r.used = Some(r.next);
+        r.next = (r.next + 1) % r.slots.len();
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&r.pipeline);
-            pass.set_bind_group(0, &r.group, &[]);
+            pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(width, groups.div_ceil(width), 1);
         }
         Some(encoder.finish())
+    }
+    /// What the caller waits for before `upload`: None, every earlier
+    /// batch submitted (the snapshots themselves are written by the queue);
+    /// Some(ticket), the batch that last read the next source slot.
+    pub fn gate(&self) -> Option<u64> {
+        self.resident.as_ref().map(|r| r.slots[r.next].ticket)
+    }
+    /// The batch carrying this job's scatter: its slot is free again once
+    /// that batch is submitted.
+    pub fn tag(&mut self, ticket: u64) {
+        if let Some(r) = &mut self.resident {
+            if let Some(i) = r.used.take() {
+                r.slots[i].ticket = ticket;
+            }
+        }
     }
     pub fn restart(&mut self) {
         self.at = 0;

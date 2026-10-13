@@ -142,9 +142,48 @@ pub(crate) struct Objects {
     /// A directly flushed child can leave a clean parent indexed until its
     /// next flush; false positives cost one scan, never change uploads.
     pub(crate) dirty: crate::fasthash::FxSet<u32>,
+    /// The device last looked up, and its data (L144: every device method
+    /// found it in `live` again); cleared when that object leaves `live`.
+    device: Option<(u32, DevicePtr)>,
 }
 
+/// A live device's boxed data: the box does not move while the object is
+/// in `live`, and is only reached through `&mut Objects`.
+#[derive(Clone, Copy)]
+struct DevicePtr(std::ptr::NonNull<DeviceData>);
+// SAFETY: only dereferenced through `&mut Objects` (behind the D3D lock)
+unsafe impl Send for DevicePtr {}
+
 impl Objects {
+    /// The live device at `device`: the cached one without a lookup.
+    #[inline]
+    pub(crate) fn device_mut(&mut self, device: u32) -> Option<&mut DeviceData> {
+        if let Some((k, p)) = self.device {
+            if k == device {
+                // SAFETY: cached from `live`, where the object still is
+                // (`remove` clears the cache); borrowed as `self` is
+                return Some(unsafe { &mut *p.0.as_ptr() });
+            }
+        }
+        match self.live.get_mut(&device) {
+            Some(Object { kind: Kind::Device(d), .. }) => {
+                let p = std::ptr::NonNull::from(&mut **d);
+                self.device = Some((device, DevicePtr(p)));
+                // SAFETY: as above
+                Some(unsafe { &mut *p.as_ptr() })
+            }
+            _ => None,
+        }
+    }
+
+    /// Take `object` out of `live`.
+    pub(crate) fn remove(&mut self, object: u32) -> Option<Object> {
+        if self.device.is_some_and(|(k, _)| k == object) {
+            self.device = None;
+        }
+        self.live.remove(&object)
+    }
+
     /// All dirty writers pass here: d3d9res surface_image (surface/flat/cube
     /// UnlockRect and restored images), texture (volume UnlockBox and restored
     /// volumes), buffer (Unlock and restored image), d3d9copy mark_dirty and
@@ -217,25 +256,23 @@ impl<T: Default> Default for D3dCell<T> {
     }
 }
 
-/// This thread's key for D3dCell::owner, and the D3D locks it holds.
-struct ThreadKey {
-    key: u64,
-    held: std::cell::Cell<u32>,
-}
-
-thread_local! {
-    static THREAD_KEY: ThreadKey = {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        ThreadKey { key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), held: std::cell::Cell::new(0) }
-    };
+/// Unique host-thread key, initialized once in the shared hot TLS record.
+fn thread_key() -> u64 {
+    crate::runtime::local(|l| {
+        if l.d3d_key.get() == 0 {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            l.d3d_key.set(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        }
+        l.d3d_key.get()
+    })
 }
 
 impl<T> D3dCell<T> {
     fn acquire(&self) {
         use std::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
-        let me = THREAD_KEY.with(|k| {
-            k.held.set(k.held.get() + 1);
-            k.key
+        let me = crate::runtime::local(|l| {
+            l.d3d_held.set(l.d3d_held.get() + 1);
+            thread_key()
         });
         if self.owner.load(Relaxed) != me && self.owner.compare_exchange(0, me, Acquire, Relaxed).is_err() {
             // contended: wait for a release (which notifies while anyone waits)
@@ -252,7 +289,7 @@ impl<T> D3dCell<T> {
 
     fn release(&self) {
         use std::sync::atomic::Ordering::SeqCst;
-        THREAD_KEY.with(|k| k.held.set(k.held.get() - 1));
+        crate::runtime::local(|l| l.d3d_held.set(l.d3d_held.get() - 1));
         let d = self.depth.get() - 1;
         self.depth.set(d);
         if d == 0 {
@@ -270,7 +307,7 @@ impl<T> D3dCell<T> {
         // A surrounding DeviceLock already keeps this cell alive and locked.
         // Borrow checking remains active; no depth/HELD bookkeeping is needed
         // for a borrow whose lifetime ends before that surrounding guard.
-        if self.owner.load(std::sync::atomic::Ordering::Acquire) == THREAD_KEY.with(|k| k.key) {
+        if self.owner.load(std::sync::atomic::Ordering::Acquire) == thread_key() {
             return f(&mut self.cell.borrow_mut());
         }
         struct Release<'a, T>(&'a D3dCell<T>);
@@ -291,7 +328,7 @@ impl<T> D3dCell<T> {
 
 /// Whether this thread holds the D3D lock.
 pub(crate) fn holds_device_lock() -> bool {
-    THREAD_KEY.with(|k| k.held.get()) > 0
+    crate::runtime::local(|l| l.d3d_held.get()) > 0
 }
 
 /// The D3D lock for one D3D method (dispatch::Binding::Device). With the
@@ -341,25 +378,20 @@ pub(crate) fn new_object(m: &mut dyn Mem, iface: &'static str, kind: Kind) -> u3
 }
 
 pub(crate) fn add_ref_to(object: u32) -> u32 {
-    let object = counted(object);
-    objects(|o| {
-        let x = o.live.get_mut(&object).unwrap_or_else(|| panic!("AddRef on {object:#x}, not a live D3D9 object"));
-        x.refs += 1;
-        x.refs
-    })
+    objects(|o| with_counted(o, object, |_, x| { x.refs += 1; x.refs }))
+        .unwrap_or_else(|| panic!("AddRef on {object:#x}, not a live D3D9 object"))
 }
 
 /// Release one reference; at zero the object goes, releasing what it holds
 /// (a swap chain its back buffers, a device its swap chains and surfaces).
 pub(crate) fn release_of(object: u32) -> u32 {
-    let object = counted(object);
-    let (left, gone) = objects(|o| {
-        let x = o.live.get_mut(&object).unwrap_or_else(|| panic!("Release on {object:#x}, not a live D3D9 object"));
-        x.refs -= 1;
-        if x.refs == 0 {
+    let (object, left, gone) = objects(|o| {
+        let (object, left) = with_counted(o, object, |t, x| { x.refs -= 1; (t, x.refs) })
+            .unwrap_or_else(|| panic!("Release on {object:#x}, not a live D3D9 object"));
+        if left == 0 {
             o.dirty.remove(&object);
-            (0, o.live.remove(&object))
-        } else { (x.refs, None) }
+            (object, 0, o.remove(object))
+        } else { (object, left, None) }
     });
     if let Some(x) = gone {
         if matches!(x.kind, Kind::Query { .. }) {
@@ -413,7 +445,7 @@ fn destroy(object: u32, x: Object) {
             Kind::Texture { data, .. } => {
                 // the level surfaces go with the texture (they share its count)
                 for s in &data.surfaces {
-                    if let Some(x) = objects(|o| { o.dirty.remove(s); o.live.remove(s) }) {
+                    if let Some(x) = objects(|o| { o.dirty.remove(s); o.remove(*s) }) {
                         if let Kind::Surface { image, .. } = x.kind {
                             image.free();
                         }
@@ -468,18 +500,19 @@ fn surface(m: &mut dyn Mem, device: u32, desc: SurfaceDesc, container: u32) -> u
     new_object(m, "IDirect3DSurface9", Kind::Surface { device, desc, container, owner: 0, image })
 }
 
-/// The object whose reference count `object` uses (a texture's level
-/// surfaces count on the texture).
-fn counted(object: u32) -> u32 {
-    objects(|o| counted_in(o, object))
-}
-
-/// [`counted`] inside an access to the objects.
-pub(crate) fn counted_in(o: &Objects, object: u32) -> u32 {
-    match o.live.get(&object).map(|x| &x.kind) {
-        Some(Kind::Surface { owner, .. }) if *owner != 0 => *owner,
-        _ => object,
-    }
+/// `f` on the object whose reference count `object` uses (a texture's
+/// level surfaces count on the texture), and its address: one lookup unless
+/// `object` is such a surface (L144: AddRef, Release and SetTexture looked
+/// each object up twice). None if either is not live.
+pub(crate) fn with_counted<R>(o: &mut Objects, object: u32, f: impl FnOnce(u32, &mut Object) -> R) -> Option<R> {
+    let owner = {
+        let x = o.live.get_mut(&object)?;
+        match x.kind {
+            Kind::Surface { owner, .. } if owner != 0 => owner,
+            _ => return Some(f(object, x)),
+        }
+    };
+    o.live.get_mut(&owner).map(|x| f(owner, x))
 }
 
 /// Complete windowed present parameters as D3D9 does: a zero back buffer
@@ -614,9 +647,9 @@ impl std::fmt::Debug for DeviceData {
 }
 
 pub(crate) fn with_device<R>(device: u32, f: impl FnOnce(&mut DeviceData) -> R) -> R {
-    objects(|o| match o.live.get_mut(&device) {
-        Some(Object { kind: Kind::Device(d), .. }) => f(d),
-        _ => panic!("{device:#x} is not a live IDirect3DDevice9"),
+    objects(|o| match o.device_mut(device) {
+        Some(d) => f(d),
+        None => panic!("{device:#x} is not a live IDirect3DDevice9"),
     })
 }
 
@@ -1262,7 +1295,13 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
                 }
             } else { f };
             let only_d3d = spec.name == "IDirect3DDevice9" && DEVICE_ONLY_SLOTS.contains(&slot)
-                || spec.name == "IDirect3DSwapChain9" && slot == 3;
+                || spec.name == "IDirect3DSwapChain9" && slot == 3
+                // L144: AddRef/Release of every D3D9 object touch only the
+                // reference counts; a Release to zero without the guest
+                // lock defers the destruction (release_of, L93). Under the
+                // guest lock they cost ~190 ns a call (its mutex, the
+                // time-slice clock read), the device's own ~60 ns.
+                || (slot == 1 || slot == 2) && INTERFACES.iter().any(|s| std::ptr::eq(s, spec));
             let b = if spec.name == "IDirect3DDevice9" && STATE_SLOTS.contains(&slot) {
                 crate::dispatch::Binding::DeviceState(f)
             } else if spec.name == "IDirect3DQuery9" && slot == 7 {
@@ -1293,10 +1332,10 @@ mod tests {
         let cell = D3dCell::<u32>::default();
         cell.acquire();
         let depth = cell.depth.get();
-        let held = THREAD_KEY.with(|k| k.held.get());
+        let held = crate::runtime::local(|l| l.d3d_held.get());
         cell.with(|value| *value = 7);
         assert_eq!(cell.depth.get(), depth);
-        assert_eq!(THREAD_KEY.with(|k| k.held.get()), held);
+        assert_eq!(crate::runtime::local(|l| l.d3d_held.get()), held);
         let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             cell.with(|_| cell.with(|_| ()));
         }));
@@ -1305,7 +1344,7 @@ mod tests {
         assert_eq!(cell.depth.get(), depth);
         cell.release();
         assert_eq!(cell.owner.load(Ordering::Acquire), 0);
-        assert_eq!(THREAD_KEY.with(|k| k.held.get()), held - 1);
+        assert_eq!(crate::runtime::local(|l| l.d3d_held.get()), held - 1);
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             cell.with(|_| panic!("unwind an outer borrow"));
         })).is_err());

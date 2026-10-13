@@ -8,7 +8,7 @@
 //! the original locked pump so hooks and message-removal ordering survive.
 use crate::dispatch::{Conflict, Registry};
 use crate::interfaces::{self, Spec, Tokens};
-use crate::services::{arg, call_guest, ret, with_state, zero};
+use crate::services::{arg, call_guest, ret, zero};
 use crate::user32::{self, Msg};
 use ddnative_base::{mem::Mem, x86::Cpu};
 use std::collections::{HashMap, VecDeque};
@@ -158,7 +158,7 @@ fn state<R>(f: impl FnOnce(&mut Input) -> R) -> R {
     crate::runtime::with(|r| r.input.with(f))
 }
 fn error(code: u32) {
-    with_state(|s| s.last_error = code);
+    crate::runtime::set_last_error(code);
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

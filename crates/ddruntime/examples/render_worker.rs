@@ -193,6 +193,33 @@ fn main() {
     }
     assert_eq!(com(mem, dev, 41, &[]), 0); // BeginScene
 
+    // RW_LOOP=ps|tex|draw|addref: one call in a loop for RW_SECS seconds
+    // (default 10), timed without per-call clock reads; for a profiler
+    if let Ok(what) = std::env::var("RW_LOOP") {
+        let secs: f64 = std::env::var("RW_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
+        ddruntime::threads::without_lock(|| {
+            let t = Instant::now();
+            let mut calls = 0u64;
+            while t.elapsed().as_secs_f64() < secs {
+                for k in 0..10_000u32 {
+                    match what.as_str() {
+                        "ps" => assert_eq!(com(mem, dev, 109, &[0, DATA, 4]), 0),
+                        "tex" => assert_eq!(com(mem, dev, 65, &[0, textures[(k % 6) as usize]]), 0),
+                        "draw" => assert_eq!(com(mem, dev, 82, &[4, 0, 0, 1000, 0, 300]), 0),
+                        "addref" => {
+                            com(mem, textures[(k % 6) as usize], 1, &[]);
+                            com(mem, textures[(k % 6) as usize], 2, &[]);
+                        }
+                        other => panic!("RW_LOOP={other}: ps, tex, draw or addref"),
+                    }
+                }
+                calls += 10_000;
+            }
+            println!("RW_LOOP={what}: {:.1} ns per call", t.elapsed().as_secs_f64() * 1e9 / calls as f64);
+        });
+        quit();
+    }
+
     let no_lock = std::env::var_os("RW_NOLOCK").is_some();
     let n: u32 = std::env::var("RW_N").ok().and_then(|v| v.parse().ok()).unwrap_or(20_000);
     let mut best = [f64::MAX; 4];
