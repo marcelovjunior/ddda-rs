@@ -24,8 +24,8 @@ ports the lookup pair:
 ## Method
 
 Semantic ports (L171's rule): EAX, the callee-saved registers, ESP and
-every memory write at or above the returned stack match the original;
-ECX, EDX, the flags and the popped stack scratch are not reproduced. Two
+every memory write outside the popped stack scratch match the original;
+ECX, EDX, the flags and that scratch are not reproduced. Two
 details matter:
 
 - The binary search wraps: with five or more indices and a key below the
