@@ -1181,6 +1181,7 @@ impl Pending {
     pub fn send(&mut self) -> Option<(u64, bool)> {
         let (job, calls) = self.take()?;
         let n = calls.len() as u64;
+        crate::d3d9draw::count_draws(n);
         let accepted = crate::d3d9draw::backend_unlocked(|b| match b.native(job) {
             Ok(()) => true,
             Err(_) => {
@@ -1358,6 +1359,7 @@ impl Native {
             Ok(d) if self.mode == Mode::DrawCall => {
                 crate::d3d9draw::flush_reads(m, reads_of(&d));
                 crate::d3d9draw::backend_unlocked(|b| b.draw(&d));
+                crate::d3d9draw::count_draws(1);
                 t.taken += 1;
                 Taken::Handled
             }
