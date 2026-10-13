@@ -8,8 +8,9 @@
   registration tested. Read-ahead remains default-off. Per head's updated
   brief, no fast-boot option: original timing/input paths remain unchanged.
 - Boot profile implicates scene/geometry setup; a nested Vorbis symbol is
-  inconsistent with original callers. Next: exact attribution before
-  selecting the readable port; visible UI timings still need head marks.
+  inconsistent with original callers. Exact opt-in FE9580/12EB690 counters
+  added; wrapper-effects regression and eight parser tests pass. Next:
+  head's counter run before selecting the port; UI timings need head marks.
 
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 

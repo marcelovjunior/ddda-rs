@@ -107,6 +107,14 @@ regression has not been fixed. No shard or game run by this agent.
 Next: exact geometry/Vorbis boot attribution, original-verified port of
 the actual hotspot, and head's visible title/menu/save-loading milestones.
 
+`DDRUNTIME_LOAD_LOG=1` now wraps both exact entries with original bodies
+and overrides retained. `boot_cpu_totals` reports separate inclusive
+`geometry_calls/geometry_ns` (FE9580) and `vorbis_calls/vorbis_ns`
+(12EB690). Geometry begin/end events also bound an in-flight call and
+record the subdivision argument (FEAE50 passes 4 at startup). No log
+switch means no extra wrappers. These counters disambiguate profiler
+symbol names; they do not change decoding or geometry generation.
+
 ### Continuation: readable inflate fast loop (2026-10-13)
 
 Rebased onto `task/fps-line`; baseline instrumentation/read scratch is

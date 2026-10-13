@@ -23,6 +23,10 @@ static ZLIB_CALLS: AtomicU64 = AtomicU64::new(0);
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 static CACHE_HOST_BYTES: AtomicU64 = AtomicU64::new(0);
+static GEOMETRY_CALLS: AtomicU64 = AtomicU64::new(0);
+static GEOMETRY_NS: AtomicU64 = AtomicU64::new(0);
+static VORBIS_CALLS: AtomicU64 = AtomicU64::new(0);
+static VORBIS_NS: AtomicU64 = AtomicU64::new(0);
 
 pub fn enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("DDRUNTIME_LOAD_LOG").as_deref() == Ok("1"))
@@ -143,6 +147,10 @@ pub fn totals() {
     if !enabled() {
         return;
     }
+    event("boot_cpu_totals", format_args!(
+        "geometry_calls={} geometry_ns={} vorbis_calls={} vorbis_ns={}",
+        GEOMETRY_CALLS.load(Relaxed), GEOMETRY_NS.load(Relaxed),
+        VORBIS_CALLS.load(Relaxed), VORBIS_NS.load(Relaxed)));
     event(
         "io_totals",
         format_args!(
@@ -189,6 +197,13 @@ mod guest {
     const INFLATE: u32 = 0x00cf02e0;
     static ORIGINAL_READ: OnceLock<LiftFn> = OnceLock::new();
     static ORIGINAL_INFLATE: OnceLock<LiftFn> = OnceLock::new();
+    // Read-only exe/Ghidra: procedural mesh construction and vorbisfile's
+    // packet-processing entry. Exact dispatch boundaries disambiguate PDB
+    // nearest-public-symbol attribution of private split helpers.
+    const GEOMETRY: u32 = 0x00fe9580;
+    const VORBIS: u32 = 0x012eb690;
+    static ORIGINAL_GEOMETRY: OnceLock<LiftFn> = OnceLock::new();
+    static ORIGINAL_VORBIS: OnceLock<LiftFn> = OnceLock::new();
     thread_local! { static ARCHIVE_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
 
     struct ArchiveScope(Instant);
@@ -222,12 +237,31 @@ mod guest {
         }
     }
 
+    fn geometry(m: &mut dyn Mem, cpu: &mut Cpu) {
+        let start = Instant::now();
+        event("boot_geometry_begin", format_args!("subdivisions={}", m.u32(cpu.esp + 4)));
+        ORIGINAL_GEOMETRY.get().expect("geometry timing body")(m, cpu);
+        let elapsed = start.elapsed().as_nanos() as u64;
+        GEOMETRY_NS.fetch_add(elapsed, Relaxed);
+        GEOMETRY_CALLS.fetch_add(1, Relaxed);
+        event("boot_geometry_end", format_args!("elapsed_ns={elapsed}"));
+    }
+
+    fn vorbis(m: &mut dyn Mem, cpu: &mut Cpu) {
+        let start = Instant::now();
+        ORIGINAL_VORBIS.get().expect("vorbis timing body")(m, cpu);
+        VORBIS_NS.fetch_add(start.elapsed().as_nanos() as u64, Relaxed);
+        VORBIS_CALLS.fetch_add(1, Relaxed);
+    }
+
     /// Preserve installed mods/ports as the wrapped body. Never bypass an
     /// override, recurse through dispatch, or change guest registers/memory.
     pub(crate) fn wrap_archive(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) {
         for (address, wrapper, original) in [
             (ARCHIVE_READ, archive_read as LiftFn, &ORIGINAL_READ),
             (INFLATE, inflate as LiftFn, &ORIGINAL_INFLATE),
+            (GEOMETRY, geometry as LiftFn, &ORIGINAL_GEOMETRY),
+            (VORBIS, vorbis as LiftFn, &ORIGINAL_VORBIS),
         ] {
             let body = ports.iter().chain(bodies).find(|e| e.0 == address).map(|e| e.1);
             if let Some(body) = body {
@@ -254,9 +288,10 @@ mod guest {
                 panic!("bypassed override")
             }
             let mut ports = vec![(ARCHIVE_READ, body as LiftFn)];
-            wrap_archive(&mut ports, &[(ARCHIVE_READ, replaced), (INFLATE, body)]);
+            wrap_archive(&mut ports, &[(ARCHIVE_READ, replaced), (INFLATE, body), (GEOMETRY, body), (VORBIS, body)]);
             for (_, f) in ports {
                 let mut m = ddnative_base::mem::Sparse::default();
+                m.set_u32(104, 4); // geometry's subdivision argument
                 let mut cpu = Cpu {
                     ecx: 35,
                     esp: 100,
