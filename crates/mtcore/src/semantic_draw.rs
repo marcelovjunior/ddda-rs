@@ -72,6 +72,18 @@ fn guest(target: u32) -> impl FnOnce(&mut dyn Mem, &mut Cpu) {
 /// report the bounding sphere when asked, flush state (0x00FEEF20), append
 /// a 32-byte draw command and its sort slot, and submit (0x00FF1920).
 pub fn draw_mesh(m: &mut dyn Mem, c: &mut Cpu) {
+    draw_mesh_with(m, c, false)
+}
+
+/// [`draw_mesh`] with its small callees folded in: the view matrix address
+/// (0x00FED940), the primitive state flush (0x00FEEF20) and, inside it,
+/// the state commit 0x00FEE320 ([`crate::semantic_draw_c::commit_primitive_state`])
+/// run as direct native code instead of guest calls.
+pub fn draw_mesh_folded(m: &mut dyn Mem, c: &mut Cpu) {
+    draw_mesh_with(m, c, true)
+}
+
+fn draw_mesh_with(m: &mut dyn Mem, c: &mut Cpu, fold: bool) {
     let pg = Pages::of(m);
     let model = c.ecx;
     let entry = c.esp;
@@ -98,7 +110,7 @@ pub fn draw_mesh(m: &mut dyn Mem, c: &mut Cpu) {
         pg.set_u32(m, ctx + 0x150, 1);
     }
     let bias = pg.u32(m, model + 0x154) as i32 as f32;
-    let view = call_from(m, c, pg, frame, ctx, &[], 0x00ea_53aa, guest(0x00fe_d940));
+    let view = view_matrix(m, c, pg, frame, ctx, 0x00ea_53aa, fold);
     let (px, py, pz) = (float(m, pg, position), float(m, pg, position + 4), float(m, pg, position + 8));
     let depth = view_depth(m, pg, view, px, py, pz);
     let lods = pg.u32(m, model + 0xf0);
@@ -142,7 +154,7 @@ pub fn draw_mesh(m: &mut dyn Mem, c: &mut Cpu) {
             && (pass == 0x3f
                 || (call_from(m, c, pg, frame, model, &[ctx, prim - 4, pass], 0x00ea_55c1, guest(0x00ea_42e0)) as i32) >= 0);
         if visible {
-            draw_primitive(m, c, pg, frame, model, ctx, prim, materials, stream, &mut material, Keys { bias, near_key, far_key, bounds_callback });
+            draw_primitive(m, c, pg, frame, model, ctx, prim, materials, stream, &mut material, Keys { bias, near_key, far_key, bounds_callback, fold });
         }
         prim = prim.wrapping_add(0x30);
         count = count.wrapping_sub(1);
@@ -154,6 +166,7 @@ pub fn draw_mesh(m: &mut dyn Mem, c: &mut Cpu) {
 }
 
 struct Keys {
+    fold: bool,
     bias: f32,
     near_key: u32,
     far_key: u32,
@@ -195,7 +208,7 @@ fn draw_primitive(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, model: u3
     } else {
         let bounds = pg.u32(m, prim + 0x28);
         let center = transform(m, pg, model, float(m, pg, bounds + 0x10), float(m, pg, bounds + 0x14), float(m, pg, bounds + 0x18));
-        let view = call_from(m, c, pg, frame, ctx, &[], 0x00ea_56fa, guest(0x00fe_d940));
+        let view = view_matrix(m, c, pg, frame, ctx, 0x00ea_56fa, keys.fold);
         let depth = view_depth(m, pg, view, center[0], center[1], center[2]) + keys.bias;
         let v = cvttss2si(depth).min(0x7fff).max(0);
         let key = (((0x7fff - v) as u32) << 12).wrapping_add(pg.u8(m, prim + 5) as u32);
@@ -218,7 +231,11 @@ fn draw_primitive(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, model: u3
         let id = pg.u32(m, model + 0x100);
         call_from(m, c, pg, frame, listener, &[ctx, id, group, sphere], 0x00ea_5912, guest(method));
     }
-    call_from(m, c, pg, frame, ctx, &[], 0x00ea_5919, guest(0x00fe_ef20));
+    if keys.fold {
+        flush_primitive_state(m, c, pg, frame, ctx);
+    } else {
+        call_from(m, c, pg, frame, ctx, &[], 0x00ea_5919, guest(0x00fe_ef20));
+    }
     let (word7, word6, word5) = (pg.u32(m, prim + 0x1c), pg.u32(m, prim + 0x14), pg.u32(m, prim + 0x18));
     let flags = pg.u32(m, ctx + 0x5c);
     if flags & 0x100 != 0 || flags & 0x50 == 0 {
@@ -265,4 +282,49 @@ fn append_draw(m: &mut dyn Mem, pg: Pages, ctx: u32, word5: u32, word6: u32, wor
     let order = (pg.u32(m, ctx + 0x164) >> 5).wrapping_add(pg.u32(m, ctx + 0x178));
     pg.set_u32(m, slot + 4, record);
     pg.set_u32(m, slot, ((order ^ first) & 0x7ff_ffff) ^ first);
+}
+
+/// 0x00FED940, `ctx->view_matrix()`: the address of the current view
+/// matrix, `(ctx[0xC88] & ~15) + 0x70` (a guest call unless `fold`).
+fn view_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, ctx: u32, back: u32, fold: bool) -> u32 {
+    if fold {
+        (pg.u32(m, ctx.wrapping_add(0xc88)) & !0xf).wrapping_add(0x70)
+    } else {
+        call_from(m, c, pg, frame, ctx, &[], back, guest(0x00fe_d940))
+    }
+}
+
+/// 0x00FEEF20, `ctx->flush_primitive_state()` (thiscall, void): unless the
+/// context's mode flags (+0x5C) have bit 6 set, commit the state of the
+/// current primitive (0x00FEE320, with the resource `[ctx[0x20] +
+/// (ctx[0x1CC] & 0xFFF) * 8]` and the index byte ctx[0x169], 0xFF meaning 0)
+/// and record the outcome: flag 0x08 when it committed, 0x10 when not, with
+/// the packet cursor `ctx[0x48]` copied to `ctx[0x60]`.
+///
+/// The commit is called directly with the original's frame: `frame` is the
+/// caller's ESP at its call of 0x00FEEF20, which pushes a return address,
+/// its saved ESI and two arguments before calling 0x00FEE320.
+// Translated from 0x00FEEF20 (DDDA.exe 2017-12-13 Steam)
+fn flush_primitive_state(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, ctx: u32) {
+    if pg.u8(m, ctx.wrapping_add(0x5c)) & 0x40 != 0 {
+        return;
+    }
+    let slot = pg.u32(m, ctx.wrapping_add(0x1cc)) & 0xfff;
+    let resource = pg.u32(m, pg.u32(m, ctx.wrapping_add(0x20)).wrapping_add(slot * 8));
+    let index = match pg.u8(m, ctx.wrapping_add(0x169)) {
+        0xff => 0,
+        v => v as u32,
+    };
+    let entry = frame.wrapping_sub(20);
+    pg.set_u32(m, entry, 0x00fe_ef54);
+    pg.set_u32(m, entry.wrapping_add(4), resource);
+    pg.set_u32(m, entry.wrapping_add(8), index);
+    c.esp = entry;
+    c.ecx = ctx;
+    crate::semantic_draw_c::commit_primitive_state(m, c);
+    let committed = c.eax & 0xff != 0;
+    let cursor = pg.u32(m, ctx.wrapping_add(0x48));
+    let flags = pg.u32(m, ctx.wrapping_add(0x5c)) | if committed { 0x08 } else { 0x10 };
+    pg.set_u32(m, ctx.wrapping_add(0x5c), flags);
+    pg.set_u32(m, ctx.wrapping_add(0x60), cursor);
 }
