@@ -65,4 +65,5 @@ pub mod semantic_s6_crt;
 pub mod semantic_s7_collision;
 pub mod semantic_s7_falloff;
 pub mod semantic_s8_sweep;
+pub mod semantic_s7_ftol;
 pub mod tree;
