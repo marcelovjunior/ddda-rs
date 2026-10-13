@@ -901,8 +901,10 @@ fn all_input_audio_import_names_bind_including_xinput_ordinals() {
     assert_eq!(imports.len(), 17);
     assert_eq!(services::bind_apis(&mut r, &imports).unwrap(), 17);
     for i in imports {
+        let polling = matches!(i.name.as_str(), "GetAsyncKeyState" | "GetKeyState" | "GetKeyboardLayout" | "MapVirtualKeyA" | "ImmGetVirtualKey");
         assert!(
-            matches!(r.get(i.token), Some(Binding::Service(_))),
+            if polling { matches!(r.get(i.token), Some(Binding::LockFree(_))) }
+            else { matches!(r.get(i.token), Some(Binding::Service(_))) },
             "{}",
             i.full_name()
         );

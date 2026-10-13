@@ -1,5 +1,45 @@
 # Phase 1 runtime proposal (R01)
 
+## L82 render service tails (2026-10-13)
+
+**Input convoy follow-up:** GetAsyncKeyState/GetKeyState and the stateless
+GetKeyboardLayout/MapVirtualKeyA/ImmGetVirtualKey queries are LockFree.
+The host's EventSender atomically publishes pending input; unchanged polls
+read accepted-key snapshots. Pending events still pump under `with_lock`
+so hook suppression and hook-thread ordering remain intact. Modifier
+families share one atomic word for exact pressed-bit consumption.
+GetKeyState snapshots are per-session/per-guest-thread and update only on
+message removal (including toggles). XInput/DirectInput mutations retain
+their existing locks. The snapshot-map mutex is used only on cache misses.
+Busy-worker scenario: 32 polls, **32 -> 0 acquisitions/blocks**, **4.461 ms
+-> 15.003 us/call**; full **141 light tests pass**. Head must measure gameplay
+and build the host integration; the agent neither built shards nor ran the
+game. Details and limits are in the L82 task Results.
+
+`Binding::ServiceTail` preserves locked preparation and the existing
+backend-mutex submission order for DrawPrimitive, DrawIndexedPrimitive and
+Clear (device slots 81/82/43). Their final `unlocked` section no longer
+reacquires merely for CPU/stack return. All unlocked calls in a service
+must satisfy this contract before assigning the policy. UP methods still
+reacquire for binding/reference updates. Nested and serial services retain
+their caller's lock; the step executor uses the same policy as dispatch.
+Device state remains shared `GuestCell` data and is not generally lock-free.
+
+`DDRUNTIME_LOCK_STATS=1` reports each thread's services per Present interval,
+contended calls, condition-variable blocks, wait and service time, plus
+waiting-thread/service to holding-thread/service edges in `lock_stats()`.
+Present failures also delimit an interval; initialization belongs to the
+first interval, and nested timings are inclusive. Parallel acquisitions
+also avoid enabling the serial-preemption hook which already returns
+without yielding in that mode.
+
+Synthetic 32-call contention: acquisitions **64 -> 32**, blocks **32 -> 0**,
+mean service **4.479 ms -> 71.496 us** (instrumented debug scenario, not FPS).
+**138 light tests pass**, including real headless COM acquisition counts and
+recorded output. No gameplay comparison yet. Head redirected the next L82
+batch to the measured GetAsyncKeyState polling convoy; see
+`docs/tasks/L82-render-lock.md`.
+
 **For head review; no runtime implementation is authorized by this document.**
 Baseline: `9091c6c`, 2026-10-11, DDDA.exe 2017-12-13 Steam. The head reports
 31,590 verified functions, 62.6% of inventoried functions and 72.7% of code

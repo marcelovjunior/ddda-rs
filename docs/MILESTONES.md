@@ -1,5 +1,30 @@
 # Milestones
 
+### L82 input polling convoy (2026-10-13)
+
+- Head's measured GetAsyncKeyState hotspot (1,284,189 calls / 14,719 ms wait
+  over 120 s) now polls atomic accepted-key state without the guest lock.
+  New host events alone use the locked pump to preserve hook suppression;
+  GetKeyState retains per-thread message-removal/toggle semantics.
+- Five input-query bindings are LockFree. Busy-worker 32-poll scenario:
+  **32 -> 0 acquisitions/blocks**, **4.461 ms -> 15.003 us/call**.
+  **141 light tests pass**, including existing hook/queue behavior, concurrent
+  edge consumption and a 20,000-step comparison against the old key model.
+- Next: head's gameplay/FPS comparison; no agent game or shard build/run.
+
+### L82 render service lock tails (2026-10-13)
+
+- DrawPrimitive, DrawIndexedPrimitive and Clear retain locked snapshots and
+  backend command order, but no longer reacquire solely to return. UP stays
+  locked for post-draw state changes. Per-thread/frame contention telemetry
+  identifies waiting services and holders; parallel preemption avoids a
+  serial-only hook and suspended-thread scans.
+- Synthetic 32-call contention: 64 to 32 acquisitions, 32 to zero blocks,
+  4.479 ms to 71.496 us/call. **138 light runtime tests pass**; actual COM
+  regression checks acquisition counts and recorded commands. No game run.
+- Next: head's L82 redirect targets GetAsyncKeyState's measured lock convoy
+  with atomic input snapshots; head owns gameplay/FPS comparison.
+
 ### L66 hot/cold build (2026-10-12)
 
 - Optional function-level hot packages implemented; 20 focused Python tests,

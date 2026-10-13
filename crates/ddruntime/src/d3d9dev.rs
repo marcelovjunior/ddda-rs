@@ -942,6 +942,20 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
     objects(|o| *o = Objects::default());
     for spec in INTERFACES.iter().chain(crate::d3dx::INTERFACES) {
         let v = interfaces::vtable(m, registry, tokens, spec)?;
+        if spec.name == "IDirect3DDevice9" {
+            // L82: these three bodies prepare/flush their complete command
+            // under the guest lock, then call backend_unlocked exactly once
+            // as their final host operation. That helper takes the backend
+            // mutex before dropping the guest lock, preserving submission
+            // order. Only CPU/stack return follows: no GuestCell or callback.
+            // Keep this list audited against every unlocked call in each
+            // body. UP draws reset bindings/release references afterward,
+            // so they MUST retain the ordinary Service policy.
+            for (slot, f) in [(43, draw::clear as ddnative_base::x86::LiftFn),
+                              (81, draw::draw_primitive), (82, draw::draw_indexed_primitive)] {
+                registry.replace(m.u32(v + 4 * slot), crate::dispatch::Binding::ServiceTail(f));
+            }
+        }
         objects(|o| o.vtables.insert(spec.name, v));
     }
     Ok(())

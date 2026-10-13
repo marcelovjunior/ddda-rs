@@ -82,6 +82,7 @@ const SLICE: Duration = Duration::from_millis(2);
 struct LockState {
     held: bool,
     holder: u32,
+    holder_host: Option<std::thread::ThreadId>,
     /// Nested service entries of the holder (parallel mode; 1 otherwise).
     depth: u32,
     /// The thread whose per-thread state (last error, TLS) is loaded.
@@ -138,6 +139,7 @@ impl Default for GuestLock {
             state: Mutex::new(LockState {
                 held: true,
                 holder: current_tid(),
+                holder_host: None,
                 depth: 1,
                 state_owner: current_tid(),
                 ..LockState::default()
@@ -214,6 +216,9 @@ impl GuestLock {
                 s = self.lock();
                 continue;
             }
+            if asked.is_some() && s.held {
+                stats::blocked(s.holder, s.holder_host);
+            }
             s = self.cv.wait(s).unwrap_or_else(|e| e.into_inner());
             spun = false;
         }
@@ -225,6 +230,7 @@ impl GuestLock {
         s.held = true;
         self.held_hint.store(true, std::sync::atomic::Ordering::Release);
         s.holder = me;
+        s.holder_host = asked.map(|_| std::thread::current().id());
         s.depth = depth;
         s.acquisitions += 1;
         SLICE_START.with(|t| t.set(Some(Instant::now())));
@@ -239,6 +245,9 @@ impl GuestLock {
 /// must not borrow runtime state itself. In the serial mode, or nested,
 /// `f` just runs.
 pub(crate) fn unlocked<R>(f: impl FnOnce() -> R) -> R {
+    if SERVICE_TAIL_ALLOWED.with(Cell::get) && release_service_tail() {
+        return f();
+    }
     let rt = runtime::current();
     if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
         return f();
@@ -262,6 +271,34 @@ pub(crate) fn unlocked<R>(f: impl FnOnce() -> R) -> R {
     }
     let _again = Again(rt);
     f()
+}
+
+thread_local! {
+    static SERVICE_TAIL_RELEASED: Cell<bool> = const { Cell::new(false) };
+    static SERVICE_TAIL_ALLOWED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Finish an outermost service without reacquiring the guest lock. After
+/// this call only host-owned backend work and CPU/stack return are allowed:
+/// no GuestCell, callbacks, or further services. Nested/direct calls retain
+/// their caller's lock. The backend mutex must already be held to preserve
+/// submission order, exactly as for `unlocked`.
+fn release_service_tail() -> bool {
+    if IN_SERVICE.with(Cell::get) != 1 {
+        return false;
+    }
+    let rt = runtime::current();
+    if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    let mut s = rt.lock.lock();
+    if s.held && s.holder == current_tid() && s.depth == 1 {
+        s.depth = 0;
+        rt.lock.release_locked(&mut s);
+        SERVICE_TAIL_RELEASED.with(|v| v.set(true));
+        return true;
+    }
+    false
 }
 
 /// Run `f` holding the guest lock: from inside [`unlocked`] (parallel
@@ -290,7 +327,7 @@ pub(crate) fn with_lock<R>(f: impl FnOnce() -> R) -> R {
 /// too. [`lock_stats`] formats them; ddplay and the drivers print them at
 /// exit.
 pub(crate) mod stats {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
     use std::sync::{Mutex, OnceLock};
@@ -303,6 +340,10 @@ pub(crate) mod stats {
         pub max_hold: Duration,
         pub wait: Duration,
         pub max_wait: Duration,
+        pub blocks: u64,
+        pub contended_calls: u64,
+        pub elapsed: Duration,
+        pub acquisitions: u64,
     }
 
     /// 0: not read yet, 1: off, 2: on.
@@ -345,6 +386,9 @@ pub(crate) mod stats {
         ON.store(2, Ordering::Relaxed);
         WOKEN.store(0, Ordering::Relaxed);
         table().lock().unwrap_or_else(|e| e.into_inner()).clear();
+        blockers().lock().unwrap_or_else(|e| e.into_inner()).clear();
+        FRAME.with(|f| f.borrow_mut().clear());
+        FRAME_NUMBER.with(|n| n.set(0));
     }
 
     /// A signal woke a blocked kernel wait.
@@ -363,14 +407,106 @@ pub(crate) mod stats {
         T.get_or_init(Default::default)
     }
 
+    fn active() -> &'static Mutex<HashMap<std::thread::ThreadId, (u32, String)>> {
+        static T: OnceLock<Mutex<HashMap<std::thread::ThreadId, (u32, String)>>> = OnceLock::new();
+        T.get_or_init(Default::default)
+    }
+
+    fn blockers() -> &'static Mutex<HashMap<String, u64>> {
+        static T: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+        T.get_or_init(Default::default)
+    }
+
+    pub(crate) struct Call {
+        name: String,
+        previous: Option<(u32, String)>,
+        before: (Duration, Duration),
+        blocks: u64,
+        acquisitions: u64,
+        start: Instant,
+    }
+
+    pub(crate) fn start(name: String) -> Call {
+        let previous = active().lock().unwrap_or_else(|e| e.into_inner())
+            .insert(std::thread::current().id(), (super::current_tid(), name.clone()));
+        Call { name, previous, before: totals(), blocks: BLOCKS.with(Cell::get),
+            acquisitions: ACQUISITIONS.with(Cell::get), start: Instant::now() }
+    }
+
+    impl Drop for Call {
+        fn drop(&mut self) {
+            let blocks = BLOCKS.with(Cell::get) - self.blocks;
+            let elapsed = self.start.elapsed();
+            let key = format!("tid={:#x} {}", super::current_tid(), self.name);
+            record(key, self.before, blocks, elapsed, ACQUISITIONS.with(Cell::get) - self.acquisitions);
+            FRAME.with(|frame| {
+                let mut frame = frame.borrow_mut();
+                let s = frame.entry(self.name.clone()).or_default();
+                s.calls += 1;
+                s.blocks += blocks;
+                s.contended_calls += u64::from(blocks != 0);
+                s.wait += totals().1 - self.before.1;
+                s.elapsed += elapsed;
+                s.acquisitions += ACQUISITIONS.with(Cell::get) - self.acquisitions;
+                // A Present call delimits this thread's frame (including
+                // failed Presents); no cross-thread frame ownership assumed.
+                if self.name.starts_with("IDirect3DDevice9::Present (")
+                    || self.name.starts_with("IDirect3DSwapChain9::Present (")
+                {
+                    FRAME_NUMBER.with(|n| {
+                        n.set(n.get() + 1);
+                        eprintln!("lock frame tid={:#x} frame={} calls/contended_calls/blocks/wait_us/service_us: {:?}",
+                            super::current_tid(), n.get(), frame.iter().map(|(name, s)|
+                                (name, s.calls, s.contended_calls, s.blocks, s.wait.as_micros(), s.elapsed.as_micros())).collect::<Vec<_>>());
+                    });
+                    frame.clear();
+                }
+            });
+            let mut a = active().lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(previous) = self.previous.take() {
+                a.insert(std::thread::current().id(), previous);
+            } else {
+                a.remove(&std::thread::current().id());
+            }
+        }
+    }
+
+    /// A condition-variable block, attributed to the holder observed while
+    /// the guest-lock mutex is held. Reblocks after wakeup count separately.
+    pub(super) fn blocked(holder: u32, holder_host: Option<std::thread::ThreadId>) {
+        BLOCKS.with(|n| n.set(n.get() + 1));
+        let a = active().lock().unwrap_or_else(|e| e.into_inner());
+        let waiter = a.get(&std::thread::current().id()).map(|(_, s)| s.as_str()).unwrap_or("outside service");
+        let owner = holder_host.and_then(|id| a.get(&id)).map(|(_, s)| s.as_str()).unwrap_or("outside service");
+        let key = format!("tid={:#x} {waiter} <- tid={holder:#x} {owner}", super::current_tid());
+        *blockers().lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_default() += 1;
+    }
+
+    pub(super) fn blocker_report() -> String {
+        let t = blockers().lock().unwrap_or_else(|e| e.into_inner());
+        let mut rows: Vec<_> = t.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1));
+        rows.into_iter().map(|(name, count)| format!("{count:>9} blocks {name}\n")).collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn frame_service(name: &str) -> Stat {
+        FRAME.with(|f| f.borrow()[name])
+    }
+
     thread_local! {
         static HELD_SINCE: Cell<Option<Instant>> = const { Cell::new(None) };
         static HELD: Cell<Duration> = const { Cell::new(Duration::ZERO) };
         static WAITED: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+        static BLOCKS: Cell<u64> = const { Cell::new(0) };
+        static ACQUISITIONS: Cell<u64> = const { Cell::new(0) };
+        static FRAME: RefCell<std::collections::BTreeMap<String, Stat>> = RefCell::new(Default::default());
+        static FRAME_NUMBER: Cell<u64> = const { Cell::new(0) };
     }
 
     /// This thread took the lock after asking at `asked`.
     pub(super) fn acquired(asked: Instant) {
+        ACQUISITIONS.with(|n| n.set(n.get() + 1));
         let now = Instant::now();
         WAITED.with(|w| w.set(w.get() + (now - asked)));
         HELD_SINCE.with(|h| h.set(Some(now)));
@@ -390,7 +526,7 @@ pub(crate) mod stats {
     }
 
     /// Add one service call that started at `before` (totals()).
-    pub(crate) fn record(name: String, before: (Duration, Duration)) {
+    fn record(name: String, before: (Duration, Duration), blocks: u64, elapsed: Duration, acquisitions: u64) {
         let (held, waited) = totals();
         let (hold, wait) = (held - before.0, waited - before.1);
         let mut t = table().lock().unwrap_or_else(|e| e.into_inner());
@@ -400,6 +536,10 @@ pub(crate) mod stats {
         s.max_hold = s.max_hold.max(hold);
         s.wait += wait;
         s.max_wait = s.max_wait.max(wait);
+        s.blocks += blocks;
+        s.contended_calls += u64::from(blocks != 0);
+        s.elapsed += elapsed;
+        s.acquisitions += acquisitions;
     }
 }
 
@@ -421,7 +561,11 @@ guest lock by service: calls, held ms (total, mean, max), waited ms (total, mean
         out += &format!("{:>9} {:>10.1} {:>8.3} {:>8.2}  {:>10.1} {:>8.3} {:>8.2}  {name}
 ",
                         s.calls, ms(s.hold), ms(s.hold) / n, ms(s.max_hold), ms(s.wait), ms(s.wait) / n, ms(s.max_wait));
+        out += &format!("          acquisitions={} contended_calls={} blocks={} service_ms={:.3}\n",
+            s.acquisitions, s.contended_calls, s.blocks, ms(s.elapsed));
     }
+    drop(t);
+    out += &stats::blocker_report();
     Some(out)
 }
 
@@ -478,7 +622,9 @@ pub(crate) fn service_lock_free() -> ServiceLock {
 impl Drop for ServiceLock {
     fn drop(&mut self) {
         if let Some(rt) = self.0.take() {
-            leave(&rt);
+            if !SERVICE_TAIL_RELEASED.with(|v| v.replace(false)) {
+                leave(&rt);
+            }
         }
     }
 }
@@ -634,7 +780,11 @@ pub(crate) fn yield_now() {
 /// Lifted calls become preemption points while a runnable guest thread
 /// waits for the lock (suspended threads wait too, but cannot take it).
 fn signal_preempt(s: &LockState) {
-    let runnable = s.waiting as usize > s.suspended.values().filter(|n| **n > 0).count();
+    // `preempt` already refuses to yield once ANY_PARALLEL is set. Avoid
+    // scanning suspended threads twice per acquisition and enabling the
+    // lifted-call slow path for a hook which cannot do anything (L82).
+    let runnable = !ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed)
+        && s.waiting as usize > s.suspended.values().filter(|n| **n > 0).count();
     ddnative_host::PREEMPT.store(runnable, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -648,18 +798,26 @@ thread_local! {
 }
 
 /// Marks this thread as running a service until dropped.
-pub(crate) struct ServiceScope;
+pub(crate) struct ServiceScope {
+    previous_tail: bool,
+}
 
 impl ServiceScope {
+    #[cfg(test)]
     pub(crate) fn enter() -> Self {
+        Self::enter_with_tail(false)
+    }
+
+    pub(crate) fn enter_with_tail(tail: bool) -> Self {
         IN_SERVICE.with(|n| n.set(n.get() + 1));
-        ServiceScope
+        Self { previous_tail: SERVICE_TAIL_ALLOWED.with(|v| v.replace(tail)) }
     }
 }
 
 impl Drop for ServiceScope {
     fn drop(&mut self) {
         IN_SERVICE.with(|n| n.set(n.get() - 1));
+        SERVICE_TAIL_ALLOWED.with(|v| v.set(self.previous_tail));
     }
 }
 
@@ -1401,6 +1559,178 @@ mod tests {
         crate::services::ret(m, c, 0);
     }
 
+    thread_local! {
+        static TAIL_SYNC: std::cell::RefCell<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn tail_host_work() {
+        assert!(!holds_lock());
+        TAIL_SYNC.with(|sync| {
+            let sync = sync.borrow();
+            let (start, held) = sync.as_ref().unwrap();
+            start.send(()).unwrap();
+            held.recv_timeout(Duration::from_secs(5)).unwrap();
+        });
+    }
+
+    fn tail_before(m: &mut dyn Mem, c: &mut Cpu) {
+        crate::d3d9draw::backend_unlocked(|_| tail_host_work());
+        ret(m, c, 0);
+    }
+
+    fn tail_busy(m: &mut dyn Mem, c: &mut Cpu) {
+        assert!(holds_lock());
+        TAIL_SYNC.with(|sync| sync.borrow().as_ref().unwrap().0.send(()).unwrap());
+        // Host-side contention fixture, not a game timing constant.
+        std::thread::sleep(Duration::from_millis(4));
+        ret(m, c, 0);
+    }
+
+    /// Each simulated render submission lets a second thread acquire the
+    /// guest lock. Measure only the render service; drain the busy worker
+    /// between frames so entry contention cannot hide the redundant tail.
+    fn render_tail_scenario(tail: bool) -> (Duration, stats::Stat, String) {
+        use std::sync::mpsc::channel;
+        const FRAMES: usize = 32;
+        let rt = Arc::new(Runtime::default());
+        runtime::enter(rt.clone());
+        set_parallel(true);
+        let mut r = Registry::new();
+        r.insert(0x7000_0010, if tail { Binding::ServiceTail(tail_before) } else { Binding::Service(tail_before) }).unwrap();
+        r.name(0x7000_0010, "L82::RenderTail");
+        r.insert(0x7000_0020, Binding::Service(tail_busy)).unwrap();
+        r.name(0x7000_0020, "L82::BusyWorker");
+        let r = Arc::new(r);
+        let (start_tx, start_rx) = channel();
+        let (held_tx, held_rx) = channel();
+        let (done_tx, done_rx) = channel();
+        TAIL_SYNC.with(|s| *s.borrow_mut() = Some((start_tx, held_rx)));
+        let total = without_lock(|| {
+            let worker_rt = rt.clone();
+            let worker_r = r.clone();
+            let worker = std::thread::spawn(move || {
+                runtime::enter(worker_rt);
+                CURRENT_TID.with(|t| t.set(0x3082));
+                let (_, unused) = channel();
+                TAIL_SYNC.with(|s| *s.borrow_mut() = Some((held_tx, unused)));
+                let mut m = GuestMemory::new();
+                m.map(0x10000, 0x10000, READ | WRITE).unwrap();
+                let mut c = Cpu::default();
+                for _ in 0..FRAMES {
+                    start_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    call_service(&worker_r, &mut m, &mut c, 0x1F000, 0x7000_0020, &[]);
+                    done_tx.send(()).unwrap();
+                }
+            });
+            let mut m = GuestMemory::new();
+            m.map(0x10000, 0x10000, READ | WRITE).unwrap();
+            let mut c = Cpu::default();
+            let mut total = Duration::ZERO;
+            for _ in 0..FRAMES {
+                let start = Instant::now();
+                call_service(&r, &mut m, &mut c, 0x1F000, 0x7000_0010, &[]);
+                total += start.elapsed();
+                assert_eq!(c.esp, 0x1F000);
+                assert!(!holds_lock());
+                done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            worker.join().unwrap();
+            total
+        });
+        TAIL_SYNC.with(|s| *s.borrow_mut() = None);
+        let stat = stats::frame_service("L82::RenderTail");
+        (total / FRAMES as u32, stat, lock_stats().unwrap())
+    }
+
+    #[test]
+    fn render_tail_avoids_reacquiring_a_busy_guest_lock() {
+        stats::force_on();
+        let before = render_tail_scenario(false);
+        stats::force_on();
+        let after = render_tail_scenario(true);
+        eprintln!("L82 32 render calls, busy worker 4 ms: before {:?}/call, {} acquisitions, {} blocks, {:?} wait; after {:?}/call, {} acquisitions, {} blocks, {:?} wait",
+            before.0, before.1.acquisitions, before.1.blocks, before.1.wait,
+            after.0, after.1.acquisitions, after.1.blocks, after.1.wait);
+        eprintln!("before:\n{}after:\n{}", before.2, after.2);
+        assert_eq!(before.1.calls, 32);
+        assert_eq!(after.1.calls, 32);
+        assert_eq!(before.1.acquisitions, 64);
+        assert_eq!(after.1.acquisitions, 32);
+        assert!(before.1.blocks >= 32);
+        assert_eq!(after.1.blocks, 0);
+        assert_eq!(before.1.contended_calls, 32);
+        assert_eq!(after.1.contended_calls, 0);
+    }
+
+    fn tail_probe(m: &mut dyn Mem, c: &mut Cpu) {
+        c.eax = unlocked(holds_lock) as u32;
+        ret(m, c, 0);
+    }
+
+    #[test]
+    fn render_tail_preserves_serial_direct_and_nested_lock_ownership() {
+        for parallel in [false, true] {
+            let rt = Arc::new(Runtime::default());
+            runtime::enter(rt);
+            set_parallel(parallel);
+            release_service_tail(); // direct call outside a service
+            assert!(holds_lock());
+            let mut r = Registry::new();
+            r.insert(0x7000_0010, Binding::ServiceTail(tail_probe)).unwrap();
+            let mut m = GuestMemory::new();
+            m.map(0x10000, 0x10000, READ | WRITE).unwrap();
+            let mut c = Cpu::default();
+            // Parallel entry nests inside the caller's already held lock.
+            call_service(&r, &mut m, &mut c, 0x1F000, 0x7000_0010, &[]);
+            assert_eq!(c.eax, 1);
+            assert!(holds_lock());
+        }
+    }
+
+    #[test]
+    fn parallel_waiters_do_not_enable_serial_preemption_hooks() {
+        let rt = Arc::new(Runtime::default());
+        runtime::enter(rt);
+        set_parallel(true);
+        let state = LockState { waiting: 3, ..Default::default() };
+        signal_preempt(&state);
+        assert!(!ddnative_host::PREEMPT.load(Ordering::Relaxed));
+    }
+
+    fn tail_panic(_: &mut dyn Mem, _: &mut Cpu) {
+        unlocked(|| panic!("synthetic backend fault"));
+    }
+
+    fn tail_nested(m: &mut dyn Mem, c: &mut Cpu) {
+        let _nested = ServiceScope::enter();
+        release_service_tail();
+        assert!(holds_lock(), "nested scopes cannot release their caller's lock");
+        ret(m, c, 0);
+    }
+
+    #[test]
+    fn render_tail_unwind_does_not_poison_the_next_service() {
+        let rt = Arc::new(Runtime::default());
+        runtime::enter(rt);
+        set_parallel(true);
+        let mut r = Registry::new();
+        r.insert(0x7000_0010, Binding::ServiceTail(tail_panic)).unwrap();
+        r.insert(0x7000_0020, Binding::Service(tail_nested)).unwrap();
+        let mut m = GuestMemory::new();
+        m.map(0x10000, 0x10000, READ | WRITE).unwrap();
+        let mut c = Cpu::default();
+        without_lock(|| {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                call_service(&r, &mut m, &mut c, 0x1F000, 0x7000_0010, &[]);
+            }));
+            assert!(result.is_err());
+            assert!(!holds_lock());
+            call_service(&r, &mut m, &mut c, 0x1F000, 0x7000_0020, &[]);
+            assert!(!holds_lock());
+        });
+        assert!(holds_lock());
+    }
+
     /// One guest thread calls the service at `target` `calls` times, or
     /// (calls == 0) until `done`, pausing `pause` between calls; the
     /// duration of each call.
@@ -1433,7 +1763,7 @@ mod tests {
                 m.set_u32(c.esp, 0xFFFF_0000);
                 m.set_u32(c.esp + 4, 0x0090_0000);
                 let t = Instant::now();
-                r.run_service(f, &mut m, &mut c, target, locked);
+                r.run_service(f, &mut m, &mut c, target, locked, false);
                 took.push(t.elapsed());
                 std::thread::sleep(pause);
             }
@@ -1599,12 +1929,13 @@ mod tests {
         }
         c.esp -= 4;
         m.set_u32(c.esp, 0xFFFF_0000);
-        let (f, locked) = match r.get(target) {
-            Some(Binding::Service(f)) => (f, true),
-            Some(Binding::LockFree(f)) => (f, false),
+        let (f, locked, tail) = match r.get(target) {
+            Some(Binding::Service(f)) => (f, true, false),
+            Some(Binding::ServiceTail(f)) => (f, true, true),
+            Some(Binding::LockFree(f)) => (f, false, false),
             _ => unreachable!(),
         };
-        r.run_service(f, m, c, target, locked);
+        r.run_service(f, m, c, target, locked, tail);
     }
 
     /// `idle` guest threads wait on their own events (as the game's worker

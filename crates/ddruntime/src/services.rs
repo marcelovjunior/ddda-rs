@@ -377,6 +377,13 @@ pub fn bind_apis(registry: &mut Registry, imports: &[crate::image::Import]) -> R
 /// game calls the Interlocked family and the timers every frame from
 /// several threads.
 pub const LOCK_FREE: &[(&str, &str)] = &[
+    // L82: atomic accepted-key and per-thread queue snapshots. New input
+    // alone takes the narrow pump lock, preserving hook/queue ordering.
+    ("USER32.dll", "GetAsyncKeyState"),
+    ("USER32.dll", "GetKeyState"),
+    ("USER32.dll", "GetKeyboardLayout"),
+    ("USER32.dll", "MapVirtualKeyA"),
+    ("IMM32.dll", "ImmGetVirtualKey"),
     ("KERNEL32.dll", "InterlockedIncrement"),
     ("KERNEL32.dll", "InterlockedDecrement"),
     ("KERNEL32.dll", "InterlockedExchange"),
