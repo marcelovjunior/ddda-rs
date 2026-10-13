@@ -262,8 +262,9 @@ opt-level = 1
 opt-level = 1
 
 # `play`: the build to play, mod and tune with (cargo build --profile play
-# -p ddplay). Optimised everywhere, but cheap where it costs: the 32 lifted
-# shards at opt-level 1, no link-time optimisation, no debug info, and
+# -p ddplay). lift.py gen keeps address shards at opt-level 1 by default;
+# --hot-functions moves sampled functions to opt-level 1 hot packages and
+# builds the remaining address shards at opt-level 0. No LTO, no debug info, and
 # incremental compilation so that an edit to the runtime or a mod rebuilds
 # only that crate. Keep one warm target directory for it (the shards almost
 # never change): after the first build, iterations take minutes.
@@ -276,131 +277,131 @@ incremental = true
 codegen-units = 64
 
 [profile.play.package.ddlift-00]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-01]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-02]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-03]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-04]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-05]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-06]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-07]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-08]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-09]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-10]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-11]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-12]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-13]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-14]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-15]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-16]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-17]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-18]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-19]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-20]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-21]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-22]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-23]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-24]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-25]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-26]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-27]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-28]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-29]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-30]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 [profile.play.package.ddlift-31]
-opt-level = 1
+opt-level = 0
 incremental = false
 
 # `play-fast`: the play build for quick iteration (L68). The 32 lifted
@@ -676,3 +677,14 @@ incremental = false
 [profile.play-o0.package.ddlift-31]
 opt-level = 0
 incremental = false
+
+# BEGIN generated hot shards
+[profile.dev.package.ddlift-hot-00]
+opt-level = 0
+debug = 1
+[profile.release.package.ddlift-hot-00]
+opt-level = 1
+[profile.play.package.ddlift-hot-00]
+opt-level = 1
+incremental = false
+# END generated hot shards

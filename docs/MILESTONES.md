@@ -1,5 +1,21 @@
 # Milestones
 
+### L66 hot/cold build (2026-10-12)
+
+- Optional function-level hot packages implemented; 20 focused Python tests,
+  one real hot/cold Rust graph test and the native play-profile gate pass.
+  Required lift corpus: 178,130 cases / 59,734 functions. Input audit clean.
+- Fixed shard: 254.89 s opt1 to 21.49 s opt0/eight-thread front end.
+  Full play + emu: 636.08 s (first full L66 build, some dependencies cached), versus head's approximate 25 min.
+  Provisional profile list has 83 functions; 230 hot replay cases match.
+- No compile improvement from predicate/accessor experiments; not retained.
+  Head owns base helpers. Full sampled list and runtime baseline are pending.
+- Scope narrowed to layout/gate: emission, base structure and toolchain
+  work handed to L73/L74/L75. Extra baseline/replay remains queued behind
+  another lane's GPU test; results will post to head/L75.
+- Next: complete hot sample and head-run clean FPS comparison. See
+  `docs/tasks/L66-build-speed.md` for conditions and limits.
+
 ### L28c remaining recorder review (2026-10-12)
 
 - **+0 functions / +0 cases**; audit preserves all **59,685 / 177,649**.

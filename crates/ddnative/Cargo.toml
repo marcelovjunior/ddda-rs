@@ -48,3 +48,8 @@ ddlift-28 = { path = "../ddlift/lift_28" }
 ddlift-29 = { path = "../ddlift/lift_29" }
 ddlift-30 = { path = "../ddlift/lift_30" }
 ddlift-31 = { path = "../ddlift/lift_31" }
+
+# BEGIN generated hot shards
+[dependencies.ddlift-hot-00]
+path = "../ddlift/lift_hot_00"
+# END generated hot shards

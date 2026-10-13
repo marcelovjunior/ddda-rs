@@ -2841,6 +2841,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddlift-hot-00"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+ "mtcore",
+ "mtframe",
+ "mtmath",
+]
+
+[[package]]
 name = "ddlook"
 version = "0.1.0"
 dependencies = [
@@ -2902,6 +2912,7 @@ dependencies = [
  "ddlift-29",
  "ddlift-30",
  "ddlift-31",
+ "ddlift-hot-00",
  "ddnative-base",
  "mtmath",
  "serde_json",
