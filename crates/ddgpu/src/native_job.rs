@@ -297,6 +297,9 @@ impl WgpuBackend {
             self.native_comparisons = Some(comparisons);
             return Err(job);
         }
+        // Replay can hand its render encoder to the async finisher. Reduction
+        // submits directly, so it must follow that submission (no GPU wait).
+        self.wait_finisher();
         for p in snapshot.pairs {
             let aspects = if p.shadow.format.is_depth_stencil_format() {
                 [
