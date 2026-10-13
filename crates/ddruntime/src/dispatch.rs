@@ -201,6 +201,27 @@ impl Registry {
         ddports::ensure_with(|ports| {
             crate::archive_inflate::install(ports);
             crate::procedural_geometry::install(ports);
+            // L171: semantic 0x00E12A20 keeps the original body for its rare branch
+            if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
+                let bodies = ddnative::generated::lifted::bodies();
+                if let Some(&(_, original)) = bodies.iter().find(|(a, _)| *a == 0x00e1_2a20) {
+                    let _ = ddports::mtcore::semantic::E12A20_ORIGINAL.set(original);
+                    ports.retain(|p| p.0 != 0x00e1_2a20);
+                    ports.push((0x00e1_2a20, ddports::mtcore::semantic::shader_lookup));
+                }
+            }
+            if crate::critical_jobs::enabled() {
+                crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
+            }
+            if std::env::var_os("DDRUNTIME_JOB_PARTICIPANTS").is_some() {
+                crate::job_participants::install(ports, &ddnative::generated::lifted::bodies());
+            }
+            if crate::shadow_fee320::enabled() {
+                crate::shadow_fee320::install(ports, &ddnative::generated::lifted::bodies());
+            }
+            if crate::shadow_replay::enabled() {
+                crate::shadow_replay::install(ports, &ddnative::generated::lifted::bodies());
+            }
             if crate::ndraw_stats::enabled() {
                 crate::ndraw_stats::wrap_executor(ports, &ddnative::generated::lifted::bodies());
             }
@@ -368,7 +389,11 @@ impl Registry {
                 let sample = if crate::threads::sync_profile::enabled() {
                     crate::threads::sync_profile::begin_job(target, m, cpu)
                 } else { None };
+                let critical = if crate::critical_jobs::enabled() {
+                    crate::critical_jobs::begin_job(target, m, cpu)
+                } else { None };
                 f(m, cpu);
+                drop(critical);
                 if let Some(sample) = sample { crate::threads::sync_profile::finish_job(sample); }
             },
         }
@@ -377,7 +402,7 @@ impl Registry {
     fn run_integer(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         // Only the audited x86-64 Windows runtime/allocator/scheduler path
         // supports this contract. Diagnostics format floats and do host I/O.
-        if !cfg!(all(windows, target_arch = "x86_64")) || crate::threads::stats::on() || trace::on() || crate::threads::sync_profile::enabled() {
+        if !cfg!(all(windows, target_arch = "x86_64")) || crate::threads::stats::on() || trace::on() || crate::threads::sync_profile::enabled() || crate::critical_jobs::enabled() {
             return self.run_service(f, m, cpu, target, false, false);
         }
         // Keep the Cpu mirror current as for every other service, but the
@@ -461,6 +486,7 @@ impl Registry {
         let sync_sample = if crate::threads::sync_profile::enabled() {
             crate::threads::sync_profile::begin(self.names.get(&target).map(String::as_str), target, m, cpu)
         } else { None };
+        let critical = crate::critical_jobs::begin_join(self.names.get(&target).map(String::as_str), m, cpu);
         let stats = crate::threads::stats::on().then(|| {
             let name = self.names.get(&target).cloned().unwrap_or_else(|| format!("{target:#010x}"));
             crate::threads::stats::start(name)
@@ -477,6 +503,8 @@ impl Registry {
         drop(scope);
         drop(lock);
         drop(stats);
+        if let Some(sample) = critical { sample.finish(cpu.eax); }
+        crate::critical_jobs::presented(self.names.get(&target).map(String::as_str), cpu.eax);
         if let Some(sample) = sync_sample { sample.finish(cpu.eax); }
         if crate::threads::sync_profile::enabled() {
             crate::threads::sync_profile::presented(self.names.get(&target).map(String::as_str), cpu.eax);
@@ -510,9 +538,10 @@ impl Registry {
         // L101: the bindings this thread called, direct-mapped by address
         // (the registry no longer changes once shared, so they never go
         // stale): a hit skips the map lookup
-        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 256]> = Box::new([const { std::cell::Cell::new(None) }; 256]);
+        // L171: 4096 entries (256 thrashed on the game's call mix)
+        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 4096]> = Box::new([const { std::cell::Cell::new(None) }; 4096]);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
-            let slot = &cache[((target >> 2) ^ (target >> 10)) as usize & 255];
+            let slot = &cache[((target >> 2) ^ (target >> 14)) as usize & 4095];
             if let Some((t, b)) = slot.get() {
                 if t == target {
                     return me.run_binding(b, m, cpu, target);

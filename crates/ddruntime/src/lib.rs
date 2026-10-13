@@ -15,6 +15,7 @@
 pub mod audio;
 pub mod archive_inflate;
 pub mod procedural_geometry;
+mod job_participants;
 pub mod input;
 pub mod d3d9;
 pub mod d3d9copy;
@@ -24,6 +25,10 @@ pub mod d3d9res;
 pub mod d3d9state;
 pub mod d3dx;
 pub mod dispatch;
+mod critical_jobs;
+mod shadow_fee320;
+mod parallel_shadow;
+pub mod shadow_replay;
 #[cfg(feature = "emu")]
 pub mod emu;
 pub mod executor;

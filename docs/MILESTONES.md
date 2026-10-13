@@ -1,5 +1,420 @@
 # Milestones
 
+### L177 semantic state commit and model mesh (2026-10-13)
+
+- Opt-in FEE320/FFC350/01145BF0 native semantic ports: **1,664 original
+  returns** pass ABI replay including heap/live stack. Reachable FEE320
+  instructions **761/761**, FFC350 **440/440**, material wrapper **17/17**.
+- Eleven isolated tests pass, including opt2 baseline, serial/atomic Pages
+  and deliberate heap corruption rejection. Runtime light **260 pass /
+  zero failures / seven ignored**; mtcore/ddports **35 pass / nine ignored**.
+  Guest x87 precision/rounding retained.
+- Synthetic median paired gains **1.665x / 2.126x / 1.102x** respectively;
+  callee seams and shared-host noise limit attribution. No gameplay claim.
+- Next: head accumulated semantic train and real shadow-job/image gate.
+  Details, hashes and limitations: `docs/tasks/L177-semantic-state-commit.md`.
+
+### L174b semantic model palette and culled instances (2026-10-13)
+
+- Opt-in SEMANTIC ports FFC9F0/1140180 retain original guest seams;
+  prior 10655A0 is retained. Requested integration base 1fcd6330 merged.
+- 247 original returns pass sparse/serial/atomic Pages and isolated opt2
+  lifted replay. Instruction coverage 641/644 and 824/824; signaling-NaN
+  x87 oracle boundary documented, hardware behavior retained.
+- 24/24 paired scenario medians improve: model 1.188–1.485x, instancing
+  1.248–1.914x. No game/shard run or FPS claim. Evidence and private hashes:
+  `docs/tasks/L174-semantic-draw-b.md`, continuation Results.
+- Runtime light rerun: 260 passed, zero failed, seven ignored. Default
+  and SEMANTIC/JOB_HASH/JOB_LOOKUP registration checks pass. Full mtcore
+  and ddports gate: 38 passed, zero failed, 11 ignored.
+- Next: head combined semantic train and matched critical-job/image gate.
+
+### L174 semantic material draw and dependency hash (2026-10-13)
+
+- `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
+  and 1066C60 pass selection; original guest callees retained. Defaults
+  unchanged; hash override takes precedence over JOB_HASH without duplicates.
+- 1,168 original synthetic returns pass ABI checks in sparse, serial Pages
+  and atomic Pages modes. Both isolated opt2 lifted draw bodies pass all
+  640 draw vectors; 197/197 and 377/377 original instructions covered.
+- 24/24 draw benchmark scenario medians improve: apply 1.546–2.111x,
+  selection 1.221–1.507x. Shared-host isolated results, no FPS/image claim.
+  Evidence and limitations: `docs/tasks/L174-semantic-draw-b.md`.
+- Runtime light: 255 pass, zero failures, seven ignored. Five ABI mutation
+  variants are rejected, including corrupted and extra heap writes below ESP.
+- Next: head merges registrations and validates the combined semantic train
+  against the native gate and matched image/critical-job capture.
+### L169 exact shadow traversal and setup (2026-10-13)
+
+- Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
+  `DDRUNTIME_SHADOW_PASS=1` (EFD240) preserve the original queue/serial
+  choice, callback order, guest state and x87 operations. Defaults off.
+- **420 original returns**, all **63 lifted basic blocks**, **15,660 paired
+  fault/access cases**, production GuestMemory serial/atomic replay pass.
+  Eight isolated tests pass; mtcore/ddports **20 pass / nine ignored**;
+  runtime light **255 pass / zero failures / seven ignored**.
+- Synthetic paired median gains: traversal **1.22–1.89x**, setup
+  **1.07–1.28x**. No gameplay/FPS claim. Shared nesting guard, lane-ordered
+  merge and callback mutations block a simple parallel traversal toggle.
+- Next: head combined native gate and independent same-route port A/B;
+  retain opt-ins until image/job-time acceptance. Evidence and divisibility
+  limits: `docs/tasks/L169-shadow.md`.
+### L172 isolated parallel-shadow proof runner (2026-10-13)
+
+- Head cap172 reached gameplay but returned zero captures/hook lines.
+  Added installation and entry diagnostics; launch receipt/rerun pending.
+  Full feature-light before service addition277/0/7; final replay10PASS
+  with and without feature. Next: diagnose missing hook activation.
+
+- Publication preflight: 11 executor tests pass, including three new
+  all-before-store checks. Complete serialized synthetic replay and private
+  uncontended critical-section model: 10 replay tests pass, including
+  differential runtime service checks and allocator dependency refusal.
+  Still awaiting real capture; no live publication or speed claim.
+
+- Continuation: capture v2 preserves live outgoing MXCSR; replay compares
+  x87 and thread control state. Five focused replay tests pass; real
+  capture and production publication remain pending.
+
+- Private contiguous helper lanes, dependency-checked ordered merge, and
+  strict command/resource-byte comparison are implemented. Opt-in proof
+  runner captures the real serial traversal and replays raw serial/queued
+  bodies privately; unknown host services and incomplete inputs refuse.
+  Live output remains serial. No real-stream acceptance or speedup claimed.
+- TLS routing precedes global overrides and warmed caches only in the
+  `parallel-shadow` Cargo feature. The unconditional check measured slower
+  in 9/9 isolated pairs, so ordinary builds retain the old call path.
+- 17 focused runtime checks and two routing tests pass. Lane oracle:
+  12 tests, eight original FED3B0 returns and 227 shader fixtures reproducing
+  1,704 original uploads (29 conservative refusals). Default light: 271
+  passed / zero failures / seven ignored before final capture-file addition.
+  Final feature-enabled light: 272 passed / zero failures / seven ignored.
+- Next: head proof build and one nonempty private `.ddshadow` capture;
+  offline replay closes unsupported services/dependencies before candidate
+  publication and TRAIN READY. `docs/tasks/L172-parallel-shadow.md`.
+
+### L162e whole FEE320 capture prerequisite (2026-10-13)
+
+- Opt-in exact sky-shadow wrapper records FEE320 inclusive/external-call
+  wall time, or separately full lifted-caller CPU/ordered memory traces.
+  External callees remain explicit opaque contracts; no native port yet.
+- Isolated whole-lift machinery: 128 synthetic round trips and corruption
+  rejections pass; five runtime/six analyzer tests pass. Light suite:
+  259 reported passes, zero failures, seven ignored. No game/GPU/shards.
+- Real per-frame oracle, precise cost and >=1.5x candidate proof remain
+  open. Next: head's separate timing30/capture1 windows, after playtest;
+  protocol and limitations in `docs/tasks/L162-job-wake.md` (L162e).
+
+### L162d sky-shadow critical callback attribution (2026-10-13)
+
+- Exact c31 h0 sky-shadow object: DB7620 -> EE2C90, uSkyStableShadow
+  vtable160DF98. One callback/frame, batch-last150/150; main27/worker123.
+  Main shadow solo0.965ms/frame is part of earlier all-main2.661ms figure.
+- c26vk admits24 main/129 worker shadow stacks. Stable-shadow traversal
+  EFDC70 -> EFD240 -> DB63E0 builds model/material commands; guest memory
+  helpers dominate sampled PCs, x87 only5/153. Counts are not self times.
+- Original DBE560 nesting guard forces serial inner traversal. Existing
+  parallel branch shares the active queue; no safe simple split established.
+  Four attribution/provenance tests pass; no game/GPU/build or speedup claim.
+- Family split posted to head: codex-7 FED480/EA5B50, codex-9 DB63E0/EFD240
+  and split proof, codex-11 FEE320 evaluation. Next: isolated original
+  oracles/microbenchmarks before one integration train. See L162 brief.
+### L175 semantic material and package leaves (2026-10-13)
+
+- Opt-in EA23F0/FED190/E0F3C0/01008200 native semantic ports: **2,226
+  original returns** pass ABI replay; EA23F0 reaches **712/712 decoded
+  instructions**, both growth sites, NaNs and unaligned/aliased inputs.
+- Seven isolated tests pass, including heap-corruption rejection, opt2 lifted bodies and serial/atomic
+  Pages. Runtime light **255 pass / zero failures / seven ignored**.
+- Median paired synthetic gains EA23F0 **1.512x**, E0F3C0 **2.734x**,
+  01008200 **1.141x**; some individual samples regress, FED190 mixed
+  across runs. mtcore/ddports **26 pass / zero failures / nine ignored**.
+  No game/image/FPS claim. Details: `docs/tasks/L175-semantic-draw-c.md`.
+- Next: head accumulated train with `DDRUNTIME_SEMANTIC=1`, then real
+  job/image acceptance. Virtual/growth callees remain recorded mock seams
+  in isolated tests; full gameplay comparison remains open.
+### L174 semantic material draw and dependency hash (2026-10-13)
+
+- `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
+  and 1066C60 pass selection; original guest callees retained. Defaults
+  unchanged; hash override takes precedence over JOB_HASH without duplicates.
+- 1,168 original synthetic returns pass ABI checks in sparse, serial Pages
+  and atomic Pages modes. Both isolated opt2 lifted draw bodies pass all
+  640 draw vectors; 197/197 and 377/377 original instructions covered.
+- 24/24 draw benchmark scenario medians improve: apply 1.546–2.111x,
+  selection 1.221–1.507x. Shared-host isolated results, no FPS/image claim.
+  Evidence and limitations: `docs/tasks/L174-semantic-draw-b.md`.
+- Runtime light: 255 pass, zero failures, seven ignored. Five ABI mutation
+  variants are rejected, including corrupted and extra heap writes below ESP.
+- Next: head merges registrations and validates the combined semantic train
+  against the native gate and matched image/critical-job capture.
+### L173 semantic model draw leaves (2026-10-13)
+
+- Native FF1920/FF14D0/FEFB90 under `DDRUNTIME_SEMANTIC=1`: 480 original
+  ABI returns pass, including all heap writes and external call arguments.
+  Seven isolated checks pass with lifted/semantic serial/atomic Pages;
+  runtime light 255 pass, zero failures, seven ignored.
+- Median isolated gains across four cases: FF1920 1.07–2.02x,
+  FF14D0 2.25–2.56x, FEFB90 1.48–1.67x. Synthetic callees; no gameplay or
+  FPS acceptance. x87 signaling-NaN emulator limit documented.
+- Head EA5320 follow-up: 302 originals pass head/strict ABI harnesses and
+  isolated lift; callback spheres and heap writes included. Leaf oracle
+  rejects three deliberate below-stack heap corruptions.
+- Next: head combined train/image acceptance. Evidence and reproduction:
+  `docs/tasks/L173-semantic-draw-a.md`.
+
+### L169 exact shadow traversal and setup (2026-10-13)
+
+- Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
+  `DDRUNTIME_SHADOW_PASS=1` (EFD240) preserve the original queue/serial
+  choice, callback order, guest state and x87 operations. Defaults off.
+- **420 original returns**, all **63 lifted basic blocks**, **15,660 paired
+  fault/access cases**, production GuestMemory serial/atomic replay pass.
+  Eight isolated tests pass; mtcore/ddports **20 pass / nine ignored**;
+  runtime light **255 pass / zero failures / seven ignored**.
+- Synthetic paired median gains: traversal **1.22–1.89x**, setup
+  **1.07–1.28x**. No gameplay/FPS claim. Shared nesting guard, lane-ordered
+  merge and callback mutations block a simple parallel traversal toggle.
+- Next: head combined native gate and independent same-route port A/B;
+  retain opt-ins until image/job-time acceptance. Evidence and divisibility
+  limits: `docs/tasks/L169-shadow.md`.
+
+### L162c job distribution and host scheduling (2026-10-13)
+
+- c31 h0 150-frame census: main 65,186 callbacks, six workers
+  88,096 / 78,545 / 64,249 / 55,879 / 52,116 / 42,930. Main final-callback
+  solo tails add 2.661 ms/frame before its joins. Worst main/worker tails
+  start within 92..135 us but run 14.65..18.51 ms; late queue ordering is
+  not established as their cause. Shared atomic FIFO already distributes work.
+- Independent priority/ideal-processor opt-ins forward original Windows
+  requests previously ignored. Foreground requests CPU hints only; background
+  requests priority -1. No invented boost, affinity pin or callback reordering.
+- 19 parser and four host scheduling tests pass, including suspended guest
+  startup in both modes. Light 254 reported passes / zero failures / seven
+  ignored before final lifecycle refinement; final focused four pass.
+  No game/FPS gain measured. Details: `docs/tasks/L162-job-wake.md`.
+- Blocker: no post-fix p8 trace yet; old ctor-only run cannot prove eighth-lane
+  work. Next: head capture p8 per-thread callbacks, then independent scheduling
+  A/B with participant/hash/sync settings fixed and profile-off acceptance.
+### L168 guest-memory locality opt-in (2026-10-13)
+
+- `DDNATIVE_BACKING=regions`: 2 MiB-aligned guest-region host reservations,
+  lazy 4 KiB commits, unchanged permissions/atomics/retirement. Large-page
+  attempt fails error 1314 on this token; `large` falls back, no policy change.
+- Base 41 pass; fallback five pass; runtime light 250 reported pass, zero
+  failures/seven ignored. Original hash leaf replay four tests pass.
+- Synthetic sequential read/read-write median paired gains 1.461x/1.385x;
+  scattered/leaf gains unproven. No hardware miss-rate or gameplay claim.
+- Head-owned bounded WPR profile validates. Next: matched PMC and profiler-off
+  gameplay A/B after playtest; actual snapshot/counters pending. Details:
+  `docs/tasks/L168-tlb.md`.
+### L167 critical callbacks and exact shadow state save (2026-10-13)
+
+- Ranked 20,700 validated joins: sky-stable shadow EE2C90 leads at
+  3.905/3.651 ms solo overlap per frame; per-join IDs/durations retained.
+- Opt-in JOB_SHADOW_SAVE=1 ports whole FED480 state save with ordered
+  checked page accesses. 432 original returns, 68,200 paired fault/access
+  checks and serial/atomic production-memory replays pass. All 56 paired
+  helper samples improve, median 1.47–1.87x; no callback/FPS gain claimed.
+- Four isolated and four ranking tests pass; mtcore/ddports 20 pass,
+  nine ignored; light runtime 251 pass, zero fail, seven ignored.
+  Combined native gate and head image/per-job A/B pending.
+- Next: head train with this independent switch, then matched shadow-save
+  0/1 capture. Full evidence: `docs/tasks/L167-critical-callbacks.md`.
+- EA5B50 follow-up: 576 original caller fixtures cover 112/112 block
+  starts; 28,800 fault/access pairs and both memory modes pass. Split/flat
+  Pages specializations regress on some paths; neither is registered.
+  Oracle/replay retained for codegen work, not a gameplay-input corpus.
+
+### L158 combo31 critical paths and next lookup leaves (2026-10-13)
+
+- Late hash=0/1 captures: 150 frames / 10,350 joins each; main joins
+  **14.819→13.526 ms/frame**, solo callback tails **7.086→6.887**.
+  uSkyStableShadow leads 123/150 and 121/150 frames. Its join reduction
+  is **7.25%**, inside head's noise threshold; NPC counts change 8→7.
+  No clean causal port/frame improvement established.
+- Exact opt-in `JOB_LOOKUP` leaves 01008200/01008260: **1,380 original
+  vectors**, **11,520 paired fault/access cases**, serial/atomic replay.
+  Four isolated tests pass; synthetic **98/98 pairs improve**, medians
+  **1.43–2.68x**. Crate gate **19 pass / nine ignored**, Python **nine pass**.
+  Runtime light: **242 reported passes / zero failures / seven ignored**.
+- Verified trace compression recovers **3.12 GB**. Evidence and hashes:
+  `docs/tasks/L158-critical-jobs.md`. Combined native gate and live lookup
+  benefit remain pending; next: head integration gate and controlled A/B.
+
+### L159 Vulkan default image gate (2026-10-13)
+
+- Same-run selected raw pass oracle copies attachment load state, replays
+  wgpu on shadows, and compares color/depth/stencil image values in queue
+  order. Separate query/resource fallback counters; initialization retained.
+- 30 CPU / 19 focused GPU tests pass; dedicated four-pass oracle matches
+  all 14 aspects, zero errors/skips/pending. Light suite 221 reported passes,
+  inherited gamma and timing failures / six ignored; timing retry passes.
+  No game acceptance; oracle commit keeps opt-in. Protocol and limitations:
+  `docs/tasks/L159-vk-default.md`.
+- Next: head `DDGPU_VK=1 DDGPU_VK_SHADOW=997` gameplay image gate, then
+  separately adopt the staged default-on commit only after acceptance.
+### L163 boot attribution and exact stream skip (2026-10-13)
+
+- Boot intervals mix original logo holds, authored GUI sequences, input
+  residence and work. Autoplay cadence ~1.66 s; title entry/exit nominally
+  5.3 s. Storage's 120-frame hold has original input escape; no timer edits.
+- Combo30 loading: decoders 16.969 CPU s / 14 s; 207 non-wait samples.
+  CF02E0 76, CFEEC0 59 (28.5%), DB9F40 service/lock loop 52. New opt-in
+  ARCHIVE_SKIP batches buffered skip, preserving original refill and ABI.
+- CPU timeline replaces repeated Toolhelp with one first-Present discovery
+  plus cached GetThreadTimes; process residual covers unregistered CPU.
+  Boot-detail observations opt-in. 192 original-instruction + 192 scalar
+  skip cases pass; 16 parser tests pass; final library results in brief.
+- Not yet compared in game; inherited gamma Reset failure remains. Next:
+  head skip0/1 load/image run plus boot detail; retain FAST2/TABLE opt-ins.
+  Evidence and limitations: docs/LOADING.md, docs/tasks/L163-loader-cpu.md.
+
+### L156 exact inflate and Huffman builder (2026-10-13)
+
+- Opt-in FAST=2 adds bounded table/output spans, packed input pairs and
+  aligned wide matches; TABLE=1 ports exact cf30c0 table construction.
+  Defaults unchanged. Speculative input staging/literal batching regressed
+  and were removed; modern-library throughput parity is not established.
+- Original-instruction gate: 217 streams / 12,893 returns; 632 leaf cases
+  x5; 81 table cases. Light 224 reported pass / inherited gamma failure /
+  6 ignored. All final focused and full-stream rechecks passed.
+- Combined ARC microbench gains are 4.1-13.6% and shared-host dependent; no
+  game loading gain claimed. New zlib_table_ns isolates table work in the
+  next real stage capture. Details: docs/tasks/L156-inflate-fast.md.
+- Next: head FAST=1/TABLE=0 vs FAST=2/TABLE=1 with PORT=0, then repeat
+  logging-off with image/control acceptance; retain separate table-only A/B.
+### L158 critical scheduler jobs (2026-10-13)
+
+- Exact E0E5E0 hash candidate: **528 original returns** match port and
+  isolated lift; **672 paired fault/access cases** pass. All **105 paired
+  CPU samples improve**, median **1.63–2.01x**. Opt-in JOB_HASH=1;
+  combined native gate and head per-job A/B remain pending.
+- Late c26s1 main-only callback leaders: DB7620 **10.679 ms/Present**,
+  4B9FF0 **5.179**, 1090F70 **3.933**. These dispatch virtual methods;
+  old worker coverage/tail duplication prevents per-join critical ranking.
+- Opt-in private-file trace correlates frame/batch, callback completion,
+  residual join, and worker signal/wait boundaries. Complete-batch parser
+  separates last job from longest job and rejects loss/truncation.
+- Four focused runtime and four parser tests pass. Light **226 pass /
+  inherited gamma failure / six ignored**. No game or speedup claim.
+- Next: head corrected census/trace capture, then exact hot-inner A/B.
+  Source map, hashes and limits: `docs/tasks/L158-critical-jobs.md`.
+### L162 original job participation and wake diagnostics (2026-10-13)
+
+- Opt-in `DDRUNTIME_JOB_PARTICIPANTS=1..8` calls original `00DBD620`
+  after construction; original CPU/eight clamp and frame activation remain.
+  No cap patch. Intended head A/B: seven vs eight participants, main included.
+- Wake analyzer reports per-batch jobs/participants, callback gaps,
+  final-job solo tails and join overlaps; **17 parser tests pass**.
+  Signaled lanes are distinct from active participation (one-job bypass).
+- Full light gate **234 reported passes / two inherited failures / seven
+  ignored**; Present timing passes its isolated retry, gamma remains.
+  First-frame follow-up: **242 reported passes / inherited Present timing
+  failure / seven ignored**, three focused ABI/configuration tests pass.
+- c31 h0/h1: 150 frames each, 62,100 paired wakes each, no selected-batch
+  rejects. Signal-to-wait p50/p95 **11.5/52.2 -> 10.6/25.0 us**;
+  final-callback solo overlap **7.086 -> 6.887 ms/frame** dominates wakes.
+  40 of 69 parallel batches/frame have >=8 jobs (h0).
+- Ctor-only p8 configured eight but seventh worker remains idle in profile.
+  First-frame original-setter reapplication candidate logs actual activation;
+  head acceptance remains pending. No speculative sync primitive change.
+- Next: instrumented p8 activation check and matched cache/futex A/B;
+  exact measurements, hashes and limitations: `docs/tasks/L162-job-wake.md`.
+
+### L160 job worker sizing and wake analysis (2026-10-13)
+
+- Original constructor caps participation at min(CPUs,8), minus one for
+  counts >=4: 8/12/16 CPUs all select **main + six active workers**.
+  Seven foreground workers are allocated; a separate background pool has
+  up to eight. More reported CPUs cannot enable the proposed larger pool.
+- Producers mix per-participant and per-object work with dynamic claiming;
+  the scheduler does not split a long callback. Runtime already reports
+  host logical CPU count in parallel mode; ddplay requests a 1 ms timer.
+- Offline L158 signal/wait/first-job pairing: **seven tests pass**. Actual
+  wake latency remains pending head capture; aggregate wait durations are
+  not wake delays. No runtime behavior change or game/shard run.
+- Next: head L158 trace capture, cache/futex 0/0 versus 1/1, with exact
+  binary/env hashes. Details: `docs/tasks/L160-job-threads.md`.
+### L159 shadow failure diagnostics (2026-10-13)
+
+- Head combo30: 1,652 shadow aspect checks / zero mismatches, then backend
+  disconnect around t=91 s. `not Vulkan` can mean invalid encoder or HAL-open
+  failure; Windows records NVIDIA event 153 during the run window. Exact
+  trigger remains unresolved; this is not default-flip acceptance.
+- Opt-in `DDGPU_DIAGNOSTICS=1` prints device-loss and fatal validation
+  errors despite the runtime's silent panic hook; finisher preserves its
+  panic cause. **Four CPU + two bounded GPU checks pass**; validation stays
+  fatal. Next: head repeats shadow997 with diagnostics and event correlation.
+  Details: `docs/tasks/L164-native-backend.md` (L159 follow-up).
+
+### L164 native backend constant processing (2026-10-13)
+
+- c29nat1 backend: 18.5 CPU seconds/30 seconds, 386 busy samples;
+  native preparation 86 inclusive samples, constant uploads 61, synchronous
+  scatter finish 27. Late counters: 52.23 draws/job, 318.54 upload bytes/draw,
+  one submit/job, no new pipelines/texture sets or resource resets.
+- Candidate defers scatter finish to the ordered encoder pool and skips
+  coverage bitmap scans for complete constant banks, retaining range errors.
+  Upload gates, source-slot tickets, draw order and submit count are unchanged.
+- GPU **43 + eight ordering checks pass**, same 96-job image hash. CPU
+  **30 pass / inherited strip-test failure / one ignored**; baseline reproduces
+  that failure. Runtime light **233 pass / inherited gamma failure / seven ignored**.
+- Paired raw-Vulkan median: 64-draw jobs **2.312 -> 2.216 us/draw**;
+  5,000-draw jobs **1.804 -> 1.832** (regression). Same bytes/submits/hashes;
+  no gameplay gain claimed. Next: head native VK=1 A/B and zero-mismatch
+  compare. Details and limitations: `docs/tasks/L164-native-backend.md`.
+### L161c opt-in guest register/flag locals (2026-10-13)
+
+- Default-off `LIFT_REG_LOCALS=1` keeps GPRs and Flags in host locals,
+  flushing at known full-Cpu calls and exits. Split parts and helper
+  boundaries covered; restartable steps unchanged. DD42C0 opt2 Cpu ESP
+  loads/stores **23/14 -> 3/3**; EDI loads **6 -> 3**.
+- **51 focused tests**, **40 original cases per variant at opt0/1/2**,
+  paired full-state/byte checks, and **234 light runtime tests pass**
+  (seven ignored). No shard/game/GPU run or full-corpus gate.
+- No general timing gain: four hot-function opt2 fixture ratios
+  **0.974..1.007x**. Locals also inhibit default opt2 dispatcher removal
+  in DD42C0; isolated LLVM clone-rate-32 removes that dispatcher but still
+  gives no sparse-fixture win. Compiler profiles/defaults unchanged.
+  Next: head's combined train and real worker corpus, including the
+  separate inline-flags candidate. Details: `docs/tasks/L161-codegen.md`.
+
+### L161b adjacent-result zero predicates (2026-10-13)
+
+- Default-off `LIFT_RESULT_ZF=1` replaces adjacent 32-bit result ZF
+  helper calls with direct zero tests; preserves all flag writes, memory,
+  calls and restartable steps. Selected fourteen-body audit removes eleven
+  ZF calls across four bodies, with no other source changes.
+- **47 focused tests pass**, including 13,608 synthetic state/access/fault
+  cases at each opt0/opt1; **31 original cases** pass for each variant at
+  both levels. Recorded FEDD60 loops with synthetic inputs improve median
+  thread cycles **1.054..1.213x opt0 / 1.005..1.155x opt1**. No game gain
+  claimed; not additive when codex-6's pending FEDD60 port is enabled.
+- Push fusion and CFG experiments rejected. No shard generation/build or
+  game/GPU run. Full corpus and gameplay acceptance remain with the head.
+  Next: shared train with the switch enabled; broader redesign measured on
+  codex-6's forthcoming corpus. Details: `docs/tasks/L161-codegen.md`.
+
+### L161 generator flag fixed point (2026-10-13)
+
+- Audited ten hot main/job lifted routines against raw stacks and opt1
+  assembly. Register caching showed mixed timings and was rejected.
+  Independent generator switch `LIFT_FLAG_FIXED_POINT=1` removes dead
+  carry chains; default off. Regeneration removes 3,238 net flag helpers,
+  preserves 44 step bodies and all per-function memory-helper counts.
+- Full opt0 native/vector/inventory gate: 107 pass, 0 failures, 9 ignored;
+  178,130 original cases / 59,734 functions, five unchanged inventory gaps.
+  Generation 927.60 s; opt0 prebuild 370 s. Isolated opt0/opt1 replay passes
+  31 cases; 43 focused generator/fixture tests pass. Full opt1 build stopped
+  per head's shared-train rule; completion remains with that train.
+- Long hash-loop medians improve 1.032–1.824x opt0 / 1.150–1.879x opt1;
+  other fixture timings mixed. Not additive to L158 JOB_HASH=1. No game
+  FPS claim. Runtime light: 232 pass, two timing failures, seven ignored;
+  both failures pass isolated retries. Details: `docs/tasks/L161-codegen.md`.
+- Next: head combined generation/gate with the switch enabled, then
+  matched image/FPS acceptance.
+
 ### L153 game-thread synchronization (2026-10-13)
 
 - Head combo26 late-game census: main plus six joined workers, about 69

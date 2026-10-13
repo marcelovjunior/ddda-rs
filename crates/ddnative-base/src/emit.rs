@@ -12,6 +12,9 @@ use crate::mem::{Mem, PageTable};
 use crate::x86::Cpu;
 use std::ptr::NonNull;
 
+#[path = "emit/flags.rs"]
+mod flags;
+
 /// `push v`: ESP -= 4, then the dword store at the new ESP.
 #[inline]
 pub fn push(v: u32, m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) {

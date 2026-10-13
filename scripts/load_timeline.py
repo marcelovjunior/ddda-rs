@@ -54,7 +54,7 @@ def phases(events):
     """Adjacent observed milestones; no inferred time zero for missing logs."""
     last = None
     for event in events:
-        if event.name in TOTALS or event.name in {"stage_probe", "timing_unavailable", "zlib_helper", "zlib_caller", "zlib_caller_overflow", "interval"}:
+        if event.name in TOTALS or event.name in {"stage_probe", "boot_detail", "timing_unavailable", "zlib_helper", "zlib_caller", "zlib_caller_overflow", "interval"}:
             continue
         yield event, None if last is None else event.time - last
         last = event.time

@@ -309,7 +309,7 @@ impl Recorder<'_> {
     }
     /// Same upload ordering contract as finish_parts, with raw chunks retained
     /// for the existing ordered finisher and GPU-completion keepalives.
-    pub(crate) fn finish_chunks(&mut self) -> (Option<wgpu::CommandBuffer>, Vec<crate::vk::Chunk>) {
+    pub(crate) fn finish_chunks(&mut self) -> (Option<wgpu::CommandEncoder>, Vec<crate::vk::Chunk>) {
         if self.raw.is_none() {
             let (upload, encoder) = self.finish_parts();
             return (upload, encoder.into_iter().map(crate::vk::Chunk::Wgpu).collect());

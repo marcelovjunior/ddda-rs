@@ -1,5 +1,86 @@
 # Phase 1 runtime proposal (R01)
 
+## L174b semantic model palette and culled instances
+
+`DDRUNTIME_SEMANTIC=1` also selects `00FFC9F0` model palette setup and
+`01140180` instancing-culling submission. The two native callers preserve
+guest call seams, scalar SSE ordering, command records and live memory.
+247 original synthetic returns pass sparse and serial/atomic Pages replay
+and the isolated opt2 lifted baseline. Paired scenario medians improve
+1.188–1.485x and 1.248–1.914x respectively; gameplay acceptance is pending.
+The prior `010655A0` port is retained. See the
+[L174b results and x87 oracle limitation](tasks/L174-semantic-draw-b.md).
+
+## L174 semantic material draw and dependency hash
+
+`DDRUNTIME_SEMANTIC=1` replaces E0E5E0 dependency hashing, 10655A0 material
+application and 1066C60 pass selection with ABI-level native Rust, keeping
+the original guest callees. It takes precedence over JOB_HASH at E0E5E0.
+1,168 synthetic original returns match in sparse and serial/atomic Pages
+memory; the isolated opt2 lifted draw bodies match the same 640 draw cases.
+All live memory is checked, including heap addresses below the guest stack.
+Draw benchmark medians improve 1.221–2.111x; this is isolated caller cost,
+not an FPS or image acceptance result. Defaults and inventory totals stay
+unchanged. Head-owned integration/game acceptance is next. See
+[L174 evidence and reproduction](tasks/L174-semantic-draw-b.md).
+## L173 semantic model-draw leaves
+
+`DDRUNTIME_SEMANTIC=1` additionally replaces FF1920 (shadow draw copies),
+FF14D0 (extra material passes), and FEFB90 (render-target/viewport binding).
+480 original ABI cases and production serial/atomic memory replay pass;
+runtime light 255 pass, zero failures, seven ignored. Full train and live
+image/per-job acceptance remain head-owned. See
+[L173 evidence](tasks/L173-semantic-draw-a.md) for isolated timings and
+the x87 signaling-NaN oracle limitation.
+## L177 semantic draw commit and model mesh
+
+`DDRUNTIME_SEMANTIC=1` also replaces FEE320, FFC350 and 01145BF0 with
+native draw-context commit, model-mesh and material-wrapper functions.
+All 1,664 isolated original returns match heap/live-stack ABI checks,
+opt2 lifted replay, and serial/atomic Pages; runtime light 260 pass.
+Synthetic median paired gains are 1.665x/2.126x/1.102x. Guest x87 modes
+and SSE operation order are preserved. Gameplay/image acceptance remains
+with the head's train; see [L177 evidence](tasks/L177-semantic-state-commit.md).
+
+## L168 guest-memory backing experiment
+
+`DDNATIVE_BACKING=regions` opts into 2 MiB-aligned host regions with lazy
+4 KiB commits. Guest permissions, atomic accesses and retired-page lifetime
+stay unchanged. `large` attempts actual large pages, then logs failure and
+falls back to regions; this account lacks the required privilege (error
+1314), and system policy is unchanged. Default backing stays per-page.
+
+Regions improve synthetic sequential access; scattered and hot-leaf gains
+are unproven. Runtime light 250 reported tests pass. Hardware miss rates and
+gameplay performance await the head-owned WPR/game A/B. See
+[L168 measurements and protocol](tasks/L168-tlb.md); alignment alone is not
+large-page backing. Rust allocator counters exclude VirtualAlloc regions.
+## L158 shader lookup opt-in (2026-10-13)
+
+`DDRUNTIME_JOB_LOOKUP=1` registers exact 01008200/01008260 dependency
+lookup leaves below the model-job shader path. Default remains off.
+Original vectors (1,380), isolated lifted/port replay and 11,520 paired
+access/fault positions pass; serial and atomic page policies agree.
+Combined native integration and head live A/B are pending. The combo31
+hash captures identify uSkyStableShadow as the dominant solo tail, but
+shared load and changed NPC counts prevent causal speedup attribution.
+See `docs/tasks/L158-critical-jobs.md` for windows, numbers and hashes.
+
+## L160 job CPU sizing and wake diagnostics
+
+Parallel `GetSystemInfo` reports host logical processors capped at 32;
+serial mode reports one. The game's foreground job constructor caps at
+eight participants and subtracts one for counts >=4, so 8/12/16 reported
+CPUs all select main plus six workers. CPU-count inflation cannot create
+the requested larger pool. No CPU-count override or scheduler patch is
+included. See [L160 evidence](tasks/L160-job-threads.md).
+
+`scripts/job_wake.py <private L158 trace> --min-frame N` reports correlated
+SetEvent-entry to worker-wait-return and first-callback delays, rejecting
+incomplete/ambiguous/lossy batches. It requires L158 wake records; the L153
+aggregate service census alone cannot measure wake latency. Seven offline
+tests pass; live game latency and performance acceptance await head runs.
+
 ## L140 opt-in loading diagnostics and acceleration
 
 `DDRUNTIME_ZLIB_ADLER=1` substitutes the exact native `0x00cf34d0`
@@ -1391,6 +1472,24 @@ WAIT_ABANDONED on the next successful acquisition.
 Tests, measured ranges, Win32 references and inherited semantic limits are
 in `docs/tasks/L153-sync.md`. Implemented/tested is distinct from game
 comparison; no L153 game run has yet been performed by the agent.
+
+## L158 correlated scheduler jobs and hash candidate
+
+`DDRUNTIME_CRITICAL_JOBS=<private output file>` records application frame
+iterations, DBE560 batches, all eight main/worker callback sites, DBE66D
+joins, and start-event/wait-return pairs. Use with `DDRUNTIME_SYNC_PROFILE=1`
+for matched job timing. Queue mode, participant limits, object/vtable and
+candidate virtual target are observations; scheduler behavior is unchanged.
+The bounded writer never blocks workers and reports loss. Analyze with
+`scripts/critical_jobs.py FILE --trace --first-frame N`; incomplete/lossy
+batches are rejected. Last-completing and longest-duration jobs are distinct.
+`--dti` optionally labels vtables from the private registry.
+
+`DDRUNTIME_JOB_HASH=1` enables the exact E0E5E0 dependency hash port (default
+off). Original-instruction and isolated lifted checks pass; synthetic leaf
+timings improve 1.63–2.01x. Combined native gate and head job/FPS acceptance
+remain pending. See [L158 results and capture limits](tasks/L158-critical-jobs.md).
+
 ## L151 parallel pipeline preparation
 
 `DDGPU_PIPELINE_THREADS=2..4` opts into parallel creation of L116's recorded
@@ -1467,3 +1566,82 @@ main work in the double-buffered handoff. The first census omitted worker job
 callbacks and counted tail redispatch twice; the follow-up fixes both, preserves
 MXCSR, and writes sparse cumulative reports. L158 owns the subsequent correlated
 batch trace; aggregate c26 rows cannot identify the last worker in a long join.
+
+### L159 Vulkan pass image gate
+
+`DDGPU_VK=1 DDGPU_VK_SHADOW=997` samples same-run raw passes against wgpu
+using copied attachment load state and identical retained draws. Color,
+depth and stencil reductions execute before later passes overwrite targets.
+`DDGPU_VK_SHADOW=1` checks all eligible passes (expensive); unset/0 disables.
+Matched, mismatched, skipped, pending and error counts remain distinct;
+receipt hashes describe reductions, not presented frames. New Vulkan query
+and resource-fallback counters separate initialization from unsupported work.
+Head's image gate and limitations: `docs/tasks/L159-vk-default.md`.
+
+
+## L156 exact decoder and table opt-ins (2026-10-13)
+
+`DDRUNTIME_ZLIB_FAST=2` selects the exact `cf2cb0` candidate with bounded
+root-table/output spans via `Pages`, packed input pairs, aligned atomic
+64-bit forward matches (periodic seeds for distances 1/2/4), and one
+forward copy per remaining match. Other short distances retain byte order.
+Logical bit counts, input/output guards, end/error modes, argument spills,
+registers and all return-state bytes stay original. Explicit overrides win;
+FAST=0/1 remain available and defaults do not change. Refill speculation and
+literal batching were measured and removed after ARC regressions.
+
+`DDRUNTIME_ZLIB_TABLE=1` independently replaces the entire `cf30c0`
+Huffman-table builder. Original stack/register layout, capacity and invalid
+tree paths remain; embedded tables are read from the mapped install image.
+Local frame storage snapshots only the six cdecl arguments and commits
+written bytes at return; unused stack padding is never read.
+Load telemetry appends `zlib_table_ns` to transition deltas and reports the
+builder's helper total, including when an explicit override is wrapped.
+
+The differential gate covers 217 streams / 12,893 returns, 632 leaf cases
+in five decoder/memory configurations, and 81 direct table fixtures.
+Full light: 224 reported pass, inherited fullscreen gamma failure, six
+ignored. Final argument-only frame and page-access rechecks passed.
+The combined ARC microbenchmark improves 4.1-13.6%; FAST=2 alone is mixed.
+Modern-library parity and actual loading/image/control acceptance remain
+unestablished. Sources, hashes, measurements and limits:
+[task L156](tasks/L156-inflate-fast.md).
+## L167 exact shadow callback state save
+
+`DDRUNTIME_JOB_SHADOW_SAVE=1` opts into the whole FED480 context state-save
+port. Its partial-save branch retains 81 ordered MOVSD-width accesses,
+DF, overlap, guest ABI, and install-supplied selection keys, while using
+checked `Pages` in the native port. The full-save branch delegates to the
+existing memcpy dispatch. No scheduler or callback work order changes.
+
+432 original returns, 68,200 paired fault/access positions, and both
+serial/atomic production-memory replays pass. Isolated helper speedup is
+1.47–1.87x median; combined native gate and head callback/image/FPS A/B
+remain pending. Default off. Per-join ranking and source/corpus details:
+[L167 results](tasks/L167-critical-callbacks.md).
+
+## L162 job participant diagnostic
+
+`DDRUNTIME_JOB_PARTICIPANTS=1..8` invokes original `00DBD620` after sMain
+construction and once at the first `00DBFA90` entry after startup configuration.
+It sets configured participation (main included), subject to
+the original CPU/eight cap; the normal frame-start path activates it.
+Absent preserves defaults. It neither patches caps nor changes CPU reporting.
+First-frame stderr reports actual activation. C31's ctor-only option produced
+configured eight but an idle seventh worker; the first-frame follow-up still
+needs head acceptance. Later game/user configuration changes remain effective.
+See `docs/tasks/L162-job-wake.md` for exact 7/8 capture env, verification
+status and the `scripts/job_wake.py` per-join latency/tail report.
+
+L162c adds independent Windows opt-ins `DDRUNTIME_THREAD_PRIORITY=1` and
+`DDRUNTIME_THREAD_IDEAL=1`. These forward the game's SetThreadPriority and
+SetThreadIdealProcessor requests using retained host thread handles (also
+valid before guest ResumeThread), preserving host errors and return values.
+Defaults retain the previous stubs. The ideal processor is a scheduling hint,
+not an affinity restriction; x86's query sentinel 32 maps to the host sentinel.
+Foreground workers request ideal CPUs 1..7 at `00DBDF30`, with no priority
+boost. The background pool requests priority -1 and ideal CPUs 0..7 at
+`00DBDFE0`. No new priority, queue ordering, or worker count is imposed.
+Four Windows tests cover actual host state, suspended creation, current-thread
+handles, invalid/closed handles, aliases and ABI/error results. Gameplay
+performance and eighth-lane callback confirmation still require head captures.

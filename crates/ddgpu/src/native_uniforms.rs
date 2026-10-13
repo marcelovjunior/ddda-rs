@@ -112,7 +112,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         stats: &mut RecorderStats,
-    ) -> Option<wgpu::CommandBuffer> {
+    ) -> Option<wgpu::CommandEncoder> {
         if self.at == 0 {
             return None;
         }
@@ -162,7 +162,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(width, groups.div_ceil(width), 1);
         }
-        Some(encoder.finish())
+        // Finish on the ordered encoder worker, just like the render chunks.
+        // Queue writes and the source-slot ticket remain on the producer.
+        Some(encoder)
     }
     /// What the caller waits for before `upload`: None, every earlier
     /// batch submitted (the snapshots themselves are written by the queue);

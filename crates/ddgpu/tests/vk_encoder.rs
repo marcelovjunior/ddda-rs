@@ -726,3 +726,35 @@ fn feedback_views_retire_after_submission() {
         else { reference = Some(images); }
     }
 }
+
+/// Run this test in its own process: shadow sampling is fixed at first use.
+#[test]
+#[ignore = "run isolated: shadow interval is fixed on first Vulkan pass"]
+fn shadow_same_run_mrt_depth_stencil() {
+    std::env::set_var("DDGPU_VK_SHADOW", "1");
+    let before = ddgpu::vk::shadow_stats();
+    blend_case(1);
+    // Nonzero load state plus a stencil replacement exercises both seed and
+    // write comparison, rather than only comparing untouched zero stencil.
+    {
+        let _lock = SERIAL.lock().unwrap();
+        let color = target(0x170, 21);
+        let depth = depth_target();
+        let mut clear = clear_of(&[color.clone()], 0xff294763);
+        clear.flags = 7;
+        clear.stencil = 19;
+        clear.depth = Some(depth.clone());
+        let mut d = draw(&[[0.2,0.4,0.8,1.0]], [Some(color.clone()),None,None,None], 0.4,
+            &[(7,1),(14,1),(52,1),(53,1),(54,1),(55,3),(56,8),(57,73),(58,255),(59,255),(174,1)]);
+        d.depth = Some(depth);
+        d.scissor = [1,1,3,3];
+        compare_case("shadow-stencil-load-and-write", &[clear], &[d], &[color]);
+    }
+    let after = ddgpu::vk::shadow_stats();
+    assert!(after.selected > before.selected, "{after:?}");
+    assert!(after.matched_aspects >= before.matched_aspects + 14, "{after:?}");
+    assert_eq!(after.mismatched_aspects, before.mismatched_aspects, "{after:?}");
+    assert_eq!(after.errors, before.errors, "{after:?}");
+    assert_eq!(after.skipped_passes, before.skipped_passes, "{after:?}");
+    assert_eq!(after.pending_aspects, 0, "{after:?}");
+}

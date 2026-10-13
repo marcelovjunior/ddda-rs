@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 import lean_emission as le
+import rust_base
 from test_lean_emission import FIXTURE
 
 CMP = '{ let r = cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); }'
@@ -96,7 +97,7 @@ class Flow(unittest.TestCase):
         ]
         optimized = le.function_flags([le.lean(a) for a in arms])
         self.assertEqual(sum(a.count('let l129_condition') for a in optimized), 2)
-        source = '\n'.join(f'#[path="{(base / (m + ".rs")).as_posix()}"] mod {m};' for m in ('mem', 'x86', 'x87', 'emit', 'hooks'))
+        source = rust_base.modules(root)
         source += '\nuse mem::Mem; use x86::{Cpu,Flags};'
         for module, body in [('plain', arms), ('lean', optimized), ('split', optimized)]:
             name = 'g_00001000' if module == 'split' else 'f_00001000'
@@ -112,7 +113,7 @@ class Flow(unittest.TestCase):
             path = Path(tmp) / 'check.rs'
             exe = Path(tmp) / 'check.exe'
             path.write_text(source)
-            for opt in (0, 1):
+            for opt in (0, 1, 2):
                 for command in (['rustc', '--edition=2021', '-Awarnings', f'-Copt-level={opt}', str(path), '-o', str(exe)], [str(exe)]):
                     run = subprocess.run(command, capture_output=True, text=True, timeout=60)
                     self.assertEqual(run.returncode, 0, run.stdout + run.stderr)

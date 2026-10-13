@@ -141,6 +141,8 @@ pub type ExtCall = dyn Fn(&mut dyn crate::mem::Mem, &mut Cpu, u32);
 /// Direct cross-shard calls must never use the external/mock call handler.
 pub type LiftFn = fn(&mut dyn crate::mem::Mem, &mut Cpu);
 pub type LiftLookup = fn(u32) -> Option<LiftFn>;
+#[path = "private_calls.rs"]
+pub mod private_calls;
 static LIFTED: std::sync::OnceLock<LiftLookup> = std::sync::OnceLock::new();
 
 pub fn set_lifted_lookup(lookup: LiftLookup) {
@@ -245,28 +247,61 @@ pub fn call_local(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32, f: Li
 #[cold]
 #[inline(never)]
 fn call_overridden(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32, f: LiftFn) {
+    #[cfg(feature = "private-replay")]
+    if private_calls::dispatch(m, cpu, target) { return; }
     override_of(target).unwrap_or(f)(m, cpu)
 }
 
 thread_local! {
     static EXT: std::cell::RefCell<Option<std::rc::Rc<ExtCall>>> = std::cell::RefCell::new(None);
+    /// The installed handler, for `call_ext`'s fast path: a plain pointer
+    /// read instead of a RefCell borrow and a reference-count round trip
+    /// per call (L171). Kept valid by EXT and, for a handler replaced while
+    /// a call through it is still running, by RETIRED.
+    static EXT_PTR: std::cell::Cell<Option<std::ptr::NonNull<ExtCall>>> = const { std::cell::Cell::new(None) };
+    /// `call_ext` calls in progress on this thread.
+    static EXT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Handlers replaced while calls were in progress, kept until none is.
+    static RETIRED: std::cell::RefCell<Vec<std::rc::Rc<ExtCall>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Install the handler for `call_ext` on this thread; returns the old one.
 pub fn set_ext_calls(f: Option<Box<ExtCall>>) -> Option<std::rc::Rc<ExtCall>> {
-    EXT.with(|e| std::mem::replace(&mut *e.borrow_mut(), f.map(std::rc::Rc::from)))
+    let new: Option<std::rc::Rc<ExtCall>> = f.map(std::rc::Rc::from);
+    EXT_PTR.with(|p| p.set(new.as_ref().map(|r| std::ptr::NonNull::from(&**r))));
+    let old = EXT.with(|e| std::mem::replace(&mut *e.borrow_mut(), new));
+    if EXT_DEPTH.with(|d| d.get()) == 0 {
+        RETIRED.with(|r| r.borrow_mut().clear());
+    } else if let Some(old) = &old {
+        // a call through `old` may still be running below us
+        RETIRED.with(|r| r.borrow_mut().push(std::rc::Rc::clone(old)));
+    }
+    old
 }
 
-/// A call from lifted code to `target`, which is not lifted. The handler is
-/// cloned out of the thread-local slot (a reference count), not taken, so a
-/// handler that dispatches into lifted code which calls `call_ext` again
-/// (nested calls, callbacks, recursion) finds it installed, and a panic
-/// inside the handler leaves it in place.
+/// Restores the call depth even when the handler unwinds.
+struct ExtDepth;
+impl Drop for ExtDepth {
+    fn drop(&mut self) {
+        EXT_DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
+/// A call from lifted code to `target`, which is not lifted. A handler that
+/// dispatches into lifted code which calls `call_ext` again (nested calls,
+/// callbacks, recursion) finds itself installed; a handler replaced during
+/// a call stays alive until the outermost call returns, and a panic inside
+/// the handler leaves it in place.
 #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
 pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
-    let f = EXT.with(|e| e.borrow().clone())
+    let f = EXT_PTR.with(|p| p.get())
         .unwrap_or_else(|| panic!("call to {target:#010x}: no handler for untranslated code"));
-    f(m, cpu, target);
+    EXT_DEPTH.with(|d| d.set(d.get() + 1));
+    let _depth = ExtDepth;
+    // SAFETY: EXT (or RETIRED while this call is in progress) owns the
+    // handler `f` points at: set_ext_calls retires a replaced handler
+    // whenever a call is in progress, and frees retired ones only at depth 0.
+    unsafe { (*f.as_ptr())(m, cpu, target) }
 }
 
 impl Flags {

@@ -7,9 +7,11 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import lean_emission as le
 import lift
+import rust_base
 
 ADD = "{ let r = cpu.fl.alu_add(cpu.eax, 0x1u32, 32); cpu.eax = r; }"
 CMP = "{ let r = cpu.fl.alu_sub(cpu.eax, 0x5u32, 32); }"
@@ -17,6 +19,24 @@ JCC = 'pc = if cpu.fl.cond("e") { 0x2000 } else { 0x1010 }; continue;'
 
 
 class DeadFlags(unittest.TestCase):
+    def setUp(self):
+        switch = patch.dict(os.environ, {"LIFT_FLAG_FIXED_POINT": "1"})
+        switch.start()
+        self.addCleanup(switch.stop)
+
+    def test_default_and_disabled_keep_single_pass(self):
+        inc = 'cpu.fl.inc_dec(x86::INC, a, r, 32);'
+        arm = f'{ADD} {inc} {CMP} {JCC}'
+        for value in (None, '0'):
+            with patch.dict(os.environ):
+                if value is None:
+                    os.environ.pop('LIFT_FLAG_FIXED_POINT', None)
+                else:
+                    os.environ['LIFT_FLAG_FIXED_POINT'] = value
+                self.assertEqual(le.dead_flags(arm), le._dead_flags_once(arm))
+                self.assertIn('alu_add', le.dead_flags(arm))
+        self.assertNotIn('alu_add', le.dead_flags(arm))
+
     def test_overwritten_write_becomes_plain_arithmetic(self):
         self.assertEqual(le.dead_flags(f"0x1000 => {{ {ADD} {CMP} {JCC} }}"),
                          f"0x1000 => {{ cpu.eax = cpu.eax.wrapping_add(0x1u32); {CMP} {JCC} }}")
@@ -55,6 +75,25 @@ class DeadFlags(unittest.TestCase):
         out = le.dead_flags(f"0x1000 => {{ {inc} {CMP} {JCC} }}")
         self.assertIn("let r = a.wrapping_add(1) & u32::MAX; cpu.esi = r; }", out)
         self.assertNotIn("inc_dec", out)
+
+    def test_dead_carry_chain_reaches_fixed_point(self):
+        inc = ('{ let a = cpu.esi; let r = a.wrapping_add(1); '
+               'cpu.fl.inc_dec(x86::INC, a, r, 32); cpu.esi = r; }')
+        for length in (1, 2, 8):
+            arm = f'0x1000 => {{ {ADD} ' + (inc + ' ') * length + f'{CMP} {JCC} }}'
+            out = le.dead_flags(arm)
+            self.assertNotIn('alu_add', out)
+            self.assertNotIn('inc_dec', out)
+            self.assertIn(CMP, out)
+            self.assertEqual(le.dead_flags(out), out)
+            self.assertEqual(out.count('cpu.esi = r;'), length)
+
+    def test_live_carry_chain_and_call_boundary_stay(self):
+        inc = ('{ let a = cpu.esi; let r = a.wrapping_add(1); '
+               'cpu.fl.inc_dec(x86::INC, a, r, 32); cpu.esi = r; }')
+        for reader in ('cpu.edx = cpu.fl.cf() as u32;', 'x86::call_ext(m, cpu, 0x400000);'):
+            arm = f'0x1000 => {{ {ADD} {inc} {inc} {reader} {CMP} {JCC} }}'
+            self.assertEqual(le.dead_flags(arm), arm)
 
     def test_loop_body_is_a_reader(self):
         loop = "for k in 0..4 { cpu.xmm[0][k] = cpu.fl.r; }"
@@ -215,6 +254,7 @@ SSE = ["{ let a = esp.wrapping_add(0x10); xmm1 = [m.u32(a), m.u32(a.wrapping_add
 
 
 class Differential(unittest.TestCase):
+    @patch.dict(os.environ, {"LIFT_FLAG_FIXED_POINT": "1"})
     def test_lean_and_literal_templates_agree(self):
         S, L = lift.SAVE, lift.LOAD
         arms = [
@@ -226,7 +266,8 @@ class Differential(unittest.TestCase):
             "0x1010 => { " + " ".join([
                 alu("or", "eax", "0x10u32"),
                 "{ let (a, b) = (edx, 0x0u32); let r = fl.alu_carry(a, b, 32, false); edx = r; }",
-                alu("add", "ecx", "0x3u32"), inc("ecx"), alu("test", "eax", "eax"), 'ebx = fl.cond("ne") as u32;',
+                alu("add", "ecx", "0x3u32"), inc("ecx"), inc("ecx"), inc("edi"),
+                alu("test", "eax", "eax"), 'ebx = fl.cond("ne") as u32;',
                 alu("add", "esi", "ebx"), pop("ebp"), f"esp = esp.wrapping_add(4 + 0); {S} return; }}"]),
             "0x1020 => { " + " ".join([
                 alu("add", "eax", "ecx"), push("eax"),
@@ -269,11 +310,7 @@ class Differential(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         base = root / "crates/ddnative-base/src"
         source = f'''#![allow(warnings)]
-            #[path = "{(base / 'mem.rs').as_posix()}"] mod mem;
-            #[path = "{(base / 'x86.rs').as_posix()}"] mod x86;
-            #[path = "{(base / 'x87.rs').as_posix()}"] mod x87;
-            #[path = "{(base / 'emit.rs').as_posix()}"] mod emit;
-            #[path = "{(base / 'hooks.rs').as_posix()}"] mod hooks;
+            {rust_base.modules(root)}
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod plain {{ use super::*; {plain} }}
             mod lean {{ use super::*; {lean} }}
@@ -284,9 +321,10 @@ class Differential(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="lean-test-", dir=target) as tmp:
             src, exe = Path(tmp) / "fixture.rs", Path(tmp) / "fixture.exe"
             src.write_text(source)
-            for command in (["rustc", "--edition=2021", "--test", str(src), "-o", str(exe)], [str(exe)]):
-                result = subprocess.run(command, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for opt in (0, 1, 2):
+                for command in (["rustc", "--edition=2021", "--test", f"-Copt-level={opt}", str(src), "-o", str(exe)], [str(exe)]):
+                    result = subprocess.run(command, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

@@ -66,14 +66,14 @@ pub(crate) fn texture_upload(start: Option<Instant>, bytes: u64) {
 }
 
 #[derive(Default)]
-struct Interval { time: f64, name: String, counters: [u64; 29], cpu: [u64; 7] }
+struct Interval { time: f64, name: String, counters: [u64; 30], cpu: [u64; 7] }
 static INTERVAL: Mutex<Option<Interval>> = Mutex::new(None);
-const NAMES: [&str; 29] = ["reads", "bytes", "read_ns", "archive_reads", "archive_ns",
+const NAMES: [&str; 30] = ["reads", "bytes", "read_ns", "archive_reads", "archive_ns",
     "inflates", "inflate_ns", "zlib_calls", "zlib_ns", "zlib_fast_ns", "adler_ns",
     "window_ns", "geometry_ns", "open_ns", "vorbis_ns", "modules", "module_ns",
     "translate_ns", "pipelines", "pipeline_ns", "texture_uploads", "texture_bytes", "texture_enqueue_ns",
     "archive_io_reads", "archive_io_bytes", "archive_io_ns", "emu_engine_ns",
-    "service_samples", "service_sample_ns"];
+    "service_samples", "service_sample_ns", "zlib_table_ns"];
 const CLASSES: [&str; 7] = ["main", "render", "jobs", "loader_io", "host_main", "backend", "other"];
 fn delta<const N: usize>(now: [u64; N], before: [u64; N]) -> [u64; N] {
     std::array::from_fn(|i| now[i].saturating_sub(before[i]))
@@ -91,12 +91,13 @@ pub fn transition(name: &str, details: std::fmt::Arguments<'_>) {
     ddnative_base::x87::park();
     ddnative_base::x86::ldmxcsr(ddnative_base::x86::MXCSR_DEFAULT);
     let mut previous = INTERVAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut counters = [0; 29];
+    let mut counters = [0; 30];
     counters[..15].copy_from_slice(&interval_counters());
     if let Some(snapshot) = GPU.get() { counters[15..20].copy_from_slice(&snapshot()); }
     for i in 0..3 { counters[20+i] = UPLOADS[i].load(Relaxed); }
     for i in 0..6 { counters[23+i] = EXTRA[i].load(Relaxed); }
-    let cpu = cpu_snapshot();
+    counters[29] = ZLIB_HELPER_NS[4].load(Relaxed);
+    let cpu = cpu_snapshot(name == "first_present");
     let now = seconds();
     let old = previous.take().unwrap_or_default();
     let mut fields = String::new();
@@ -131,7 +132,7 @@ use windows_cpu::cpu_snapshot;
 #[cfg(not(windows))]
 pub(crate) fn register_thread(_: &str) {}
 #[cfg(not(windows))]
-fn cpu_snapshot() -> [u64; 7] { [0; 7] }
+fn cpu_snapshot(_: bool) -> [u64; 7] { [0; 7] }
 
 #[cfg(windows)]
 mod windows_cpu {
@@ -147,6 +148,8 @@ mod windows_cpu {
     unsafe extern "system" {
         fn GetCurrentThreadId() -> u32;
         fn GetCurrentProcessId() -> u32;
+        fn GetCurrentProcess() -> isize;
+        fn GetProcessTimes(h: isize, c: *mut FileTime, e: *mut FileTime, k: *mut FileTime, u: *mut FileTime) -> i32;
         fn OpenThread(access: u32, inherit: i32, id: u32) -> isize;
         fn CloseHandle(handle: isize) -> i32;
         fn GetThreadTimes(h: isize, c: *mut FileTime, e: *mut FileTime, k: *mut FileTime, u: *mut FileTime) -> i32;
@@ -158,8 +161,9 @@ mod windows_cpu {
     }
     struct Thread { handle: isize, class: usize, last: u64 }
     impl Drop for Thread { fn drop(&mut self) { unsafe { CloseHandle(self.handle); } } }
-    static THREADS: OnceLock<Mutex<HashMap<u32, Thread>>> = OnceLock::new();
-    fn threads() -> &'static Mutex<HashMap<u32, Thread>> { THREADS.get_or_init(Default::default) }
+    static DISCOVERED: AtomicBool = AtomicBool::new(false);
+    static THREADS: OnceLock<Mutex<HashMap<(u32, u64), Thread>>> = OnceLock::new();
+    fn threads() -> &'static Mutex<HashMap<(u32, u64), Thread>> { THREADS.get_or_init(Default::default) }
     pub(crate) fn register_thread(class: &str) {
         if !enabled() { return; }
         let mut threads = threads().lock().unwrap_or_else(|e| e.into_inner());
@@ -167,22 +171,34 @@ mod windows_cpu {
         unsafe {
             let id = GetCurrentThreadId();
             let class = CLASSES.iter().position(|s| *s == class).unwrap_or(6);
-            if let Some(t) = threads.get_mut(&id) { t.class = class; return; }
             let h = OpenThread(0x0800, 0, id); // THREAD_QUERY_LIMITED_INFORMATION
-            if h != 0 { threads.insert(id, Thread { handle: h, class, last: 0 }); }
+            if h != 0 {
+                let (mut c, mut e, mut k, mut u) = (FileTime::default(), FileTime::default(), FileTime::default(), FileTime::default());
+                if GetThreadTimes(h, &mut c, &mut e, &mut k, &mut u) == 0 { CloseHandle(h); return; }
+                // A retained handle belongs to a thread object, while Windows
+                // may reuse its numeric ID after exit. Preserve both lifetimes.
+                let key = (id, c.ns());
+                if let Some(t) = threads.get_mut(&key) { t.class = class; CloseHandle(h); }
+                else { threads.insert(key, Thread { handle: h, class, last: k.ns() + u.ns() }); }
+            }
         }
     }
-    pub(super) fn cpu_snapshot() -> [u64; 7] {
+    pub(super) fn cpu_snapshot(discover: bool) -> [u64; 7] {
         let mut threads = threads().lock().unwrap_or_else(|e| e.into_inner());
-        // Discover host backend/encoder/audio threads too. Guest threads register
-        // at entry, before any guest code, so short-lived guest work is retained.
+        // Discover host backend/encoder/audio threads ONCE, at first Present,
+        // when the renderer exists. Toolhelp enumerates the whole machine and
+        // previously dominated frequent title/stage transitions (c30load).
+        // Guest threads register at entry; all later samples query cached
+        // handles. Unregistered host CPU remains in the process residual.
         unsafe {
-            let snapshot = CreateToolhelp32Snapshot(4, 0);
+            let snapshot = if discover && !DISCOVERED.swap(true, Relaxed) {
+                CreateToolhelp32Snapshot(4, 0)
+            } else { -1 };
             if snapshot != -1 {
                 let mut e = Entry { size: std::mem::size_of::<Entry>() as u32, usage: 0, tid: 0, pid: 0, base: 0, delta: 0, flags: 0 };
                 let mut ok = Thread32First(snapshot, &mut e);
                 while ok != 0 {
-                    if e.pid == GetCurrentProcessId() && !threads.contains_key(&e.tid) {
+                    if e.pid == GetCurrentProcessId() {
                         let h = OpenThread(0x0800, 0, e.tid);
                         if h != 0 {
                             let mut p = std::ptr::null_mut();
@@ -194,7 +210,10 @@ mod windows_cpu {
                                 if name.starts_with("d3d9-backend") || name.starts_with("wgpu-") { class = 5; }
                                 LocalFree(p);
                             }
-                            threads.insert(e.tid, Thread { handle: h, class, last: 0 });
+                            let (mut c, mut exit, mut k, mut u) = (FileTime::default(), FileTime::default(), FileTime::default(), FileTime::default());
+                            if GetThreadTimes(h, &mut c, &mut exit, &mut k, &mut u) != 0 {
+                                threads.entry((e.tid, c.ns())).or_insert(Thread { handle: h, class, last: k.ns() + u.ns() });
+                            } else { CloseHandle(h); }
                         }
                     }
                     ok = Thread32Next(snapshot, &mut e);
@@ -207,8 +226,39 @@ mod windows_cpu {
                 if GetThreadTimes(t.handle, &mut c, &mut e, &mut k, &mut u) != 0 { t.last = k.ns()+u.ns(); }
                 sums[t.class] += t.last;
             }
+            let (mut c, mut e, mut k, mut u) = (FileTime::default(), FileTime::default(), FileTime::default(), FileTime::default());
+            if GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) != 0 {
+                // Process totals include unregistered or already-exited host
+                // workers. Samples are sequential, so clamp quantization skew.
+                let classified: u64 = sums[..6].iter().sum();
+                sums[6] = (k.ns() + u.ns()).saturating_sub(classified);
+            }
             sums
         }
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn cached_handle_retains_exited_worker_cpu_without_discovery() {
+        if !enabled() { return; }
+        let id = std::thread::spawn(|| {
+            register_thread("loader_io");
+            register_thread("loader_io"); // idempotent, even after discovery
+            let start = Instant::now();
+            let mut value = 1u64;
+            while start.elapsed() < Duration::from_millis(40) {
+                value = std::hint::black_box(value.wrapping_mul(1664525).wrapping_add(1013904223));
+            }
+            unsafe { GetCurrentThreadId() }
+        }).join().unwrap();
+        let a = cpu_snapshot(false);
+        let threads = threads().lock().unwrap_or_else(|e| e.into_inner());
+        let retained: Vec<_> = threads.iter().filter(|((tid, _), _)| *tid == id).collect();
+        assert!(!retained.is_empty());
+        assert!(retained.iter().any(|(_, t)| t.last > 0 && t.class == 3));
+        drop(threads);
+        let b = cpu_snapshot(false);
+        assert!(b[3] >= a[3]);
     }
 }
 
@@ -222,8 +272,8 @@ mod tests {
     }
     #[test]
     fn windows_cpu_snapshot_is_monotonic() {
-        let a = cpu_snapshot().iter().sum::<u64>();
-        let b = cpu_snapshot().iter().sum::<u64>();
+        let a = cpu_snapshot(false).iter().sum::<u64>();
+        let b = cpu_snapshot(false).iter().sum::<u64>();
         assert!(b >= a);
     }
     #[test]
