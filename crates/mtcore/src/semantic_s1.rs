@@ -29,7 +29,7 @@ fn set_float(pg: Pages, m: &mut dyn Mem, address: u32, v: f32) {
 /// 0x004241F0 (register convention, `EAX` = record): initialise the 0x68-byte
 /// effect request the timer update below hands to 0x00429680. Only the bits
 /// of the flags word at +0x24 it keeps are read from the stale record.
-fn init_effect_request(pg: Pages, m: &mut dyn Mem, r: u32) {
+pub fn init_effect_request(pg: Pages, m: &mut dyn Mem, r: u32) {
     let at = |o: u32| r.wrapping_add(o);
     pg.set_u32(m, at(0xc), 0);
     pg.set_u32(m, at(0x1c), 0);
@@ -226,9 +226,9 @@ fn tuning_value(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, index: u32,
     }
     let method = pg.u32(m, pg.u32(m, object).wrapping_add(0x3c));
     call_from(m, c, pg, frame, object, &[index], back, |m, c| ddnative_base::x86::call_ext(m, c, method));
-    // fstp dword: the value leaves the x87 stack as a float
-    let bits = c.st.top_f32().unwrap_or(0);
-    c.st.pop();
+    // fstp dword [frame + 0x1c]: the value leaves the x87 stack as a float
+    c.st.real_memory::<0x18d9, 4, true>(m, frame.wrapping_add(0x1c));
+    let bits = pg.u32(m, frame.wrapping_add(0x1c));
     f32::from_bits(bits)
 }
 
@@ -651,9 +651,10 @@ impl RenderContext {
         self.set_word(m, 0x24, copy.wrapping_add(bytes));
         let size = (pg.u16(m, block.wrapping_add(0x18)) as u32) * 4;
         let source = self.word(m, field);
-        for k in (0..size).step_by(4) {
-            let v = pg.u32(m, source.wrapping_add(k));
-            pg.set_u32(m, copy.wrapping_add(k), v);
+        // the CRT memcpy behaves like memmove: read everything before writing
+        let words: Vec<u32> = (0..size).step_by(4).map(|k| pg.u32(m, source.wrapping_add(k))).collect();
+        for (k, v) in words.into_iter().enumerate() {
+            pg.set_u32(m, copy.wrapping_add(4 * k as u32), v);
         }
         self.set_word(m, field, copy);
         self.mark_dirty(m, 1);
@@ -754,4 +755,188 @@ pub fn sync_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
     c.eax = result;
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(12);
+}
+
+// Translated from 0x00c25ea0 (DDDA.exe 2017-12-13 Steam), uOmSwingBaseInstancing::vf11.
+/// 0x00C25EA0, `instancing->update(ctx)` (thiscall, `ret 4`): the instanced
+/// object's per-draw state update (`uOmSwingBaseInstancing::vf11`). `this`
+/// embeds a sub-object at `this + 0x470` (called `part` here) whose virtual
+/// methods do the work; `ctx` is the draw context.
+///
+/// 1. When the object is active (`ctx[0x16A] & 0x208`, the culling record
+///    `P = ctx[0x1370] & ~0xF` has `P[5] != 0`, and the byte `this[0x15F0]`
+///    is set): with `P[4] != 0` it builds six clip planes from `P`'s four
+///    floats (`p0..p3`: `(c, p3 - p0)`, `(-c, p0 + p3)`, and likewise for
+///    `p1` and `p2`, with the plane normals `c` from the constants at
+///    0x01629530/40/50 and their sign-flipped copies) in frame memory,
+///    clears the cache with 0x00FED1E0, copies the constant block
+///    `[[ctx + 0x18] + 0x554]` and the planes into the context's bump
+///    allocator (`ctx[0x24]`, grown by 0x00FED890), points `ctx[0xCA0]` at
+///    it and calls the part's method 0x34 `(ctx)`. With `P[4] == 0` it only
+///    remembers (flag A) that there were no planes.
+/// 2. Calls the part's method 0x2C `(ctx, ((this[0x108] << 19) >> 28), flag A)`.
+///    If it accepts: copies `this[0x108] >> 25 & 0xF` and `this[0x100]` into
+///    the part (+0x1C, +0x20), calls 0x00FA5860 `(ctx)` when `this[0x449] == 1`,
+///    then methods 0x3C, and (planes built) 0x38 with the clip-binding
+///    restore below, then 0x30. If it declines: only 0x38 and the restore,
+///    when planes were built.
+/// The restore puts the clip binding `ctx[0xCA0]` back to its previous
+/// value (or `[ctx[0x20] + 0xAA8]` when there was none), journalled as
+/// entry 0x155, when it changed.
+pub fn update_instancing(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let ctx = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // the original's frame after its prologue and three pushes
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x74 + 12);
+    let part = this.wrapping_add(0x470);
+    let rc = RenderContext { pg, ctx };
+    (c.ebp, c.esi, c.edi) = (entry.wrapping_sub(4), ctx, part);
+    let culling = pg.u32(m, ctx.wrapping_add(0x1370)) & 0xffff_fff0;
+    let active = pg.u16(m, ctx.wrapping_add(0x16a)) & 0x208 != 0
+        && pg.u32(m, culling.wrapping_add(0x14)) != 0
+        && pg.u8(m, this.wrapping_add(0x15f0)) != 0;
+    let previous = pg.u32(m, ctx.wrapping_add(0xca0)) & 0xffff_fff0;
+    pg.set_u8(m, frame.wrapping_add(0x14), 0);
+    let mut built = false;
+    // virtual call on the part: `part->method(args)`
+    let part_call = |m: &mut dyn Mem, c: &mut Cpu, slot: u32, args: &[u32], back: u32| {
+        let method = pg.u32(m, pg.u32(m, part).wrapping_add(slot));
+        call_from(m, c, pg, frame, part, args, back, |m, c| ddnative_base::x86::call_ext(m, c, method));
+    };
+    if active {
+        if pg.u32(m, culling.wrapping_add(0x10)) == 0 {
+            pg.set_u8(m, frame.wrapping_add(0x14), 1);
+        } else {
+            c.ebx = previous;
+            call_from(m, c, pg, frame, ctx, &[], 0x00c2_5f0f, |m, c| ddnative_base::x86::call_ext(m, c, 0x00fe_d1e0));
+            let f = |m: &dyn Mem, o: u32| float(pg, m, culling.wrapping_add(o));
+            let (p3, p0) = (f(m, 0xc), f(m, 0));
+            let block = pg.u32(m, pg.u32(m, ctx.wrapping_add(0x18)).wrapping_add(0x554));
+            let normals0 = [pg.u32(m, 0x0162_9530), pg.u32(m, 0x0162_9534), pg.u32(m, 0x0162_9538)];
+            let top = pg.u32(m, ctx.wrapping_add(0x24));
+            let p1 = f(m, 4);
+            let p2 = f(m, 8);
+            let sign = pg.u32(m, 0x0161_c280);
+            let normals1 = [pg.u32(m, 0x0162_9540), pg.u32(m, 0x0162_9544), pg.u32(m, 0x0162_9548)];
+            let size = ((pg.u16(m, block.wrapping_add(0x18)) as u32) * 4 + 0xf) & 0xffff_fff0;
+            let normals2 = [pg.u32(m, 0x0162_9550), pg.u32(m, 0x0162_9554), pg.u32(m, 0x0162_9558)];
+            // six planes: (normal, offset), (-normal, offset)
+            let flip = |n: [u32; 3]| [n[0] ^ sign, n[1] ^ sign, n[2] ^ sign];
+            let planes: [[u32; 4]; 6] = [
+                [normals0[0], normals0[1], normals0[2], (p3 - p0).to_bits()],
+                [flip(normals0)[0], flip(normals0)[1], flip(normals0)[2], (p0 + p3).to_bits()],
+                [normals1[0], normals1[1], normals1[2], (p3 - p1).to_bits()],
+                [flip(normals1)[0], flip(normals1)[1], flip(normals1)[2], (p1 + p3).to_bits()],
+                [normals2[0], normals2[1], normals2[2], (p3 - p2).to_bits()],
+                [flip(normals2)[0], flip(normals2)[1], flip(normals2)[2], (p2 + p3).to_bits()],
+            ];
+            c.edi = size;
+            if top.wrapping_add(size) > pg.u32(m, ctx.wrapping_add(0x28)) {
+                call_from(m, c, pg, frame, ctx, &[size], 0x00c2_606b, |m, c| ddnative_base::x86::call_ext(m, c, 0x00fe_d890));
+            }
+            let buffer = pg.u32(m, ctx.wrapping_add(0x24));
+            pg.set_u32(m, ctx.wrapping_add(0x24), buffer.wrapping_add(size));
+            pg.set_u32(m, ctx.wrapping_add(0xca0), buffer);
+            rc.mark_dirty(m, 1);
+            if buffer != 0 {
+                // memcpy(buffer, block->source, block->words * 4), memmove semantics
+                let bytes = (pg.u16(m, block.wrapping_add(0x18)) as u32) * 4;
+                let source = pg.u32(m, block.wrapping_add(0x24));
+                let words: Vec<u32> = (0..bytes).step_by(4).map(|k| pg.u32(m, source.wrapping_add(k))).collect();
+                for (k, v) in words.into_iter().enumerate() {
+                    pg.set_u32(m, buffer.wrapping_add(4 * k as u32), v);
+                }
+            }
+            for (k, plane) in planes.iter().enumerate() {
+                for (j, v) in plane.iter().enumerate() {
+                    pg.set_u32(m, buffer.wrapping_add(16 * k as u32 + 4 * j as u32), *v);
+                }
+            }
+            c.ebx = buffer;
+            part_call(m, c, 0x34, &[ctx], 0x00c2_60e5);
+            built = true;
+        }
+    }
+    // the flag A dword the original pushes includes three stale stack bytes
+    let flag_a = pg.u32(m, frame.wrapping_add(0x14));
+    let field = ((pg.u32(m, this.wrapping_add(0x108)) << 19) as i32 >> 28) as u32;
+    let mut base = previous;
+    c.ebx = previous;
+    let accepted = {
+        let method = pg.u32(m, pg.u32(m, part).wrapping_add(0x2c));
+        call_from(m, c, pg, frame, part, &[ctx, field, flag_a], 0x00c2_611f, |m, c| ddnative_base::x86::call_ext(m, c, method));
+        c.eax & 0xff != 0
+    };
+    // after planes are built: the clip binding goes back to `base`
+    let restore = |m: &mut dyn Mem, c: &mut Cpu, base: &mut u32| {
+        part_call(m, c, 0x38, &[ctx], if accepted { 0x00c2_6171 } else { 0x00c2_624a });
+        if *base == 0 {
+            *base = pg.u32(m, pg.u32(m, ctx.wrapping_add(0x20)).wrapping_add(0xaa8));
+        }
+        let current = pg.u32(m, ctx.wrapping_add(0xca0)) & 0xffff_fff0;
+        if current != *base || pg.u32(m, ctx.wrapping_add(0xca4)) != 0 {
+            rc.journal(m, 0x155, 0xca0);
+            let different = pg.u32(m, ctx.wrapping_add(0xca4)) != 0;
+            pg.set_u32(m, ctx.wrapping_add(0xca0), *base);
+            if different {
+                pg.set_u32(m, ctx.wrapping_add(0xca4), 0);
+                rc.mark_dirty(m, 2);
+            }
+            rc.mark_dirty(m, 1);
+        }
+    };
+    if accepted {
+        let (mode, flags) = (pg.u32(m, this.wrapping_add(0x108)), pg.u32(m, this.wrapping_add(0x100)));
+        pg.set_u32(m, part.wrapping_add(0x1c), (mode >> 25) & 0xf);
+        pg.set_u32(m, part.wrapping_add(0x20), flags);
+        if pg.u8(m, this.wrapping_add(0x449)) == 1 {
+            c.ecx = this;
+            call_from(m, c, pg, frame, this, &[ctx], 0x00c2_6152, |m, c| ddnative_base::x86::call_ext(m, c, 0x00fa_5860));
+        }
+        part_call(m, c, 0x3c, &[ctx], 0x00c2_615c);
+        if built {
+            restore(m, c, &mut base);
+        }
+        part_call(m, c, 0x30, &[ctx], 0x00c2_622c);
+    } else if built {
+        restore(m, c, &mut base);
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(8);
+}
+
+// Translated from 0x00e6d070 (DDDA.exe 2017-12-13 Steam).
+/// 0x00E6D070, `owner->count_active_children()` (fastcall, ECX = owner,
+/// plain `ret`): counts the nodes of the owner's child list (head
+/// `owner[0x1F0]`, next link at node +8) whose flag byte +0xC has bit 0 set
+/// and whose virtual method 0x44 `is_active()` returns non-zero, into the
+/// u16 `owner[0x1E2]`.
+pub fn count_active_children(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let owner = c.ecx;
+    let saved = (c.ebx, c.esi, c.edi);
+    // the original's frame after its three pushes
+    let frame = entry.wrapping_sub(12);
+    let counter = owner.wrapping_add(0x1e2);
+    let mut node = pg.u32(m, owner.wrapping_add(0x1f0));
+    pg.set_u16(m, counter, 0);
+    (c.ebx, c.edi) = (1, owner);
+    while node != 0 {
+        if pg.u8(m, node.wrapping_add(0xc)) & 1 != 0 {
+            let method = pg.u32(m, pg.u32(m, node).wrapping_add(0x44));
+            c.esi = node;
+            call_from(m, c, pg, frame, node, &[], 0x00e6_d09e, |m, c| ddnative_base::x86::call_ext(m, c, method));
+            if c.eax & 0xff != 0 {
+                let v = pg.u16(m, counter).wrapping_add(1);
+                pg.set_u16(m, counter, v);
+            }
+        }
+        node = pg.u32(m, node.wrapping_add(8));
+    }
+    (c.ebx, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4);
 }
