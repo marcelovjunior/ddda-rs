@@ -136,6 +136,9 @@ impl GraphicsBackend for DeferredBackend {
         let draw = draw.clone();
         self.enqueue(move |b| b.draw(&draw));
     }
+    fn draws(&mut self, draws: Vec<DrawCall>) {
+        self.enqueue(move |b| b.draws(draws));
+    }
     fn clear(&mut self, clear: &ClearCall) {
         let clear = clear.clone();
         self.enqueue(move |b| b.clear(&clear));
@@ -279,6 +282,33 @@ mod tests {
         frame(&mut deferred, Some(unblock));
         drop(deferred); // must drain the final release and reused resource
         assert_eq!(*actual.lock().unwrap(), *expected.lock().unwrap());
+    }
+
+    #[test]
+    fn a_run_of_draws_is_one_command_in_its_place() {
+        let (mut deferred, log) = queue(8);
+        let t = target();
+        let draw = |start: u32| DrawCall {
+            primitive: 4, primitives: 1, start, base_vertex: 0, min_index: 0, vertex_count: 3,
+            vertices: Vertices::Inline { bytes: vec![0; 36], stride: 12 }, indices: Indices::None,
+            vertex_shader: None, pixel_shader: None, declaration: vec![].into(), fvf: 0,
+            vs_constants: Constants::default().into(), ps_constants: Constants::default().into(),
+            textures: vec![].into(), render_states: vec![].into(), viewport: [0; 6], scissor: [0; 4],
+            targets: [Some(t.clone()), None, None, None], depth: None,
+        };
+        deferred.release(1);
+        let before = deferred.mark();
+        deferred.draws(vec![draw(0), draw(3), draw(6)]);
+        assert_eq!(deferred.mark(), before + 1, "one command");
+        deferred.release(2);
+        deferred.fence();
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 5);
+        assert_eq!(log[0], "release:1");
+        for (k, start) in [0, 3, 6].into_iter().enumerate() {
+            assert_eq!(log[1 + k], format!("draw:{:?}", draw(start)));
+        }
+        assert_eq!(log[4], "release:2");
     }
 
     #[test]
