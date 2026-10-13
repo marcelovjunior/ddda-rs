@@ -148,6 +148,23 @@ pub fn packed(
     filtering: u32,
 ) -> Vec<Call> {
     let mut out = vec![];
+    packed_each(fields, new, old, stage, filtering, |state, value| match stage {
+        Some(stage) => call(&mut out, 69, &[stage, state, value]),
+        None => call(&mut out, 57, &[state, value]),
+    });
+    out
+}
+
+/// `packed`'s calls as `emit(state, value)`, in order, without building
+/// them (L180: the native sink's sampler section, per draw).
+pub fn packed_each(
+    fields: &[Field],
+    new: &[u32],
+    old: Option<&[u32]>,
+    stage: Option<u32>,
+    filtering: u32,
+    mut emit: impl FnMut(u32, u32),
+) {
     for &(word, shift, mask, state) in fields {
         let mut value = (new[word] >> shift) & mask;
         if stage.is_some() && old.is_some() && (new[0] >> 13 & 15) == 3 {
@@ -159,13 +176,9 @@ pub fn packed(
             }
         }
         if old.is_none_or(|p| (p[word] >> shift & mask) != value) {
-            match stage {
-                Some(stage) => call(&mut out, 69, &[stage, state, value]),
-                None => call(&mut out, 57, &[state, value]),
-            }
+            emit(state, value);
         }
     }
-    out
 }
 
 fn apply_payload(

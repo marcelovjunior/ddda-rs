@@ -16,6 +16,21 @@
 - Frame (train 6 sync): main runs jobs ~13 ms and waits ~10.5 ms/frame at job joins (long
   single jobs: the shadow job, L172); the render worker waits ~11 ms/frame for main; GPU ~37%.
 - Next: L172 parallel shadow (capture accepted; parallel replay needs CreateEventA), train 7.
+### L180 render-worker per-draw cost (2026-10-13)
+
+- The render worker (guest thread 0x1034) bounds the frame once the
+  semantic rewrites are on. Implemented and tested:
+  - kept stream/target parts and inline guest reads;
+  - bulk register reads and moved constant banks;
+  - one dirty pass per taken draw;
+  - binding parts and texture lists reused by content, with entries aged
+    out instead of whole-table clears;
+  - no Vec of calls in the sampler section.
+- Release NDRAW_BENCH: `draw_call` from the caches 0.34-0.41 -> 0.20-0.30
+  us; a new frame's first draw 2.5-2.7 -> 1.31-1.43 us. In-game effect
+  pending train 6.
+- Next: the train 6 profile, then per-draw guest reads. Details:
+  docs/tasks/L180-render-worker.md.
 
 ### L177 semantic state commit and model mesh (2026-10-13)
 
