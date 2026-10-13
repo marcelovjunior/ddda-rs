@@ -1731,7 +1731,9 @@ fn compare_replays(
     let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
     if let Some(test) = &publish_test {
         match test {
-            Ok(stream) => match results[1].1.first_difference(stream) {
+            Ok(stream) => match results[1].1.first_difference_allowing(stream, &mut |path, a, _b, offset| {
+                poisoned_results.len() == 4 && undefined_in(&poisoned_results[2..4], &results[1].1, path, a, offset)
+            }) {
                 None => eprintln!("parallel-shadow publish test: stream equals the proof's parallel stream ({} entries)", stream.entries.len()),
                 Some(d) => eprintln!("parallel-shadow publish test: stream differs from the proof's parallel stream: {d:?}"),
             },
