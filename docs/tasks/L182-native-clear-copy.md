@@ -69,4 +69,13 @@ come from.
 
 ## Results
 
-(pending: unit tests; `DDDRAW_NATIVE=verify` run by the head)
+- Also here: claude-2's `dirty_count()` guard (#14395) in `decide`'s
+  DrawCall and Compare arms (cherry-picked 26244237 from L144). Both arms
+  run under `device_lock`, so the count is exact there.
+- Tests: 9 new `ndraw_native::ops` unit tests (colour packing, exactness
+  at 24 and 53 bits, masks, flags, a quieted SNaN z, the rounding mode
+  refused, null fallbacks, both copy forms, verify counting). All
+  ddruntime lib tests pass (146) and all mtdraw tests pass (executor
+  differential included).
+- Not run in game: needs `DDDRAW_NATIVE=verify` (the "verify
+  clears/copies" line) and a stats run from the head.

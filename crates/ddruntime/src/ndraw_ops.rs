@@ -437,10 +437,10 @@ mod tests {
         let m = clear_record(0x01, [-1.0, 0.0, 0.0, 0.0], 1);
         assert_eq!(clear_args(&m, 0x1000, PC53).unwrap(), None);
         // a mask of 3 channels on a 4-channel target
-        let m = clear_record(0x07, [0.0, 0.0, 0.0, 1.0], 4);
+        let m = clear_record(0x07, [0.0; 4], 4);
         assert_eq!(clear_args(&m, 0x1000, PC53).unwrap(), None);
         // the same mask on a 3-channel target clears
-        let m = clear_record(0x07, [0.0, 0.0, 0.0, 1.0], 3);
+        let m = clear_record(0x07, [0.0; 4], 3);
         assert_eq!(clear_args(&m, 0x1000, PC53).unwrap().unwrap().flags, 1);
         // depth and stencil only: the colour does not matter
         let m = clear_record(0x30, [0.5, f32::NAN, 0.0, 0.3], 4);

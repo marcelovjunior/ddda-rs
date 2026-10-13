@@ -2184,8 +2184,9 @@ impl Native {
                 g.handled = true;
                 // an upload goes after the draws taken before it; nothing
                 // the draw reads is dirty: nothing to flush (the D3D lock
-                // keeps the dirty set as it is meanwhile)
-                if objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
+                // keeps the dirty set as it is meanwhile; a count of 0, read
+                // without it, skips the lookup)
+                if crate::d3d9dev::dirty_count() != 0 && objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
                     send_batch(&mut g.batch);
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
                 }
@@ -2206,7 +2207,7 @@ impl Native {
                     if self.mode == Mode::Compare {
                         // Finish before any upload can replace resources used
                         // by an earlier draw in the pending shadow pass.
-                        let dirty = objects(|o| reads_of(&d).any(|r| o.dirty.contains(&r)));
+                        let dirty = crate::d3d9dev::dirty_count() != 0 && objects(|o| reads_of(&d).any(|r| o.dirty.contains(&r)));
                         if dirty {
                             crate::d3d9draw::backend_unlocked(|b| g.comparison.finish(b));
                         }
