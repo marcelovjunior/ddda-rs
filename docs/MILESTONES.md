@@ -1,5 +1,17 @@
 # Milestones
 
+### L110 native backend floor (2026-10-13)
+
+- Optimized 5,000-draw/40-pipeline/200-group synthetic Vulkan floor,
+  including finish + submit: **wgpu 0.884, reused bundles 0.386, ash 0.326
+  us/draw**. Uniform data prefilled; no texture sampling/gameplay claim.
+- 900 one-draw clear passes: **7.146 / 7.151 / 1.351 us/pass**, respectively.
+  Bundles reduce repeated draw processing but do not remove pass overhead.
+- Runtime light suite **152 pass / 1 existing gamma-reset failure / 1
+  ignored**. Native API compiled; image tests pending game-run hold.
+- Next: native image equivalence and changed-constant recording benchmark.
+  Details and limitations: `docs/tasks/L110-native-device.md`.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants
