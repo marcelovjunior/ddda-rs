@@ -75,7 +75,7 @@ fn draw(ps: Vec<u32>, ps_constants: Constants, textures: Vec<TextureBinding>) ->
         fvf: 0,
         vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
         ps_constants: ps_constants.into(),
-        textures,
+        textures: textures.into(),
         render_states: render_states().into(),
         viewport: [0, 0, 4, 4, 0f32.to_bits(), 1f32.to_bits()],
         scissor: [0, 0, 4, 4],
@@ -154,6 +154,46 @@ fn compare(uploads: &[Upload], clear: &ClearCall, draws: &[DrawCall]) -> (Vec<u8
 
 fn blue_clear() -> ClearCall {
     ClearCall { rects: vec![], flags: 1, colour: 0xFF00_00FF, z: 1.0, stencil: 0, targets: [Some(back_buffer()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0], scissor: None, srgb: false }
+}
+
+/// Keep every draw visible, including both sides of uniform-ring rollover.
+/// Alternating c0/c223 also moves the integer/bool/alpha uniform offsets.
+#[test]
+fn compact_constant_layouts_and_ring_rollover_match_the_driver() {
+    let (Some(mut reference), Some(mut gpu)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else { return; };
+    let target = Target { width: 64, height: 64, ..back_buffer() };
+    let mut clear = blue_clear();
+    clear.targets[0] = Some(target.clone());
+    clear.viewport = [0, 0, 64, 64, 0, 0];
+    let mut shaders = [ps_constant(), ps_constant()];
+    shaders[1][3] |= 223;
+    let shaders = shaders.map(std::sync::Arc::<[u32]>::from);
+    let mut template = draw(ps_constant(), Constants::default(), vec![]);
+    template.targets[0] = Some(target.clone());
+    template.viewport = [0, 0, 64, 64, 0, 1f32.to_bits()];
+    template.render_states.extend([(174, 1), (15, 1), (24, 127), (25, 5)]);
+    // Alpha test GREATER than 127: incorrect compact tail offsets discard
+    // pixels. SetRenderState ordering remains unique and sorted.
+    template.render_states.retain(|&(s, v)| s != 15 || v == 1);
+    template.render_states.sort();
+    let mut draws = Vec::with_capacity(4096);
+    for pixel in 0..4096 {
+        let reg = if pixel % 2 == 0 { 0 } else { 223 };
+        let mut d = template.clone();
+        d.pixel_shader = Some(shaders[pixel % 2].clone());
+        let mut c = Constants { f: vec![[0; 4]; reg + 1], ..Default::default() };
+        c.f[reg] = [(pixel % 7) as f32 / 6.0, (pixel % 11) as f32 / 10.0, (pixel % 3) as f32 / 2.0, 1.0].map(f32::to_bits);
+        d.ps_constants = c.into();
+        let (x, y) = ((pixel % 64) as i32, (pixel / 64) as i32);
+        d.scissor = [x, y, x + 1, y + 1];
+        draws.push(d);
+    }
+    let expected = reference.render(&[], Some(&clear), &draws, &target).expect("D3D9 render");
+    gpu.clear(&clear);
+    for d in &draws { gpu.draw(d); }
+    gpu.present(&target);
+    assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    assert_eq!(gpu.last_frame.unwrap().rgba, expected.rgba);
 }
 
 #[test]
@@ -388,6 +428,17 @@ fn counted(gpu: &mut ddgpu::WgpuBackend, draws: &[DrawCall], spans: &[std::ops::
         issue(gpu, k + 1, true);
     }
     issue(gpu, draws.len(), false);
+    if gpu.async_queries {
+        // L120: no count until the read-back is mapped; ask again
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        return ids.iter().map(|&q| loop {
+            if let Some(n) = gpu.query_result(q) {
+                break n as u32;
+            }
+            assert!(std::time::Instant::now() < deadline, "query {q:#x}: no count after 20 s");
+            std::thread::yield_now();
+        }).collect();
+    }
     ids.iter().map(|&q| gpu.query_result(q).expect("count") as u32).collect()
 }
 
@@ -418,6 +469,27 @@ fn occlusion_counts_match_the_d3d9_driver() {
     assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
     eprintln!("occlusion counts: D3D9 {theirs:?}, wgpu {ours:?}");
     assert_eq!(ours, theirs, "occlusion counts (wgpu / D3D9)");
+}
+
+/// L120: with async_queries the backend never waits for the GPU in
+/// query_result (None until the count is read back); the counts it then
+/// gives equal the blocking ones.
+#[test]
+fn async_occlusion_counts_equal_blocking_ones() {
+    let (Some(mut blocking), Some(mut nonblocking)) = (ddgpu::WgpuBackend::headless(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    nonblocking.async_queries = true;
+    let clear = ClearCall { flags: 1 | 2 | 4, z: 0.5, depth: Some(depth_target()), ..blue_clear() };
+    let draws = vec![depth_draw(0.25, 1.0, &[]), depth_draw(0.75, 1.0, &[]), depth_draw(0.75, 1.0, &[(7, 0)])];
+    let spans = vec![0..1, 1..2, 2..3, 3..3];
+    blocking.clear(&clear);
+    let want = counted(&mut blocking, &draws, &spans);
+    nonblocking.clear(&clear);
+    let got = counted(&mut nonblocking, &draws, &spans);
+    assert!(nonblocking.errors.is_empty(), "{:?}", nonblocking.errors);
+    assert_eq!(got, want, "async / blocking occlusion counts");
 }
 
 /// vs_3_0: o0 = v0 + v1 (v1: texcoord1, the per-instance offset; one
@@ -469,7 +541,7 @@ fn instanced_draws_match_the_d3d9_driver() {
         d.vertex_shader = Some((vs_offset()).into());
         d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [1, 0, 0, 0, 3, 0, 5, 1]].into();
         let geometry = if start == 0 { 0x403 } else { 0x400 };
-        d.vertices = Vertices::Streams(vec![(0, geometry, 0, 16, 0x4000_0003), (1, 0x401, 0, 16, 0x8000_0001)]);
+        d.vertices = Vertices::Streams(vec![(0, geometry, 0, 16, 0x4000_0003), (1, 0x401, 0, 16, 0x8000_0001)].into());
         if indexed {
             d.indices = Indices::Buffer(0x402, 101);
             d.base_vertex = start as i32;
@@ -1033,7 +1105,7 @@ fn deferred_frame_matches_synchronous_image() {
             let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
             c.f[0] = colour.map(f32::to_bits);
             let mut d = draw(ps_constant(), c, vec![]);
-            d.vertices = Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]);
+            d.vertices = Vertices::Streams(vec![(0, 0x300, 0, 24, 1)].into());
             d.indices = Indices::Buffer(0x301, 101);
             backend.query_begin(0x500);
             backend.draw(&d);
@@ -1045,7 +1117,15 @@ fn deferred_frame_matches_synchronous_image() {
             backend.fill(&d3d9cmd::FillCall { dst: bb.clone(), rect: [0, 0, 1, 1], colour: 0xFFFFFFFF });
             backend.present(&bb);
             reads.push(backend.read_back(&copy).expect("copied image"));
-            assert_eq!(backend.query_result(0x500), Some(16));
+            // a deferred backend answers None until its worker has the count
+            // (L102: GetData never waits); a game polls the same way
+            let count = loop {
+                if let Some(n) = backend.query_result(0x500) {
+                    break n;
+                }
+                backend.fence();
+            };
+            assert_eq!(count, 16);
             backend.release(0x300);
             backend.release(0x301);
         }

@@ -16,6 +16,7 @@
 //! - [`array`]: MtArray clear, reserve, destructor.
 //! - [`property`]: MtPropertyList construction, `add`, clear, destructor.
 //! - [`allocator`]: the allocator registry.
+//! - [`tree`]: MSVC's red-black tree (`equal_range` of the QLOC alive set).
 //! - [`abi`]: the ports behind the lifted calling convention; the lifted
 //!   program calls these instead of the lifted bodies.
 
@@ -27,3 +28,4 @@ pub mod hash;
 pub mod machine;
 pub mod object;
 pub mod property;
+pub mod tree;

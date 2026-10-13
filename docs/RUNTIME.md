@@ -1,5 +1,37 @@
 # Phase 1 runtime proposal (R01)
 
+## L109 loading telemetry
+
+ReadFileEx optionally caches immutable install archives with
+`DDRUNTIME_FILE_READ_AHEAD=1`: 256 KiB forward windows, 8 MiB retained
+buffer capacity per runtime, overlay/writable files excluded. It remains
+off by default: warm sequential 128 KiB reads regressed, although small
+and repeated ranges improved. Loading logs include cache hit/miss/fetched
+byte counters and all-zlib counters alongside archive-scoped inflate.
+Head's instr1 baseline records 4.854 s archive inflate before the movie
+opens, versus 0.056 s file-read and 0.007 s pipeline time at that sample.
+UI phase boundaries and a paired post-port run remain with head.
+
+The archive zlib fast loop (`0x00cf2cb0`) is a readable runtime port,
+verified against 559 original-instruction vectors including state,
+output, registers, flags and stack spills. The original outer inflate and
+archive streaming functions still handle checksums, buffers and callbacks.
+`DDRUNTIME_ARCHIVE_INFLATE=0` selects the generated leaf for A/B runs;
+explicit mods at that address retain precedence. Isolated leaf timings
+improved 2.30–8.06x; whole-game loading is awaiting head comparison.
+
+`DDRUNTIME_LOAD_LOG=1` adds process-relative startup/movie/file/archive/GPU
+timing and frame counters. `scripts/load_timeline.py` produces a timeline;
+UI milestones require explicit head-observed timestamps. Service totals
+are inclusive across threads, not additive wall-time phases. Archive
+wrappers retain original code and registered overrides. See
+[timing boundaries and validation](tasks/L109-loading.md). ReadFile and
+ReadFileEx reuse bounded per-thread host scratch for requests up to 128 KiB;
+they still read the file every time. Synthetic warm 128 KiB service time
+by default they still read the file every time. Synthetic warm 128 KiB service time
+was 11.569 -> 9.643 us/call, allocations 1 -> 0. Whole-game phase timings
+remain pending head runs.
+
 ## L82 render service tails (2026-10-13)
 
 **Input convoy follow-up:** GetAsyncKeyState/GetKeyState and the stateless
@@ -657,6 +689,7 @@ module; behaviour choices are labelled in the code.
 | D3D9 device state machine: render/sampler/stage states with a fresh driver device's recorded defaults, textures per stage, viewport/scissor, transforms, shader and declaration objects, constants, streams, indices, scenes; Set* reference counting | `d3d9state.rs` | done, tested |
 | D3D9 resources: textures (2D/cube/volume, mip chains), surfaces, vertex/index buffers; Lock into guest-memory shadows with D3D9's pitches and block layouts, D3D9's lock rules, level surfaces sharing the texture's count | `d3d9res.rs` | done, tested |
 | D3D9 draws: DrawPrimitive/Indexed/UP, Clear, Present as backend commands (`crates/d3d9cmd`) with dirty uploads and a complete state snapshot; a recording backend by default | `d3d9draw.rs`, `crates/d3d9cmd` | done, tested |
+| L98 clean-resource flush selection: owner/surface dirty index, one objects access for draw reads, 42-slot reads array; `DDRUNTIME_VERIFY_DIRTY_FLUSH=1` debug audit | `d3d9draw.rs`, `d3d9dev.rs`, `d3d9res.rs`, `d3d9copy.rs` | implemented; two focused regressions pass; full light suite 152 pass / one base-reproduced gamma Reset failure / one ignored; no gameplay comparison |
 | D3D9 copies and queries: StretchRect and ColorFill as backend commands (a blit pass; exact for same-size copies), UpdateSurface/UpdateTexture between guest-memory shadows, GetRenderTargetData through the backend's read-back; event and timestamp queries answered as a synchronous device; occlusion queries counted by the backend (one wgpu occlusion slot per draw, summed per query; GetData states as measured on the driver) | `d3d9copy.rs`, `crates/d3d9cmd`, `crates/ddgpu` | done, tested; occlusion counts equal the driver's |
 | The wgpu backend: textures (format conversions to D3D9's sampled values, DXT as BC; every format of the renderer's format table the driver accepts), buffers, targets, translated and linked shaders, half-pixel offset, alpha test (8-bit), render states as pipeline state (one- and two-sided stencil, blend ops and separate alpha, write masks, scissor, cull, point/solid fill, sRGB read and write), depth bias and LOD bias in the pixel shader, samplers (border colours, MIPFILTER NONE rules), vertex layouts, fans, D3D9 instancing, occlusion queries, gamma ramp, release of freed resources; every render-target format the renderer uses (A8R8G8B8, A16B16G16R16F, A2B10G10R10, R32F, G16R16, A32B32G32R32F) with blending, MRT, D24 depth and D3D9's Clear regions and values (L29: equal to the driver except fp16 blend overflow); multisampled targets (2x/4x/8x) with the driver's gamma-correct colour resolve and its depth-stencil StretchRect sample choice (L31: equal to the driver; MULTISAMPLEANTIALIAS off not modelled); render-target textures drawn into before they are sampled, with the channels a target format lacks sampled as 1 (L41: equal to the driver). State fuzz (`DDGPU_FUZZ`) equal to the driver in 982 of 982 cases; known differences in the [L20 results](tasks/L20-d3d9-completeness.md#results) | `crates/ddgpu` | done, tested against the driver |
 | Backend costs (L25): pipelines, layouts, texture bind groups and target views cached by their complete inputs; constants (dynamic offsets) and DrawPrimitiveUP data in ring buffers; draws batched into one encoder, submitted every 128 draws or before any other queue use; same-size buffer uploads in place. 475 -> 18 us per draw (`examples/draw_cost.rs`) | `crates/ddgpu` (`src/cache.rs`) | done, tested (`tests/cache.rs`: a long-lived backend equals a fresh one frame by frame; draw.rs gate and 1000-case state fuzz unchanged) |
@@ -844,3 +877,61 @@ Dropping/replacing the deferred backend drains accepted commands and joins the
 worker. A worker panic disconnects producers/results rather than leaving them
 waiting indefinitely. Test coverage and measurement limits are recorded in
 `tasks/L89-backend-worker.md`; gameplay FPS must be measured by the head.
+
+## L110 native device checkpoint (2026-10-13)
+
+`ddgpu::native` adds immutable state/resource handles, cached pipelines and
+texture sets, separate recorders with generation-aware constant rings,
+coalesced range updates and redundant draw-state filtering. The D3D9 path
+is unchanged. Four Vulkan image tests match full/compact synthetic native
+draws exactly to the D3D9 backend and host D3D9 driver; five CPU tests pass.
+Matched native medians: full blocks 3.839, compact 1.692, compact range
+updates 1.433 us/draw including upload/finish/submit. The <2 us synthetic
+target is met; full-frame/gameplay equality is not claimed.
+
+The wgpu/ash interop readback probe passes using separate ordered command
+encoders and explicit resource transitions; raw and normal commands cannot
+share one encoder in wgpu 29.0.4. See `docs/tasks/L110-native-device.md` for
+ownership limits, benchmark conditions and the L119 integration handoff.
+
+
+
+### L90 compact shader constants (2026-10-13)
+
+The runtime retains complete VS/PS register banks but draws share immutable
+prefixes sized from bytecode reads. Matrix opcodes include implicit rows;
+relative addressing conservatively retains all registers. Setters preserve
+prior draws and update the full bank for a later shader with a larger extent.
+The backend translates matching compact WGSL uniform layouts and bulk-copies
+float bits into the ring. Integer/bool/extra offsets follow the compact float
+array. Dynamic offsets stay aligned to 256 bytes and fixed maximum binding
+ranges fit in the buffer even near rollover; a two-stage preflight prevents
+restarting between the pixel and vertex allocations.
+
+The synthetic VS150/PS32 float payload falls from 7,680 to 2,912 bytes.
+CPU-only repeated-draw timings are unchanged within noise. A 4,096-draw
+ring-rollover driver regression and the full 150-case texture/state matrix
+pass; the remaining GPU gate/timings await the shared slot and L96 driver
+teardown fix. See the L90 brief for the light-suite result and independently
+reproduced fullscreen-gamma failure.
+
+
+### L90 dirty draw groups (2026-10-13)
+
+Device setters mark texture/sampler, stream, shader, declaration, index or
+render-target groups dirty. The snapshot refreshes only those groups;
+unchanged texture and stream Arc slices also make command cloning cheap.
+Target/index invalidation is setter-driven, preserving correct metadata
+when guest addresses are later reused. UP draws invalidate the bindings
+they reset. Resource shadow flushing remains independent of these flags.
+The snapshot uses fixed resource-ID scratch space, indexed draws use stack
+arguments, and constant setters reuse staging words. Production queue and
+worker plumbing are unchanged.
+
+The synthetic runtime draw path falls from 10 to 3 allocations per draw
+(including test COM arguments), with paired debug medians 39.19 to 23.05 us
+under variable shared load. The runtime snapshot regression and frame
+round-trip tests pass; full light tests retain the independently reproduced
+fullscreen-gamma Reset failure. GPU tests/examples compile; execution gate
+is pending head's exclusive run. See the L90 brief for details and L97/L98
+merge notes.

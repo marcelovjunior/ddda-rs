@@ -120,7 +120,7 @@ fn main() {
         states.sort();
         Some(DrawCall {
             primitive: 4, primitives: 1, start: 0, base_vertex: 0, min_index: 0, vertex_count: 3,
-            vertices: Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]),
+            vertices: Vertices::Streams(vec![(0, 0x300, 0, 24, 1)].into()),
             indices: Indices::None,
             vertex_shader: Some((vs()).into()),
             pixel_shader: Some((ps.to_vec()).into()),
@@ -141,7 +141,7 @@ fn main() {
     if let Some(d) = stream.first() {
         let mut first = d.clone();
         first.pixel_shader = Some((vec![0xFFFF_0300, 0x0200_0001, 0x800F_0800, 0x90E4_0000, 0x0000_FFFF]).into());
-        first.textures.clear();
+        first.textures = Default::default();
         gpu.draw(&first);
     }
     let before = ddgpu::pipeline_stats();

@@ -140,7 +140,7 @@ pub(crate) type BufferLayout = (u64, wgpu::VertexStepMode, Vec<(wgpu::VertexForm
 pub(crate) type SamplerKinds = Vec<(u32, u8)>;
 
 /// Everything a render pipeline is built from.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PipelineKey {
     /// the vertex and pixel shader module keys
     pub vs: ModuleKey,
@@ -162,7 +162,10 @@ pub(crate) struct PipelineKey {
 
 /// A texture bind group: the stage and, per sampler, its number, view
 /// dimension, texture, sRGB read and sampler states.
-pub(crate) type TexGroupKey = (bool, Vec<(u32, u8, u32, bool, [u32; 14])>);
+pub(crate) type TexGroupKey = (bool, Vec<TexGroupEntry>);
+/// One sampler of a texture bind group: number, view dimension, texture,
+/// sRGB read, sampler states.
+pub(crate) type TexGroupEntry = (u32, u8, u32, bool, [u32; 14]);
 
 /// A target view: surface, texture, level, D3D format, sRGB view.
 /// A translated shader: (token hash, linked vertex shader hash, depth bias,
@@ -179,10 +182,14 @@ pub(crate) const VS_BLOCK: u64 = 256 * 16 + 16 * 16 + 16 * 16 + 16;
 pub(crate) const PS_BLOCK: u64 = 224 * 16 + 16 * 16 + 16 * 16 + 6 * 16;
 /// Uniform offsets (wgpu's default min_uniform_buffer_offset_alignment).
 pub(crate) const UNIFORM_ALIGN: u64 = 256;
-pub(crate) const UNIFORM_RING: u64 = 8 << 20;
+/// L105: 48 MB, so a gameplay frame (~5,200 draws at ~9 KB of constants
+/// each when both blocks change) fills it in ~5,000 draws, not ~500: each
+/// fill was a submission that ended the open render pass.
+pub(crate) const UNIFORM_RING: u64 = 48 << 20;
 pub(crate) const INLINE_RING: u64 = 4 << 20;
 /// Draws recorded before they are submitted anyway (the GPU starts on a
 /// frame while the guest still records it). L72: each submission ends the
 /// open render pass, so this is high (it was 128): the uniform ring fills
-/// first (about 500 draws), or Present comes.
-pub(crate) const DRAWS_PER_SUBMIT: u32 = 1024;
+/// first (about 500 draws), or Present comes. L105: 4096 (the backend
+/// records on its own thread since L89; ~5,200 draws a gameplay frame).
+pub(crate) const DRAWS_PER_SUBMIT: u32 = 4096;

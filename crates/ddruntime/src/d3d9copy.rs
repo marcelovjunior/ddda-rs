@@ -63,6 +63,7 @@ fn surface_shadow(m: &mut dyn Mem, s: u32) -> Option<(u32, u32, u32, u32, u32, u
         if let Some(Kind::Surface { image, .. }) = o.live.get_mut(&s).map(|x| &mut x.kind) {
             *image = img;
         }
+        o.track_dirty(s);
     });
     Some(r)
 }
@@ -72,6 +73,7 @@ fn mark_dirty(s: u32) {
         if let Some(Kind::Surface { image, .. }) = o.live.get_mut(&s).map(|x| &mut x.kind) {
             image.dirty = true;
         }
+        o.track_dirty(s);
     });
 }
 

@@ -424,6 +424,32 @@ pub fn f_00cf5870(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(cpu, 0);
 }
 
+/// thiscall `void equal_range(pair<node*, node*> *out, const u32 *key)`
+/// of a `std::set<u32>` (ECX = the tree), `ret 8`: EAX = out, EDX = the
+/// upper bound, ECX = the key when the upper-bound walk ran; EBX, EBP and,
+/// when the tree is not empty, ESI and EDI pushed below ESP and restored.
+/// Called on every tracked object's destruction (the QLOC alive set):
+/// ~14% of the render thread in gameplay as lifted code at opt-level 0.
+pub fn f_00db82c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let esp = cpu.esp;
+    let root = m.u32(m.u32(cpu.ecx.wrapping_add(4)).wrapping_add(4));
+    m.set_u32(esp.wrapping_sub(4), cpu.ebx);
+    m.set_u32(esp.wrapping_sub(8), cpu.ebp);
+    if m.u8(root.wrapping_add(0x11)) == 0 {
+        m.set_u32(esp.wrapping_sub(12), cpu.esi);
+        m.set_u32(esp.wrapping_sub(16), cpu.edi);
+    }
+    let r = crate::tree::equal_range(m, cpu.ecx, arg(m, cpu, 1));
+    let out = arg(m, cpu, 0);
+    m.set_u32(out, r.lower);
+    m.set_u32(out.wrapping_add(4), r.upper);
+    if r.second_walk {
+        cpu.ecx = r.key;
+    }
+    (cpu.eax, cpu.edx) = (out, r.upper);
+    ret(cpu, 8);
+}
+
 /// Every port above with its original address and the xmm registers it
 /// leaves exactly as the original does (bit k = xmmk; these use no xmm
 /// scratch except `add`, which sets xmm0 as the original does).
@@ -446,4 +472,5 @@ pub const PORTS: &[(u32, LiftFn, u8)] = &[
     (0x00CF_74E0, f_00cf74e0, 0b1111_1111),
     (0x00CF_76C0, f_00cf76c0, 0b1111_1111),
     (0x00D0_1B60, f_00d01b60, 0b1111_1111),
+    (0x00DB_82C0, f_00db82c0, 0b1111_1111),
 ];

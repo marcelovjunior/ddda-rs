@@ -53,7 +53,7 @@ pub struct SurfaceDesc {
 pub enum Kind {
     Device(Box<DeviceData>),
     /// IDirect3DVertexShader9 / IDirect3DPixelShader9: the bytecode
-    Shader { device: u32, tokens: std::sync::Arc<[u32]> },
+    Shader { device: u32, tokens: std::sync::Arc<[u32]>, float_constants: usize },
     /// IDirect3DVertexDeclaration9: the elements (8 bytes each, END excluded)
     Declaration { device: u32, elements: std::sync::Arc<[[u8; 8]]> },
     /// `gamma`: the ramp SetGammaRamp gave this chain (None: identity)
@@ -93,6 +93,32 @@ pub(crate) struct Objects {
     vtables: HashMap<&'static str, u32>,
     /// by guest address (L78: a fast hash; looked up several times a draw)
     pub(crate) live: crate::fasthash::FxMap<u32, Object>,
+    /// Conservative dirty index: surface IDs AND their texture owner IDs.
+    /// A directly flushed child can leave a clean parent indexed until its
+    /// next flush; false positives cost one scan, never change uploads.
+    pub(crate) dirty: crate::fasthash::FxSet<u32>,
+}
+
+impl Objects {
+    /// All dirty writers pass here: d3d9res surface_image (surface/flat/cube
+    /// UnlockRect and restored images), texture (volume UnlockBox and restored
+    /// volumes), buffer (Unlock and restored image), d3d9copy mark_dirty and
+    /// surface_shadow restoration, and new_object for initially dirty images.
+    /// New images otherwise start clean. Flush alone clears flags. Indexing
+    /// both a child and its owner preserves direct-surface vs texture uploads;
+    /// never clear a parent's entry just because one child was flushed.
+    pub(crate) fn track_dirty(&mut self, resource: u32) {
+        let owner = match self.live.get(&resource).map(|x| &x.kind) {
+            Some(Kind::Surface { image, owner, .. }) if image.dirty => *owner,
+            Some(Kind::Texture { data, .. }) if data.volumes.iter().any(|i| i.dirty) => 0,
+            Some(Kind::Buffer { data, .. }) if data.image.dirty => 0,
+            _ => return,
+        };
+        self.dirty.insert(resource);
+        if owner != 0 {
+            self.dirty.insert(owner);
+        }
+    }
 }
 
 pub(crate) fn objects<R>(f: impl FnOnce(&mut Objects) -> R) -> R {
@@ -196,6 +222,12 @@ impl<T> D3dCell<T> {
     }
 
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        // A surrounding DeviceLock already keeps this cell alive and locked.
+        // Borrow checking remains active; no depth/HELD bookkeeping is needed
+        // for a borrow whose lifetime ends before that surrounding guard.
+        if self.owner.load(std::sync::atomic::Ordering::Acquire) == THREAD_KEY.with(|k| k.key) {
+            return f(&mut self.cell.borrow_mut());
+        }
         struct Release<'a, T>(&'a D3dCell<T>);
         impl<T> Drop for Release<'_, T> {
             fn drop(&mut self) {
@@ -256,7 +288,10 @@ pub fn refs(object: u32) -> Option<(&'static str, u32)> {
 pub(crate) fn new_object(m: &mut dyn Mem, iface: &'static str, kind: Kind) -> u32 {
     let vtable = objects(|o| o.vtables.get(iface).copied()).unwrap_or_else(|| panic!("no vtable for {iface}"));
     let p = interfaces::object(m, vtable, 16);
-    objects(|o| o.live.insert(p, Object { iface, refs: 1, kind }));
+    objects(|o| {
+        o.live.insert(p, Object { iface, refs: 1, kind });
+        o.track_dirty(p);
+    });
     p
 }
 
@@ -276,7 +311,10 @@ pub(crate) fn release_of(object: u32) -> u32 {
     let (left, gone) = objects(|o| {
         let x = o.live.get_mut(&object).unwrap_or_else(|| panic!("Release on {object:#x}, not a live D3D9 object"));
         x.refs -= 1;
-        if x.refs == 0 { (0, o.live.remove(&object)) } else { (x.refs, None) }
+        if x.refs == 0 {
+            o.dirty.remove(&object);
+            (0, o.live.remove(&object))
+        } else { (x.refs, None) }
     });
     if let Some(x) = gone {
         // a DeviceState method (dispatch) runs with the guest's x87 state
@@ -327,7 +365,7 @@ fn destroy(object: u32, x: Object) {
             Kind::Texture { data, .. } => {
                 // the level surfaces go with the texture (they share its count)
                 for s in &data.surfaces {
-                    if let Some(x) = objects(|o| o.live.remove(s)) {
+                    if let Some(x) = objects(|o| { o.dirty.remove(s); o.live.remove(s) }) {
                         if let Kind::Surface { image, .. } = x.kind {
                             image.free();
                         }
@@ -475,6 +513,7 @@ pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
             with_device(device, |d| d.swap_chains.push(chain));
             bind_implicit(m, device, chain, pp);
             m.set_u32(out, device);
+            crate::load_log::event("d3d_device_created", format_args!("device={device:#x}"));
             D3D_OK
         }
     };
@@ -772,6 +811,19 @@ fn present(m: &mut dyn Mem, cpu: &mut Cpu) {
     let chain = with_device(arg(m, cpu, 0), |d| d.swap_chains[0]);
     cpu.eax = present_chain(m, chain);
     ret(m, cpu, 20);
+}
+
+// Selected at registration only. The disabled path has no per-Present check.
+fn present_ndraw_stats(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let device = arg(m, cpu, 0);
+    present(m, cpu);
+    if cpu.eax == D3D_OK { crate::ndraw_stats::present(device); }
+}
+
+fn chain_present_ndraw_stats(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let device = with_chain(arg(m, cpu, 0), |d, _, _, _| d);
+    chain_present(m, cpu);
+    if cpu.eax == D3D_OK { crate::ndraw_stats::present(device); }
 }
 
 /// SetGammaRamp(this, swap chain, flags, D3DGAMMARAMP*): returns nothing.
@@ -1153,6 +1205,13 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
         // L93: every D3D method holds the D3D lock; the hot device methods
         // that touch only the D3D objects and the backend take no guest lock
         for &(slot, f) in spec.methods {
+            let f = if crate::ndraw_stats::enabled() {
+                match (spec.name, slot) {
+                    ("IDirect3DDevice9", 17) => present_ndraw_stats as ddnative_base::x86::LiftFn,
+                    ("IDirect3DSwapChain9", 3) => chain_present_ndraw_stats as ddnative_base::x86::LiftFn,
+                    _ => f,
+                }
+            } else { f };
             let only_d3d = spec.name == "IDirect3DDevice9" && DEVICE_ONLY_SLOTS.contains(&slot)
                 || spec.name == "IDirect3DSwapChain9" && slot == 3;
             let b = if spec.name == "IDirect3DDevice9" && STATE_SLOTS.contains(&slot) {
@@ -1176,6 +1235,31 @@ mod tests {
     use crate::session::{Outcome, Session};
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn scoped_cell_borrows_preserve_outer_lock_and_unwind_checks() {
+        let cell = D3dCell::<u32>::default();
+        cell.acquire();
+        let depth = cell.depth.get();
+        let held = THREAD_KEY.with(|k| k.held.get());
+        cell.with(|value| *value = 7);
+        assert_eq!(cell.depth.get(), depth);
+        assert_eq!(THREAD_KEY.with(|k| k.held.get()), held);
+        let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cell.with(|_| cell.with(|_| ()));
+        }));
+        assert!(nested.is_err(), "nested mutable borrows must still fail");
+        assert_eq!(cell.with(|v| *v), 7);
+        assert_eq!(cell.depth.get(), depth);
+        cell.release();
+        assert_eq!(cell.owner.load(Ordering::Acquire), 0);
+        assert_eq!(THREAD_KEY.with(|k| k.held.get()), held - 1);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cell.with(|_| panic!("unwind an outer borrow"));
+        })).is_err());
+        assert_eq!(cell.owner.load(Ordering::Acquire), 0);
+        assert_eq!(cell.with(|v| *v), 7);
+    }
 
     const SCRATCH: u32 = 0x7EFF_0000;
     const PP: u32 = SCRATCH + 0x200;

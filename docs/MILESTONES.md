@@ -1,5 +1,108 @@
 # Milestones
 
+### L109 loading baseline, cache experiment and original waits (2026-10-13)
+
+- Head instr1: at 16.032 s, archive inflate **4.854 s**, file reads
+  **0.056 s**, pipelines **0.007 s**; first Present **6.002 s**.
+  Final archive inflate **5.482 s**. UI phase marks remain unobserved.
+- Bounded install-archive read-ahead implemented and tested, **off by
+  default**: warm sequential 128 KiB **7.601 -> 12.903 us** (regression),
+  repeated 128 KiB **7.559 -> 4.352 us**; host I/O microbench only.
+- Light suite **168 pass / 1 existing gamma failure / 2 ignored**;
+  final cache/APC/overlay/budget checks pass after buffer reuse.
+- Original logo/disclaimer timers unchanged: **2 s / 4 s** nominal
+  holds; alternative regional lists total **2 / 6 / 10 s**, plus GUI
+  transitions. Source addresses and reachability limits in L109 brief.
+- Next: head's matched run with inflate port `9093ace7`, observed UI
+  timestamps and all-zlib telemetry; keep cache disabled for this A/B.
+
+### L109 readable archive inflate fast loop (2026-10-13)
+
+- Whole `0x00cf2cb0` fast decoder port; original outer inflate/streaming
+  state machines retain headers, checksums, buffering and callbacks.
+- **559 original Unicorn cases pass**: all scratch/stack/heap bytes,
+  GPR/XMM registers and arithmetic flags. No shard or game build/run.
+- Isolated opt1 generated / opt3 readable leaf: **18.209 -> 2.260 us**
+  for 349 output bytes, **16.274 -> 3.239 us** for 512 bytes; three
+  alternating 1,000-call rounds. No whole-loading speedup claim.
+- Next: head's load-log/same-save comparison, baseline `45b89e6f`,
+  readable leaf selectable with `DDRUNTIME_ARCHIVE_INFLATE=0/1`.
+### L110 native backend floor (2026-10-13)
+
+- Optimized 5,000-draw/40-pipeline/200-group synthetic Vulkan floor,
+  including finish + submit: **wgpu 0.884, reused bundles 0.386, ash 0.326
+  us/draw**. Uniform data prefilled; no texture sampling/gameplay claim.
+- 900 one-draw clear passes: **7.146 / 7.151 / 1.351 us/pass**, respectively.
+  Bundles reduce repeated draw processing but do not remove pass overhead.
+- Native API: **4 GPU tests pass**, including full/compact exact D3D9/host
+  comparisons and texture/constants/ring checks; **5 CPU tests pass**.
+- Matched 5,000-draw native workload: full **3.839**, compact **1.692**,
+  compact range updates **1.433 us/draw**, including upload/finish/submit
+  (three alternating repeats). Minimal shaders; no gameplay/FPS claim.
+- wgpu-owned texture/buffer -> raw Vulkan/hal -> wgpu readback passes with
+  separate ordered encoders; mixing raw and normal encoding in one fails.
+- Current-base runtime light suite **167 pass / 1 existing gamma-reset
+  failure / 2 ignored**. Next: L119 integration and one captured-pass oracle.
+  Details and limitations: `docs/tasks/L110-native-device.md`.
+
+### L111 nDraw executor observer (2026-10-13)
+
+- Opt-in read-only executor wrapper plus Present-selected frame counters;
+  off registers no new execution/Present hooks. Nested command decoder,
+  state/shader/sampler/buffer identities and ordered surface target runs
+  sourced to DAB480/DA6DA0 and apply helpers. Counts are raw records.
+- Seven synthetic regressions pass; enabled light unit suite 35 pass /
+  1 existing ignored. Full suite 158 pass / 2 existing timing failures /
+  1 ignored; both failures pass isolated reruns (160 verified across runs).
+  Fullscreen gamma fails with switch off too on current desktop; recorded
+  L34 display resolves it. No tests/checks weakened.
+- cap1 last20 analytical extraction preserves 108,502 command payloads
+  and 50,507 referenced blobs (284 MB raw vs 19.79 GB whole-capture blobs).
+  Unchanged frame_stats completed: 107,544 draws / 19,704 passes.
+- Mean 5,377.2 draws / 985.2 passes per frame, including 898.2 single-draw
+  tiny float32 target passes. Constants change 248,722 bytes/frame;
+  fixed-state lists differ for 4.898% of predecessor comparisons.
+- Next: head-run DDRUNTIME_NDRAW_STATS=1, EVERY=1 for executor/capture
+  correlation; no game, image-equivalence or FPS claim from this batch.
+  Details: docs/tasks/L111-executor-stats.md.
+### L109 loading instrumentation and read scratch (2026-10-13)
+
+- Opt-in process-relative init/movie/file/archive/GPU/frame telemetry;
+  original archive read/inflate bodies retained. Timeline parser keeps
+  unobserved title/menu/loading phases explicitly unmeasured.
+- Synthetic optimized warm 128 KiB ReadFile: **11.569 -> 9.643 us/call**,
+  **1 -> 0 allocations** (three alternating pairs, five samples each).
+  Small reads have no reliable timing win; no game loading speedup claim.
+- Light runtime serial suite: **153 passed, 1 existing gamma failure,
+  2 ignored**. Parser **8 pass**, ddports **1 pass**. Details:
+  `docs/tasks/L109-loading.md`.
+- Next: head-run unskipped boot/menu/save baseline using
+  `DDRUNTIME_LOAD_LOG=1`, then same-save before/after phase comparison.
+### L118 dense D3D9 state and snapshot access (2026-10-13)
+
+- Dense sampler/stage banks and render-state indices preserve presence, unusual
+  IDs and immutable draw payloads. Scoped device borrows avoid repeated lock
+  bookkeeping; dirty snapshots avoid temporary Vec growth.
+- Three paired debug dirty-sampler draw medians **49.71 -> 29.97 us**, allocations
+  **8 -> 6** including COM test buffers. Clean draw timings overlap; no FPS claim.
+- Runtime light suite **158 passed / one fullscreen-gamma Reset failure /
+  one ignored**; new map-equivalence, snapshot-retention and lock-unwind checks
+  pass. No game/shard/GPU runs. Details: `docs/tasks/L118-d3d9-render-thread.md`.
+- Next: head combo4 gameplay/image comparison and renewed render-thread profile.
+### L117 nDraw state semantics (2026-10-13)
+
+- New standalone mtstate decoder: four descriptor constructors, eight
+  applies and InputLayout/declaration synthesis compared with original
+  Unicorn vectors. **3,584 cases / 17,928 D3D9 calls** and checked memory
+  match; four contract tests and strict crate clippy pass.
+- Raster depth-bias multiplier is `0x33800001`; sampler max-mip conversion
+  truncates. This is a call-level semantic decoder, not an ABI override.
+- NDRAW section9 maps descriptors to D3D9/wgpu and lists native gaps.
+  Runtime light serial:155 pass,1 inherited fullscreen gamma Reset failure,
+  1 ignored (initial parallel lock-timing failure passes serially).
+- Next: L112/L110 integration and head-run frame comparison. No GPU/game
+  run or image/FPS claim. Details: `docs/tasks/L117-state-semantics.md`.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants
@@ -1963,3 +2066,69 @@ opening (codex-31), route perf (codex-29).
   timings improve, but total frame time does not establish an FPS improvement.
 - Next: finish the bounded gate/timing, then head-run gameplay A/B. No game or
   lifted-shard build by this lane. Details: `tasks/L89-backend-worker.md`.
+
+
+### L98 clean resource flushes (2026-10-13)
+
+- Draw reads use a 42-slot stack array and one batched objects access.
+  Dirty resource/owner indexing skips clean mip walks, preserving upload
+  order and surface aliases; opt-in debug audit checks skipped dirty flags.
+- Audit-enabled light suite: **152 passed, 1 failed, 1 ignored**; the sole
+  fullscreen-gamma Reset failure also reproduces on the untouched base.
+  Two new alias/copy/relock/all-42-read/cube/volume regressions pass.
+- Three paired debug draw samples: median **35.03 -> 28.51 us/draw**,
+  allocations **12 -> 10/draw**. Synthetic service timing only, no game run.
+- Next: head integrates with the relocated L90 snapshot and compares FPS;
+  full-suite green also requires resolving the existing gamma/Reset failure.
+  Details: `docs/tasks/L98-clean-flush.md`.
+
+### L96 headless encoder-hang investigation (2026-10-13)
+
+- Concurrent cache tests reproduced a driver deadlock: the WGL instance
+  thread spins during shutdown while Vulkan device/pipeline creation waits.
+  No encoder/readback loop was observed; L88/L95 batching remains intact.
+- Headless initialization now selects primary backends by default, keeping
+  `WGPU_BACKEND` overrides. Focused regression checks clear/copy submit
+  limits, resource tracking and upload ordering.
+- Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
+  comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
+- Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+### L90 compact constants (2026-10-13)
+
+- Implemented bytecode-bounded constant snapshots and matching WGSL uniform
+  layouts, little-endian bulk float copying, and valid dynamic binding
+  ranges across ring rollover. Relative addressing retains full banks.
+- Fixture float bytes: **7,680 -> 2,912**. Light suite **151 pass / 1 fail /
+  1 ignored**; failure is the baseline fullscreen-gamma Reset issue also
+  reproduced by L98. Prefix/rebinding and byte-packing regressions pass.
+- GPU compact-layout/ring-rollover regression: **4,096 draws, exact driver
+  pixel match**. Full 150-case texture/state matrix and completed draw
+  comparisons pass. Next: remaining serialized GPU gate/timings after
+  L96's independent WGL teardown fix; snapshot groups stay separate.
+
+
+### L90 dirty snapshot groups (2026-10-13)
+
+- Implemented setter-driven immutable draw groups, shared texture/stream
+  lists, stack draw/read arguments, and reused constant-setter staging.
+  Resource flushing and backend worker ordering are unchanged.
+- Runtime allocations **10 -> 3/draw**; paired median **39.19 -> 23.05 us**
+  (shared-machine load). **152 runtime + 5 frame tests pass**, one baseline
+  fullscreen-gamma failure and one existing ignored test remain. New
+  binding-transition/UP/old-snapshot regression passes. GPU targets compile.
+- Next: complete serialized GPU gate/timings after head's gameplay run;
+  integrate snapshot module with L97 render sharing and L98 flush_reads.
+
+
+### L96 headless encoder-hang investigation (2026-10-13)
+
+- Concurrent cache tests reproduced a driver deadlock: the WGL instance
+  thread spins during shutdown while Vulkan device/pipeline creation waits.
+  No encoder/readback loop was observed; L88/L95 batching remains intact.
+- Headless initialization now selects primary backends by default, keeping
+  `WGPU_BACKEND` overrides. Focused regression checks clear/copy submit
+  limits, resource tracking and upload ordering.
+- Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
+  comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
+- Next: finish the serialized GPU gate and hand the minimal fix to head.

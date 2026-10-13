@@ -1,0 +1,94 @@
+//! Original-instruction differential vectors; no shard dependency.
+use ddnative_base::{
+    mem::{Mem, Sparse},
+    x86::{Cpu, Entry},
+};
+use std::io::{Cursor, Read};
+
+fn word(c: &mut Cursor<Vec<u8>>) -> u32 {
+    let mut bytes = [0; 4];
+    c.read_exact(&mut bytes).unwrap();
+    u32::from_le_bytes(bytes)
+}
+fn machine(c: &mut Cursor<Vec<u8>>) -> ([u32; 8], [[u32; 4]; 8], Vec<(u32, Vec<u8>)>) {
+    let regs = std::array::from_fn(|_| word(c));
+    let xmm = std::array::from_fn(|_| std::array::from_fn(|_| word(c)));
+    let windows = (0..word(c))
+        .map(|_| {
+            let addr = word(c);
+            let len = word(c) as usize;
+            let mut bytes = vec![0; len];
+            c.read_exact(&mut bytes).unwrap();
+            (addr, bytes)
+        })
+        .collect();
+    (regs, xmm, windows)
+}
+
+#[test]
+fn original_fast_inflate_registers_and_all_memory() {
+    let path = std::env::var("L109_VECTORS")
+        .unwrap_or_else(|_| "E:/ddda-re/notes/native-L109/vectors/inflate_fast.bin".into());
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => {
+            eprintln!("private original vectors absent: {path}");
+            return;
+        }
+    };
+    let mut c = Cursor::new(bytes);
+    let mut magic = [0; 8];
+    c.read_exact(&mut magic).unwrap();
+    assert_eq!(&magic, b"L109IF02");
+    let count = word(&mut c);
+    for index in 0..count {
+        let (r, xmm, input) = machine(&mut c);
+        let (expected, out_xmm, output) = machine(&mut c);
+        let flags = word(&mut c);
+        let mut m = Sparse::default();
+        for (addr, bytes) in input {
+            for (k, b) in bytes.into_iter().enumerate() {
+                m.set_u8(addr + k as u32, b);
+            }
+        }
+        let mut cpu = Cpu::from(Entry {
+            eax: r[0],
+            ecx: r[1],
+            edx: r[2],
+            ebx: r[3],
+            esp: r[4],
+            ebp: r[5],
+            esi: r[6],
+            edi: r[7],
+            xmm0: xmm[0][0],
+        });
+        cpu.xmm = xmm;
+        ddruntime::archive_inflate::inflate_fast(&mut m, &mut cpu);
+        assert_eq!(
+            [
+                cpu.eax, cpu.ecx, cpu.edx, cpu.ebx, cpu.esp, cpu.ebp, cpu.esi, cpu.edi
+            ],
+            expected,
+            "case {index} registers"
+        );
+        assert_eq!(cpu.xmm, out_xmm, "case {index} xmm");
+        assert_eq!(
+            cpu.fl.snapshot().0 & 0x8d5,
+            flags & 0x8d5,
+            "case {index} arithmetic flags"
+        );
+        for (addr, bytes) in output {
+            for (k, b) in bytes.into_iter().enumerate() {
+                assert_eq!(
+                    m.u8(addr + k as u32),
+                    b,
+                    "case {index} memory {:#x}",
+                    addr + k as u32
+                );
+            }
+        }
+    }
+    assert_eq!(c.position() as usize, c.get_ref().len());
+    eprintln!("{count} original fast inflate cases matched");
+}

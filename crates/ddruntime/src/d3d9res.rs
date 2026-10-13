@@ -209,16 +209,24 @@ fn create_texture_object(m: &mut dyn Mem, device: u32, kind: TexKind, dims: (u32
 }
 
 pub(crate) fn texture<R>(tex: u32, f: impl FnOnce(&mut TextureData) -> R) -> R {
-    objects(|o| match o.live.get_mut(&tex).map(|x| &mut x.kind) {
-        Some(Kind::Texture { data, .. }) => f(data),
-        _ => panic!("{tex:#x} is not a live texture"),
+    objects(|o| {
+        let result = match o.live.get_mut(&tex).map(|x| &mut x.kind) {
+            Some(Kind::Texture { data, .. }) => f(data),
+            _ => panic!("{tex:#x} is not a live texture"),
+        };
+        o.track_dirty(tex);
+        result
     })
 }
 
 fn surface_image<R>(surf: u32, f: impl FnOnce(&SurfaceDesc, &mut Image) -> R) -> R {
-    objects(|o| match o.live.get_mut(&surf).map(|x| &mut x.kind) {
-        Some(Kind::Surface { desc, image, .. }) => f(desc, image),
-        _ => panic!("{surf:#x} is not a live surface"),
+    objects(|o| {
+        let result = match o.live.get_mut(&surf).map(|x| &mut x.kind) {
+            Some(Kind::Surface { desc, image, .. }) => f(desc, image),
+            _ => panic!("{surf:#x} is not a live surface"),
+        };
+        o.track_dirty(surf);
+        result
     })
 }
 
@@ -600,9 +608,13 @@ pub fn cube_add_dirty(m: &mut dyn Mem, cpu: &mut Cpu) {
 // --- buffers ---------------------------------------------------------------------
 
 fn buffer<R>(b: u32, f: impl FnOnce(&mut BufferData) -> R) -> R {
-    objects(|o| match o.live.get_mut(&b).map(|x| &mut x.kind) {
-        Some(Kind::Buffer { data, .. }) => f(data),
-        _ => panic!("{b:#x} is not a live buffer"),
+    objects(|o| {
+        let result = match o.live.get_mut(&b).map(|x| &mut x.kind) {
+            Some(Kind::Buffer { data, .. }) => f(data),
+            _ => panic!("{b:#x} is not a live buffer"),
+        };
+        o.track_dirty(b);
+        result
     })
 }
 

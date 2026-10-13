@@ -96,6 +96,7 @@ impl App {
     /// One device for the window surface and the game's backend: an adapter
     /// that can present to the window and has the backend's features.
     fn create_gpu(window: Arc<Window>, vsync: bool) -> Result<Gpu, String> {
+        ddruntime::load_log::event("gpu_init_begin", format_args!(""));
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance.create_surface(window.clone()).map_err(|e| format!("a surface for the window: {e}"))?;
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -117,6 +118,7 @@ impl App {
             .map_err(|e| format!("a device: {e}"))?;
         let size = window.inner_size();
         let shown = present::Window::new(surface, &adapter, device.clone(), queue.clone(), size.width, size.height, vsync)?;
+        ddruntime::load_log::event("gpu_init_end", format_args!(""));
         Ok(Gpu { device, queue, adapter: adapter.get_info(), window: shown })
     }
 
@@ -143,10 +145,12 @@ impl App {
                 let status = |s: String| {
                     let _ = proxy.send_event(GameEvent::Status(s));
                 };
+                ddruntime::load_log::event("runtime_init_begin", format_args!(""));
                 let mut session = match ddruntime::session::Session::new(&exe) {
                     Ok(s) => s,
                     Err(e) => return status(format!("could not load {exe}: {e}")),
                 };
+                ddruntime::load_log::event("runtime_init_end", format_args!(""));
                 ddruntime::session::install_fault_hook();
                 let _ = proxy.send_event(GameEvent::Input(ddruntime::input::connect()));
                 sink::start(ddruntime::audio::output());
@@ -154,6 +158,8 @@ impl App {
                     Some((device, queue, adapter, window)) => {
                         let mut backend = ddgpu::WgpuBackend::new(device, queue, adapter);
                         backend.read_frames = false;
+                        // L120: occlusion counts read back without stalling the backend
+                        backend.async_queries = true;
                         // L71: the driver's pipeline compilation kept between
                         // runs, in DDPLAY_PIPELINE_CACHE (a directory; 0: off),
                         // by default %LOCALAPPDATA%\ddda-rs\pipelines
@@ -165,6 +171,8 @@ impl App {
                         if let Some(dir) = cache_dir {
                             if !backend.enable_pipeline_cache(&dir) {
                                 eprintln!("no pipeline cache (the device has none)");
+                            } else {
+                                backend.enable_pipeline_warmup(&dir, std::path::Path::new(&exe));
                             }
                         }
                         // DDPLAY_PIPELINE_STATS=<s>: shader modules and
@@ -186,7 +194,10 @@ impl App {
                     None => status("no GPU device for the game's backend; running headless".into()),
                 }
                 status("running".into());
+                ddruntime::load_log::event("guest_start", format_args!(""));
                 let started = session.start();
+                ddruntime::load_log::event("guest_end", format_args!(""));
+                ddruntime::load_log::totals();
                 let threads: Vec<String> = ddruntime::threads::faults().into_iter()
                     .map(|(tid, f)| format!("guest thread {tid:#x}: {f}")).collect();
                 let mut report = format!("{}: {}", started.step, started.outcome);
@@ -272,6 +283,7 @@ impl ApplicationHandler<GameEvent> for App {
             .with_title("Dragon's Dogma: Dark Arisen (rebuilt) - starting")
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("a window"));
+        ddruntime::load_log::event("first_window", format_args!(""));
         match App::create_gpu(window.clone(), self.vsync) {
             Ok(g) => self.gpu = Some(g),
             Err(e) => {
@@ -354,9 +366,20 @@ impl ApplicationHandler<GameEvent> for App {
 }
 
 fn main() {
+    ddruntime::load_log::start();
     // L103: the x87 live slot among the TEB's 64 direct TLS slots, before
     // any GPU driver DLL takes them
     let x87_slot = ddruntime::reserve_x87_slot();
+    if ddruntime::load_log::enabled() {
+        let _ = std::thread::Builder::new().name("load-log".into()).spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(1));
+            ddruntime::load_log::totals();
+            let (draws, presents) = ddruntime::d3d9draw::counts();
+            ddruntime::load_log::event("frame_totals", format_args!("draws={draws} presents={presents}"));
+            let p = ddgpu::pipeline_stats();
+            ddruntime::load_log::event("gpu_totals", format_args!("modules={} module_ns={} translate_ns={} pipelines={} pipeline_ns={}", p.modules, p.module_time.as_nanos(), p.translate_time.as_nanos(), p.pipelines, p.pipeline_time.as_nanos()));
+        });
+    }
     if x87_slot >= 64 {
         eprintln!("ddplay: no direct TLS slot for the x87 live id or the dispatch cache ({x87_slot}): the slower fallback is used");
     }

@@ -90,7 +90,7 @@ pub struct Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Vertices {
     /// stream number, vertex buffer, offset, stride, frequency setting
-    Streams(Vec<(u32, u32, u32, u32, u32)>),
+    Streams(std::sync::Arc<[(u32, u32, u32, u32, u32)]>),
     /// DrawPrimitiveUP data for stream 0, with its stride
     Inline { bytes: Vec<u8>, stride: u32 },
 }
@@ -109,6 +109,17 @@ pub enum Indices {
 /// allocation). Reads and writes go through the Vec it derefs to.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RenderStateList(std::sync::Arc<Vec<(u32, u32)>>);
+
+impl RenderStateList {
+    /// The same shared list (not merely equal states).
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+    /// Where the shared list lives, for a cache slot.
+    pub fn address(&self) -> u64 {
+        std::sync::Arc::as_ptr(&self.0) as usize as u64
+    }
+}
 
 impl std::ops::Deref for RenderStateList {
     type Target = Vec<(u32, u32)>;
@@ -157,7 +168,7 @@ pub struct DrawCall {
     /// Immutable snapshot; setters detach a shared block only when bits change.
     pub vs_constants: std::sync::Arc<Constants>,
     pub ps_constants: std::sync::Arc<Constants>,
-    pub textures: Vec<TextureBinding>,
+    pub textures: std::sync::Arc<[TextureBinding]>,
     /// every render state, sorted by state
     pub render_states: RenderStateList,
     pub viewport: [u32; 6],

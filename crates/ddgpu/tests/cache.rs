@@ -146,9 +146,9 @@ fn frame_of(rng: &mut Rng, count: usize) -> (Vec<Upload>, Vec<ClearCall>, Vec<Dr
         states.sort();
         let (primitive, vertices, indices, primitives) = match rng.next() % 4 {
             0 => (4, Vertices::Inline { bytes: bytes(&(0..6).map(|_| vertex(rng)).collect::<Vec<_>>()), stride: 24 }, Indices::None, 2),
-            1 => (5, Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]), Indices::None, 3),
-            2 => (6, Vertices::Streams(vec![(0, 0x300, 24, 24, 1)]), Indices::None, 3),
-            _ => (4, Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]), Indices::Buffer(0x301, 101), 2),
+            1 => (5, Vertices::Streams(vec![(0, 0x300, 0, 24, 1)].into()), Indices::None, 3),
+            2 => (6, Vertices::Streams(vec![(0, 0x300, 24, 24, 1)].into()), Indices::None, 3),
+            _ => (4, Vertices::Streams(vec![(0, 0x300, 0, 24, 1)].into()), Indices::Buffer(0x301, 101), 2),
         };
         let vp = [rng.next() % 4, rng.next() % 4, W - 4 + rng.next() % 4, H - 4 + rng.next() % 4];
         // DrawPrimitiveUP data starts at its first vertex
@@ -166,7 +166,7 @@ fn frame_of(rng: &mut Rng, count: usize) -> (Vec<Upload>, Vec<ClearCall>, Vec<Dr
                 vec![TextureBinding { sampler: 0, resource: 0x200 + tex, kind: TexKind::Flat, format: formats[tex as usize], width: 4, height: 4, depth: 1, levels: 1, usage: 0, states: st }]
             } else {
                 vec![]
-            },
+            }.into(),
             render_states: states.into(),
             viewport: [vp[0], vp[1], vp[2].min(W - vp[0]), vp[3].min(H - vp[1]), 0f32.to_bits(), 1f32.to_bits()],
             scissor: [(rng.next() % 8) as i32, (rng.next() % 8) as i32, 8 + (rng.next() % 8) as i32, 8 + (rng.next() % 8) as i32],
@@ -262,4 +262,50 @@ fn draws_sharing_a_render_pass_draw_what_a_pass_each_draws() {
     assert_eq!(recorded, draws_made);
     assert!(passes < recorded, "draws shared passes");
     assert!(differ.is_empty(), "frames that differ from a pass per draw: {differ:?}");
+}
+
+/// A synthetic executable identity and the normal randomized draw generator:
+/// persistence/warmup must reuse actual objects and preserve both target images.
+#[test]
+fn persisted_warmup_reuses_pipelines_and_preserves_pixels() {
+    let Some(mut cold) = ddgpu::WgpuBackend::headless() else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("ddgpu-warmup-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("synthetic-exe");
+    std::fs::write(&exe, b"synthetic test identity; no game data").unwrap();
+    if !cold.enable_pipeline_cache(&dir) {
+        eprintln!("skipped: adapter has no pipeline cache");
+        std::fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+    assert!(cold.enable_pipeline_warmup(&dir, &exe));
+    let (uploads, clears, draws, second) = frame_of(&mut Rng(0x716116), 12);
+    let expected = run(&mut cold, &uploads, &clears, &draws, &second);
+    ddgpu::save_pipeline_caches();
+    drop(cold);
+    let mut warm = ddgpu::WgpuBackend::headless().unwrap();
+    assert!(warm.enable_pipeline_cache(&dir));
+    assert!(warm.enable_pipeline_warmup(&dir, &exe));
+    let start = std::time::Instant::now();
+    while !warm.pipeline_warmup_status().unwrap().0 {
+        assert!(start.elapsed().as_secs() < 30, "background warmup did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let (_, ready, _) = warm.pipeline_warmup_status().unwrap();
+    assert!(ready > 0, "no persisted pipeline was compiled");
+    let before = warm.pipeline_creation_counts();
+    let actual = run(&mut warm, &uploads, &clears, &draws, &second);
+    let after = warm.pipeline_creation_counts();
+    let (_, _, used) = warm.pipeline_warmup_status().unwrap();
+    assert_eq!(expected, actual);
+    assert_eq!(used, ready as u64, "every recipe is used by this identical frame");
+    assert_eq!(after, before, "draws must create no cold modules or pipelines");
+    ddgpu::save_pipeline_caches();
+    drop(warm);
+    // The worker drains its record queue after cancellation. The close-time
+    // flush above has already acknowledged every source/recipe write.
+    std::fs::remove_dir_all(&dir).unwrap();
 }

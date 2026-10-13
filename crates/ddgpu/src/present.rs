@@ -74,7 +74,7 @@ pub fn fit(sw: u32, sh: u32, tw: u32, th: u32) -> [u32; 4] {
 
 impl Blitter {
     pub fn new(device: &wgpu::Device) -> Blitter {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("present"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) });
+        let module = crate::pipeline_log::timed("module", "object-miss", || device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("present"), source: wgpu::ShaderSource::Wgsl(SHADER.into()) }));
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -116,7 +116,7 @@ impl Blitter {
     }
 
     fn pipeline(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
-        self.pipelines.entry(format).or_insert_with(|| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        self.pipelines.entry(format).or_insert_with(|| crate::pipeline_log::timed("pipeline", "object-miss", || device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("present"),
             layout: Some(&self.pipeline_layout),
             vertex: wgpu::VertexState { module: &self.module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
@@ -131,7 +131,7 @@ impl Blitter {
             }),
             multiview_mask: None,
             cache: None,
-        })).clone()
+        }))).clone()
     }
 
     /// Draw the presented back buffer into `target` (a view of `format`,

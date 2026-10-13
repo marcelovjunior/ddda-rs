@@ -33,6 +33,36 @@ pub struct Shader {
     pub tokens: usize,
 }
 
+impl Shader {
+    /// Exclusive end of the float constant registers read by this shader.
+    /// Relative indexing can reach the entire stage register file. Matrix
+    /// instructions implicitly read consecutive rows from their second source.
+    /// DEF registers remain included (conservative, including relative reads).
+    pub fn float_constant_count(&self) -> usize {
+        let limit = if self.stage == Stage::Vertex { 256 } else { 224 };
+        let mut end = 0;
+        for ins in &self.instructions {
+            for (source, p) in ins.src.iter().enumerate() {
+                if matches!(p.kind, reg::CONST2 | reg::CONST3 | reg::CONST4) {
+                    return limit;
+                }
+                if p.kind != reg::CONST { continue; }
+                if p.relative.is_some() { return limit; }
+                let rows = if source == 1 {
+                    match ins.opcode {
+                        op::M4X4 | op::M3X4 => 4,
+                        op::M4X3 | op::M3X3 => 3,
+                        op::M3X2 => 2,
+                        _ => 1,
+                    }
+                } else { 1 };
+                end = end.max((p.index as usize).saturating_add(rows));
+            }
+        }
+        end.min(limit)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instruction {
     pub opcode: u16,
@@ -335,4 +365,21 @@ fn shape(opcode: u16) -> Option<(bool, u8)> {
         DCL | DEF | DEFI | DEFB => (true, 0),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod constant_extent_tests {
+    use super::*;
+
+    #[test]
+    fn direct_matrix_and_relative_reads() {
+        let direct = parse(&[0xfffe0300, 0x02000001, 0xe00f0000, 0xa0e40007, 0xffff]).unwrap();
+        assert_eq!(direct.float_constant_count(), 8);
+        let matrix = parse(&[0xfffe0300, 0x03000014, 0xe00f0000, 0x90e40000, 0xa0e40007, 0xffff]).unwrap();
+        assert_eq!(matrix.float_constant_count(), 11);
+        let relative = parse(&[0xfffe0300, 0x03000001, 0xe00f0000, 0xa0e42007, 0xb0000000, 0xffff]).unwrap();
+        assert_eq!(relative.float_constant_count(), 256);
+        let none = parse(&[0xffff0300, 0x02000001, 0x800f0800, 0x90e40000, 0xffff]).unwrap();
+        assert_eq!(none.float_constant_count(), 0);
+    }
 }
