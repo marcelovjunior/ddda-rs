@@ -1,5 +1,19 @@
 # Milestones
 
+### L83 exact shader IR cache preparation (2026-10-12)
+
+- Cache helper and phase benchmark implemented; backend hook awaits stale
+  claim approval. No shader translation changes. Two cache tests pass.
+- D3DX reflection: 29,198 shaders, zero differences. WGSL validation:
+  60,524 variants, zero failures. Full CPU roundtrip still running.
+- Preliminary Vulkan 100-pixel sample: 5.52 ms including translation to
+  1.23 ms with warm IR cache. Full-corpus GPU batches held by shared pause;
+  default adapter discovery hangs, explicit Vulkan succeeds.
+- Runtime light suite: two timing assertions failed under shared load;
+  serial rerun pending. No game or shard build run.
+- Next: complete corpus timings and integrate the cache after claim release.
+  Details: `docs/tasks/L83-naga-direct.md`.
+
 ### L66 hot/cold build (2026-10-12)
 
 - Optional function-level hot packages implemented; 20 focused Python tests,
