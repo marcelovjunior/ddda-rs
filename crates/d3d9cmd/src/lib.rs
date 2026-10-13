@@ -4,6 +4,8 @@
 //! that backends (crates/ddgpu, wgpu) do not depend on the runtime.
 
 mod deferred;
+mod native;
+pub use native::*;
 pub use deferred::DeferredBackend;
 
 /// A texture's dimensionality.
@@ -229,6 +231,13 @@ pub trait GraphicsBackend: Send + std::any::Any {
     /// execute as they record: every mark has passed.
     fn mark(&mut self) -> u64 { 0 }
     fn passed(&self, _mark: u64) -> bool { true }
+    /// Ordered native job. Err returns the original job without native target
+    /// writes; the sender must fall back. DeferredBackend acknowledges once per
+    /// job, never once per draw, so unsupported work cannot vanish on a worker.
+    fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> { Err(job) }
+    /// Comparison markers default to unsupported, without side effects.
+    fn native_compare_begin(&mut self, _begin: NativeCompareBegin) -> bool { false }
+    fn native_compare_end(&mut self, _id: u64, job: NativeJob) -> Result<(), NativeJob> { Err(job) }
     fn upload(&mut self, upload: Upload);
     fn draw(&mut self, draw: &DrawCall);
     fn clear(&mut self, clear: &ClearCall);
