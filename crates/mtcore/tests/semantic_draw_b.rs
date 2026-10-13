@@ -59,6 +59,9 @@ fn read(path: &str) -> Option<Value> {
 fn verify(path: &str, body: LiftFn) -> usize {
     verify_mode(path, body, false)
 }
+/// Callees the ports now run natively: their recorded events are dropped
+/// (the final memory comparison covers their effects).
+const NATIVE_CALLEES: &[u32] = &[];
 fn verify_mode(path: &str, body: LiftFn, paged: bool) -> usize {
     let Some(data) = read(path) else { return 0 };
     let cases = data["cases"].as_array().unwrap();
@@ -75,7 +78,14 @@ fn verify_mode(path: &str, body: LiftFn, paged: bool) -> usize {
             m.paged = Some(memory);
         }
         let mut c = cpu(&case["before"]);
-        let events = Rc::new(case["events"].as_array().cloned().unwrap_or_default());
+        let events: Vec<Value> = case["events"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|e| !NATIVE_CALLEES.contains(&n(&e["target"])))
+            .collect();
+        let events = Rc::new(events);
         let cursor = Rc::new(RefCell::new(0usize));
         let (trace, pos) = (events.clone(), cursor.clone());
         x86::set_ext_calls(Some(Box::new(move |m, c, target| {
@@ -157,7 +167,7 @@ fn apply_material_original() {
     ddnative_host::install();
     verify(
         "E:/ddda-re/notes/native-L174/010655a0.json",
-        mtcore::semantic_draw_b::apply_material,
+        mtcore::semantic_draw_b::apply_material_guest_finalizer,
     );
 }
 
@@ -187,7 +197,7 @@ fn select_material_pass_original() {
     ddnative_host::install();
     verify(
         "E:/ddda-re/notes/native-L174/01066c60.json",
-        mtcore::semantic_draw_b::select_material_pass,
+        mtcore::semantic_draw_b::select_material_pass_guest_callees,
     );
 }
 
@@ -200,24 +210,24 @@ fn abi_oracle_rejects_corruption() {
     ddnative_host::install();
     let corruptions: [LiftFn; 5] = [
         |m, c| {
-            mtcore::semantic_draw_b::apply_material(m, c);
+            mtcore::semantic_draw_b::apply_material_guest_finalizer(m, c);
             c.eax ^= 1;
         },
         |m, c| {
-            mtcore::semantic_draw_b::apply_material(m, c);
+            mtcore::semantic_draw_b::apply_material_guest_finalizer(m, c);
             c.ebx ^= 1;
         },
         |m, c| {
-            mtcore::semantic_draw_b::apply_material(m, c);
+            mtcore::semantic_draw_b::apply_material_guest_finalizer(m, c);
             c.esp = c.esp.wrapping_add(4);
         },
         |m, c| {
-            mtcore::semantic_draw_b::apply_material(m, c);
+            mtcore::semantic_draw_b::apply_material_guest_finalizer(m, c);
             let v = m.u8(0x0e001154);
             m.set_u8(0x0e001154, v ^ 1);
         },
         |m, c| {
-            mtcore::semantic_draw_b::apply_material(m, c);
+            mtcore::semantic_draw_b::apply_material_guest_finalizer(m, c);
             m.set_u8(0x0e003800, 1);
         },
     ];
@@ -251,11 +261,11 @@ fn page_backed_originals() {
             ),
             (
                 "E:/ddda-re/notes/native-L174/010655a0.json",
-                mtcore::semantic_draw_b::apply_material,
+                mtcore::semantic_draw_b::apply_material_guest_finalizer,
             ),
             (
                 "E:/ddda-re/notes/native-L174/01066c60.json",
-                mtcore::semantic_draw_b::select_material_pass,
+                mtcore::semantic_draw_b::select_material_pass_guest_callees,
             ),
         ] {
             verify_mode(path, body, true);

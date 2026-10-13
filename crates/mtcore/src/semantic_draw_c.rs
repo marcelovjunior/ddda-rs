@@ -13,21 +13,28 @@ use ddnative_base::{
 /// MaterialStd's primitive hook first resolves Material's binding, then
 /// applies the standard material only when the binding is non-null.
 pub fn apply_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
+    apply_standard_material_with(m, c, true);
+}
+
+/// [`apply_standard_material`] with the guest call to 0x01066C60 (the
+/// original's own call; differential tests against the direct version).
+pub fn apply_standard_material_guest_callee(m: &mut dyn Mem, c: &mut Cpu) {
+    apply_standard_material_with(m, c, false);
+}
+
+fn apply_standard_material_with(m: &mut dyn Mem, c: &mut Cpu, direct: bool) {
     let p = Pages::of(m);
     let entry = c.esp;
     let material = c.ecx;
     let context = p.u32(m, entry.wrapping_add(4));
     let primitive = p.u32(m, entry.wrapping_add(8));
-    let binding = draw_call(
-        m,
-        c,
-        p,
-        entry.wrapping_sub(8),
-        0x01066c60,
-        0x01145c03,
-        material,
-        &[context, primitive],
-    );
+    let binding = if direct {
+        // 0x01066C60 called directly: its entry ESP is the frame less its
+        // two arguments and the return address
+        crate::semantic_draw_b::select_material_pass_at(m, c, p, material, context, primitive, entry.wrapping_sub(8 + 12))
+    } else {
+        draw_call(m, c, p, entry.wrapping_sub(8), 0x01066c60, 0x01145c03, material, &[context, primitive])
+    };
     if binding != 0 {
         draw_call(
             m,

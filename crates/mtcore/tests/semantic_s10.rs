@@ -262,3 +262,17 @@ fn semantic_gather_ambient_probe_matches_original() {
     let (cases, made) = run_cases(&vectors("ambient_probe.json"), mtcore::semantic_s10::gather_ambient_probe, false, &callees, &[]);
     eprintln!("{cases} ABI-level ambient_probe cases passed; calls {made:x?}");
 }
+
+// verifies 0x01062f20 (ABI level incl. its leftover EAX; the CRT memcpy is native)
+#[test]
+fn semantic_finalize_material_matches_original() {
+    let callees = [Callee { target: 0x00fe_d890, reads: &[ECX], stack_args: 1 }];
+    let (cases, made) = run_cases(
+        &vectors("finalize_material.json"),
+        mtcore::semantic_draw_b::finalize_material_abi,
+        true,
+        &callees,
+        &[0x012e_fea0],
+    );
+    eprintln!("{cases} ABI-level finalize_material cases passed; calls {made:x?}");
+}

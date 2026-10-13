@@ -593,7 +593,7 @@ pub fn player_prepare_draw(m: &mut dyn Mem, c: &mut Cpu) {
 }
 
 /// memcpy of `words` 32-bit words (the CRT routine is overlap safe).
-fn copy_words(m: &mut dyn Mem, pg: Pages, dst: u32, src: u32, words: u32) {
+pub(crate) fn copy_words(m: &mut dyn Mem, pg: Pages, dst: u32, src: u32, words: u32) {
     let bytes = words.wrapping_mul(4);
     if dst.wrapping_sub(src) < bytes && dst != src {
         let copy: Vec<u32> = (0..words).map(|i| pg.u32(m, src.wrapping_add(4 * i))).collect();
