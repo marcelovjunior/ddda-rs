@@ -164,7 +164,7 @@ static ANY_PARALLEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 
 /// Whether this runtime runs guest threads in parallel.
 pub fn parallel() -> bool {
-    runtime::current().lock.parallel.load(std::sync::atomic::Ordering::Relaxed)
+    runtime::with(|rt| rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Choose the mode for this runtime (before it starts guest threads).
@@ -630,7 +630,7 @@ pub(crate) fn service() -> ServiceLock {
 /// slice may end, as for any service.
 pub(crate) fn service_lock_free() -> ServiceLock {
     if !ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed)
-        || !runtime::current().lock.parallel.load(std::sync::atomic::Ordering::Relaxed)
+        || !runtime::with(|rt| rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed))
     {
         maybe_yield();
     }
