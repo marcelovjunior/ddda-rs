@@ -1442,3 +1442,12 @@ main work in the double-buffered handoff. The first census omitted worker job
 callbacks and counted tail redispatch twice; the follow-up fixes both, preserves
 MXCSR, and writes sparse cumulative reports. L158 owns the subsequent correlated
 batch trace; aggregate c26 rows cannot identify the last worker in a long join.
+
+## L162 job participant diagnostic
+
+`DDRUNTIME_JOB_PARTICIPANTS=1..8` invokes original `00DBD620` after sMain
+construction. It sets configured participation (main included), subject to
+the original CPU/eight cap; the normal frame-start path activates it.
+Absent preserves defaults. It neither patches caps nor changes CPU reporting.
+See `docs/tasks/L162-job-wake.md` for exact 7/8 capture env, verification
+status and the `scripts/job_wake.py` per-join latency/tail report.

@@ -201,6 +201,9 @@ impl Registry {
         ddports::ensure_with(|ports| {
             crate::archive_inflate::install(ports);
             crate::procedural_geometry::install(ports);
+            if std::env::var_os("DDRUNTIME_JOB_PARTICIPANTS").is_some() {
+                crate::job_participants::install(ports, &ddnative::generated::lifted::bodies());
+            }
             if crate::ndraw_stats::enabled() {
                 crate::ndraw_stats::wrap_executor(ports, &ddnative::generated::lifted::bodies());
             }

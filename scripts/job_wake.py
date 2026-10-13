@@ -49,6 +49,42 @@ def distribution(values):
             "over_20us": sum(v > 20_000 for v in values)}
 
 
+def batch_timeline(ident, batch, end, jobs, pairs, joins):
+    """Callback boundaries bound visible work, not queue-claim or kernel times."""
+    last_start = max((j["start"] for j in jobs), default=batch["ns"])
+    ordered = sorted(jobs, key=lambda j: (j["end"], j["start"], j["tid"]))
+    last = ordered[-1] if ordered else None
+    # Portion of the last callback after every other callback completed.
+    solo_start = max(last["start"], ordered[-2]["end"] if len(ordered) > 1
+                     else last["start"]) if last else None
+    gaps = []
+    for pair in pairs:
+        worker = sorted((j for j in jobs if j["tid"] == pair["tid"]),
+                        key=lambda j: j["start"])
+        cursor = pair["signal_start_ns"]
+        for job in worker:
+            stop = min(job["start"], last_start)
+            if cursor < stop:
+                gaps.append({"tid": pair["tid"], "start": cursor, "end": stop,
+                             "ns": stop - cursor})
+            cursor = max(cursor, job["end"])
+        if cursor < last_start:
+            gaps.append({"tid": pair["tid"], "start": cursor, "end": last_start,
+                         "ns": last_start - cursor})
+    return {"batch": ident, "frame": batch["frame"], "queued": batch["queued"],
+            "signaled_workers": len(pairs), "participants": len(pairs) + 1,
+            "workers_with_callbacks": sum(p["worker_jobs"] > 0 for p in pairs),
+            "jobs_per_participant": batch["queued"] / (len(pairs) + 1),
+            "batch_ns": end["ns"] - batch["ns"],
+            "last_job": last, "last_job_solo_tail_ns":
+                last["end"] - solo_start if last else 0,
+            "last_job_to_batch_end_ns": end["ns"] - last["end"] if last else None,
+            "join_waits": [{**j, "duration_ns": j["end"] - j["start"],
+                            "last_job_overlap_ns": max(0, min(j["end"], last["end"]) -
+                                max(j["start"], solo_start)) if last else 0} for j in joins],
+            "no_callback_gaps_while_callbacks_unstarted": gaps}
+
+
 def analyze(records, min_frame=0):
     groups = defaultdict(lambda: defaultdict(list))
     rejected = Counter()
@@ -57,8 +93,8 @@ def analyze(records, min_frame=0):
             continue
         ident = row["end_id"] if kind == "Wake" and row["site"] == WAIT else row["id"]
         groups[ident][kind].append(row)
-    pairs = []
-    for ident, group in groups.items():
+    pairs, batches = [], []
+    for ident, group in sorted(groups.items()):
         if len(group["Batch"]) != 1 or len(group["End"]) != 1:
             rejected["missing/duplicate batch boundary"] += 1
             continue
@@ -76,6 +112,7 @@ def analyze(records, min_frame=0):
             rejected["incomplete/unordered callbacks"] += 1
             continue
         signals, waits = defaultdict(list), defaultdict(list)
+        batch_pairs = []
         for wake in group["Wake"]:
             if wake["site"] == SIGNAL:
                 signals[wake["handle"]].append(wake)
@@ -100,7 +137,8 @@ def analyze(records, min_frame=0):
             if first is not None and first < wait["end"]:
                 rejected["job precedes successful wait return"] += 1
                 continue
-            pairs.append({"batch": ident, "frame": batch["frame"], "handle": handle,
+            batch_pairs.append({"batch": ident, "frame": batch["frame"], "handle": handle,
+                "signal_start_ns": signal["start"],
                 "tid": wait["tid"], "signal_to_wait_ns": wait["end"] - signal["start"],
                 "signal_service_ns": signal["end"] - signal["start"],
                 # Signed: the worker can wake before SetEvent returns.
@@ -108,9 +146,24 @@ def analyze(records, min_frame=0):
                 "wait_to_first_job_ns": None if first is None else first - wait["end"],
                 "signal_to_first_job_ns": None if first is None else first - signal["start"],
                 "worker_jobs": len(worker_jobs)})
+        batch_pairs.sort(key=lambda p: (p["tid"], p["handle"]))
+        pairs.extend(batch_pairs)
+        # A partial wake set cannot establish participant count or idle gaps.
+        if len(batch_pairs) != len(signals) or len(signals) != len(waits):
+            continue
+        if len({p["tid"] for p in batch_pairs}) != len(batch_pairs):
+            rejected["duplicate worker identity"] += 1
+            continue
+        joins = sorted(group["Join"], key=lambda j: j["start"])
+        if any(j["result"] != 0 or not batch["ns"] <= j["start"] <= j["end"] <= end["ns"]
+               for j in joins):
+            rejected["unsuccessful/unordered join"] += 1
+            continue
+        batches.append(batch_timeline(ident, batch, end, jobs, batch_pairs, joins))
     metrics = ("signal_to_wait_ns", "signal_service_ns", "signal_return_to_wait_ns",
                "wait_to_first_job_ns", "signal_to_first_job_ns")
-    return {"pairs": pairs, "rejected": dict(rejected),
+    return {"pairs": pairs, "batches": batches, "rejected": dict(rejected),
+            "gap_definition": "No callback executing on worker after its signal while some callback has not started. Includes wake/dispatch/claim overhead; not proof worker was descheduled or queue remained unclaimed. Gaps overlap across workers; never sum as frame time.",
             "summary": {key: distribution([r[key] for r in pairs if r[key] is not None])
                         for key in metrics},
             "per_thread": {str(tid): distribution([r["signal_to_wait_ns"] for r in pairs

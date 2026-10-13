@@ -55,6 +55,41 @@ class WakeTests(unittest.TestCase):
         self.assertFalse(analyze(fixture(), 11)["pairs"])
         self.assertEqual(len(analyze(fixture(), 10)["pairs"]), 1)
 
+    def test_per_batch_tail_and_participation(self):
+        records = fixture()
+        records.append(("Join", dict(id=2, start=155, end=195, result=0)))
+        row = analyze(records)["batches"][0]
+        self.assertEqual(row["participants"], 2)
+        self.assertEqual(row["jobs_per_participant"], 0.5)
+        self.assertEqual(row["last_job_solo_tail_ns"], 20)
+        self.assertEqual(row["last_job_to_batch_end_ns"], 20)
+        self.assertEqual(row["join_waits"][0]["last_job_overlap_ns"], 20)
+        self.assertEqual(row["no_callback_gaps_while_callbacks_unstarted"],
+                         [dict(tid=4, start=110, end=160, ns=50)])
+
+    def test_gaps_stop_when_all_callbacks_started_and_tail_is_clipped(self):
+        records = fixture()
+        records[0][1]["queued"] = 3
+        records[3][1].update(start=145, end=150)
+        records.extend([
+            ("Job", dict(id=2, tid=1, start=165, end=190, panicked=False)),
+            ("Job", dict(id=2, tid=4, start=170, end=195, panicked=False)),
+        ])
+        row = analyze(records)["batches"][0]
+        self.assertEqual(row["last_job_solo_tail_ns"], 5)
+        self.assertEqual([g["ns"] for g in row["no_callback_gaps_while_callbacks_unstarted"]],
+                         [35, 20])
+
+    def test_incomplete_wakes_do_not_infer_participant_count(self):
+        records = fixture()
+        del records[2]
+        self.assertFalse(analyze(records)["batches"])
+
+    def test_bad_join_does_not_generate_tail_attribution(self):
+        records = fixture()
+        records.append(("Join", dict(id=2, start=155, end=195, result=258)))
+        self.assertFalse(analyze(records)["batches"])
+
     def test_parse_and_reject_truncation_or_multiple_processes(self):
         lines = ["critical version=1"]
         for kind, row in fixture():
