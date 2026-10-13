@@ -19,8 +19,9 @@ draw timings. GPU runs require pause.py to report not paused, each capped at 60 
 
 ## Results
 
-Implemented, with final target-format gate and isolated timings pending the
-head's CPU-quiet window (#10403). No gameplay run or shard build performed.
+Implemented and tested. Core **e7a069f3**, shared-handle fixture compatibility
+**ffc2b759**, standalone target-format sharding **0a1776ab**. No game run,
+lifted-shard build, or push by this lane.
 
 - One bounded 2048-command FIFO, owned closures/snapshots, one backend consumer,
   synchronous result round trips, shutdown drain/join, worker failure propagation.
@@ -35,7 +36,7 @@ head's CPU-quiet window (#10403). No gameplay run or shard build performed.
   rerun: **14 + 5 pass**. `d3d9cmd`: **5 pass** (ownership with a blocked consumer,
   FIFO/results/reuse, queue backpressure, frame pacing, worker failure).
   `d3d9frame`: **5 pass**. Jobs=4, incremental=0, target `C:/ddda-targets/L89`.
-- GPU: **33 pass, 3 existing ignored**, including exact queued-versus-sync
+- GPU: **34 pass, 3 existing ignored**, including exact queued-versus-sync
   two-frame pixels, buffer replacement/reuse, copies/fills, occlusion counts,
   and execution of present_sink on one worker. Driver comparisons for randomized
   draws, render states, depth, MRT and render-to-texture pass. Debug executable
@@ -44,23 +45,43 @@ head's CPU-quiet window (#10403). No gameplay run or shard build performed.
 - The default 200-case target-format matrix exceeded 60 seconds amid concurrent
   GPU suites. Test-only commit **0a1776ab** adds `TARGETS_SHARD=i/n` after all RNG
   input generation: default unchanged, four disjoint shards preserve all 200
-  cases and assertions. It compiles; the four GPU runs remain pending.
+  cases and assertions. All four shards pass: **200/200 compared, zero
+  differences, zero refused formats**, 12.91–13.20 seconds per process.
 - `draw_cost_game` now reports immediate and queued producer costs and total
-  GPU-waited frame time on the same warmed backend. Preliminary, **contended**
-  medians (three runs, not an FPS claim): 1700 draws, 18.22 -> 6.11 us/draw,
-  36.05 -> 37.01 ms/frame; 5200 draws, 18.55 -> 14.43 us/draw,
-  101.96 -> 125.40 ms/frame. The larger burst hits the command-count bound.
-  A requested isolated repeat was interrupted by the head's game handoff and
-  is discarded. Repeat under `HEAVY_BIG=1` after the quiet period.
+  GPU-waited frame time on the same warmed backend. Final `play` measurements
+  ran through `HEAVY_BIG=1` after the head's hold, with no overlapping GPU suite,
+  jobs=4 for the earlier build and no lifted crates. Each process was capped at
+  60 seconds; all six benchmark processes completed in 2.54–2.75 seconds.
+
+| Draws/frame | Frames/run | Sync producer us/draw | Queued producer us/draw | Sync total ms/frame | Queued total ms/frame |
+|---|---|---|---|---|---|
+| 1700 | 30 | 14.35 | 4.41 | 28.72 | 29.77 |
+| 5200 | 10 | 14.38 | 9.72 | 79.18 | 85.98 |
+
+These are medians of three paired runs per load, on the L88 base plus L89
+(without L90's shared payloads). Producer time falls **69.3% / 32.4%**; total
+time rises **3.7% / 8.6%**. The larger burst hits the 2048-command bound.
+Snapshots are prebuilt, and each frame ends with read_back: this measures
+offloading and completion cost, not game simulation overlap or FPS. Earlier
+contended samples and an interrupted lease-acquisition trial are not used.
+
 - The no-op runtime backend probe passes both modes: one debug sample was
   29.97 -> 40.38 us/draw. This isolates recording overhead, with no backend work
   to offload. L90's shared handles will remove most payload-copy allocations;
   this branch's production queue already accepts those types unchanged.
 - Limits: command-count bound, not a byte bound; a single upload can be large.
   Existing target LockRect CPU-shadow behavior remains: this adds ordering, not
-  its missing GPU readback. Neither gameplay FPS nor original-game visuals have
-  been compared. The worker takes no runtime/guest/device lock (L93 compatible).
-- Logs: `C:/ddda-targets/L89/{runtime-tests,queue-final,gpu-tests,gpu-remaining,
-  benchmarks}.log`. Next action: all four target-format shards and isolated
-  paired timing under the shared heavy slot after `build B done`; then head-run
-  gameplay A/B against `DDRUNTIME_SYNC_BACKEND=1`.
+  its missing GPU readback. L89-only gameplay FPS and original-game visuals have
+  not been compared. The worker takes no runtime/guest/device lock.
+- Head's combined L83+L89+L90+L94+L97 run reports **7.2 vs 4.9 FPS** (#10493),
+  not an isolated L89 A/B. It exposes 26% render-thread wait on the D3D lock
+  because another thread calls synchronous occlusion GetData while holding it.
+  The head owns the follow-up **L102 non-blocking query** work; this branch
+  implements the original brief's synchronous-result contract. The subsequent
+  L102+L103+L99 combo reports **8.9 FPS** (#10525); neither combined result
+  isolates L89's contribution.
+- Logs: `C:/ddda-targets/L89/{runtime-tests,queue-compatible,gpu-tests,
+  gpu-remaining,benchmarks-serial}.log` and `gpu-isolated-target-formats-*.log`.
+  Final job exited and released its heavy slot at 02:27:02, before the next
+  game-run hold. Next action: head integrates L90's snapshot groups and L98's
+  dirty-resource flushes into the renderer; no further L89 gate is pending.
