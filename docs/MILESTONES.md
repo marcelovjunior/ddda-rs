@@ -1,5 +1,19 @@
 # Milestones
 
+### L177 semantic state commit and model mesh (2026-10-13)
+
+- Opt-in FEE320/FFC350/01145BF0 native semantic ports: **1,664 original
+  returns** pass ABI replay including heap/live stack. Reachable FEE320
+  instructions **761/761**, FFC350 **440/440**, material wrapper **17/17**.
+- Eleven isolated tests pass, including opt2 baseline, serial/atomic Pages
+  and deliberate heap corruption rejection. Runtime light **260 pass /
+  zero failures / seven ignored**; mtcore/ddports **35 pass / nine ignored**.
+  Guest x87 precision/rounding retained.
+- Synthetic median paired gains **1.665x / 2.126x / 1.102x** respectively;
+  callee seams and shared-host noise limit attribution. No gameplay claim.
+- Next: head accumulated semantic train and real shadow-job/image gate.
+  Details, hashes and limitations: `docs/tasks/L177-semantic-state-commit.md`.
+
 ### L169 exact shadow traversal and setup (2026-10-13)
 
 - Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and

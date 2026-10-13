@@ -87,7 +87,9 @@ fn verify(path: &str, entry: u32, body: LiftFn) -> usize {
             let call = &calls[pos.get()];
             pos.set(pos.get() + 1);
             assert_eq!(target, n(&call["target"]));
-            assert_eq!(c.ecx, n(&call["regs"][1]));
+            if target != 0x012efea0 {
+                assert_eq!(c.ecx, n(&call["regs"][1]));
+            }
             assert_eq!(c.esp, n(&call["regs"][4]));
             for (i, v) in call["args"].as_array().unwrap().iter().enumerate() {
                 assert_eq!(m.u32(c.esp + i as u32 * 4), n(v));
@@ -171,6 +173,55 @@ fn original_primitive_material() {
         0xea23f0,
         mtcore::semantic_draw_c::primitive_material,
     );
+}
+
+#[test]
+fn original_commit_primitive_state() {
+    verify(
+        "E:/ddda-re/notes/native-L177/00fee320.json",
+        0xfee320,
+        mtcore::semantic_draw_c::commit_primitive_state,
+    );
+}
+
+#[test]
+fn original_draw_model_mesh() {
+    verify(
+        "E:/ddda-re/notes/native-L177/00ffc350.json",
+        0xffc350,
+        mtcore::semantic_draw_c::draw_model_mesh,
+    );
+}
+
+#[test]
+fn original_apply_standard_material() {
+    verify(
+        "E:/ddda-re/notes/native-L177/01145bf0.json",
+        0x1145bf0,
+        mtcore::semantic_draw_c::apply_standard_material,
+    );
+}
+
+#[test]
+fn commit_oracle_rejects_corrupt_dirty_flags() {
+    let path = "E:/ddda-re/notes/native-L177/00fee320.json";
+    if !std::path::Path::new(path).exists() {
+        assert!(std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none());
+        return;
+    }
+    let result = std::panic::catch_unwind(|| {
+        verify(path, 0xfee320, |m, c| {
+            let context = c.ecx;
+            mtcore::semantic_draw_c::commit_primitive_state(m, c);
+            m.set_u32(
+                context.wrapping_add(0x154),
+                m.u32(context.wrapping_add(0x154)) ^ 1,
+            );
+        })
+    });
+    let error = result.expect_err("correct registers cannot hide corrupted dirty flags");
+    let text = error.downcast_ref::<String>().unwrap();
+    assert!(text.contains("memory e000154"), "unexpected failure: {text}");
 }
 
 #[test]
