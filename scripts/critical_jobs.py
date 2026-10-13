@@ -54,7 +54,7 @@ def join_metrics(batch, end, jobs, joins):
             "longest_duration_ns": longest["end"] - longest["start"],
             "last_end_ns": last["end"], "penultimate_end_ns": second,
             "wait_after_other_jobs_ns": join["end"] - tail_start if tail_start is not None else None,
-            "last_job_wait_overlap_ns": max(0, last["end"] - tail_start) if tail_start is not None else None,
+            "last_job_wait_overlap_ns": max(0, last["end"] - max(tail_start, last["start"])) if tail_start is not None else None,
             "after_last_completion_ns": max(0, join["end"] - max(join["start"], last["end"]))}
 
 

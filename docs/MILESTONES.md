@@ -1,5 +1,64 @@
 # Milestones
 
+### L162c job distribution and host scheduling (2026-10-13)
+
+- c31 h0 150-frame census: main 65,186 callbacks, six workers
+  88,096 / 78,545 / 64,249 / 55,879 / 52,116 / 42,930. Main final-callback
+  solo tails add 2.661 ms/frame before its joins. Worst main/worker tails
+  start within 92..135 us but run 14.65..18.51 ms; late queue ordering is
+  not established as their cause. Shared atomic FIFO already distributes work.
+- Independent priority/ideal-processor opt-ins forward original Windows
+  requests previously ignored. Foreground requests CPU hints only; background
+  requests priority -1. No invented boost, affinity pin or callback reordering.
+- 19 parser and four host scheduling tests pass, including suspended guest
+  startup in both modes. Light 254 reported passes / zero failures / seven
+  ignored before final lifecycle refinement; final focused four pass.
+  No game/FPS gain measured. Details: `docs/tasks/L162-job-wake.md`.
+- Blocker: no post-fix p8 trace yet; old ctor-only run cannot prove eighth-lane
+  work. Next: head capture p8 per-thread callbacks, then independent scheduling
+  A/B with participant/hash/sync settings fixed and profile-off acceptance.
+### L168 guest-memory locality opt-in (2026-10-13)
+
+- `DDNATIVE_BACKING=regions`: 2 MiB-aligned guest-region host reservations,
+  lazy 4 KiB commits, unchanged permissions/atomics/retirement. Large-page
+  attempt fails error 1314 on this token; `large` falls back, no policy change.
+- Base 41 pass; fallback five pass; runtime light 250 reported pass, zero
+  failures/seven ignored. Original hash leaf replay four tests pass.
+- Synthetic sequential read/read-write median paired gains 1.461x/1.385x;
+  scattered/leaf gains unproven. No hardware miss-rate or gameplay claim.
+- Head-owned bounded WPR profile validates. Next: matched PMC and profiler-off
+  gameplay A/B after playtest; actual snapshot/counters pending. Details:
+  `docs/tasks/L168-tlb.md`.
+### L167 critical callbacks and exact shadow state save (2026-10-13)
+
+- Ranked 20,700 validated joins: sky-stable shadow EE2C90 leads at
+  3.905/3.651 ms solo overlap per frame; per-join IDs/durations retained.
+- Opt-in JOB_SHADOW_SAVE=1 ports whole FED480 state save with ordered
+  checked page accesses. 432 original returns, 68,200 paired fault/access
+  checks and serial/atomic production-memory replays pass. All 56 paired
+  helper samples improve, median 1.47–1.87x; no callback/FPS gain claimed.
+- Four isolated and four ranking tests pass; mtcore/ddports 20 pass,
+  nine ignored; light runtime 251 pass, zero fail, seven ignored.
+  Combined native gate and head image/per-job A/B pending.
+- Next: head train with this independent switch, then matched shadow-save
+  0/1 capture. Full evidence: `docs/tasks/L167-critical-callbacks.md`.
+
+### L158 combo31 critical paths and next lookup leaves (2026-10-13)
+
+- Late hash=0/1 captures: 150 frames / 10,350 joins each; main joins
+  **14.819→13.526 ms/frame**, solo callback tails **7.086→6.887**.
+  uSkyStableShadow leads 123/150 and 121/150 frames. Its join reduction
+  is **7.25%**, inside head's noise threshold; NPC counts change 8→7.
+  No clean causal port/frame improvement established.
+- Exact opt-in `JOB_LOOKUP` leaves 01008200/01008260: **1,380 original
+  vectors**, **11,520 paired fault/access cases**, serial/atomic replay.
+  Four isolated tests pass; synthetic **98/98 pairs improve**, medians
+  **1.43–2.68x**. Crate gate **19 pass / nine ignored**, Python **nine pass**.
+  Runtime light: **242 reported passes / zero failures / seven ignored**.
+- Verified trace compression recovers **3.12 GB**. Evidence and hashes:
+  `docs/tasks/L158-critical-jobs.md`. Combined native gate and live lookup
+  benefit remain pending; next: head integration gate and controlled A/B.
+
 ### L159 Vulkan default image gate (2026-10-13)
 
 - Same-run selected raw pass oracle copies attachment load state, replays
@@ -64,14 +123,21 @@
   after construction; original CPU/eight clamp and frame activation remain.
   No cap patch. Intended head A/B: seven vs eight participants, main included.
 - Wake analyzer reports per-batch jobs/participants, callback gaps,
-  final-job solo tails and join overlaps; **13 parser tests pass**.
+  final-job solo tails and join overlaps; **17 parser tests pass**.
   Signaled lanes are distinct from active participation (one-job bypass).
 - Full light gate **234 reported passes / two inherited failures / seven
   ignored**; Present timing passes its isolated retry, gamma remains.
-  Both new ABI/configuration tests pass. Actual wake latency and
-  performance/image acceptance pending. No speculative sync fix.
-- Next: head capture with L158 and this setter, exact env in
-  `docs/tasks/L162-job-wake.md`; analyze matched 7/8 joins and hashes.
+  First-frame follow-up: **242 reported passes / inherited Present timing
+  failure / seven ignored**, three focused ABI/configuration tests pass.
+- c31 h0/h1: 150 frames each, 62,100 paired wakes each, no selected-batch
+  rejects. Signal-to-wait p50/p95 **11.5/52.2 -> 10.6/25.0 us**;
+  final-callback solo overlap **7.086 -> 6.887 ms/frame** dominates wakes.
+  40 of 69 parallel batches/frame have >=8 jobs (h0).
+- Ctor-only p8 configured eight but seventh worker remains idle in profile.
+  First-frame original-setter reapplication candidate logs actual activation;
+  head acceptance remains pending. No speculative sync primitive change.
+- Next: instrumented p8 activation check and matched cache/futex A/B;
+  exact measurements, hashes and limitations: `docs/tasks/L162-job-wake.md`.
 
 ### L160 job worker sizing and wake analysis (2026-10-13)
 

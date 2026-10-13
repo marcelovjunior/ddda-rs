@@ -21,6 +21,10 @@ class AttributionTests(unittest.TestCase):
         row = join_metrics(batch, end, jobs, [join])
         self.assertEqual(row["last_job_wait_overlap_ns"], 0)
         self.assertEqual(row["after_last_completion_ns"], 3)
+        join["start"] = 85
+        jobs[1]["start"] = 95
+        row = join_metrics(batch, end, jobs, [join])
+        self.assertEqual(row["last_job_wait_overlap_ns"], 5)
         for field in ("lost", "panicked"):
             bad = dict(end, **{field: 1})
             with self.assertRaises(ValueError):

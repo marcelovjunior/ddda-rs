@@ -1,5 +1,29 @@
 # Phase 1 runtime proposal (R01)
 
+## L168 guest-memory backing experiment
+
+`DDNATIVE_BACKING=regions` opts into 2 MiB-aligned host regions with lazy
+4 KiB commits. Guest permissions, atomic accesses and retired-page lifetime
+stay unchanged. `large` attempts actual large pages, then logs failure and
+falls back to regions; this account lacks the required privilege (error
+1314), and system policy is unchanged. Default backing stays per-page.
+
+Regions improve synthetic sequential access; scattered and hot-leaf gains
+are unproven. Runtime light 250 reported tests pass. Hardware miss rates and
+gameplay performance await the head-owned WPR/game A/B. See
+[L168 measurements and protocol](tasks/L168-tlb.md); alignment alone is not
+large-page backing. Rust allocator counters exclude VirtualAlloc regions.
+## L158 shader lookup opt-in (2026-10-13)
+
+`DDRUNTIME_JOB_LOOKUP=1` registers exact 01008200/01008260 dependency
+lookup leaves below the model-job shader path. Default remains off.
+Original vectors (1,380), isolated lifted/port replay and 11,520 paired
+access/fault positions pass; serial and atomic page policies agree.
+Combined native integration and head live A/B are pending. The combo31
+hash captures identify uSkyStableShadow as the dominant solo tail, but
+shared load and changed NPC counts prevent causal speedup attribution.
+See `docs/tasks/L158-critical-jobs.md` for windows, numbers and hashes.
+
 ## L160 job CPU sizing and wake diagnostics
 
 Parallel `GetSystemInfo` reports host logical processors capped at 32;
@@ -1500,11 +1524,42 @@ The combined ARC microbenchmark improves 4.1-13.6%; FAST=2 alone is mixed.
 Modern-library parity and actual loading/image/control acceptance remain
 unestablished. Sources, hashes, measurements and limits:
 [task L156](tasks/L156-inflate-fast.md).
+## L167 exact shadow callback state save
+
+`DDRUNTIME_JOB_SHADOW_SAVE=1` opts into the whole FED480 context state-save
+port. Its partial-save branch retains 81 ordered MOVSD-width accesses,
+DF, overlap, guest ABI, and install-supplied selection keys, while using
+checked `Pages` in the native port. The full-save branch delegates to the
+existing memcpy dispatch. No scheduler or callback work order changes.
+
+432 original returns, 68,200 paired fault/access positions, and both
+serial/atomic production-memory replays pass. Isolated helper speedup is
+1.47–1.87x median; combined native gate and head callback/image/FPS A/B
+remain pending. Default off. Per-join ranking and source/corpus details:
+[L167 results](tasks/L167-critical-callbacks.md).
+
 ## L162 job participant diagnostic
 
 `DDRUNTIME_JOB_PARTICIPANTS=1..8` invokes original `00DBD620` after sMain
-construction. It sets configured participation (main included), subject to
+construction and once at the first `00DBFA90` entry after startup configuration.
+It sets configured participation (main included), subject to
 the original CPU/eight cap; the normal frame-start path activates it.
 Absent preserves defaults. It neither patches caps nor changes CPU reporting.
+First-frame stderr reports actual activation. C31's ctor-only option produced
+configured eight but an idle seventh worker; the first-frame follow-up still
+needs head acceptance. Later game/user configuration changes remain effective.
 See `docs/tasks/L162-job-wake.md` for exact 7/8 capture env, verification
 status and the `scripts/job_wake.py` per-join latency/tail report.
+
+L162c adds independent Windows opt-ins `DDRUNTIME_THREAD_PRIORITY=1` and
+`DDRUNTIME_THREAD_IDEAL=1`. These forward the game's SetThreadPriority and
+SetThreadIdealProcessor requests using retained host thread handles (also
+valid before guest ResumeThread), preserving host errors and return values.
+Defaults retain the previous stubs. The ideal processor is a scheduling hint,
+not an affinity restriction; x86's query sentinel 32 maps to the host sentinel.
+Foreground workers request ideal CPUs 1..7 at `00DBDF30`, with no priority
+boost. The background pool requests priority -1 and ideal CPUs 0..7 at
+`00DBDFE0`. No new priority, queue ordering, or worker count is imposed.
+Four Windows tests cover actual host state, suspended creation, current-thread
+handles, invalid/closed handles, aliases and ABI/error results. Gameplay
+performance and eighth-lane callback confirmation still require head captures.

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Head-owned recording only. 128 x 1024 KiB circular memory buffers.
+     No default CPU/time profiler; four PMCs, no stacks. Event attribution is
+     sampled instruction pointer + thread, with CPU-specific event semantics.
+     Based on Microsoft's Recording Hardware Performance (PMU) Events example:
+     https://devblogs.microsoft.com/performance-diagnostics/recording-hardware-performance-pmu-events-with-complete-examples/
+-->
+<WindowsPerformanceRecorder Version="1.0">
+  <Profiles>
+    <SystemCollector Id="L168Collector" Name="L168PMC">
+      <BufferSize Value="1024" />
+      <Buffers Value="128" />
+    </SystemCollector>
+    <SystemProvider Id="L168System">
+      <Keywords>
+        <Keyword Value="Loader" />
+        <Keyword Value="ProcessThread" />
+        <Keyword Value="PmcProfile" />
+      </Keywords>
+    </SystemProvider>
+    <HardwareCounter Id="L168Counters" Strict="true">
+      <SampledCounters>
+        <SampledCounter Value="DcacheMisses" Interval="65536" />
+        <SampledCounter Value="DcacheAccesses" Interval="1048576" />
+        <SampledCounter Value="CacheMisses" Interval="65536" />
+        <SampledCounter Value="InstructionRetired" Interval="1048576" />
+      </SampledCounters>
+    </HardwareCounter>
+    <Profile Id="L168.Verbose.Memory" Name="L168" Description="L168 bounded cache PMC sampling" DetailLevel="Verbose" LoggingMode="Memory">
+      <Collectors>
+        <SystemCollectorId Value="L168Collector">
+          <SystemProviderId Value="L168System" />
+          <HardwareCounterId Value="L168Counters" />
+        </SystemCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

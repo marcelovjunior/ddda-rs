@@ -4,7 +4,9 @@
 //! differential tests run it over the byte image the original ran on and
 //! compare the whole result. (docs/NATIVE_PIPELINE.md, "Memory-model ports")
 mod host;
+mod backing;
 pub use host::Pages;
+pub use backing::BackingMode;
 
 pub trait Mem {
     /// Preflight an instruction access without reading or publishing bytes.
@@ -111,6 +113,7 @@ pub struct PageTable {
     // still mean unbacked even when a lazy page has permission bits set.
     entries: Box<[AtomicUsize; PAGES]>,
     retired: std::sync::Mutex<Vec<usize>>,
+    backing: Option<std::sync::Mutex<backing::Regions>>,
 }
 
 /// A zero-filled heap value of type `T`, in one allocation (the OS hands
@@ -131,16 +134,26 @@ unsafe fn zeroed_box<T>() -> Box<T> {
 
 impl Default for PageTable {
     fn default() -> Self {
+        Self::with_backing(BackingMode::from_env())
+    }
+}
+
+impl PageTable {
+    /// Explicit allocation policy for isolated tests and replay tools.
+    pub fn with_backing(mode: BackingMode) -> Self {
         PageTable {
             // SAFETY: zero is a valid AtomicUsize.
             entries: unsafe { zeroed_box() },
             retired: Default::default(),
+            backing: (mode != BackingMode::Pages).then(|| std::sync::Mutex::new(backing::Regions::new(mode))),
         }
     }
 }
 
 impl Drop for PageTable {
     fn drop(&mut self) {
+        // Region owners retain every published/retired allocation until here.
+        if self.backing.is_some() { return; }
         let retired = std::mem::take(self.retired.get_mut().unwrap_or_else(|e| e.into_inner()));
         let live = self.entries.iter().map(|p| p.load(Ordering::Relaxed) & POINTER_MASK).filter(|&p| p != 0);
         for p in live.chain(retired) {
@@ -187,6 +200,22 @@ impl PageTable {
     #[cold]
     #[inline(never)]
     fn materialise(&self, p: usize) -> *mut u8 {
+        if let Some(backing) = &self.backing {
+            // Serialise allocation only, never ordinary guest accesses. Recheck
+            // after locking so racing first touches don't consume region slots.
+            let mut regions = backing.lock().unwrap_or_else(|e| e.into_inner());
+            let cur = self.page(p);
+            if !cur.is_null() { return cur; }
+            let fresh = regions.page(p);
+            let mut entry = self.entries[p].load(Ordering::Acquire);
+            loop {
+                match self.entries[p].compare_exchange_weak(entry, tagged_page(fresh as usize, entry as u8),
+                    Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) => return fresh,
+                    Err(changed) => entry = changed,
+                }
+            }
+        }
         let fresh = alloc_zero_page();
         // Converting the allocation to an integer exposes its provenance;
         // masking the tag off later recovers an address in that allocation.
