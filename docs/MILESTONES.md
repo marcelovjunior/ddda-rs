@@ -1,5 +1,21 @@
 # Milestones
 
+### L158 combo31 critical paths and next lookup leaves (2026-10-13)
+
+- Late hash=0/1 captures: 150 frames / 10,350 joins each; main joins
+  **14.819→13.526 ms/frame**, solo callback tails **7.086→6.887**.
+  uSkyStableShadow leads 123/150 and 121/150 frames. Its join reduction
+  is **7.25%**, inside head's noise threshold; NPC counts change 8→7.
+  No clean causal port/frame improvement established.
+- Exact opt-in `JOB_LOOKUP` leaves 01008200/01008260: **1,380 original
+  vectors**, **11,520 paired fault/access cases**, serial/atomic replay.
+  Four isolated tests pass; synthetic **98/98 pairs improve**, medians
+  **1.43–2.68x**. Crate gate **19 pass / nine ignored**, Python **nine pass**.
+  Runtime light: **242 reported passes / zero failures / seven ignored**.
+- Verified trace compression recovers **3.12 GB**. Evidence and hashes:
+  `docs/tasks/L158-critical-jobs.md`. Combined native gate and live lookup
+  benefit remain pending; next: head integration gate and controlled A/B.
+
 ### L159 Vulkan default image gate (2026-10-13)
 
 - Same-run selected raw pass oracle copies attachment load state, replays

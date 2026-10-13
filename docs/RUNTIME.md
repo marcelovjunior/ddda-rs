@@ -1,5 +1,16 @@
 # Phase 1 runtime proposal (R01)
 
+## L158 shader lookup opt-in (2026-10-13)
+
+`DDRUNTIME_JOB_LOOKUP=1` registers exact 01008200/01008260 dependency
+lookup leaves below the model-job shader path. Default remains off.
+Original vectors (1,380), isolated lifted/port replay and 11,520 paired
+access/fault positions pass; serial and atomic page policies agree.
+Combined native integration and head live A/B are pending. The combo31
+hash captures identify uSkyStableShadow as the dominant solo tail, but
+shared load and changed NPC counts prevent causal speedup attribution.
+See `docs/tasks/L158-critical-jobs.md` for windows, numbers and hashes.
+
 ## L160 job CPU sizing and wake diagnostics
 
 Parallel `GetSystemInfo` reports host logical processors capped at 32;

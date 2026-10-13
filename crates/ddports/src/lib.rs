@@ -19,6 +19,10 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_JOB_HASH").as_deref() == Ok("1") {
         ports.push((0x00e0e5e0, mtcore::job_hash::dependency_hash));
     }
+    if std::env::var("DDRUNTIME_JOB_LOOKUP").as_deref() == Ok("1") {
+        ports.push((0x01008200, mtcore::job_lookup::single_key));
+        ports.push((0x01008260, mtcore::job_lookup::pair_key));
+    }
     ports
 }
 
@@ -73,6 +77,13 @@ mod tests {
     #[test]
     fn ports_are_unique_and_a_mod_replaces_a_port() {
         let p = ports();
+        let lookup_enabled = std::env::var("DDRUNTIME_JOB_LOOKUP").as_deref() == Ok("1");
+        for (address, body) in [
+            (0x01008200, mtcore::job_lookup::single_key as LiftFn),
+            (0x01008260, mtcore::job_lookup::pair_key as LiftFn),
+        ] {
+            assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)), lookup_enabled);
+        }
         let mut addrs: Vec<u32> = p.iter().map(|e| e.0).collect();
         addrs.sort_unstable();
         addrs.dedup();
