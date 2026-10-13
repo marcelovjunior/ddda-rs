@@ -4,6 +4,8 @@ use ddnative_base::{mem::Mem, x86::Cpu};
 
 #[path = "zlib_access.rs"]
 mod access;
+#[path = "zlib_flat.rs"]
+mod flat;
 #[path = "zlib_port.rs"]
 pub mod port;
 #[path = "zlib_table.rs"]
@@ -39,7 +41,9 @@ pub fn install(ports: &mut Vec<(u32, ddnative_base::x86::LiftFn)>) {
     }
     if !ports.iter().any(|&(address, _)| address == 0x00cf_2cb0) {
         let decoder: ddnative_base::x86::LiftFn =
-            if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("2") {
+            if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("3") {
+                inflate_fast_flat
+            } else if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("2") {
                 inflate_fast_wide
             } else if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("1") {
                 inflate_fast_pages
@@ -199,6 +203,15 @@ pub fn inflate_fast_pages(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// Translated from 0x00cf2cb0 (DDDA.exe 2017-12-13 Steam).
 pub fn inflate_fast_wide(m: &mut dyn Mem, cpu: &mut Cpu) {
     inflate_decoder(&mut Access::<true, true>::new(m), cpu);
+}
+
+/// Same contract on gathered host buffers (see `zlib_flat.rs`); calls it
+/// does not cover run the `WIDE` decoder. Opt-in FAST=3.
+/// Translated from 0x00cf2cb0 (DDDA.exe 2017-12-13 Steam).
+pub fn inflate_fast_flat(m: &mut dyn Mem, cpu: &mut Cpu) {
+    if !flat::run(m, cpu) {
+        inflate_fast_wide(m, cpu);
+    }
 }
 
 fn inflate_decoder<const FAST: bool, const WIDE: bool>(m: &mut Access<FAST, WIDE>, cpu: &mut Cpu) {

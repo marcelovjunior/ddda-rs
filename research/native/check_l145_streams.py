@@ -340,6 +340,7 @@ def main():
     parser.add_argument('--fast', action='store_true', help='actual native fast leaf through page-backed guest memory')
     parser.add_argument('--table', action='store_true', help='native exact Huffman builder')
     parser.add_argument('--wide', action='store_true', help='L156 FAST=2 page-backed decoder')
+    parser.add_argument('--flat', action='store_true', help='FAST=3 gathered-buffer decoder')
     parser.add_argument('--extended', action='store_true')
     parser.add_argument('--record-tables', type=Path)
     parser.add_argument('--record-guards', type=Path)
@@ -358,7 +359,7 @@ def main():
     bridge = dll.l145_inflate
     bridge.argtypes = [c.POINTER(Window), c.c_size_t, c.POINTER(c.c_uint32), CALLEE, c.c_uint32]
     bridge.restype = c.c_uint32
-    implementation=(0 if args.original_lift else 1)+(10 if args.wide else 2 if args.fast else 0)+(16 if args.table else 0)
+    implementation=(0 if args.original_lift else 1)+(34 if args.flat else 10 if args.wide else 2 if args.fast else 0)+(16 if args.table else 0)
     print(f'oracle implementation={implementation} fast_pages={args.fast or args.wide} table_port={args.table} original_lift={args.original_lift} dll_sha256={hashlib.sha256(args.dll.read_bytes()).hexdigest()}',flush=True)
     cases = [(name,data,wrap,(8192,16384),0,0) for name,data,wrap in archives(args.install)]
     payload = b'original streaming boundary check' * 16
