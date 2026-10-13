@@ -85,9 +85,15 @@ fn verify(path: &str, entry: u32, body: LiftFn) -> usize {
             assert_eq!(target, n(&call["target"]));
             assert_eq!(c.ecx, n(&call["regs"][1]));
             assert_eq!(c.esp, n(&call["regs"][4]));
-            if target == 0x00c26310 { assert_eq!(c.edx, n(&call["regs"][2]), "fastcall material"); }
+            if target == 0x00c26310 {
+                assert_eq!(c.edx, n(&call["regs"][2]), "fastcall material");
+            }
             if target == 0x00c242c0 {
-                assert_eq!([c.eax,c.esi,c.edi], [0,6,7].map(|i| n(&call["regs"][i])), "fallback register arguments");
+                assert_eq!(
+                    [c.eax, c.esi, c.edi],
+                    [0, 6, 7].map(|i| n(&call["regs"][i])),
+                    "fallback register arguments"
+                );
             }
             for (i, v) in call["args"].as_array().unwrap().iter().enumerate() {
                 assert_eq!(m.u32(c.esp + i as u32 * 4), n(v));
@@ -98,7 +104,9 @@ fn verify(path: &str, entry: u32, body: LiftFn) -> usize {
                 }
             }
             if call.get("reads").is_some() {
-                for (a,b) in pairs(&call["reads"]) { assert_eq!(m.u8(a),b,"callee read {a:x}"); }
+                for (a, b) in pairs(&call["reads"]) {
+                    assert_eq!(m.u8(a), b, "callee read {a:x}");
+                }
             }
             for (a, b) in pairs(&call["effects"]) {
                 m.set_u8(a, b);
@@ -114,7 +122,10 @@ fn verify(path: &str, entry: u32, body: LiftFn) -> usize {
         assert_eq!(cursor.get(), total, "seed {seed}: calls");
         let mut got = [c.eax, c.ebx, c.esp, c.ebp, c.esi, c.edi];
         let mut want = [0, 3, 4, 5, 6, 7].map(|i| n(&case["after"]["regs"][i]));
-        if entry == 0xc24640 { got[0]=0;want[0]=0; } // void method
+        if entry == 0xc24640 {
+            got[0] = 0;
+            want[0] = 0;
+        } // void method
         assert_eq!(got, want, "entry {entry:x} seed {seed}: ABI");
         for (&a, &b) in &expected {
             if observable(a, c.esp) {
@@ -146,6 +157,15 @@ fn original_bounds_tree() {
         "E:/ddda-re/notes/native-L178/010a35d0.json",
         0x10a35d0,
         mtcore::semantic_jobs::query_bounds_tree,
+    );
+}
+
+#[test]
+fn original_instanced_mesh() {
+    verify(
+        "E:/ddda-re/notes/native-L178/00c24640.json",
+        0xc24640,
+        mtcore::semantic_instancing::draw_instanced_mesh,
     );
 }
 

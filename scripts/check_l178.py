@@ -1,4 +1,4 @@
-"""L178 traversal isolation: ABI vectors, serial/atomic pages, paired CPU costs.
+"""L178 job routine isolation: ABI vectors, serial/atomic pages, paired CPU costs.
 
 Extracted generated bodies and build products stay private. No shard build.
 """
@@ -34,6 +34,7 @@ fn install_calls(calls:Vec<Value>,lift:bool) {
 fn original_lifted_vectors() {
     x86::set_lifted_lookup(resolve);
     verify("E:/ddda-re/notes/native-L178/010a35d0.json",0x10a35d0,lifted::f_010a35d0);
+    verify("E:/ddda-re/notes/native-L178/00c24640.json",0xc24640,lifted::f_00c24640);
 }
 #[test]
 fn pages_and_cost() {
@@ -46,6 +47,7 @@ fn pages_and_cost() {
         ATOMIC_ACCESSES.store(atomic,Relaxed);
         for(entry,bodies) in [
             (0x10a35d0,[lifted::f_010a35d0 as LiftFn,mtcore::semantic_jobs::query_bounds_tree]),
+            (0xc24640,[lifted::f_00c24640,mtcore::semantic_instancing::draw_instanced_mesh]),
         ] {
             let path=format!("E:/ddda-re/notes/native-L178/{entry:08x}.json");
             let data:Value=serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -59,7 +61,8 @@ fn pages_and_cost() {
                     for(&a,&b) in &initial {m.table.set_perm((a/4096) as usize,READ|WRITE);m.table.backed_page((a/4096) as usize);m.set_u8(a,b);}
                     install_calls(calls.clone(),port==0);
                     let mut c=cpu(&case["before"]);let _floating=floating_control(&mut c,&case["before"]);body(&mut m,&mut c);
-                    assert_eq!([c.eax,c.ebx,c.esp,c.ebp,c.esi,c.edi],[0,3,4,5,6,7].map(|i|n(&case["after"]["regs"][i])),"entry {entry:x} seed {seed} port {port}");
+                    let mut got=[c.eax,c.ebx,c.esp,c.ebp,c.esi,c.edi];let mut want=[0,3,4,5,6,7].map(|i|n(&case["after"]["regs"][i]));if entry==0xc24640 {got[0]=0;want[0]=0;}
+                    assert_eq!(got,want,"entry {entry:x} seed {seed} port {port}");
                     for(&a,&b) in &expected {if observable(a,c.esp) {assert_eq!(m.u8(a),b,"entry {entry:x} seed {seed} port {port} byte {a:x}");}}
                 }
                 if !atomic || std::env::var_os("L178_BENCH").is_none() || ![0,1,2,3,7,15,31,32,63,127,143].contains(&seed) {continue;}
@@ -89,7 +92,10 @@ fn pages_and_cost() {
     }
     x86::set_ext_calls(None);ATOMIC_ACCESSES.store(false,Relaxed);
 }
-fn resolve(_:u32)->Option<LiftFn> {None}
+fn resolve(target:u32)->Option<LiftFn> {
+    macro_rules! routes {($($address:literal),*) => {match target {$($address => Some((|m,c|x86::call_ext(m,c,$address)) as LiftFn),)* _=>None}};}
+    routes!(0x01004ab0,0x00fed940,0x0113c160,0x0113aea0,0x00ff14d0,0x00fed190,0x0113c1b0,0x00ea23f0,0x0113aee0,0x00feef20,0x00c26310,0x00ff1920,0x00c242c0)
+}
 '''
 
 def main():
@@ -100,7 +106,7 @@ def main():
     out=Path('E:/ddda-re/notes/native-L178/isolated');out.mkdir(parents=True,exist_ok=True)
     # Locate each body from source; shard allocation can change after regeneration.
     bodies=[]
-    for entry in [0x10a35d0]:
+    for entry in [0x10a35d0,0xc24640]:
         needle=f'pub fn f_{entry:08x}('
         matches=subprocess.check_output(['rg','-l','-F',needle,str(repo/'crates/ddlift')],text=True).splitlines()
         assert len(matches)==1,(entry,matches)

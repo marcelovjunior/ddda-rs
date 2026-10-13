@@ -32,6 +32,7 @@ pub mod job_shadow;
 pub mod machine;
 pub mod semantic;
 pub mod semantic_jobs;
+pub mod semantic_instancing;
 pub mod semantic_draw;
 pub mod semantic_draw_c;
 pub mod object;

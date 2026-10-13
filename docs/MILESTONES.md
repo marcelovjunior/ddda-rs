@@ -1,5 +1,15 @@
 # Milestones
 
+### L178 semantic instanced-model draw (2026-10-13)
+
+- C24640 `uOmSwingBaseInstancing::vf26` registered under SEMANTIC:
+  **256 original returns**, **337/337 body instructions**, including
+  callback buffers and nonstandard register arguments.
+- Five combined isolated tests pass, opt2 and serial/atomic Pages;
+  synthetic paired median **1.076x**, 58/77 improving pairs. No game run.
+- Next: head combined train; D7CF70 collision/simplex proof remains open.
+  Detailed evidence and runtime timing-test failures: L178 brief.
+
 ### L178 semantic job bounds traversal (2026-10-13)
 
 - Opt-in `DDRUNTIME_SEMANTIC=1` replaces 010A35D0 with a semantic
