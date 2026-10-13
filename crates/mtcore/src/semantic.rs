@@ -330,6 +330,59 @@ pub fn intern_dependency_keys_with(m: &mut dyn Mem, c: &mut Cpu, expander: Expan
 /// [`shader_lookup`] (the rare branch runs it unchanged).
 pub static E12A20_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = std::sync::OnceLock::new();
 
+/// A call from a native port to the guest function at `target`, with the
+/// stack already set up as for `call_ext`: straight into the native port
+/// registered as an override for `target` (no dispatch), otherwise through
+/// `call_ext` (replayed seams in tests, the lifted program in the game).
+#[inline(always)]
+pub(crate) fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
+    if ddnative_base::x86::may_be_overridden(target) {
+        if let Some(f) = ddnative_base::x86::override_of(target) {
+            return f(m, c);
+        }
+    }
+    ddnative_base::x86::call_ext(m, c, target)
+}
+
+/// The CRT `memcpy` 0x012EFEA0 done natively: it behaves like memmove (the
+/// whole source is read before the destination is written). Whole pages are
+/// moved with host copies; anything the page table does not serve directly
+/// goes byte by byte through the memory.
+pub(crate) fn copy_guest(m: &mut dyn Mem, pg: Pages, destination: u32, source: u32, bytes: u32) {
+    use ddnative_base::mem::{PAGE, READ, WRITE};
+    if bytes == 0 {
+        return;
+    }
+    if let (Some(from), Some(to)) = (pg.bytes(source, bytes as usize, READ), pg.bytes(destination, bytes as usize, WRITE)) {
+        // SAFETY: both ranges lie inside one backed page each; `copy` allows overlap
+        unsafe { std::ptr::copy(from, to, bytes as usize) };
+        return;
+    }
+    let mut data = vec![0u8; bytes as usize];
+    let mut done = 0u32;
+    while done < bytes {
+        let at = source.wrapping_add(done);
+        let n = (bytes - done).min(PAGE - at % PAGE);
+        match pg.bytes(at, n as usize, READ) {
+            // SAFETY: `n` bytes inside one backed page
+            Some(p) => unsafe { std::ptr::copy_nonoverlapping(p, data[done as usize..].as_mut_ptr(), n as usize) },
+            None => (0..n).for_each(|k| data[(done + k) as usize] = pg.u8(m, at.wrapping_add(k))),
+        }
+        done += n;
+    }
+    done = 0;
+    while done < bytes {
+        let at = destination.wrapping_add(done);
+        let n = (bytes - done).min(PAGE - at % PAGE);
+        match pg.bytes(at, n as usize, WRITE) {
+            // SAFETY: `n` bytes inside one backed page
+            Some(p) => unsafe { std::ptr::copy_nonoverlapping(data[done as usize..].as_ptr(), p, n as usize) },
+            None => (0..n).for_each(|k| pg.set_u8(m, at.wrapping_add(k), data[(done + k) as usize])),
+        }
+        done += n;
+    }
+}
+
 /// A guest call from the frame `frame` (the caller's ESP at its call
 /// sites): push `args` (last first) and `back`, set ECX and run `body`.
 /// Returns EAX; ESP is `frame` again after the callee's own `ret n`.

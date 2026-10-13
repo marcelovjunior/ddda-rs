@@ -123,7 +123,7 @@ pub fn begin_material(m: &mut dyn Mem, c: &mut Cpu) {
         p.set_u32(m, c.esp, value);
     }
     c.ecx = material;
-    x86::call_ext(m, c, target);
+    crate::semantic::call_guest(m, c, target);
     let policy = c.eax;
     let flag = match policy {
         0 => 0x40,
@@ -236,7 +236,7 @@ fn draw_call(
         p.set_u32(m, c.esp, value);
     }
     c.ecx = owner;
-    x86::call_ext(m, c, target);
+    crate::semantic::call_guest(m, c, target);
     c.eax
 }
 
@@ -483,8 +483,8 @@ fn commit_state(m: &mut dyn Mem, c: &mut Cpu, p: Pages, entry: u32, context: u32
             if buffer != 0 {
                 let size = p.u16(m, descriptor.wrapping_add(24)) as u32 * 4;
                 let source = p.u32(m, descriptor.wrapping_add(36));
-                // the CRT's memcpy (0x012EFEA0), done natively
-                copy_guest(m, p, buffer, source, size);
+                crate::semantic::copy_guest(m, p, buffer, source, size);
+                c.eax = buffer; // memcpy returns its destination
                 p.set_u32(m, buffer, threshold);
                 p.set_u32(m, buffer.wrapping_add(8), 0);
                 p.set_u32(m, buffer.wrapping_add(4), 0);
@@ -997,7 +997,7 @@ fn allocate_constants(
             p.set_u32(m, c.esp, value);
         }
         c.ecx = context;
-        x86::call_ext(m, c, 0x00fe_d890);
+        crate::semantic::call_guest(m, c, 0x00fe_d890);
         reloaded_primitive = Some(p.u32(m, entry.wrapping_add(8)));
     }
     let buffer = p.u32(m, context.wrapping_add(0x24));

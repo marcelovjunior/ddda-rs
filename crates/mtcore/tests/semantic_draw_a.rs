@@ -54,8 +54,21 @@ fn vectors(entry: u32) -> Option<Value> {
 fn visible(a: u32, esp: u32) -> bool {
     !(0x0f000000..esp).contains(&a)
 }
+/// The recorded callee events the port still makes as guest calls (the CRT
+/// memcpy 0x012EFEA0 is done natively: its effects are covered by the final
+/// memory comparison).
+fn guest_events(case: &Value) -> Vec<Value> {
+    case["events"]
+        .as_array()
+        .unwrap()
+        .chunks(2)
+        .filter(|pair| n(&pair[0]["target"]) != 0x12efea0)
+        .flatten()
+        .cloned()
+        .collect()
+}
 fn install_calls(case: &Value) -> Rc<RefCell<usize>> {
-    let events = case["events"].as_array().unwrap().clone();
+    let events = guest_events(case);
     let position = Rc::new(RefCell::new(0));
     let cursor = position.clone();
     x86::set_ext_calls(Some(Box::new(move |m, c, target| {
@@ -119,7 +132,7 @@ fn verify(entry: u32, body: LiftFn) {
         x86::ldmxcsr(c.mxcsr.0);
         body(&mut m, &mut c);
         x86::set_ext_calls(None);
-        assert_eq!(*cursor.borrow(), case["events"].as_array().unwrap().len());
+        assert_eq!(*cursor.borrow(), guest_events(case).len());
         check(&c, &m, case);
         let expected = pairs(&case["after"]["memory"]);
         for (&a, &b) in &m.writes {
@@ -173,7 +186,7 @@ fn abi_oracle_rejects_corrupted_heap_below_stack() {
         x86::ldmxcsr(cpu.mxcsr.0);
         body(&mut memory, &mut cpu);
         x86::set_ext_calls(None);
-        assert_eq!(*cursor.borrow(), case["events"].as_array().unwrap().len());
+        assert_eq!(*cursor.borrow(), guest_events(case).len());
         check(&cpu, &memory, case);
         let address = pairs(&case["after"]["memory"])
             .keys()
