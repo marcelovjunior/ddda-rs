@@ -118,7 +118,7 @@ Verified:
   (the reader keeps blobs in the file; a watchdog stops it above 4 GB).
 
 Measured (`sim_oracle ... --bench 50`, frame 7,550's 904 draws replayed
-into a warm backend, RTX machine, Vulkan):
+into a warm backend, wgpu on Vulkan, this machine):
 
 | Path | Record (CPU) | Submit and run | Total |
 |---|---|---|---|
