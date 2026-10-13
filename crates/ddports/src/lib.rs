@@ -62,6 +62,13 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_LIGHTS").as_deref() == Ok("1") {
         ports.push((0x0049_b1a0, mtdraw::lights::scene_lights));
     }
+    // L183: game-side searches of the main thread (semantic ports,
+    // crates/mtcore/tests/game_scan.rs).
+    if std::env::var("DDRUNTIME_SCAN").as_deref() == Ok("1") {
+        ports.push((0x0049_e920, mtcore::game_scan::nearest_object));
+        ports.push((0x0041_72c0, mtcore::game_scan::scan_unlocks));
+        ports.push((0x00d1_b840, mtcore::game_scan::segment_hits_box));
+    }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
     if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {

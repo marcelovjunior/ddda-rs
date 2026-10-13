@@ -24,6 +24,7 @@ pub mod abi;
 pub mod allocator;
 pub mod array;
 pub mod dti;
+pub mod game_scan;
 pub mod hash;
 pub mod hot;
 pub mod job_hash;
