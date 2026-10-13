@@ -355,3 +355,17 @@ Next: offline rebuild/replay48124; no recapture required.
 root entry2 record header. Added bounded key/header/count diagnostics;
 no header masks or comparator relaxation.35 focused tests pass. Next:
 offline rebuild/replay to identify exact bits and trace original consumer.
+
+2026-10-13 source-backed sequence relocation helper (NOT WIRED):
+FEF830/FFC8E6 store context+74 in header low15 and increment the full
+context counter. FED200 zeros child counters; FED3B0 joins lanes in order.
+The helper validates complete, unique local ordinal domains and parent
+root/counter invariants, then rebases candidate low15 into serial ordinal
+space in lane order and advances the parent counter. All other bits remain
+exact; comparator unchanged. Nested kind6 records are traversed; associated
+draw kinds4/5 conservatively refuse pending evidence. Tests cover nested
+creation order,15bit boundary, preservation of all other bits, duplicate/
+missing ordinals and no writes on refusal.37 focused pass/0 failed.
+Complete default light at8750e8bf:290 passed/0 failed/7 ignored.
+Awaiting initial R172 warm build, then exact header diagnostic BEFORE
+integrating the helper; future offline builds self-served via head script.
