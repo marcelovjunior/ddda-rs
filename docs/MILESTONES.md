@@ -1,5 +1,15 @@
 # Milestones
 
+### L178 collision checkpoint, head-requested stop (2026-10-13)
+
+- D7CF70 complete semantic draft: **640 ABI original returns pass**, full
+  EAX/callee buffers/memory checked; **960/1001 body instructions** covered.
+- **Not registered**. Earlier 544-case opt2/Pages gate passed; final gate
+  after unordered-comparison corrections remains pending. Head #14255
+  requested WIP commit and stop to reserve quota for L172.
+- Next owner: finish final isolated gate and costs before registration.
+  Proven TRAIN READY commits remain ea514de1 (010A35D0), 10a36ae7 (C24640).
+
 ### L178 semantic instanced-model draw (2026-10-13)
 
 - C24640 `uOmSwingBaseInstancing::vf26` registered under SEMANTIC:
