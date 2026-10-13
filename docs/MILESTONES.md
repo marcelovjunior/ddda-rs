@@ -15,6 +15,61 @@
   variants are rejected, including corrupted and extra heap writes below ESP.
 - Next: head merges registrations and validates the combined semantic train
   against the native gate and matched image/critical-job capture.
+### L169 exact shadow traversal and setup (2026-10-13)
+
+- Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
+  `DDRUNTIME_SHADOW_PASS=1` (EFD240) preserve the original queue/serial
+  choice, callback order, guest state and x87 operations. Defaults off.
+- **420 original returns**, all **63 lifted basic blocks**, **15,660 paired
+  fault/access cases**, production GuestMemory serial/atomic replay pass.
+  Eight isolated tests pass; mtcore/ddports **20 pass / nine ignored**;
+  runtime light **255 pass / zero failures / seven ignored**.
+- Synthetic paired median gains: traversal **1.22–1.89x**, setup
+  **1.07–1.28x**. No gameplay/FPS claim. Shared nesting guard, lane-ordered
+  merge and callback mutations block a simple parallel traversal toggle.
+- Next: head combined native gate and independent same-route port A/B;
+  retain opt-ins until image/job-time acceptance. Evidence and divisibility
+  limits: `docs/tasks/L169-shadow.md`.
+### L162e whole FEE320 capture prerequisite (2026-10-13)
+
+- Opt-in exact sky-shadow wrapper records FEE320 inclusive/external-call
+  wall time, or separately full lifted-caller CPU/ordered memory traces.
+  External callees remain explicit opaque contracts; no native port yet.
+- Isolated whole-lift machinery: 128 synthetic round trips and corruption
+  rejections pass; five runtime/six analyzer tests pass. Light suite:
+  259 reported passes, zero failures, seven ignored. No game/GPU/shards.
+- Real per-frame oracle, precise cost and >=1.5x candidate proof remain
+  open. Next: head's separate timing30/capture1 windows, after playtest;
+  protocol and limitations in `docs/tasks/L162-job-wake.md` (L162e).
+
+### L162d sky-shadow critical callback attribution (2026-10-13)
+
+- Exact c31 h0 sky-shadow object: DB7620 -> EE2C90, uSkyStableShadow
+  vtable160DF98. One callback/frame, batch-last150/150; main27/worker123.
+  Main shadow solo0.965ms/frame is part of earlier all-main2.661ms figure.
+- c26vk admits24 main/129 worker shadow stacks. Stable-shadow traversal
+  EFDC70 -> EFD240 -> DB63E0 builds model/material commands; guest memory
+  helpers dominate sampled PCs, x87 only5/153. Counts are not self times.
+- Original DBE560 nesting guard forces serial inner traversal. Existing
+  parallel branch shares the active queue; no safe simple split established.
+  Four attribution/provenance tests pass; no game/GPU/build or speedup claim.
+- Family split posted to head: codex-7 FED480/EA5B50, codex-9 DB63E0/EFD240
+  and split proof, codex-11 FEE320 evaluation. Next: isolated original
+  oracles/microbenchmarks before one integration train. See L162 brief.
+### L175 semantic material and package leaves (2026-10-13)
+
+- Opt-in EA23F0/FED190/E0F3C0/01008200 native semantic ports: **2,226
+  original returns** pass ABI replay; EA23F0 reaches **712/712 decoded
+  instructions**, both growth sites, NaNs and unaligned/aliased inputs.
+- Seven isolated tests pass, including heap-corruption rejection, opt2 lifted bodies and serial/atomic
+  Pages. Runtime light **255 pass / zero failures / seven ignored**.
+- Median paired synthetic gains EA23F0 **1.512x**, E0F3C0 **2.734x**,
+  01008200 **1.141x**; some individual samples regress, FED190 mixed
+  across runs. mtcore/ddports **26 pass / zero failures / nine ignored**.
+  No game/image/FPS claim. Details: `docs/tasks/L175-semantic-draw-c.md`.
+- Next: head accumulated train with `DDRUNTIME_SEMANTIC=1`, then real
+  job/image acceptance. Virtual/growth callees remain recorded mock seams
+  in isolated tests; full gameplay comparison remains open.
 
 ### L162c job distribution and host scheduling (2026-10-13)
 
@@ -58,6 +113,10 @@
   Combined native gate and head image/per-job A/B pending.
 - Next: head train with this independent switch, then matched shadow-save
   0/1 capture. Full evidence: `docs/tasks/L167-critical-callbacks.md`.
+- EA5B50 follow-up: 576 original caller fixtures cover 112/112 block
+  starts; 28,800 fault/access pairs and both memory modes pass. Split/flat
+  Pages specializations regress on some paths; neither is registered.
+  Oracle/replay retained for codegen work, not a gameplay-input corpus.
 
 ### L158 combo31 critical paths and next lookup leaves (2026-10-13)
 
@@ -197,6 +256,38 @@
   5,000-draw jobs **1.804 -> 1.832** (regression). Same bytes/submits/hashes;
   no gameplay gain claimed. Next: head native VK=1 A/B and zero-mismatch
   compare. Details and limitations: `docs/tasks/L164-native-backend.md`.
+### L161c opt-in guest register/flag locals (2026-10-13)
+
+- Default-off `LIFT_REG_LOCALS=1` keeps GPRs and Flags in host locals,
+  flushing at known full-Cpu calls and exits. Split parts and helper
+  boundaries covered; restartable steps unchanged. DD42C0 opt2 Cpu ESP
+  loads/stores **23/14 -> 3/3**; EDI loads **6 -> 3**.
+- **51 focused tests**, **40 original cases per variant at opt0/1/2**,
+  paired full-state/byte checks, and **234 light runtime tests pass**
+  (seven ignored). No shard/game/GPU run or full-corpus gate.
+- No general timing gain: four hot-function opt2 fixture ratios
+  **0.974..1.007x**. Locals also inhibit default opt2 dispatcher removal
+  in DD42C0; isolated LLVM clone-rate-32 removes that dispatcher but still
+  gives no sparse-fixture win. Compiler profiles/defaults unchanged.
+  Next: head's combined train and real worker corpus, including the
+  separate inline-flags candidate. Details: `docs/tasks/L161-codegen.md`.
+
+### L161b adjacent-result zero predicates (2026-10-13)
+
+- Default-off `LIFT_RESULT_ZF=1` replaces adjacent 32-bit result ZF
+  helper calls with direct zero tests; preserves all flag writes, memory,
+  calls and restartable steps. Selected fourteen-body audit removes eleven
+  ZF calls across four bodies, with no other source changes.
+- **47 focused tests pass**, including 13,608 synthetic state/access/fault
+  cases at each opt0/opt1; **31 original cases** pass for each variant at
+  both levels. Recorded FEDD60 loops with synthetic inputs improve median
+  thread cycles **1.054..1.213x opt0 / 1.005..1.155x opt1**. No game gain
+  claimed; not additive when codex-6's pending FEDD60 port is enabled.
+- Push fusion and CFG experiments rejected. No shard generation/build or
+  game/GPU run. Full corpus and gameplay acceptance remain with the head.
+  Next: shared train with the switch enabled; broader redesign measured on
+  codex-6's forthcoming corpus. Details: `docs/tasks/L161-codegen.md`.
+
 ### L161 generator flag fixed point (2026-10-13)
 
 - Audited ten hot main/job lifted routines against raw stacks and opt1

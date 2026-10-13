@@ -201,11 +201,23 @@ impl Registry {
         ddports::ensure_with(|ports| {
             crate::archive_inflate::install(ports);
             crate::procedural_geometry::install(ports);
+            // L171: semantic 0x00E12A20 keeps the original body for its rare branch
+            if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
+                let bodies = ddnative::generated::lifted::bodies();
+                if let Some(&(_, original)) = bodies.iter().find(|(a, _)| *a == 0x00e1_2a20) {
+                    let _ = ddports::mtcore::semantic::E12A20_ORIGINAL.set(original);
+                    ports.retain(|p| p.0 != 0x00e1_2a20);
+                    ports.push((0x00e1_2a20, ddports::mtcore::semantic::shader_lookup));
+                }
+            }
             if crate::critical_jobs::enabled() {
                 crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
             }
             if std::env::var_os("DDRUNTIME_JOB_PARTICIPANTS").is_some() {
                 crate::job_participants::install(ports, &ddnative::generated::lifted::bodies());
+            }
+            if crate::shadow_fee320::enabled() {
+                crate::shadow_fee320::install(ports, &ddnative::generated::lifted::bodies());
             }
             if crate::ndraw_stats::enabled() {
                 crate::ndraw_stats::wrap_executor(ports, &ddnative::generated::lifted::bodies());

@@ -4,6 +4,7 @@ The runtime fixture compiles only mem.rs, x86.rs and synthetic functions
 with rustc; it does not regenerate or rebuild the private lifted batch.
 """
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -169,7 +170,7 @@ class CodegenTests(unittest.TestCase):
                 }
             }
         '''
-        target = root / 'target'
+        target = Path(os.environ['CARGO_TARGET_DIR'])
         target.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='codegen-test-', dir=target) as tmp:
             src = Path(tmp) / 'fixture.rs'
@@ -259,9 +260,10 @@ class CodegenTests(unittest.TestCase):
             src = Path(tmp) / 'fixture.rs'
             exe = Path(tmp) / 'fixture.exe'
             src.write_text(source)
-            for command in (['rustc', '--edition=2021', '-O', '--test', str(src), '-o', str(exe)], [str(exe)]):
-                result = subprocess.run(command, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for opt in (0, 1, 2):
+                for command in (['rustc', '--edition=2021', f'-Copt-level={opt}', '--test', str(src), '-o', str(exe)], [str(exe)]):
+                    result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 if __name__ == '__main__':
     unittest.main()

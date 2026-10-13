@@ -340,7 +340,7 @@ pub fn f_005da5f0(m: &mut dyn Mem, cpu: &mut Cpu) {
 fn f_005da5f0_p0(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<crate::mem::PageTable>>, mut pc: u32) -> Option<u32> {
     loop {
         match pc {
-            0x5DA5F0 => { cpu.esp = cpu.esp.wrapping_sub(0x8u32); emit::push(cpu.esi, m, pt, cpu); cpu.esi = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); cpu.eax = (m.fast_u8(pt, cpu.esi.wrapping_add(0x3F)) as u32); cpu.eax = cpu.fl.alu_and(cpu.eax, 0xFu32, 32); cpu.eax = cpu.eax.wrapping_sub(1); cpu.fl.alu_sub(cpu.eax, 0xEu32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x5DAC72 } else { 0x5DA609 }; continue; }
+            0x5DA5F0 => { cpu.esp = cpu.esp.wrapping_sub(0x8u32); emit::push(cpu.esi, m, pt, cpu); cpu.esi = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); cpu.eax = (m.fast_u8(pt, cpu.esi.wrapping_add(0x3F)) as u32); cpu.eax = cpu.eax & 0xFu32; cpu.eax = cpu.eax.wrapping_sub(1); cpu.fl.alu_sub(cpu.eax, 0xEu32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x5DAC72 } else { 0x5DA609 }; continue; }
             0x5DA609 => { cpu.eax = (m.fast_u8(pt, cpu.eax.wrapping_add(0x5DAC90)) as u32); emit::push(cpu.ebx, m, pt, cpu); emit::push(cpu.ebp, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); pc = m.fast_u32(pt, cpu.eax.wrapping_mul(4).wrapping_add(0x5DAC7C)); continue; }
             0x5DA61A => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x254)); cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x5DAC6F } else { 0x5DA628 }; continue; }
             0x5DA628 => { let l129_condition = (((m.fast_u32(pt, cpu.ecx.wrapping_add(0x248))) & (0x100u32)) as i32) != 0; pc = if l129_condition { 0x5DA63A } else { 0x5DA634 }; continue; }

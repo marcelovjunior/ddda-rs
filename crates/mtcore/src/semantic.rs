@@ -164,3 +164,242 @@ pub fn intern_dependency_keys_with(m: &mut dyn Mem, c: &mut Cpu, expander: Expan
     // EAX = the interned sequence; `ret 0x14` from the entry frame
     c.esp = entry.wrapping_add(4 + 0x14);
 }
+
+/// The original body of 0x00E12A20, set by the runtime when it installs
+/// [`shader_lookup`] (the rare branch runs it unchanged).
+pub static E12A20_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = std::sync::OnceLock::new();
+
+/// A guest call from the frame `frame` (the caller's ESP at its call
+/// sites): push `args` (last first) and `back`, set ECX and run `body`.
+/// Returns EAX; ESP is `frame` again after the callee's own `ret n`.
+pub(crate) fn call_from(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, args: &[u32], back: u32, body: impl FnOnce(&mut dyn Mem, &mut Cpu)) -> u32 {
+    c.esp = frame;
+    for &v in args.iter().rev() {
+        c.esp = c.esp.wrapping_sub(4);
+        pg.set_u32(m, c.esp, v);
+    }
+    c.esp = c.esp.wrapping_sub(4);
+    pg.set_u32(m, c.esp, back);
+    c.ecx = this;
+    body(m, c);
+    c.eax
+}
+
+/// 0x00E12A20, `this->lookup(a, bank, slot, keys_owner_values, keys,
+/// extra, other_bank) -> entry` (thiscall, `ret 0x1c`): the shader/
+/// technique lookup of every model primitive draw. The common branch
+/// (byte `this + 0x39` clear) interns the dependency keys of
+/// `bucket(bank) + slot * 0x28 + 0x1c` and looks them up (0x00E0F3C0),
+/// then again with their CRC (0x00E0F4B0), then for `other_bank`; the rare
+/// branch (shader creation) runs the original body. Only reads happen
+/// before the branch, so the fallback is exact.
+pub fn shader_lookup(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let this = c.ecx;
+    if pg.u8(m, this.wrapping_add(0x39)) != 0 {
+        let original = E12A20_ORIGINAL.get().expect("0x00E12A20 original body");
+        return original(m, c);
+    }
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (bank, slot, owner_values, keys, extra, other) = (arg(m, 1), arg(m, 2), arg(m, 3), arg(m, 4), arg(m, 5), arg(m, 6));
+    let table = pg.u32(m, this.wrapping_add(0x24));
+    let bucket = pg.u32(m, table.wrapping_add((bank & 0xfff).wrapping_mul(4)));
+    let owner = bucket.wrapping_add(slot.wrapping_mul(0x28)).wrapping_add(0x1c);
+    // The original's frame after its prologue (0x8c locals, four pushes);
+    // its CRC local is at frame + 0x10.
+    let frame = entry.wrapping_sub(0x9c);
+    let crc = frame.wrapping_add(0x10);
+    let ext = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let finish = |c: &mut Cpu, r: u32| {
+        c.eax = r;
+        c.esp = entry.wrapping_add(4 + 0x1c);
+    };
+    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, 0], 0x00e1_3208, intern_dependency_keys);
+    let r = call_from(m, c, pg, frame, this, &[key], 0x00e1_3210, ext(0x00e0_f3c0));
+    if r != 0 {
+        return finish(c, r);
+    }
+    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, crc], 0x00e1_322f, intern_dependency_keys);
+    let sum = pg.u32(m, crc);
+    let r = call_from(m, c, pg, frame, this, &[key, sum], 0x00e1_3244, ext(0x00e0_f4b0));
+    if r != 0 || pg.u8(m, this.wrapping_add(0xab229)) != 0 || other == 0 {
+        return finish(c, r);
+    }
+    let table = pg.u32(m, this.wrapping_add(0x24));
+    let owner = pg.u32(m, table.wrapping_add((other & 0xfff).wrapping_mul(4))).wrapping_add(0x1c);
+    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, crc], 0x00e1_3280, intern_dependency_keys);
+    let sum = pg.u32(m, crc);
+    let r = call_from(m, c, pg, frame, this, &[key, sum], 0x00e1_3293, ext(0x00e0_f4b0));
+    finish(c, r)
+}
+
+/// 0x01054700, `model->update_joints(indices, count, flags)` (thiscall,
+/// `ret 0xc`): run the model's joint-update routine over a list of joint
+/// indices. The routine is chosen once from the model's flags at +0x378
+/// (none, 0x0104EF10, 0x01051B60, 0x010533A0 or 0x01052330; some choices
+/// also set bit 6 of +0x108); joints are 0xA0-byte records from +0x364.
+/// A joint flagged 0x20 at +0x90 is skipped, and with `flags & 1` only
+/// joints with bit 0 of +0x96 are updated. Unless `flags & 2`, joints
+/// with an attachment (+4) also get its virtual +0x14 call when model
+/// byte +0x37B bit 0 is set. A pending reset (byte +0xE19) runs
+/// 0x01054690 first.
+pub fn update_joints(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let model = c.ecx;
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    // The index list is read only inside the loop, as the original does.
+    let count = arg(m, 1);
+    let flags = pg.u8(m, entry.wrapping_add(0xc)); // the original reads the byte only
+    let notify = if flags & 2 != 0 { false } else { pg.u8(m, model + 0x37b) & 1 != 0 };
+    let visible_only = flags & 1 != 0;
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    // The original's frames: four pushes, then ESI pushed for the loop.
+    let frame = entry.wrapping_sub(16);
+    let loop_frame = entry.wrapping_sub(20);
+    if pg.u8(m, model + 0xe19) != 0 {
+        call_from(m, c, pg, frame, model, &[], 0x0105_4738, guest(0x0105_4690));
+        pg.set_u8(m, model + 0xe19, 0);
+    }
+    let mode = pg.u32(m, model + 0x378);
+    let routine = if mode & 0x0800_0000 != 0 {
+        0
+    } else if mode & 0x0400_0000 != 0 {
+        0x0104_ef10
+    } else if mode & 0x40 == 0 {
+        0x0105_1b60
+    } else {
+        let routine = if mode & 0x10_0000 != 0 {
+            0x0105_1b60
+        } else if mode & 0x4000 != 0 {
+            0x0105_33a0
+        } else {
+            0x0105_2330
+        };
+        let marks = pg.u32(m, model + 0x108);
+        pg.set_u32(m, model + 0x108, marks | 0x40);
+        routine
+    };
+    let joints = model + 0x364;
+    for i in 0..count {
+        let indices = arg(m, 0);
+        let index = pg.u8(m, indices.wrapping_add(i)) as u32;
+        let joint = pg.u32(m, joints).wrapping_add(index * 0xa0);
+        if pg.u8(m, joint + 0x90) & 0x20 != 0 {
+            continue;
+        }
+        if visible_only && pg.u8(m, joint + 0x96) & 1 == 0 {
+            continue;
+        }
+        if routine != 0 {
+            call_from(m, c, pg, loop_frame, model, &[joint], 0x0105_47d6, guest(routine));
+        }
+        if notify {
+            let attachment = pg.u32(m, joint + 4);
+            if attachment != 0 {
+                let method = pg.u32(m, pg.u32(m, attachment) + 0x14);
+                call_from(m, c, pg, loop_frame, attachment, &[joint, model], 0x0105_47ef, guest(method));
+            }
+        }
+    }
+    c.esp = entry.wrapping_add(4 + 0xc);
+}
+
+/// 0x00FEDD60, `sort_pairs(records, count, scratch) -> sorted` (stdcall,
+/// `ret 0xc`): a stable bottom-up merge sort of `count` 8-byte (key,
+/// value) records by their unsigned key, ping-ponging between `records`
+/// and `scratch`; returns the buffer holding the result.
+///
+/// Both buffers stay as the original leaves them: a pair pass writes all
+/// records into `scratch`, then merges of runs of 2, 4, 8, ... alternate
+/// direction (`scratch -> records -> scratch ...`) while the merged width
+/// does not exceed the next power of two of `count`. On equal keys the
+/// left run's record goes first.
+pub fn sort_pairs(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let records = arg(m, 0);
+    let count = arg(m, 1) as i32;
+    c.esp = entry.wrapping_add(4 + 0xc);
+    // the next power of two of `count` (at most 32 doublings)
+    let mut span: i32 = 1;
+    for _ in 0..32 {
+        if count <= span {
+            break;
+        }
+        span = span.wrapping_mul(2);
+    }
+    if span < 2 {
+        c.eax = records;
+        return;
+    }
+    let scratch = arg(m, 2);
+    let n = count as usize;
+    let read = |m: &dyn Mem, base: u32| -> Vec<[u32; 2]> {
+        (0..n as u32).map(|i| [pg.u32(m, base + 8 * i), pg.u32(m, base + 8 * i + 4)]).collect()
+    };
+    let mut a = read(m, records);
+    // pair pass: records -> scratch
+    let mut b = Vec::with_capacity(n);
+    for pair in a.chunks(2) {
+        match pair {
+            [x, y] if y[0] < x[0] => b.extend([*y, *x]),
+            _ => b.extend_from_slice(pair),
+        }
+    }
+    let mut a_written = false;
+    // merge passes; `in_scratch`: the current runs live in `b`
+    let mut in_scratch = true;
+    let mut width: i32 = 4;
+    if span > 3 {
+        while width <= span {
+            let (src, dst) = if in_scratch { (&b, &mut a) } else { (&a, &mut b) };
+            merge_runs(src, dst, (width / 2) as usize);
+            if in_scratch {
+                a_written = true;
+            }
+            in_scratch = !in_scratch;
+            width = width.wrapping_mul(2);
+        }
+    }
+    let write = |m: &mut dyn Mem, base: u32, v: &[[u32; 2]]| {
+        for (i, r) in v.iter().enumerate() {
+            pg.set_u32(m, base + 8 * i as u32, r[0]);
+            pg.set_u32(m, base + 8 * i as u32 + 4, r[1]);
+        }
+    };
+    write(m, scratch, &b);
+    if a_written {
+        write(m, records, &a);
+    }
+    c.eax = if in_scratch { scratch } else { records };
+}
+
+/// One merge pass: each pair of adjacent `run`-long runs of `src` merged
+/// into the same range of `dst` (stable; the right record first only when
+/// its key is strictly smaller).
+fn merge_runs(src: &[[u32; 2]], dst: &mut [[u32; 2]], run: usize) {
+    let n = src.len();
+    let mut start = 0;
+    while start < n {
+        let mid = (start + run).min(n);
+        let end = (mid + run).min(n);
+        let (mut l, mut r, mut out) = (start, mid, start);
+        while l < mid && r < end {
+            if src[r][0] < src[l][0] {
+                dst[out] = src[r];
+                r += 1;
+            } else {
+                dst[out] = src[l];
+                l += 1;
+            }
+            out += 1;
+        }
+        dst[out..out + (mid - l)].copy_from_slice(&src[l..mid]);
+        out += mid - l;
+        dst[out..out + (end - r)].copy_from_slice(&src[r..end]);
+        start += 2 * run;
+    }
+}

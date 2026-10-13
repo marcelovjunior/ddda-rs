@@ -444,7 +444,7 @@ pub fn f_00744da0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x744DA0;
     loop {
         match pc {
-            0x744DA0 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = cpu.esp; cpu.esp = cpu.esp & 0xFFFFFFF0u32; cpu.esp = cpu.fl.alu_sub(cpu.esp, 0x38u32, 32); cpu.eax = cpu.eax.wrapping_sub(1); emit::push(cpu.esi, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); cpu.fl.alu_sub(cpu.eax, 0x8u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x744ED8 } else { 0x744DB5 }; continue; }
+            0x744DA0 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = cpu.esp; cpu.esp = cpu.esp & 0xFFFFFFF0u32; cpu.esp = cpu.esp.wrapping_sub(0x38u32); cpu.eax = cpu.eax.wrapping_sub(1); emit::push(cpu.esi, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); cpu.fl.alu_sub(cpu.eax, 0x8u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x744ED8 } else { 0x744DB5 }; continue; }
             0x744DB5 => { { let t = m.fast_u32(pt, cpu.eax.wrapping_mul(4).wrapping_add(0x744FC0)); if matches!(t, 0x744DBC | 0x744DDF | 0x744DFF | 0x744E89 | 0x744EA2 | 0x744EBB | 0x744ED8) { pc = t; continue; }  x86::call_ext(m, cpu, t); return; } }
             0x744DBC => { emit::push(0x10u32, m, pt, cpu); emit::push(0x80u32, m, pt, cpu); emit::push(0x744DC8, m, pt, cpu); x86::call_ext(m, cpu, 0xFB8770u32); cpu.esp = cpu.esp.wrapping_add(0x8u32); cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x744ED8 } else { 0x744DD3 }; continue; }
             0x744DD3 => { cpu.ecx = cpu.eax; emit::push(0x744DDA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00FB87A0))(m, cpu);  pc = 0x744ED2; continue; }

@@ -8,6 +8,8 @@
 //! caller. Each port crate's `abi::PORTS` lists its adapters; its
 //! differential test replays them against the lifted vectors.
 use ddnative_base::x86::{self, LiftFn};
+// The port crates, for runtime-side installs that need the lifted bodies.
+pub use mtcore;
 
 /// Every verified readable port: (address, adapter).
 pub fn ports() -> Vec<(u32, LiftFn)> {
@@ -26,6 +28,19 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_JOB_SHADOW_SAVE").as_deref() == Ok("1") {
         ports.push((0x00fed480, mtcore::job_shadow::save_state));
     }
+    // L169: preserve the original serial/queued decision and callback order.
+    if std::env::var("DDRUNTIME_SHADOW_TRAVERSAL").as_deref() == Ok("1") {
+        ports.push((0x00db63e0, mtcore::shadow_traversal::traverse));
+    }
+    if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
+        ports.push((0x00efd240, mtcore::shadow_pass::setup));
+    }
+    // L176: the nDraw material's parameter lookup (semantic ports,
+    // crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_MATERIAL").as_deref() == Ok("1") {
+        ports.push((0x0106_6590, mtdraw::material::find_parameter));
+        ports.push((0x0106_6b10, mtdraw::material::bind_parameter));
+    }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
     if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
@@ -35,10 +50,21 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00e0e5e0, mtcore::semantic_draw_b::dependency_hash),
             (0x010655a0, mtcore::semantic_draw_b::apply_material),
             (0x01066c60, mtcore::semantic_draw_b::select_material_pass),
+            (0x01054700, mtcore::semantic::update_joints),
+            (0x00fedd60, mtcore::semantic::sort_pairs),
+            (0x00ea23f0, mtcore::semantic_draw_c::primitive_material),
+            (0x00fed190, mtcore::semantic_draw_c::begin_material),
+            (0x00e0f3c0, mtcore::semantic_draw_c::package_key),
+            (0x01008200, mtcore::semantic_draw_c::single_key),
         ] {
             ports.retain(|p| p.0 != a);
             ports.push((a, f));
         }
+    }
+    // L171: semantic per-mesh draw, separate until checked on recorded vectors
+    if std::env::var("DDRUNTIME_SEMANTIC_DRAW").as_deref() == Ok("1") {
+        ports.retain(|p| p.0 != 0x00ea5320);
+        ports.push((0x00ea5320, mtcore::semantic_draw::draw_mesh));
     }
     ports
 }
@@ -110,7 +136,16 @@ mod tests {
             (0x01008200, mtcore::job_lookup::single_key as LiftFn),
             (0x01008260, mtcore::job_lookup::pair_key as LiftFn),
         ] {
-            assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)), lookup_enabled);
+            assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)),
+                lookup_enabled && !(address == 0x01008200 && semantic_enabled));
+        }
+        for (address, body) in [
+            (0x00ea23f0, mtcore::semantic_draw_c::primitive_material as LiftFn),
+            (0x00fed190, mtcore::semantic_draw_c::begin_material),
+            (0x00e0f3c0, mtcore::semantic_draw_c::package_key),
+            (0x01008200, mtcore::semantic_draw_c::single_key),
+        ] {
+            assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)), semantic_enabled);
         }
         let mut addrs: Vec<u32> = p.iter().map(|e| e.0).collect();
         addrs.sort_unstable();

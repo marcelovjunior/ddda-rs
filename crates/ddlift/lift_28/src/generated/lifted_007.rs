@@ -4,12 +4,6 @@ use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 use ddnative_base::emit;
 
-// Translated from 0x00E14090 (DDDA.exe 2017-12-13 Steam), Global::FUN_00e14090.
-pub fn f_00e14090(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, cpu.ecx, 0x142EED8u32);  x86::call_ext(m, cpu, 0xE13530); return;
-}
-
 // Translated from 0x00E140A0 (DDDA.exe 2017-12-13 Steam), uHemiSphereLight::getDTI.
 pub fn f_00e140a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
