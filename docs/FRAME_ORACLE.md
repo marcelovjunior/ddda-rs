@@ -53,6 +53,67 @@ Notes on the file:
 
 ## Comparing
 
+### CPU-only frame statistics (L107)
+
+```
+cargo run --release -p d3d9frame --example frame_stats -- capture.ddframe --frames 0..3 --json stats.json
+```
+
+This tool does not create a device or run the game. It prints a profiler-style
+report and optionally streams one JSON object with `frames` and `summary`.
+`--frames A..B` is zero-based and half-open; omitted means all frames. An
+unfinished final frame is included and marked `complete: false`. Earlier
+frames are decoded to populate Reader's blob dictionary but not analyzed.
+The JSON destination must not already exist. Errors exit with status 2.
+
+- A pass starts at a draw or clear whose complete colour/depth target set
+  differs from the preceding pass. Surface identity, level, format, size and
+  multisampling are significant. Returning to a target starts another pass.
+  Copies/fills do not bind a new render-target set; their event records give
+  command positions, source/destination dimensions, formats and rectangles.
+  Commands before the first draw/clear have no pass. Pass and command ordinals
+  start at zero. Names describe targets, without guessing their visual role.
+- Distinct shader pairs use token equality, texture sets include sampler
+  states, and render-state lists use exact recorded order/content. Changes
+  compare to the previous draw in the same frame, including across passes.
+  The first draw has an unknown baseline (`null` in JSON), excluded from
+  comparison percentages. The text lists each group's count and percentage;
+  JSON stores counts and their `comparisons` denominator, plus per-draw flags.
+- Constant deltas compare raw bits: float4 and int4 changes cost 16 bytes,
+  bool changes 4 bytes. Missing trailing float registers compare as zero.
+  Per-draw VS/PS changed float4 counts and total bytes are reported separately.
+  These are state differences, not measured setter calls or GPU upload bytes.
+- Shader read counts are distinct **static external float4 references**,
+  including matrix instruction rows and excluding shader-local `def` values.
+  They do not establish which branches executed. Relative references have
+  `relative: true` / `*`: only their static bases are counted, and the dynamic
+  extent is unknown. Fixed-function and unparseable shaders report unavailable.
+- Both run histograms count maximal consecutive runs, including singletons.
+  One requires equal constants; the other ignores constants. Both permit
+  different draw ranges/counts but require equal topology and all other
+  state, including viewport/scissor, inline data and stream offsets. Every
+  non-draw command breaks a run (including uploads and queries). These are
+  state-compatible candidates, not proof of safe merging/instancing.
+- Clear sizes are clipped to target/viewport/scissor and summed per rectangle
+  as `rectangle_pixel_visits`; overlapping rectangles are counted repeatedly.
+  Copy/fill sizes are requested rectangle pixels, not GPU traffic estimates.
+  Dimensions, format, MSAA and rectangles are retained; byte bandwidth is not
+  inferred for compression, depth/stencil partial writes, or multisampling.
+
+The analyzer retains one previous draw and current-frame statistics, emits
+each frame immediately, and aggregates numeric totals/histograms. It never
+collects the capture's commands or reports across frames. **Reader itself
+retains every decompressed blob for cross-frame references**; on large
+captures that existing dictionary can dominate memory. This tool does not
+make a bounded-total-RAM claim. JSON/text contain metadata only, but captures
+themselves must remain private.
+
+Synthetic Writer/Reader regressions live in the example. Run
+`cargo test -p d3d9frame --all-targets`. To produce the same small capture
+without a game run, set `DDDA_FRAME_STATS_SAMPLE` to a private output path
+and run `cargo test -p d3d9frame --example frame_stats
+writer_reader_passes_redundancy_and_batching`; then run the CLI on that file.
+
 ```
 cargo run -p ddgpu --example frame_oracle -- E:\captures\title.ddframe --frames 2..3 --images E:\captures\title-diff
 ```

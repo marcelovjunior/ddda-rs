@@ -1,5 +1,19 @@
 # Milestones
 
+### L107 frame command statistics (2026-10-13)
+
+- CPU-only `d3d9frame` `frame_stats` example reports target-defined passes,
+  per-draw state/constant deltas, static shader reads, batching run histograms,
+  clear/copy/fill sizes, and aggregate text/streamed JSON. No game/GPU run.
+- **5 crate + 7 example tests pass**; release CLI synthetic capture:
+  **2 frames / 3 passes / 6 draws / 12 primitives**, VS delta **1 float4 / 16 B**.
+  Runtime light suite **151 passed / 1 ignored**. No gameplay comparison yet.
+- Analyzer retains current-frame statistics and previous draw; existing
+  Reader still retains its global blob dictionary. Relative shader reads
+  remain static-base counts, not runtime extents; batching is candidate-only.
+- Next: head's gameplay capture and release report to guide pass takeover.
+  Definitions and limits: `docs/FRAME_ORACLE.md`; Results: `docs/tasks/L107-frame-stats.md`.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants

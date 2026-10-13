@@ -2294,8 +2294,11 @@ name = "d3d9frame"
 version = "0.1.0"
 dependencies = [
  "d3d9cmd",
+ "d3d9shader",
  "miniz_oxide 0.8.9",
  "png",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
