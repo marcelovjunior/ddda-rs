@@ -849,7 +849,7 @@ pub fn fill_uncovered(call: &mut DrawCall, b: &BindingPart, uploads: &Uploads, d
     if b.uncovered == [[0; 4]; 2] {
         return Ok(());
     }
-    let mut banks = [(*call.vs_constants).clone(), (*call.ps_constants).clone()];
+    let mut banks = CowBanks::new([call.vs_constants.clone(), call.ps_constants.clone()]);
     let missing = fill_from_uploads(&mut banks, b.uncovered, uploads)?;
     if missing != [[0; 4]; 2] {
         objects(|o| {
@@ -862,16 +862,62 @@ pub fn fill_uncovered(call: &mut DrawCall, b: &BindingPart, uploads: &Uploads, d
             })
         })?;
     }
-    let [vs, ps] = banks;
-    call.vs_constants = Arc::new(vs);
-    call.ps_constants = Arc::new(ps);
+    if let Some([vs, ps]) = banks.finish() {
+        call.vs_constants = Arc::new(vs);
+        call.ps_constants = Arc::new(ps);
+    }
     Ok(())
+}
+
+/// A draw's constant banks, copied (L180) only at the first register whose
+/// value changes: an unchanged draw keeps the shared banks.
+struct CowBanks {
+    base: [Arc<Constants>; 2],
+    own: Option<[Constants; 2]>,
+}
+
+impl CowBanks {
+    fn new(base: [Arc<Constants>; 2]) -> Self {
+        CowBanks { base, own: None }
+    }
+    fn bank(&self, stage: usize) -> &Constants {
+        match &self.own {
+            Some(own) => &own[stage],
+            None => &self.base[stage],
+        }
+    }
+    fn own(&mut self) -> &mut [Constants; 2] {
+        let base = &self.base;
+        self.own.get_or_insert_with(|| [(*base[0]).clone(), (*base[1]).clone()])
+    }
+    /// Float register `n` of `stage` set to `v`; a register outside the
+    /// bank refuses the draw.
+    fn set_float(&mut self, stage: usize, n: usize, v: [u32; 4]) -> Result<(), Refusal> {
+        if *self.bank(stage).f.get(n).ok_or(Refusal::FloatsUncovered)? != v {
+            self.own()[stage].f[n] = v;
+        }
+        Ok(())
+    }
+    fn set_int(&mut self, stage: usize, n: usize, v: [i32; 4]) {
+        if self.bank(stage).i[n] != v {
+            self.own()[stage].i[n] = v;
+        }
+    }
+    fn set_bool(&mut self, stage: usize, n: usize, v: u32) {
+        if self.bank(stage).b[n] != v {
+            self.own()[stage].b[n] = v;
+        }
+    }
+    /// The changed banks (None: unchanged).
+    fn finish(self) -> Option<[Constants; 2]> {
+        self.own
+    }
 }
 
 /// Fill the `missing` float registers from the pending uploads (the newest
 /// binding writing a register decides, as at the flush; its bank lacking
 /// it, the device keeps its own); what is left for the device.
-fn fill_from_uploads(banks: &mut [Constants; 2], mut missing: [[u64; 4]; 2], uploads: &Uploads) -> Result<[[u64; 4]; 2], Refusal> {
+fn fill_from_uploads(banks: &mut CowBanks, mut missing: [[u64; 4]; 2], uploads: &Uploads) -> Result<[[u64; 4]; 2], Refusal> {
     let mut device = [[0u64; 4]; 2];
     for u in uploads.bindings.iter().rev() {
         for stage in 0..2 {
@@ -882,7 +928,7 @@ fn fill_from_uploads(banks: &mut [Constants; 2], mut missing: [[u64; 4]; 2], upl
                     let n = word * 64 + take.trailing_zeros() as usize;
                     take &= take - 1;
                     match u.constants[stage].f.get(n) {
-                        Some(&v) => *banks[stage].f.get_mut(n).ok_or(Refusal::FloatsUncovered)? = v,
+                        Some(&v) => banks.set_float(stage, n, v)?,
                         None => device[stage][word] |= 1 << (n % 64),
                     }
                 }
@@ -895,7 +941,7 @@ fn fill_from_uploads(banks: &mut [Constants; 2], mut missing: [[u64; 4]; 2], upl
 /// Fill the `missing` float registers with `value(stage, register)`; a
 /// register outside the bank or without a value refuses the draw.
 fn fill_registers(
-    banks: &mut [Constants; 2],
+    banks: &mut CowBanks,
     missing: [[u64; 4]; 2],
     value: impl Fn(usize, usize) -> Option<[u32; 4]>,
 ) -> Result<(), Refusal> {
@@ -905,7 +951,7 @@ fn fill_registers(
             while m != 0 {
                 let n = word * 64 + m.trailing_zeros() as usize;
                 m &= m - 1;
-                *banks[stage].f.get_mut(n).ok_or(Refusal::FloatsUncovered)? = value(stage, n).ok_or(Refusal::FloatsUncovered)?;
+                banks.set_float(stage, n, value(stage, n).ok_or(Refusal::FloatsUncovered)?)?;
             }
         }
     }
@@ -1042,6 +1088,30 @@ impl Mirror {
     fn textures(&self, sh: &Shadow, c: &mut Caches) -> Arc<[TextureBinding]> {
         let mut m = self.clone();
         m.apply(sh);
+        // the lists by the bound slots, their textures and sampler states
+        // (L180: the draws' texture sets repeat)
+        let key = {
+            use std::hash::Hasher;
+            let mut h = crate::fasthash::FxHasher::default();
+            for i in 0..21 {
+                let t = m.textures[i];
+                if t != 0 {
+                    h.write_u32(i as u32);
+                    h.write_u32(t);
+                    for &s in &m.rows[i] {
+                        h.write_u32(s);
+                    }
+                }
+            }
+            h.finish()
+        };
+        // this frame's list of the same slots: the same list (a texture's
+        // information is fixed within a frame), once the slots confirm it
+        if let Some((seen, list)) = c.texture_lists.get(&key) {
+            if *seen == c.frame && same_slots(&m, list, &c.textures) {
+                return list.clone();
+            }
+        }
         let found: [Option<TextureBinding>; 21] = std::array::from_fn(|i| {
             let h = m.textures[i];
             (h != 0)
@@ -1049,21 +1119,8 @@ impl Mirror {
                 .flatten()
                 .map(|info| TextureBinding { sampler: stage_of(i), resource: h, states: m.rows[i], ..info })
         });
-        // a list of the same content used lately (L180: the draws' texture
-        // sets repeat; no allocation, and no drop later)
-        let key = {
-            use std::hash::Hasher;
-            let mut h = crate::fasthash::FxHasher::default();
-            for t in found.iter().flatten() {
-                h.write_u32(t.sampler);
-                h.write_u32(t.resource);
-                h.write_u32(t.format ^ t.width << 8 ^ t.height << 20);
-                for &s in &t.states {
-                    h.write_u32(s);
-                }
-            }
-            h.finish()
-        };
+        // an earlier frame's list of the same content: kept (no allocation,
+        // and no drop later)
         if let Some((seen, list)) = c.texture_lists.get_mut(&key) {
             if list.iter().eq(found.iter().flatten()) {
                 *seen = c.frame;
@@ -1084,6 +1141,28 @@ impl Mirror {
         c.texture_lists.insert(key, (c.frame, list.clone()));
         list
     }
+}
+
+/// Whether `list` is what the slots of `m` make this frame: each bound
+/// slot in it, in order, with its texture and states, or its texture known
+/// this frame not to be a live one (`textures`).
+fn same_slots(m: &Mirror, list: &[TextureBinding], textures: &FxMap<u32, Option<TextureBinding>>) -> bool {
+    let mut k = 0;
+    for i in 0..21 {
+        let h = m.textures[i];
+        if h == 0 {
+            continue;
+        }
+        match list.get(k) {
+            Some(t) if t.sampler == stage_of(i) && t.resource == h && t.states == m.rows[i] => k += 1,
+            _ => {
+                if !matches!(textures.get(&h), Some(None)) {
+                    return false;
+                }
+            }
+        }
+    }
+    k == list.len()
 }
 
 // Translated from 0x00DAA8B0 (DDDA.exe 2017-12-13 Steam): its sampler and
@@ -1736,7 +1815,7 @@ fn skipped_registers(g: &G, meta: &MetaPart, binding: u32, previous: u32, shader
 }
 
 /// Copy the `skipped` registers of each stage from `source` into `banks`.
-fn copy_registers(banks: &mut [Constants; 2], skipped: &[([u64; 4], u16, u16); 2], source: [&Constants; 2]) -> Result<(), Refusal> {
+fn copy_registers(banks: &mut CowBanks, skipped: &[([u64; 4], u16, u16); 2], source: [&Constants; 2]) -> Result<(), Refusal> {
     for stage in 0..2 {
         let (floats, ints, bools) = skipped[stage];
         let src = source[stage];
@@ -1745,17 +1824,17 @@ fn copy_registers(banks: &mut [Constants; 2], skipped: &[([u64; 4], u16, u16); 2
             while m != 0 {
                 let n = word * 64 + m.trailing_zeros() as usize;
                 m &= m - 1;
-                if let Some(r) = banks[stage].f.get_mut(n) {
-                    *r = *src.f.get(n).ok_or(Refusal::FloatsUncovered)?;
+                if n < banks.bank(stage).f.len() {
+                    banks.set_float(stage, n, *src.f.get(n).ok_or(Refusal::FloatsUncovered)?)?;
                 }
             }
         }
         for n in 0..16 {
             if ints >> n & 1 != 0 {
-                banks[stage].i[n] = src.i[n];
+                banks.set_int(stage, n, src.i[n]);
             }
             if bools >> n & 1 != 0 {
-                banks[stage].b[n] = src.b[n];
+                banks.set_bool(stage, n, src.b[n]);
             }
         }
     }
@@ -1776,7 +1855,7 @@ fn held_registers(
         let constants = b.constants.clone();
         return Ok((b, constants));
     }
-    let mut banks = [(*b.constants[0]).clone(), (*b.constants[1]).clone()];
+    let mut banks = CowBanks::new(b.constants.clone());
     let covered = held.is_some_and(|h| {
         (0..2).all(|stage| {
             let floats = skipped[stage].0;
@@ -1785,20 +1864,15 @@ fn held_registers(
     });
     match held {
         Some(h) if covered => copy_registers(&mut banks, &skipped, [&h[0], &h[1]])?,
-        _ => {
-            let device_banks = objects(|o| match o.live.get(&device).map(|x| &x.kind) {
-                Some(Kind::Device(d)) => Some([(*d.state.vs).clone(), (*d.state.ps).clone()]),
-                _ => None,
-            })
-            .ok_or(Refusal::Device)?;
-            copy_registers(&mut banks, &skipped, [&device_banks[0], &device_banks[1]])?;
-        }
+        _ => objects(|o| match o.live.get(&device).map(|x| &x.kind) {
+            Some(Kind::Device(d)) => copy_registers(&mut banks, &skipped, [&d.state.vs, &d.state.ps]),
+            _ => Err(Refusal::Device),
+        })?,
     }
-    if *b.constants[0] == banks[0] && *b.constants[1] == banks[1] {
+    let Some([vs, ps]) = banks.finish() else {
         let constants = b.constants.clone();
         return Ok((b, constants));
-    }
-    let [vs, ps] = banks;
+    };
     let constants = [Arc::new(vs), Arc::new(ps)];
     let part = Arc::new(BindingPart {
         meta: b.meta.clone(),
@@ -1810,7 +1884,6 @@ fn held_registers(
     });
     Ok((part, constants))
 }
-
 
 /// Make a taken draw's sampler section effects: the context words and the
 /// device calls.
@@ -2896,18 +2969,22 @@ mod tests {
         let mut uploads = Uploads::default();
         uploads.add(&binding_writing(8, 0, 1));
         uploads.add(&binding_writing(6, 0, 2));
-        let mut banks = [(*part.constants[0]).clone(), (*part.constants[1]).clone()];
+        let mut banks = CowBanks::new(part.constants.clone());
         let left = fill_from_uploads(&mut banks, part.uncovered, &uploads).unwrap();
         assert_eq!(left, [[0; 4]; 2]);
         let expected: Vec<[u32; 4]> = (0..8).map(|k| [if k < 6 { 2 } else { 1 }, k, 0, 0]).collect();
-        assert_eq!(banks[0].f[..8], expected[..]);
-        assert_eq!(banks[0].f[8..], part.constants[0].f[8..]);
+        assert_eq!(banks.bank(0).f[..8], expected[..]);
+        assert_eq!(banks.bank(0).f[8..], part.constants[0].f[8..]);
         // nothing pending: all from the device
         let left = fill_from_uploads(&mut banks, part.uncovered, &Uploads::default()).unwrap();
         assert_eq!(left, part.uncovered);
         fill_registers(&mut banks, left, |stage, n| Some([stage as u32, n as u32, 9, 9])).unwrap();
+        // L180: unchanged registers copy nothing
+        let mut same = CowBanks::new(part.constants.clone());
+        fill_registers(&mut same, left, |stage, n| Some(part.constants[stage].f[n])).unwrap();
+        assert!(same.finish().is_none());
         let expected: Vec<[u32; 4]> = (0..8).map(|k| [0, k, 9, 9]).collect();
-        assert_eq!(banks[0].f[..8], expected[..]);
+        assert_eq!(banks.bank(0).f[..8], expected[..]);
         // no device value: refused
         assert_eq!(fill_registers(&mut banks, left, |_, _| None), Err(Refusal::FloatsUncovered));
     }
