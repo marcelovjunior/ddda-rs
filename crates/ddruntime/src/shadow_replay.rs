@@ -1148,6 +1148,7 @@ fn compare_replays(
     // Diagnose the independent state gate even when a stream difference stops
     // acceptance first. These categories never exempt bytes from comparison.
     let mut state_differences = BTreeMap::<&str, (usize, u32)>::new();
+    let mut other_words = std::collections::BTreeSet::new();
     let render = input
         .probe(0x018d08f4, 4, false)
         .ok()
@@ -1192,9 +1193,25 @@ fn compare_replays(
             };
             let row = state_differences.entry(category).or_insert((0, address));
             row.0 += 1;
+            if category == "other state" && other_words.len() < 24 {
+                other_words.insert(address & !3);
+            }
         }
     }
     eprintln!("parallel-shadow state differences (byte count, first address)={state_differences:#x?}");
+    for address in other_words {
+        let word = |writes: &BTreeMap<u32, u8>| {
+            u32::from_le_bytes(std::array::from_fn(|i| {
+                let at = address + i as u32;
+                writes.get(&at).copied().unwrap_or_else(|| input.u8(at))
+            }))
+        };
+        eprintln!(
+            "parallel-shadow other state {address:#x} serial={:#x} parallel={:#x}",
+            word(&results[0].2),
+            word(&results[1].2)
+        );
+    }
     if let Some(diff) = results[0].1.first_difference(&results[1].1) {
         fn entry<'a>(
             stream: &'a mtcore::shadow_lanes::StreamSnapshot,
