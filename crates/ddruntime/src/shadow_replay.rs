@@ -463,7 +463,31 @@ fn trace_entry(m: &mut dyn Mem, cpu: &mut Cpu) {
     let body = *current().raw.get(&function).expect("traced function body");
     body(m, cpu);
 }
+/// Normalized replays (claude-9, docs/tasks/L172): sSceneExt::vf16
+/// 0x0049B1A0 builds its 0x190-byte light constant block in four arrays of
+/// its stack frame and copies them whole, filling only the entries of the
+/// lights it found (crates/mtdraw/src/lights.rs, L176): the rest is whatever
+/// the stack held, undefined in the original (and different on a lane's
+/// stack). A normalized replay zeroes those arrays on entry, so both runs
+/// copy the same zeros there; everything vf16 computes is unchanged. The
+/// plain serial replay (checked against the live run) is not normalized.
+static NORMALIZE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const SCENE_LIGHTS: u32 = 0x0049_b1a0;
+fn scene_lights_normalized(m: &mut dyn Mem, cpu: &mut Cpu) {
+    // the frame: ebp = esp - 4, aligned to 16, 0x224 bytes of locals, three pushes
+    let s = ((cpu.esp.wrapping_sub(4) & !0xf).wrapping_sub(0x224)).wrapping_sub(12);
+    for (from, bytes) in [(0x20u32, 0x10u32), (0xa0, 0x80), (0x130, 0x80), (0x1b0, 0x80)] {
+        for k in (0..bytes).step_by(4) {
+            m.set_u32(s.wrapping_add(from + k), 0);
+        }
+    }
+    let body = *current().raw.get(&SCENE_LIGHTS).expect("0x0049B1A0 body");
+    body(m, cpu);
+}
 fn resolve(target: u32) -> LiftFn {
+    if target == SCENE_LIGHTS && NORMALIZE.load(std::sync::atomic::Ordering::Relaxed) {
+        return scene_lights_normalized;
+    }
     if traced().is_some_and(|(f, _)| f == target) {
         return trace_entry;
     }
@@ -1119,13 +1143,16 @@ fn compare_replays(
         Arc::new(input.with_writes(&bytes))
     };
     let definedness = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_NO_POISON").is_none();
-    let runs: Vec<(bool, Option<u8>)> = if definedness {
-        vec![(false, None), (true, None), (false, Some(0x00)), (false, Some(0xff))]
-    } else {
-        vec![(false, None), (true, None)]
-    };
+    // (parallel, poison, normalized): the plain serial run first (checked
+    // against the live run), then the normalized serial and parallel runs
+    // that are compared, then the poisoned (normalized) serial runs
+    let mut runs: Vec<(bool, Option<u8>, bool)> = vec![(false, None, false), (false, None, true), (true, None, true)];
+    if definedness {
+        runs.extend([(false, Some(0x00), true), (false, Some(0xff), true)]);
+    }
     let mut results = Vec::new();
-    for (parallel, poison) in runs {
+    for (parallel, poison, normalized) in runs {
+        NORMALIZE.store(normalized, std::sync::atomic::Ordering::Relaxed);
         let input = poison.map_or_else(|| input.clone(), |fill| poisoned(&input, fill));
         let (input, raw, mut cpu, stack) = (input, raw.clone(), incoming.clone(), stack.clone());
         let handle = std::thread::Builder::new()
@@ -1257,7 +1284,7 @@ fn compare_replays(
                 |e| format!("replay rejected: {e:?}"),
             )
         })??;
-        if !parallel && poison.is_none() {
+        if !parallel && poison.is_none() && !normalized {
             if let Err(e) = verify_serial(&result) {
                 if !zero_arena {
                     return Err(e);
@@ -1271,6 +1298,10 @@ fn compare_replays(
         }
         results.push(result);
     }
+    NORMALIZE.store(false, std::sync::atomic::Ordering::Relaxed);
+    // the plain serial run only served the live check: compare the normalized
+    // runs (serial, parallel, then the poisoned serial runs)
+    results.remove(0);
     // Diagnose the independent state gate even when a stream difference stops
     // acceptance first. These categories never exempt bytes from comparison.
     let mut state_differences = BTreeMap::<&str, (usize, u32)>::new();
