@@ -11,6 +11,11 @@
 //! the first saved. Packages are names in nativePC\sa\DX9 (default: all,
 //! sorted); `skip` and `count` choose the shaders (distinct, in package
 //! order), so separate runs can use shaders no run has compiled yet.
+//!
+//! For translation/parse/validation/module phases without pipeline compilation:
+//! `cargo run --release -p ddgpu --example module_cost -- <skip> <count> <cache DIR>`.
+//! Production IR caching is on by default; `DDGPU_SHADER_CACHE_DISABLE=1`
+//! restores the WGSL module path for a before/after comparison.
 use d3d9cmd::{Constants, DrawCall, GraphicsBackend, Indices, Target, TexKind, TextureBinding, Upload, Vertices};
 use std::time::Instant;
 
