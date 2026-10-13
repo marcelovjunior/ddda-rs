@@ -33,6 +33,7 @@ pub mod machine;
 pub mod semantic;
 pub mod semantic_s1;
 pub mod semantic_s10;
+pub mod semantic_p2c;
 pub mod semantic_jobs;
 pub mod semantic_s4;
 pub mod semantic_s4_joint;
