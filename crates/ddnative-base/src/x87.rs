@@ -68,6 +68,17 @@ pub fn live_id() -> u64 {
     (crate::hooks::get().x87_live)()
 }
 
+/// `X87::supported` for every opcode byte 0xd8..=0xdf and ModRM, as a table.
+static SUPPORTED: [bool; 2048] = {
+    let mut t = [false; 2048];
+    let mut op = 0;
+    while op < 2048 {
+        t[op] = X87::supported(((op >> 8) as u16 + 0xd8) | ((op & 255) as u16) << 8);
+        op += 1;
+    }
+    t
+};
+
 pub struct X87 {
     /// The state while `home` is 0; otherwise stale.
     pub state: [u8; 108],
@@ -193,7 +204,11 @@ impl X87 {
     #[cfg(target_arch = "x86_64")]
     #[inline(never)]
     fn enter(&mut self, op: u16, data: *const u8) {
-        assert!(Self::supported(op), "unsupported x87 encoding {op:#x}");
+        let opcode = op & 255;
+        assert!(
+            (0xd8..=0xdf).contains(&opcode) && SUPPORTED[(((opcode - 0xd8) << 8) | (op >> 8)) as usize],
+            "unsupported x87 encoding {op:#x}"
+        );
         if op == 0x28d9 {
             // SAFETY: fldcw's operand buffer has at least two bytes.
             assert_eq!(unsafe { *data } & 0x3f, 0x3f, "unmasked guest x87 exceptions");
@@ -413,7 +428,7 @@ impl X87 {
         // SAFETY (both): the caller's opcode is one of real_memory's
         // whitelisted triples, and the operand pointer has `size` bytes
         // (a page-table pointer from `allowed`, or the `data` buffer).
-        if addr as usize % size == 0 {
+        if addr as usize & (size - 1) == 0 {
             if let Some(p) = crate::mem::allowed(pt, addr, size, perm) {
                 if live_id() != self.id {
                     self.acquire();
@@ -422,6 +437,14 @@ impl X87 {
                 return;
             }
         }
+        self.real_memory_buffered(m, pt, op, size, write, addr);
+    }
+
+    /// The operand copied through a buffer with the trait-checked accessors:
+    /// unaligned, across pages, lazy or faulting pages.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(never)]
+    fn real_memory_buffered(&mut self, m: &mut dyn crate::mem::Mem, pt: Option<std::ptr::NonNull<crate::mem::PageTable>>, op: u16, size: usize, write: bool, addr: u32) {
         let mut data = [0u32; 2];
         if !write {
             data[0] = m.fast_u32(pt, addr);
