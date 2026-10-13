@@ -4381,6 +4381,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtdraw"
+version = "0.1.0"
+dependencies = [
+ "ddlift-hot-00",
+ "ddnative-base",
+ "ddnative-host",
+ "mtcore",
+]
+
+[[package]]
 name = "mteffect"
 version = "0.1.0"
 dependencies = [
