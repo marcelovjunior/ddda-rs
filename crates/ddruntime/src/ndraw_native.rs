@@ -456,6 +456,30 @@ impl<'a> G<'a> {
     fn u8(&self, a: u32) -> u32 {
         self.pages.u8(self.m, a) as u32
     }
+    /// `out.len()` consecutive words from `at` (L180): one page-table check
+    /// per page, not per word; the same values as `u32` each.
+    fn words(&self, at: u32, out: &mut [u32]) {
+        use ddnative_base::mem::{load_at, PAGE, READ};
+        let mut k = 0;
+        while k < out.len() {
+            let a = at.wrapping_add(4 * k as u32);
+            let room = ((PAGE - a % PAGE) / 4) as usize;
+            let n = room.min(out.len() - k);
+            match (a % 4 == 0 && n > 0).then(|| self.pages.bytes(a, n * 4, READ)).flatten() {
+                Some(p) => {
+                    for (j, w) in out[k..k + n].iter_mut().enumerate() {
+                        // SAFETY: bytes() vouches for n * 4 bytes at p
+                        *w = unsafe { load_at(p.add(4 * j), 4) };
+                    }
+                    k += n;
+                }
+                None => {
+                    out[k] = self.u32(a);
+                    k += 1;
+                }
+            }
+        }
+    }
 }
 
 /// The render states the backend reads (crates/ddgpu `derive`/`try_draw`)
@@ -678,10 +702,18 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                 0 => {
                     let at = (v & !15).wrapping_add(u.offset * 4);
                     let count = if v & 15 != 0 { u.count.min((v & 15) * 16) } else { u.count };
-                    for i in 0..count {
-                        let r: [u32; 4] = std::array::from_fn(|j| g.u32(at.wrapping_add(i * 16 + j as u32 * 4)));
-                        let r = if u.convert { r.map(|x| (x as i32 as f32).to_bits()) } else { r };
-                        set_float(bank, w, u.register + i, r);
+                    // the registers read 16 at a time (one check a page)
+                    let mut words = [0u32; 64];
+                    let mut i = 0;
+                    while i < count {
+                        let n = (count - i).min(16);
+                        g.words(at.wrapping_add(i * 16), &mut words[..n as usize * 4]);
+                        for k in 0..n {
+                            let r: [u32; 4] = std::array::from_fn(|j| words[(k * 4) as usize + j]);
+                            let r = if u.convert { r.map(|x| (x as i32 as f32).to_bits()) } else { r };
+                            set_float(bank, w, u.register + i + k, r);
+                        }
+                        i += n;
                     }
                 }
                 1 => {
@@ -732,9 +764,11 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         _ => Arc::new(BindingPart {
             meta,
             alpha,
+            // a changed bank moves into the part (the scratch bank starts
+            // over: an allocation, not a copy of the whole bank)
             constants: std::array::from_fn(|stage| match previous {
                 Some(p) if *p.constants[stage] == banks[stage] => p.constants[stage].clone(),
-                _ => Arc::new(banks[stage].clone()),
+                _ => Arc::new(std::mem::take(&mut banks[stage])),
             }),
             written,
             native: Default::default(),
@@ -2030,11 +2064,13 @@ impl Native {
                 commit(m, &g.info, &mut g.caches, shadow, &d.textures);
                 g.uploads.add(&binding);
                 g.handled = true;
-                // an upload goes after the draws taken before it
+                // an upload goes after the draws taken before it; nothing
+                // the draw reads is dirty: nothing to flush (the D3D lock
+                // keeps the dirty set as it is meanwhile)
                 if objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
                     send_batch(&mut g.batch);
+                    crate::d3d9draw::flush_reads(m, reads_of(&d));
                 }
-                crate::d3d9draw::flush_reads(m, reads_of(&d));
                 g.batch.push(d);
                 crate::d3d9draw::count_draws(1);
                 t.taken += 1;
