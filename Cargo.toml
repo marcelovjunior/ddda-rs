@@ -547,6 +547,141 @@ incremental = false
 # `play-o0`: every lifted shard at opt-level 0 (the goal: generated code
 # fast enough without optimisation, short compiles for playtesting). Built
 # with RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Z threads=8 [-Z inline-mir=yes]".
+# `play-o1` (L104): every translated crate at opt-level 1, for the frame
+# rate (gameplay runs the game's code on several threads; at opt-level 0
+# it was ~40% of the render thread). Cold builds are long; a runtime change
+# rebuilds as fast as `play`.
+[profile.play-o1]
+inherits = "play"
+
+[profile.play-o1.package.ddlift-00]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-01]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-02]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-03]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-04]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-05]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-06]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-07]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-08]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-09]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-10]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-11]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-12]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-13]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-14]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-15]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-16]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-17]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-18]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-19]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-20]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-21]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-22]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-23]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-24]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-25]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-26]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-27]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-28]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-29]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-30]
+opt-level = 1
+incremental = false
+
+[profile.play-o1.package.ddlift-31]
+opt-level = 1
+incremental = false
+
 [profile.play-o0]
 inherits = "play"
 
