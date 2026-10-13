@@ -1,5 +1,18 @@
 # Phase 1 runtime proposal (R01)
 
+## L174 semantic material draw and dependency hash
+
+`DDRUNTIME_SEMANTIC=1` replaces E0E5E0 dependency hashing, 10655A0 material
+application and 1066C60 pass selection with ABI-level native Rust, keeping
+the original guest callees. It takes precedence over JOB_HASH at E0E5E0.
+1,168 synthetic original returns match in sparse and serial/atomic Pages
+memory; the isolated opt2 lifted draw bodies match the same 640 draw cases.
+All live memory is checked, including heap addresses below the guest stack.
+Draw benchmark medians improve 1.221–2.111x; this is isolated caller cost,
+not an FPS or image acceptance result. Defaults and inventory totals stay
+unchanged. Head-owned integration/game acceptance is next. See
+[L174 evidence and reproduction](tasks/L174-semantic-draw-b.md).
+
 ## L168 guest-memory backing experiment
 
 `DDNATIVE_BACKING=regions` opts into 2 MiB-aligned host regions with lazy

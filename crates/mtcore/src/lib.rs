@@ -31,6 +31,7 @@ pub mod job_lookup;
 pub mod job_shadow;
 pub mod machine;
 pub mod semantic;
+pub mod semantic_draw_b;
 pub mod object;
 pub mod property;
 pub mod tree;

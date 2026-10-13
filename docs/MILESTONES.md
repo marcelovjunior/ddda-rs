@@ -1,5 +1,21 @@
 # Milestones
 
+### L174 semantic material draw and dependency hash (2026-10-13)
+
+- `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
+  and 1066C60 pass selection; original guest callees retained. Defaults
+  unchanged; hash override takes precedence over JOB_HASH without duplicates.
+- 1,168 original synthetic returns pass ABI checks in sparse, serial Pages
+  and atomic Pages modes. Both isolated opt2 lifted draw bodies pass all
+  640 draw vectors; 197/197 and 377/377 original instructions covered.
+- 24/24 draw benchmark scenario medians improve: apply 1.546–2.111x,
+  selection 1.221–1.507x. Shared-host isolated results, no FPS/image claim.
+  Evidence and limitations: `docs/tasks/L174-semantic-draw-b.md`.
+- Runtime light: 255 pass, zero failures, seven ignored. Five ABI mutation
+  variants are rejected, including corrupted and extra heap writes below ESP.
+- Next: head merges registrations and validates the combined semantic train
+  against the native gate and matched image/critical-job capture.
+
 ### L162c job distribution and host scheduling (2026-10-13)
 
 - c31 h0 150-frame census: main 65,186 callbacks, six workers
