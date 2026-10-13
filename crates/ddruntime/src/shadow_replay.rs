@@ -1831,8 +1831,22 @@ fn compare_control_state(a: &Cpu, a_mxcsr: u32, b: &Cpu, b_mxcsr: u32) -> Result
     if a_mxcsr != b_mxcsr || a.mxcsr.0 != b.mxcsr.0 {
         return Err("MXCSR");
     }
-    if a.st.clone().state != b.st.clone().state {
-        let (x, y) = (a.st.clone().state, b.st.clone().state);
+    // x87: the environment (FNSAVE bytes 0..28: control, status with TOP,
+    // tag word, instruction and operand pointers) must be equal; register
+    // contents may differ only in registers tagged empty (11b), which no
+    // instruction can read (a stack fault): stale values left by different
+    // computations on the lanes' threads.
+    let (x, y) = (a.st.clone().state, b.st.clone().state);
+    let unreadable = |offset: usize| -> bool {
+        if offset < 28 || x[..28] != y[..28] {
+            return false;
+        }
+        let top = (u16::from_le_bytes([x[4], x[5]]) >> 11 & 7) as usize;
+        let tags = u16::from_le_bytes([x[8], x[9]]);
+        let physical = (top + (offset - 28) / 10) & 7;
+        tags >> (2 * physical) & 3 == 3
+    };
+    if (0..108).any(|i| x[i] != y[i] && !unreadable(i)) {
         let differing: Vec<String> = x.iter().zip(y.iter()).enumerate().filter(|(_, (p, q))| p != q).map(|(i, (p, q))| format!("{i}:{p:#04x}/{q:#04x}")).collect();
         eprintln!("parallel-shadow x87 image differs at (FNSAVE offset: serial/parallel) {differing:?}");
         return Err("x87 image");
