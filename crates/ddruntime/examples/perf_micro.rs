@@ -62,6 +62,8 @@ fn ns(t: Instant, n: u32) -> f64 {
 }
 
 fn main() {
+    // the game's main thread owns the guest lock: creating the runtime starts its time slice
+    let _ = ddruntime::threads::parallel();
     let mut mem = GuestMemory::new();
     mem.map(0x1000_0000, 0x10_0000, READ | WRITE).unwrap();
 
@@ -73,6 +75,22 @@ fn main() {
     registry.insert(0x0100_0020, Binding::LockFree(ddruntime::fastmem::memcpy)).unwrap();
     registry.insert(0x0100_0030, Binding::Integer(ddruntime::fastmem::memcpy)).unwrap();
     let registry = std::sync::Arc::new(registry);
+    // the floor of call_ext itself: a handler that only returns
+    {
+        x86::set_ext_calls(Some(Box::new(|m, c, _| just_return(m, c))));
+        let mut cpu = Cpu { esp: 0x1008_0000, ..Cpu::default() };
+        for round in 0..2 {
+            let t = Instant::now();
+            for _ in 0..N {
+                cpu.esp -= 4;
+                mem.set_u32(cpu.esp, 0x1234_5678);
+                x86::call_ext(&mut mem, &mut cpu, 0x0100_0010);
+            }
+            if round == 1 {
+                println!("call_ext -> trivial handler (push, ret): {:.2} ns per call", ns(t, N));
+            }
+        }
+    }
     registry.install();
     let mut cpu = Cpu { esp: 0x1008_0000, ..Cpu::default() };
     let t = Instant::now();
