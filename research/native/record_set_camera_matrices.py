@@ -22,7 +22,9 @@ import unicorn.x86_const as x  # noqa: E402
 
 ENTRY, LENGTH = 0x00FF2EE0, 0x32A3  # through RET 0x10 at 0x00FF6180
 VIEWPORT_SETUP, LOG_F, LOG_D, PAGES, MEMCPY = 0x00FF04C0, 0x012F45C4, 0x012F439E, 0x00DA7D70, 0x012EFEA0
-ARGS = {VIEWPORT_SETUP: 1, LOG_F: 0, LOG_D: 0, PAGES: 1, MEMCPY: 3}
+ARGS = {PAGES: 1, MEMCPY: 3}
+# the real code of these runs inside the oracle (the port folds them in natively)
+REAL = ((VIEWPORT_SETUP, 0x2B2), (LOG_F, 0x179), (LOG_D, 0x226))
 THIS, THIS_SIZE = 0x20000000, 0x2000
 DESC_TABLE, R1, R2, SOURCE = 0x21000000, 0x21001000, 0x21002000, 0x21003000
 MATS, VIEWPORT = 0x22000000, 0x22001000
@@ -45,12 +47,13 @@ def as_float(bits):
 class Oracle:
     def __init__(self):
         uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
-        pages = [(ENTRY & ~0xFFF, ((ENTRY + LENGTH) | 0xFFF) + 1 - (ENTRY & ~0xFFF))]
-        for a in (VIEWPORT_SETUP, LOG_F, LOG_D, PAGES, MEMCPY):
-            pages.append((a & ~0xFFF, 0x1000))
-        pages += [(p, 0x1000) for p in DATA_PAGES]
-        pages += [(THIS, THIS_SIZE), (DESC_TABLE, 0x4000), (MATS, 0x2000), (ARENA, ARENA_SIZE), (STACK, 0x10000), (h.RET, 0x1000)]
+        _, sections = h.image()
+        for va, bytes_ in sections:
+            start = va & ~0xFFF
+            uc.mem_map(start, ((va + len(bytes_) - start) + 0xFFF) & ~0xFFF)
+            uc.mem_write(va, bytes_)
         mapped = set()
+        pages = [(0, 0x1000), (THIS, THIS_SIZE), (DESC_TABLE, 0x4000), (MATS, 0x2000), (ARENA, ARENA_SIZE), (STACK, 0x10000), (h.RET, 0x1000)]
         for address, size in pages:
             for page in range(address, address + size, 0x1000):
                 if page not in mapped:
@@ -58,12 +61,7 @@ class Oracle:
                     mapped.add(page)
         assert h.code(ENTRY + LENGTH - 3, 3) == b'\xc2\x10\x00', h.code(ENTRY + LENGTH - 3, 3)
         uc.mem_write(ENTRY, h.code(ENTRY, LENGTH))
-        for p in DATA_PAGES:
-            try:
-                uc.mem_write(p, h.code(p, 0x1000))
-            except Exception as e:  # not file-backed: leave zero
-                print('data page', hex(p), e)
-        for a in (VIEWPORT_SETUP, LOG_F, LOG_D, PAGES, MEMCPY):
+        for a in (PAGES, MEMCPY):
             uc.mem_write(a, b'\xc3')
         uc.hook_add(UC_HOOK_MEM_READ, self.read)
         uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
@@ -107,8 +105,10 @@ class Oracle:
             uc.emu_stop()
             return
         if address not in ARGS:
-            assert ENTRY <= address < ENTRY + LENGTH, hex(address)
-            self.visited.add(address)
+            if ENTRY <= address < ENTRY + LENGTH:
+                self.visited.add(address)
+            else:
+                assert any(a <= address < a + n for a, n in REAL), hex(address)
             return
         rng = self.rng
         esp = uc.reg_read(x.UC_X86_REG_ESP)
@@ -221,6 +221,15 @@ class Oracle:
         for descriptor in (R1, R2):
             uc.mem_write(descriptor + 0x18, struct.pack('<H', rng.choice((0, 3, 8, 20, 40, rng.randrange(0x80)))))
             self.w32(descriptor + 0x24, SOURCE)
+        # the viewport block: render target size, previous rect and block, descriptor
+        self.w32(THIS + 0x10C, rng.choice((0, 0x04380780, 0x03000400, 0x00400040, rng.getrandbits(32))))
+        self.w32(THIS + 0xC8, rng.getrandbits(32))
+        self.w32(THIS + 0xC90, SOURCE)
+        self.w32(DESC_TABLE + 0x54C, DESC_TABLE + 0x3000)
+        uc.mem_write(DESC_TABLE + 0x3018, struct.pack('<H', rng.choice((0, 4, 8, 20, rng.randrange(0x80)))))
+        uc.mem_write(VIEWPORT, struct.pack('<4i', *[rng.choice((0, 1, 100, 640, 1920, -20, rng.randrange(-500, 2000))) for _ in range(4)]))
+        if rng.random() < 0.2:
+            uc.mem_write(THIS + 0xCC, bytes(uc.mem_read(VIEWPORT, 16)))
         self.w32(THIS + 0x114, rng.getrandbits(32))
         self.w32(THIS + 0x154, rng.getrandbits(32))
         cursor = ARENA + 16 * rng.randrange(0, 0x400)

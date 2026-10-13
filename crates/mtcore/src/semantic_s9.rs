@@ -1469,53 +1469,22 @@ pub fn set_camera_matrices(m: &mut dyn Mem, c: &mut Cpu) {
     rotation[13] = -((a[12] * rotation[1] + a[13] * rotation[5]) + a[14] * rotation[9]);
     rotation[14] = -((a[12] * rotation[2] + a[13] * rotation[6]) + a[14] * rotation[10]);
 
-    // The viewport setup (jitter/scale block at this + 0xC90).
-    let mut call = |m: &mut dyn Mem,
-                    c: &mut Cpu,
-                    target: u32,
-                    this: u32,
-                    args: &[u32],
-                    back: u32,
-                    xmm0: Option<[u32; 2]>|
-     -> (u32, [u32; 2]) {
-        crate::semantic::call_from(
-            m,
-            c,
-            pg,
-            frame,
-            this,
-            args,
-            back,
-            move |m: &mut dyn Mem, c: &mut Cpu| {
-                if let Some(v) = xmm0 {
-                    c.xmm[0] = [v[0], v[1], 0, 0];
-                }
-                ddnative_base::x86::call_ext(m, c, target)
-            },
-        );
-        (c.eax, [c.xmm[0][0], c.xmm[0][1]])
-    };
-    call(m, c, 0x00ff_04c0, this, &[viewport], 0x00ff_4a67, None);
+    // The viewport setup (constant block at this + 0xC90), called directly
+    // with the original's call frame: argument at frame - 4, return address
+    // at frame - 8.
+    pg.set_u32(m, frame.wrapping_sub(4), viewport);
+    pg.set_u32(m, frame.wrapping_sub(8), 0x00ff_4a67);
+    c.esp = frame.wrapping_sub(8);
+    c.ecx = this;
+    set_viewport_rect(m, c);
 
     // The depth scale from the projection's z terms.
     let b10 = float(m, projection + 0x28);
     let depth_ratio = float(m, projection + 0x38) / b10;
     let remap = (-(b10 * depth_ratio)) / ((-b10) - 1.0);
     let clamped = if remap > 1.0 { remap } else { 1.0 };
-    let (_, log_result) = call(
-        m,
-        c,
-        0x012f_45c4,
-        this,
-        &[],
-        0x00ff_4ac6,
-        Some([(clamped + 1.0).to_bits(), 0]),
-    );
-    let natural_log = f32::from_bits(log_result[0]);
-    let two = word(m, 0x0161_ca50);
-    let two_high = word(m, 0x0161_ca54);
-    let (_, ln2) = call(m, c, 0x012f_439e, this, &[], 0x00ff_4ad9, Some([two, two_high]));
-    let ln2 = f64::from_bits(ln2[0] as u64 | (ln2[1] as u64) << 32) as f32;
+    let natural_log = crt_logf(m, pg, clamped + 1.0);
+    let ln2 = crt_log(m, pg, f64::from_bits(read64(m, pg, 0x0161_ca50))) as f32;
     let depth_scale = natural_log / ln2;
     let depth_scale_inverse = 1.0 / depth_scale;
     let mirrored = 0.0 > float(m, projection + 0x28);
@@ -1750,4 +1719,172 @@ pub fn set_viewport_rect(m: &mut dyn Mem, c: &mut Cpu) {
         put(m, 0x24, one / height as f32);
     }
     c.esp = entry.wrapping_add(8);
+}
+
+fn read64(m: &dyn Mem, pg: Pages, address: u32) -> u64 {
+    pg.u32(m, address) as u64 | (pg.u32(m, address.wrapping_add(4)) as u64) << 32
+}
+
+fn read_f64(m: &dyn Mem, pg: Pages, address: u32) -> f64 {
+    f64::from_bits(read64(m, pg, address))
+}
+
+/// A 128-bit table row as two `u64` lanes.
+fn read128(m: &dyn Mem, pg: Pages, address: u32) -> [u64; 2] {
+    [read64(m, pg, address), read64(m, pg, address.wrapping_add(8))]
+}
+
+/// 0x012F45C4, the CRT `logf` (argument in XMM0 as `f32`, result in XMM0):
+/// the natural logarithm of a single-precision float, evaluated in double
+/// precision from a 64-entry table and a short polynomial.
+///
+/// The argument's magnitude bits give the table row and the binary
+/// exponent; negative numbers and NaNs return NaN, zero returns the CRT's
+/// -infinity constant. Denormal arguments are scaled by a constant first.
+/// All constants and tables are read from guest memory (0x01454840..),
+/// bit for bit as the original.
+// Translated from 0x012F45C4 (DDDA.exe 2017-12-13 Steam)
+pub fn crt_logf(m: &dyn Mem, pg: Pages, x: f32) -> f32 {
+    const ZERO_RESULT: u32 = 0x0145_4ca0;
+    let bits = x.to_bits();
+    let abs = bits & pg.u32(m, 0x0145_4ca8);
+    let mantissa_mask = read64(m, pg, 0x0145_4c80);
+    let exponent_bits = read64(m, pg, 0x0145_4c88);
+    let mut word = (abs >> 16) & 0xffff;
+    let mut shifted = mantissa_mask & ((abs as u64) << 29) | exponent_bits;
+    let mut exponent_source = abs;
+    let mut bias = 0x3f3f_u32;
+    let range = (word.wrapping_sub(0x80)) | (0x7f7f_u32.wrapping_sub(word));
+    if range >= 0x8000 {
+        if bits < 0x8000_0000 {
+            if bits >= 0x7f80_0000 {
+                return x + x;
+            }
+            if bits == 0 {
+                return f32::from_bits(pg.u32(m, ZERO_RESULT));
+            }
+            // positive denormal: scale into the normal range
+            let scaled = f32::from_bits(abs) * f32::from_bits(pg.u32(m, 0x0145_4c98));
+            exponent_source = scaled.to_bits();
+            word = exponent_source >> 16;
+            shifted = mantissa_mask & (scaled as f64).to_bits() | exponent_bits;
+            bias = 0x5f3f;
+        } else {
+            if bits == 0x8000_0000 {
+                return f32::from_bits(pg.u32(m, ZERO_RESULT));
+            }
+            if bits & 0x7fff_ffff >= 0x7f80_0001 {
+                return x + x;
+            }
+            return x + f32::from_bits(pg.u32(m, 0x0145_4c9c));
+        }
+    }
+    let row = (((word & 0x7f) + 1) & 0xfe) * 4;
+    let base = read_f64(m, pg, 0x0145_4a70);
+    let reduced = f64::from_bits(shifted) * read_f64(m, pg, 0x0145_4a70 + row) - base;
+    let exponent = ((((exponent_source >> 16) as i32).wrapping_sub(bias as i32)) >> 7) as f64;
+    let table_log = read_f64(m, pg, 0x0145_4860 + row);
+    let mut p = read_f64(m, pg, 0x0145_4840) * reduced;
+    let square = reduced * reduced;
+    p += read_f64(m, pg, 0x0145_4848);
+    let scaled_exponent = exponent * read_f64(m, pg, 0x0145_4c90);
+    let cubic = reduced * square;
+    let mut q = read_f64(m, pg, 0x0145_4850) * square;
+    q += reduced;
+    let cubic = cubic * p;
+    let head = table_log + scaled_exponent;
+    q += cubic;
+    (head + q) as f32
+}
+
+/// 0x012F439E, the CRT `log` (argument in XMM0 as `f64`, result in XMM0):
+/// the natural logarithm of a double, from a 128-row table pair and a
+/// packed polynomial (two lanes: the high lane carries correction terms
+/// that are added last).
+///
+/// Zero returns the CRT's -infinity constant; negative numbers and
+/// -infinity return the default NaN; NaN and +infinity are returned as
+/// `x + x` / the infinity constant; denormals are scaled by 2^52 and
+/// evaluated with the exponent biased by -52. All constants and tables
+/// are read from guest memory (0x01453F50..), bit for bit as the original.
+// Translated from 0x012F439E (DDDA.exe 2017-12-13 Steam)
+pub fn crt_log(m: &dyn Mem, pg: Pages, input: f64) -> f64 {
+    let f = f64::from_bits;
+    let mut x = input;
+    let mut bias_adjust = 0i32;
+    loop {
+        let bits = x.to_bits();
+        let sign_exponent = ((bits >> 52) & 0xffff) as u32;
+        let mask = read128(m, pg, 0x0145_3f50);
+        let one_bits = read128(m, pg, 0x0145_3fb0);
+        let rounder = read128(m, pg, 0x0145_3f60);
+        let high_mask = read128(m, pg, 0x0145_3f70);
+        // the mantissa with the exponent of 1.0, in both lanes
+        let mantissa = [bits & mask[0] | one_bits[0], bits & mask[1] | one_bits[1]];
+        let biased = f(rounder[0]) + f(mantissa[0]);
+        let row = ((biased.to_bits() & 0xffff) as u32) & 0x7f0;
+        let scale = read128(m, pg, 0x0145_4020 + row);
+        let log_row = read128(m, pg, 0x0145_4430 + row);
+        let head = [high_mask[0] & mantissa[0], high_mask[1] & mantissa[1]];
+        let tail = [f(mantissa[0]) - f(head[0]), f(mantissa[1]) - f(head[1])];
+        let head_scaled = [
+            f(head[0]) * f(scale[0]) - f(one_bits[0]),
+            f(head[1]) * f(scale[1]) - f(one_bits[1]),
+        ];
+        // only the low lane of the table row takes the head term
+        let row_low = f(log_row[0]) + head_scaled[0];
+        let tail_scaled = [tail[0] * f(scale[0]), tail[1] * f(scale[1])];
+        let r = [tail_scaled[0] + head_scaled[0], tail_scaled[1] + head_scaled[1]];
+        let ecx = (sign_exponent & 0xfff).wrapping_sub(1);
+        if ecx > 0x7fd {
+            // zero, denormal, negative, infinity, NaN
+            let zero = read128(m, pg, 0x0145_3fc0);
+            if f(zero[0]) == x {
+                return read_f64(m, pg, 0x0145_3fe0);
+            }
+            if ecx == u32::MAX {
+                x *= read_f64(m, pg, 0x0145_3fd0);
+                bias_adjust = -0x34;
+                continue;
+            }
+            if ecx > 0x7fe {
+                if (ecx.wrapping_add(1) & 0x7ff) < 0x7ff {
+                    return f64::from_bits(0xfff8_0000_0000_0000);
+                }
+                if (bits as u32) | ((bits >> 32) as u32 & 0xfffff) == 0 {
+                    return f64::from_bits(0xfff8_0000_0000_0000);
+                }
+                return x + x;
+            }
+            if f(one_bits[0]) == f(bits & mask[0] | one_bits[0]) {
+                return read_f64(m, pg, 0x0145_3fe8);
+            }
+            return x + x;
+        }
+        let exponent = ecx.wrapping_sub(0x3fe).wrapping_add(bias_adjust as u32) as i32;
+        let exponent_f = exponent as f64;
+        let row_sum = row.wrapping_add((exponent as u32) << 10);
+        let select_offset = if row_sum == 0 { 0x10 } else { 0 };
+        let c3 = read128(m, pg, 0x0145_3ff0);
+        let c4 = read128(m, pg, 0x0145_4000);
+        let c5 = read128(m, pg, 0x0145_4010);
+        let c_exp = read128(m, pg, 0x0145_3f80);
+        let select = read128(m, pg, 0x0145_3f90 + select_offset);
+        let mut square = [r[0] * r[0], r[1] * r[1]];
+        let poly = [f(c3[0]) * r[0] + f(c4[0]), f(c3[1]) * r[1] + f(c4[1])];
+        square[0] *= square[0]; // MULSD: low lane only
+        let exp_part = [exponent_f * f(c_exp[0]), exponent_f * f(c_exp[1])];
+        let masked = [
+            tail_scaled[0].to_bits() & select[0],
+            tail_scaled[1].to_bits() & select[1],
+        ];
+        let mut acc = [row_low + exp_part[0], f(log_row[1]) + exp_part[1]];
+        acc = [acc[0] + f(masked[0]), acc[1] + f(masked[1])];
+        let poly = [poly[0] * r[0], poly[1] * r[1]];
+        square[0] *= r[0]; // MULSD: low lane only
+        let poly = [poly[0] + f(c5[0]), poly[1] + f(c5[1])];
+        let high = acc[1];
+        let product = [poly[0] * square[0], poly[1] * square[1]];
+        return product[0] + product[1] + high + acc[0];
+    }
 }
