@@ -45,6 +45,7 @@ impl Snapshot {
     /// Consumers must prove all published references leave this storage before
     /// dropping it. The address preference and bound are host policy.
     pub(crate) fn private_arena(&self, length: u32) -> Result<(Self, Range<u32>), Reject> {
+        let fill = PRIVATE_FILL.load(std::sync::atomic::Ordering::Relaxed);
         if length == 0 || length > 64 << 20 {
             return Err(Reject::InvalidPrivateRange);
         }
@@ -62,7 +63,7 @@ impl Snapshot {
                         result.pages.insert(
                             page,
                             Arc::new(Page {
-                                bytes: Box::new([0; PAGE as usize]),
+                                bytes: Box::new([fill; PAGE as usize]),
                                 permissions: READ | WRITE,
                             }),
                         );
@@ -532,6 +533,10 @@ pub(crate) enum AuditError {
 /// ordered lane merge on private memory. A successful result is a command
 /// stream and non-scratch memory check; it is not an ABI or gameplay acceptance.
 /// All three closures must satisfy execute()'s side-effect confinement rule.
+/// The bytes fresh private storage starts with: 0, or a poison pattern in
+/// the replay's definedness runs (shadow_replay).
+pub(crate) static PRIVATE_FILL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
 pub(crate) fn audit<T: Send, S, F, J>(
     input: Arc<Snapshot>,
     jobs: usize,
