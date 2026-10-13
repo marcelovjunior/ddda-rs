@@ -28,9 +28,11 @@
 - Worker now executes through native::Device with immutable state/shader /
   texture-group identity caches on the same device/queue. **4 Vulkan GPU tests
   pass** (16 backend/host-driver image cases plus FIFO/resource/rejection tests),
-  **14 ddgpu CPU tests pass**. Per-job compact recorder; persistent resident /
-  bundle reuse and game/FPS comparison remain separate work.
-- L127 shadow hooks compiled; next: end-to-end shadow gate and head N2 run.
+  **14 ddgpu CPU tests pass**. Persistent resident recorder and finisher
+  handoff now compile; focused GPU gate pending shared HEAVY_BIG availability.
+- L127 five shadow integration tests pass; runtime light **182 pass / one
+  inherited gamma-reset failure / three ignored**. Next: final resident /
+  finisher GPU gate, then head N2 image/FPS run.
   Details: `docs/tasks/L126-native-worker.md`.
 
 ### L123 native resident constants and bundles (2026-10-13)

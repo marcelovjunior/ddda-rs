@@ -360,6 +360,10 @@ pub struct NativeJobStats {
     pub rejected: u64,
     pub draws: u64,
     pub passes: u64,
+    pub upload_bytes: u64,
+    pub dirty_registers: u64,
+    pub bundle_builds: u64,
+    pub bundle_hits: u64,
 }
 struct ShaderEntry {
     _tokens: Arc<[u32]>,
@@ -387,6 +391,8 @@ struct FixedEntry {
 }
 pub(crate) struct Worker {
     device: n::Device,
+    recording: Option<n::RecorderState>,
+    constants: FxMap<n::Shader, n::ConstantBuffer>,
     shaders: FxMap<(usize, n::Stage), ShaderEntry>,
     inputs: FxMap<InputKey, InputEntry>,
     fixed: FxMap<NativeStateIdentity, Vec<FixedEntry>>,
@@ -425,8 +431,9 @@ impl WgpuBackend {
             self.native_stats.rejected += 1;
             return Err(job);
         }
-        // Submit earlier D3D9 draws before imports or native queue writes.
-        self.flush();
+        // Hand off earlier D3D9 draws. Native preparation/recording can overlap
+        // their finish; wait before the first native constant queue write.
+        self.flush_async();
         let mut worker = self.native_worker.take().unwrap_or_else(|| Worker::new(self));
         let result = worker.run(self, &job, overrides);
         self.native_worker = Some(worker);
@@ -457,6 +464,8 @@ impl Worker {
     fn new(backend: &WgpuBackend) -> Self {
         Self {
             device: n::Device::new(backend.device.clone(), backend.queue.clone()),
+            recording: None,
+            constants: Default::default(),
             shaders: Default::default(),
             inputs: Default::default(),
             fixed: Default::default(),
@@ -980,10 +989,27 @@ impl Worker {
         if bytes > backend.device.limits().max_buffer_size || bytes > u32::MAX as u64 {
             return Err("native job exceeds constant arena limit".into());
         }
-        // One per job for N2 integration; Device identity caches persist. L123
-        // resident/bundle reuse requires a later persistent recorder context.
-        let mut recorder = n::Recorder::new(&self.device, bytes);
-        let mut constants = FxMap::default();
+        let mut recorder = match self.recording.take() {
+            Some(state) if state.uniform_capacity() >= bytes => n::Recorder::from_state(&self.device, state),
+            _ => {
+                self.constants.clear();
+                let resident_limit =
+                    ((backend.device.limits().max_storage_buffer_binding_size - 16) * 4 / 5) / 256 * 256;
+                let resident = bytes.next_multiple_of(256) <= resident_limit;
+                let capacity = if resident {
+                    bytes.next_power_of_two().min(resident_limit)
+                } else {
+                    bytes
+                };
+                let mut recorder = n::Recorder::with_resident_constants(&self.device, capacity, resident);
+                // Host opt-in: exact repeated job sequences benefit; alternating
+                // sequences can rebuild bundles, so do not assume a game win.
+                recorder.enable_bundles(std::env::var_os("DDGPU_NATIVE_BUNDLES").is_some_and(|s| s == "1"));
+                recorder
+            }
+        };
+        let before = recorder.stats;
+        let constants = &mut self.constants;
         for p in &prepared {
             for d in &p.draws {
                 for shader in d.shaders {
@@ -1050,7 +1076,28 @@ impl Worker {
             }
             recorder.end_pass();
         }
-        recorder.submit();
+        // L124 finisher owns the expensive encoder finish. Queue writes may
+        // only follow submission of the previous arena users. No GPU wait.
+        backend.wait_finisher();
+        let (scatter, encoder) = recorder.finish_parts();
+        let after = recorder.stats;
+        self.recording = Some(recorder.into_state());
+        backend.native_stats.upload_bytes += after.upload_bytes - before.upload_bytes;
+        backend.native_stats.dirty_registers += after.dirty_registers - before.dirty_registers;
+        backend.native_stats.bundle_builds += after.bundle_builds - before.bundle_builds;
+        backend.native_stats.bundle_hits += after.bundle_hits - before.bundle_hits;
+        if let Some(scatter) = scatter {
+            backend.queue.submit([scatter]);
+            backend.submissions.set(backend.submissions.get() + 1);
+        }
+        if let Some(encoder) = encoder {
+            if let Some(finisher) = &backend.finisher {
+                finisher.submit(encoder);
+            } else {
+                backend.queue.submit([encoder.finish()]);
+            }
+            backend.submissions.set(backend.submissions.get() + 1);
+        }
         Ok(())
     }
 }
@@ -1265,27 +1312,51 @@ mod tests {
     use super::*;
     #[test]
     fn coverage_rejects_missing_out_of_range_and_accepts_def_constants() {
-        let mut shader = d3d9shader::parse(&[0xffff0300,0x02000001,0x800f0800,0xa0e40003,0xffff]).unwrap();
+        let mut shader =
+            d3d9shader::parse(&[0xffff0300, 0x02000001, 0x800f0800, 0xa0e40003, 0xffff]).unwrap();
         let required = ConstantReads::from_shader(&shader).unwrap();
         assert!(required.validate(&NativeConstants::default()).is_err());
-        let mut constants = NativeConstants { floats:vec![NativeFloatWrite{first:3,registers:vec![[0;4]].into()}],..Default::default() };
+        let mut constants = NativeConstants {
+            floats: vec![NativeFloatWrite {
+                first: 3,
+                registers: vec![[0; 4]].into(),
+            }],
+            ..Default::default()
+        };
         assert!(required.validate(&constants).is_ok());
-        constants.floats[0].first=224;
+        constants.floats[0].first = 224;
         assert!(required.validate(&constants).is_err());
-        let mut def=shader.instructions[0].clone();def.opcode=d3d9shader::op::DEF;
-        def.dst=Some(def.src[0].clone());def.src.clear();def.data=vec![0;4];
-        shader.instructions.insert(0,def);
-        assert!(ConstantReads::from_shader(&shader).unwrap().validate(&NativeConstants::default()).is_ok());
+        let mut def = shader.instructions[0].clone();
+        def.opcode = d3d9shader::op::DEF;
+        def.dst = Some(def.src[0].clone());
+        def.src.clear();
+        def.data = vec![0; 4];
+        shader.instructions.insert(0, def);
+        assert!(ConstantReads::from_shader(&shader)
+            .unwrap()
+            .validate(&NativeConstants::default())
+            .is_ok());
     }
     #[test]
     fn coverage_includes_implicit_matrix_rows_and_relative_bank() {
-        let mut shader=d3d9shader::parse(&[0xfffe0300,0x02000001,0xe00f0000,0xa0e40000,0xffff]).unwrap();
-        let ins=&mut shader.instructions[0];ins.opcode=d3d9shader::op::M4X4;
-        let mut row=ins.src[0].clone();row.index=4;ins.src.push(row);
-        let required=ConstantReads::from_shader(&shader).unwrap();
-        assert!(required.floats[0]);assert!(required.floats[4..8].iter().all(|&r|r));assert!(!required.floats[8]);
-        let mut address=shader.instructions[0].src[0].clone();address.kind=d3d9shader::reg::ADDR;
-        shader.instructions[0].src[0].relative=Some(Box::new(address));
-        assert!(ConstantReads::from_shader(&shader).unwrap().floats.iter().all(|&r|r));
+        let mut shader =
+            d3d9shader::parse(&[0xfffe0300, 0x02000001, 0xe00f0000, 0xa0e40000, 0xffff]).unwrap();
+        let ins = &mut shader.instructions[0];
+        ins.opcode = d3d9shader::op::M4X4;
+        let mut row = ins.src[0].clone();
+        row.index = 4;
+        ins.src.push(row);
+        let required = ConstantReads::from_shader(&shader).unwrap();
+        assert!(required.floats[0]);
+        assert!(required.floats[4..8].iter().all(|&r| r));
+        assert!(!required.floats[8]);
+        let mut address = shader.instructions[0].src[0].clone();
+        address.kind = d3d9shader::reg::ADDR;
+        shader.instructions[0].src[0].relative = Some(Box::new(address));
+        assert!(ConstantReads::from_shader(&shader)
+            .unwrap()
+            .floats
+            .iter()
+            .all(|&r| r));
     }
 }

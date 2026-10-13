@@ -969,12 +969,14 @@ Unexpected worker rejection logs ERROR; the producer must satisfy the native
 eligibility contract before sending. Direct WgpuBackend calls return the
 untouched job on rejection before any native target submission.
 
-The worker resolves live backend resources, prewarms identity-cached native
-objects, records compact constants and submits one or more passes. Initial
-recorder lifetime is one job, so L123 cross-job resident/bundle speedups are
-not yet active here. Four focused GPU tests and 14 CPU tests pass. Shadow
-comparison begin/end hooks are compiled; L127 end-to-end gate and head's
-DDDRAW_NATIVE=1 image/FPS run remain pending. Details: tasks/L126-native-worker.md.
+The worker resolves live backend resources and prewarms identity-cached native
+objects. Recorder storage and constant handles persist across jobs; resident
+register deltas upload before the existing finisher receives the render encoder.
+Prior arena users must have submitted before queue writes; no GPU wait is used.
+Exact bundle reuse is opt-in via DDGPU_NATIVE_BUNDLES=1. Four initial GPU tests
+and 14 CPU tests pass; the persistent-recorder gate is pending. L127's five
+end-to-end shadow tests pass on its integration branch. Head's DDDRAW_NATIVE=1
+image/FPS run remains pending. Details: tasks/L126-native-worker.md.
 
 ## L121 StretchRect recording (2026-10-13)
 

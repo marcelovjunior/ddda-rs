@@ -56,15 +56,29 @@ Structured results: `poll_native_comparisons()` (latest 256 retained), with
 nonblocking polls at native jobs and Present, bounded pending queue, explicit
 errors/unverified counters and shutdown reporting. L127 reducer dependency
 `ef5d6869` was cherry-picked as `751bf420`; its four GPU/one CPU tests were
-verified by codex-11. End-to-end shadow worker tests remain pending L127.
+verified by codex-11. All five end-to-end shadow worker tests now pass in
+L127: 42 matching / three intentional mismatch summaries, five explicit
+rejections, zero pending; real color/depth/stencil, mip1 and reused shadows
+remain intact. Test checkpoint `434af59c` cherry-picked as `3818c5c0`.
 
-N2 integration initially uses a compact constant recorder **per job**, as
-head #11087 specified. Device/pipeline/group caches persist; cross-job resident
-constant and render-bundle reuse is not yet enabled. `flush()` before native
-work orders earlier legacy work, including the current FPS line's finisher
-wait. Native jobs submit before later FIFO commands. Worker and game-frame
-performance have not been measured; L123's 0.843 us number is its dedicated
-persistent-recorder benchmark, not this new adapter.
+N2 now retains `RecorderState` and shader constant handles across jobs. The
+resident arena grows only when required; oversized jobs use the direct-upload
+fallback when packed scatter storage would exceed the device binding limit.
+`NativeJobStats` exposes uploaded bytes, dirty registers and bundle hits/builds.
+Exact repeated bundles are host opt-in with `DDGPU_NATIVE_BUNDLES=1`; alternating
+job sequences can rebuild them, so they are not enabled unconditionally.
+
+Earlier legacy encoders hand off through `flush_async()`. Native preparation
+and recording overlap the finisher; `wait_finisher()` precedes constant queue
+writes, then the scatter submits before the render encoder is handed to the
+same finisher. This orders reused storage without a GPU wait. Worker and
+game-frame performance have not been measured; L123's 0.843 us number is its
+dedicated persistent-recorder benchmark, not this adapter.
+
+Persistent-recorder changes compile; final focused GPU gate is queued behind
+the shared HEAVY_BIG slot. Merged-base runtime light: **182 pass / one inherited
+fullscreen gamma-reset failure / three ignored**. Log:
+`C:/ddda-targets/L126-runtime-all.log`.
 
 In-game image comparison and FPS remain with head; agent never ran the game. No game
 or shard build/run. Existing L123 target directory is reused per head #11137,

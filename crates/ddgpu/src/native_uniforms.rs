@@ -96,6 +96,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             resident,
         }
     }
+    pub fn capacity(&self) -> u64 {
+        self.cpu.len() as u64
+    }
     pub fn fits(&self, len: u64, align: u64) -> bool {
         (self.at as u64).next_multiple_of(align) + len <= self.cpu.len() as u64
     }
