@@ -1,7 +1,7 @@
 //! L170: semantic ports (crates/mtcore/src/semantic_c2.rs) at the ABI level
-//! (EAX, the callee-saved registers, ESP, every memory byte at or above the
-//! returned stack; ECX, EDX, the flags and the popped scratch below the
-//! returned ESP are not compared):
+//! (EAX, the callee-saved registers, ESP, every memory write but the popped
+//! stack scratch, the 4 KiB below the returned ESP; ECX, EDX, the flags and
+//! that scratch are not compared):
 //!
 //! - against the original's recorded vectors (the lifter's lift.json cases
 //!   for these functions, extracted to a private file: `L170_VECTORS`,
@@ -56,9 +56,12 @@ fn abi_equal(what: &str, got: (&Cpu, &Memory), want: (&Cpu, &Memory)) {
     for k in [0, 3, 4, 5, 6, 7] {
         assert_eq!(g[k], w[k], "{what}: register {k} (eax ecx edx ebx esp ebp esi edi)");
     }
+    // every write but the popped stack scratch below the returned ESP (the
+    // data may lie below the stack: claude-9's L176 finding)
     let esp = w[4];
-    let above = |m: &Memory| m.writes.iter().filter(|(&a, _)| a >= esp).map(|(&a, &v)| (a, v)).collect::<Vec<_>>();
-    assert_eq!(above(got.1), above(want.1), "{what}: memory at or above the returned stack");
+    let scratch = esp.wrapping_sub(0x1000)..esp;
+    let kept = |m: &Memory| m.writes.iter().filter(|(a, _)| !scratch.contains(a)).map(|(&a, &v)| (a, v)).collect::<Vec<_>>();
+    assert_eq!(kept(got.1), kept(want.1), "{what}: memory outside the popped stack scratch");
 }
 
 fn hex(s: &str) -> Vec<u8> {
