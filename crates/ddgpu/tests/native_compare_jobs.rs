@@ -226,6 +226,7 @@ fn failed_comparison_cannot_write_oracle_targets_and_next_pass_recovers() {
 #[test]
 fn repeated_jobs_reuse_shadows_without_losing_pass_identity() {
     let mut backend = WgpuBackend::headless().expect("test GPU");
+    backend.set_async_submit(true);
     backend.read_frames = false;
     let target = target();
     let (job, oracle) = fixture(&mut backend, &target);

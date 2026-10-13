@@ -360,3 +360,33 @@ fn native_worker_sampled_uploads_and_sampler_identity_match_legacy() {
     }
     assert_eq!(backend.native_job_stats().accepted, 2);
 }
+
+#[test]
+fn native_resident_jobs_follow_async_finisher_and_skip_unchanged_uploads() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    backend.set_async_submit(true);
+    let t = target(1, 21);
+    upload(&mut backend);
+    let red = draw(false, false, false, [1.0, 0.0, 0.0, 1.0]);
+    let mut first = job(red.clone(), &t, None);
+    first.passes[0].clear_colour = Some(0xff0000ff);
+    assert!(backend.native(first.clone()).is_ok());
+    let uploaded = backend.native_job_stats().upload_bytes;
+    assert!(uploaded > 0);
+    // No readback/Wait between these jobs: prior render finish must precede
+    // constant storage reuse, while recording may overlap the finisher.
+    assert!(backend.native(first).is_ok());
+    assert_eq!(backend.native_job_stats().upload_bytes, uploaded);
+    let expected = backend.read_back(&t).unwrap();
+    let mut green = red.clone();
+    green.ps_constants.floats[0].registers = vec![[0.0f32, 1.0, 0.0, 1.0].map(f32::to_bits)].into();
+    assert!(backend.native(job(green, &t, None)).is_ok());
+    assert!(backend.native_job_stats().upload_bytes > uploaded);
+    let changed = backend.read_back(&t).unwrap();
+    assert_ne!(changed, expected);
+    backend.set_async_submit(false);
+    assert!(backend.native(job(red, &t, None)).is_ok());
+    assert_eq!(backend.read_back(&t).unwrap(), expected);
+}

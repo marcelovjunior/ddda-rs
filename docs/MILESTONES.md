@@ -1,5 +1,6 @@
 # Milestones
 
+
 ### L119 native sink, step 2b (2026-10-13)
 
 - `DDDRAW_NATIVE=drawcall|1|census` (crates/ddruntime/src/ndraw_native.rs):
@@ -30,6 +31,11 @@
   **14 ddgpu CPU tests pass**. Per-job compact recorder; persistent resident /
   bundle reuse and game/FPS comparison remain separate work.
 - L127 shadow hooks compiled; next: end-to-end shadow gate and head N2 run.
+  **14 ddgpu CPU tests pass**. Persistent resident recorder and finisher
+  handoff now compile; focused GPU gate pending shared HEAVY_BIG availability.
+- L127 five shadow integration tests pass; runtime light **182 pass / one
+  inherited gamma-reset failure / three ignored**. Next: final resident /
+  finisher GPU gate, then head N2 image/FPS run.
   Details: `docs/tasks/L126-native-worker.md`.
 
 ### L123 native resident constants and bundles (2026-10-13)
@@ -2212,6 +2218,13 @@ opening (codex-31), route perf (codex-29).
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
 
+### L127 asynchronous native comparison reduction (2026-10-13)
+
+- GPU color/depth/stencil summaries retain pass and target identity; exact loaded-channel comparisons, differing pixels and maximum difference. Bounded async MAP_READ returns 16 bytes per target without a GPU wait.
+- Four focused Vulkan tests and one CPU summary test pass. Scale fixture: 128 pending targets, 16,650,240 pixels, 2,048 readback bytes; 58.73 ms synthetic diagnostic (no gameplay/FPS claim).
+- Next: integrate L119 compare sink and L126 pre-oracle shadow lifecycle, run light runtime suite, then head-run in-game comparison. Details: docs/tasks/L127-native-compare.md.
+
+
 
 ### L121 copy submission boundaries (2026-10-13)
 
@@ -2266,9 +2279,7 @@ opening (codex-31), route perf (codex-29).
   of the pure shader/constant source iterators.
 ### L127 asynchronous native comparison reduction (2026-10-13)
 
-- GPU color/depth/stencil summaries retain pass and target identity; exact loaded-channel comparisons, differing pixels and maximum difference. Bounded async MAP_READ returns 16 bytes per target without a GPU wait.
-- Four focused Vulkan tests and one CPU summary test pass. Scale fixture: 128 pending targets, 16,650,240 pixels, 2,048 readback bytes; 58.73 ms synthetic diagnostic (no gameplay/FPS claim).
-- Next: integrate L119 compare sink and L126 pre-oracle shadow lifecycle, run light runtime suite, then head-run in-game comparison. Details: docs/tasks/L127-native-compare.md.
+### L127 integrated comparison gate (2026-10-13)
 
 
 ### L127 compare producer (2026-10-13)

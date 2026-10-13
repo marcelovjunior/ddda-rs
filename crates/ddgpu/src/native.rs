@@ -1016,13 +1016,14 @@ struct CachedBundle {
 /// Instancing is explicit in both draw methods and input stream step modes.
 pub struct Recorder<'a> {
     device: &'a Device,
+    // Drop order is significant after forget_lifetime: pass before encoder.
+    pass: Option<Pass>,
+    encoder: Option<wgpu::CommandEncoder>,
     id: u32,
     ring: Uniforms,
     group: wgpu::BindGroup,
     constants: Vec<ConstantObject>,
     bound_constants: [Option<ConstantBuffer>; 2],
-    encoder: Option<wgpu::CommandEncoder>,
-    pass: Option<Pass>,
     pipeline: Option<Pipeline>,
     sets: [Option<TextureSet>; 2],
     vertex: [Option<BufferSlice>; 16],
@@ -1037,7 +1038,89 @@ pub struct Recorder<'a> {
     bundle_cursor: usize,
     pub stats: RecorderStats,
 }
+/// Owned, closed recorder storage. Detach after submission/encoder handoff,
+/// mutate/prewarm Device objects, then resume without reallocating uniform
+/// storage, constant handles or cached bundles. It belongs to one Device.
+pub struct RecorderState {
+    device_id: u32,
+    id: u32,
+    ring: Uniforms,
+    group: wgpu::BindGroup,
+    constants: Vec<ConstantObject>,
+    bound_constants: [Option<ConstantBuffer>; 2],
+    pipeline: Option<Pipeline>,
+    sets: [Option<TextureSet>; 2],
+    vertex: [Option<BufferSlice>; 16],
+    index: Option<(BufferSlice, wgpu::IndexFormat)>,
+    viewport: Option<[f32; 6]>,
+    scissor: Option<[u32; 4]>,
+    stencil: u32,
+    blend: [f64; 4],
+    bundles: bool,
+    pending_bundle: Vec<BundleDraw>,
+    bundle_cache: Vec<CachedBundle>,
+    bundle_cursor: usize,
+    pub stats: RecorderStats,
+}
+impl RecorderState {
+    pub fn uniform_capacity(&self) -> u64 {
+        self.ring.capacity()
+    }
+}
 impl<'a> Recorder<'a> {
+    pub fn into_state(self) -> RecorderState {
+        assert!(
+            self.pass.is_none() && self.encoder.is_none() && self.pending_bundle.is_empty(),
+            "submit or finish the recorder before detaching"
+        );
+        RecorderState {
+            device_id: self.device.id,
+            id: self.id,
+            ring: self.ring,
+            group: self.group,
+            constants: self.constants,
+            bound_constants: self.bound_constants,
+            pipeline: self.pipeline,
+            sets: self.sets,
+            vertex: self.vertex,
+            index: self.index,
+            viewport: self.viewport,
+            scissor: self.scissor,
+            stencil: self.stencil,
+            blend: self.blend,
+            bundles: self.bundles,
+            pending_bundle: self.pending_bundle,
+            bundle_cache: self.bundle_cache,
+            bundle_cursor: self.bundle_cursor,
+            stats: self.stats,
+        }
+    }
+    pub fn from_state(device: &'a Device, state: RecorderState) -> Self {
+        device.check(state.device_id);
+        Self {
+            device,
+            pass: None,
+            encoder: None,
+            id: state.id,
+            ring: state.ring,
+            group: state.group,
+            constants: state.constants,
+            bound_constants: state.bound_constants,
+            pipeline: state.pipeline,
+            sets: state.sets,
+            vertex: state.vertex,
+            index: state.index,
+            viewport: state.viewport,
+            scissor: state.scissor,
+            stencil: state.stencil,
+            blend: state.blend,
+            bundles: state.bundles,
+            pending_bundle: state.pending_bundle,
+            bundle_cache: state.bundle_cache,
+            bundle_cursor: state.bundle_cursor,
+            stats: state.stats,
+        }
+    }
     pub fn new(device: &'a Device, uniform_bytes: u64) -> Self {
         Self::with_resident_constants(device, uniform_bytes, false)
     }
@@ -1616,33 +1699,31 @@ impl<'a> Recorder<'a> {
         self.flush_bundle();
         self.pass.take();
     }
-    pub fn submit(&mut self) -> Option<wgpu::SubmissionIndex> {
+    /// Flush CPU uploads and detach the still-unfinished render encoder. The
+    /// caller must order prior submissions before invoking this (queue writes
+    /// happen here), submit the optional scatter before the render encoder,
+    /// and submit both before reusing this recorder's GPU storage.
+    pub(crate) fn finish_parts(&mut self) -> (Option<wgpu::CommandBuffer>, Option<wgpu::CommandEncoder>) {
         self.end_pass();
         self.bundle_cache.truncate(self.bundle_cursor);
         self.bundle_cursor = 0;
         let Some(encoder) = self.encoder.take() else {
-            // Updates before the first pass can exhaust the ring too. No
-            // commands reference those snapshots; retained CPU blocks survive.
             self.ring.restart();
-            return None;
+            return (None, None);
         };
         let upload = self
             .ring
             .upload(&self.device.gpu, &self.device.queue, &mut self.stats);
-        let index = self
-            .device
-            .queue
-            .submit(upload.into_iter().chain([encoder.finish()]));
         self.ring.restart();
-        Some(index)
+        (upload, Some(encoder))
     }
-}
-impl Drop for Recorder<'_> {
-    fn drop(&mut self) {
-        // A cancelled recorder does not submit. Drop the lifetime-erased pass
-        // before its encoder (regardless of the struct's field order).
-        self.pass.take();
-        self.encoder.take();
+    pub fn submit(&mut self) -> Option<wgpu::SubmissionIndex> {
+        let (upload, encoder) = self.finish_parts();
+        encoder.map(|encoder| {
+            self.device
+                .queue
+                .submit(upload.into_iter().chain([encoder.finish()]))
+        })
     }
 }
 
@@ -1654,5 +1735,6 @@ mod tests {
         fn movable<T: Send>() {}
         shared::<super::Device>();
         movable::<super::Recorder<'static>>();
+        movable::<super::RecorderState>();
     }
 }
