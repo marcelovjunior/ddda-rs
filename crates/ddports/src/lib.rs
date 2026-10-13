@@ -91,6 +91,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x010658b0, mtcore::semantic_c2::apply_pass_state),
             (0x00cd8760, mtcore::semantic::find_identifier),
             (0x00dd42c0, mtcore::semantic::dispatch_event),
+            (0x005b31a0, mtcore::semantic::find_sorted),
         ] {
             if !semantic_selected(a) {
                 continue;

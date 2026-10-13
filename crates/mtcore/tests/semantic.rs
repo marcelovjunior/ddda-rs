@@ -89,6 +89,8 @@ fn semantic_expand_dependencies_matches_original() {
 fn stack_args(target: u32) -> u32 {
     match target {
         0x0105_4690 => 0,
+        0x3000_0000 => 0, // find_sorted vectors: the count stub
+        0x3000_0010 => 1, // and the entry(i) stub
         0x00f7_3b90 => 1, // owner->find(id) (0x00DD42C0's parent lookup)
         0x0104_ef10 | 0x0105_1b60 | 0x0105_33a0 | 0x0105_2330 => 1,
         0x00e0_e5e0 | 0x00e0_ec50 => 3,
@@ -307,4 +309,12 @@ fn semantic_dispatch_event_matches_original() {
     ddnative_host::install();
     let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L179/dispatch.json", mtcore::semantic::dispatch_event, false);
     eprintln!("{n} ABI-level dispatch cases passed");
+}
+
+// verifies 0x005b31a0 (ABI level)
+#[test]
+fn semantic_find_sorted_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L179/find_sorted.json", mtcore::semantic::find_sorted);
+    eprintln!("{n} ABI-level find_sorted cases passed");
 }

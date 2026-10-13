@@ -581,3 +581,59 @@ pub fn dispatch_event(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(8);
 }
+
+/// The table methods [`find_sorted`] devirtualizes (the
+/// rAIStageActionParameter family): `count()` (vtable +0x3c) the u16 at
+/// `[this + 0x60] + 6`, `entry(i)` (vtable +0x40, `ret 4`)
+/// `[this + 0x60] + 8 + 0xec i`.
+const SORTED_COUNT: u32 = 0x00ca_8d60;
+const SORTED_ENTRY: u32 = 0x00ca_a160;
+
+// Translated from 0x005b31a0 (DDDA.exe 2017-12-13 Steam).
+/// 0x005B31A0, `find(key, table) -> index` (cdecl): binary search of
+/// `table`'s entries, sorted by their first word (signed), for `key`; -1
+/// when absent. The original asks `table` for the count and each probed
+/// entry through two virtual calls; for the accessor pair above the search
+/// reads the table directly, for any other class it makes the same calls.
+pub fn find_sorted(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let table = pg.u32(m, entry.wrapping_add(8));
+    let vtable = pg.u32(m, table);
+    let count_method = pg.u32(m, vtable.wrapping_add(0x3c));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // the original's frame after its four pushes: its calls are made here
+    let frame = entry.wrapping_sub(0x10);
+    let count = if count_method == SORTED_COUNT {
+        u32::from(pg.u16(m, pg.u32(m, table.wrapping_add(0x60)).wrapping_add(6)))
+    } else {
+        (c.ebx, c.ebp) = (table, 0);
+        call_from(m, c, pg, frame, table, &[], 0x005b_31b3, |m, c| ddnative_base::x86::call_ext(m, c, count_method))
+    };
+    let (mut low, mut high) = (0i32, count.wrapping_sub(1) as i32);
+    let mut found = u32::MAX;
+    while low <= high {
+        let middle = high.wrapping_add(low) / 2;
+        let entry_method = pg.u32(m, vtable.wrapping_add(0x40));
+        let row = if entry_method == SORTED_ENTRY {
+            pg.u32(m, table.wrapping_add(0x60)).wrapping_add(8).wrapping_add((middle as u32).wrapping_mul(0xec))
+        } else {
+            (c.ebx, c.ebp, c.esi, c.edi) = (table, low as u32, middle as u32, high as u32);
+            call_from(m, c, pg, frame, table, &[middle as u32], 0x005b_31cc, |m, c| ddnative_base::x86::call_ext(m, c, entry_method))
+        };
+        let value = pg.u32(m, row) as i32;
+        let key = pg.u32(m, entry.wrapping_add(4)) as i32;
+        if value == key {
+            found = middle as u32;
+            break;
+        }
+        if value < key {
+            low = middle + 1;
+        } else {
+            high = middle - 1;
+        }
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.eax = found;
+    c.esp = entry.wrapping_add(4);
+}
