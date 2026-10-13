@@ -443,3 +443,18 @@ fn set_camera_matrices_matches_original() {
     assert!(n >= 1000, "{n} cases");
     eprintln!("{n} ABI-level set_camera_matrices cases passed");
 }
+
+// verifies 0x00ff04c0 (ABI level; void; the CRT memcpy is done natively)
+#[test]
+fn set_viewport_rect_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_options(
+        "E:/ddda-re/notes/native-L184/set_viewport_rect.json",
+        mtcore::semantic_s9::set_viewport_rect,
+        false,
+        &[0x012e_fea0],
+        true,
+    );
+    assert!(n >= 1000, "{n} cases");
+    eprintln!("{n} ABI-level set_viewport_rect cases passed");
+}

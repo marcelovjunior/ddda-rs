@@ -1654,3 +1654,100 @@ fn arena_take(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, si
     pg.set_u32(m, this + 0x24, block.wrapping_add(size));
     block
 }
+
+/// 0x00FF04C0, `ctx->set_viewport(rect)` (thiscall, `ret 4`, void): take a
+/// new viewport rectangle `[left, top, right, bottom]` (four `i32`) into the
+/// draw context and rebuild its viewport constant block.
+///
+/// Nothing happens when the rectangle equals the stored one (`this + 0xCC`).
+/// Otherwise it is stored at `this + 0xCC` and, halved toward zero, at
+/// `this + 0xDC` (setting bit 3 of the mode flags at `+0xC8`); then, when the
+/// render target size (`u16`s at `+0x10C`/`+0x10E`) is not zero, the flag
+/// word selects the halved rectangle (bit 9) or the full one, and a new
+/// constant block (the previous one at `+0xC90` copied into fresh arena
+/// space) receives the viewport's offset and scale terms:
+/// `[ox + 1, -(oy + 1), sx, -sy]` with `sx = width / target_w * 0.5`,
+/// `ox = left / target_w / sx` (likewise `y`) and, at `+0x20`/`+0x24`, the
+/// reciprocals of the full rectangle's width and height.
+// Translated from 0x00FF04C0 (DDDA.exe 2017-12-13 Steam)
+pub fn set_viewport_rect(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let rect = pg.u32(m, entry.wrapping_add(4));
+    c.esp = entry.wrapping_add(8);
+    let field = |offset: u32| this.wrapping_add(offset);
+    let word = |m: &dyn Mem, a: u32| pg.u32(m, a);
+    let unchanged = word(m, rect + 8) == word(m, field(0xd4))
+        && word(m, rect + 4) == word(m, field(0xd0))
+        && word(m, rect) == word(m, field(0xcc))
+        && word(m, rect + 12) == word(m, field(0xd8));
+    if unchanged {
+        return;
+    }
+    for k in 0..4 {
+        let v = word(m, rect + 4 * k);
+        pg.set_u32(m, field(0xcc + 4 * k), v);
+    }
+    for k in 0..4 {
+        let v = word(m, rect + 4 * k);
+        pg.set_u32(m, field(0xdc + 4 * k), v);
+    }
+    // halve toward zero: (v - (v >> 31)) >> 1
+    let halve = |v: i32| (v - (v >> 31)) >> 1;
+    for offset in [0xdc, 0xe0] {
+        let v = halve(word(m, field(offset)) as i32);
+        pg.set_u32(m, field(offset), v as u32);
+    }
+    let mode = word(m, field(0xc8)) | 8;
+    pg.set_u32(m, field(0xc8), mode);
+    let mode = word(m, field(0xc8));
+    for offset in [0xe4, 0xe8] {
+        let v = halve(word(m, field(offset)) as i32);
+        pg.set_u32(m, field(offset), v as u32);
+    }
+    let target_width = word(m, field(0x10c)) & 0xffff;
+    if target_width == 0 {
+        return;
+    }
+    let target_height = pg.u16(m, field(0x10e)) as u32;
+    if target_height == 0 {
+        return;
+    }
+    let base = if mode & 0x200 != 0 { 0xdc } else { 0xcc };
+    let (left, top, right, bottom) = (
+        word(m, field(base)) as i32,
+        word(m, field(base + 4)) as i32,
+        word(m, field(base + 8)) as i32,
+        word(m, field(base + 12)) as i32,
+    );
+    let half = f32::from_bits(word(m, 0x0140_6cf0));
+    let scale_x = ((right.wrapping_sub(left)) as f32 / target_width as i32 as f32) * half;
+    let offset_x = (left as f32 / target_width as i32 as f32) / scale_x;
+    let descriptor = word(m, word(m, field(0x18)).wrapping_add(0x54c));
+    let size = ((pg.u16(m, descriptor + 0x18) as u32) * 4 + 0xf) & !0xf;
+    let scale_y = ((bottom.wrapping_sub(top)) as f32 / target_height as i32 as f32) * half;
+    let offset_y = (top as f32 / target_height as i32 as f32) / scale_y;
+    // The original's frame at its allocator call: entry - 0x18 - 3 pushes.
+    let block = arena_take(m, c, pg, entry.wrapping_sub(0x24), this, size, 0x00ff_069f);
+    let previous = word(m, field(0xc90));
+    let bytes = (pg.u16(m, descriptor + 0x18) as u32) * 4;
+    copy_guest(m, pg, block, previous, bytes);
+    pg.set_u32(m, field(0xc90), block);
+    let dirty = word(m, field(0x154)) | 1;
+    pg.set_u32(m, field(0x154), dirty);
+    if block != 0 {
+        let one = f32::from_bits(word(m, 0x0140_6ce0));
+        let put =
+            |m: &mut dyn Mem, offset: u32, v: f32| pg.set_u32(m, block.wrapping_add(offset), v.to_bits());
+        put(m, 0, offset_x + one);
+        put(m, 4, -(offset_y + one));
+        put(m, 8, scale_x);
+        put(m, 0xc, -scale_y);
+        let width = word(m, rect + 8).wrapping_sub(word(m, rect)) as i32;
+        let height = word(m, rect + 12).wrapping_sub(word(m, rect + 4)) as i32;
+        put(m, 0x20, one / width as f32);
+        put(m, 0x24, one / height as f32);
+    }
+    c.esp = entry.wrapping_add(8);
+}
