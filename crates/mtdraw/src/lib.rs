@@ -21,4 +21,5 @@ pub mod abi;
 pub mod apply;
 mod apply_shader;
 pub mod executor;
+pub mod material;
 pub mod sink;
