@@ -184,6 +184,7 @@ impl Registry {
         // the readable ports and mods over their lifted bodies (L60)
         #[cfg(feature = "game")]
         ddports::ensure_with(|ports| {
+            crate::archive_inflate::install(ports);
             if crate::ndraw_stats::enabled() {
                 crate::ndraw_stats::wrap_executor(ports, &ddnative::generated::lifted::bodies());
             }

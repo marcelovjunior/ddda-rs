@@ -73,17 +73,20 @@ struct Fixture {
 }
 impl Fixture {
     fn new(label: &str, size: usize) -> Self {
+        Self::named(label, size, "input.bin")
+    }
+    fn named(label: &str, size: usize, name: &str) -> Self {
         let root = std::env::temp_dir().join(format!("ddruntime-L109-{}-{label}", std::process::id()));
         std::fs::create_dir_all(root.join("install")).unwrap();
         std::fs::write(
-            root.join("install/input.bin"),
+            root.join("install").join(name),
             (0..size).map(|i| (i % 251) as u8).collect::<Vec<_>>(),
         )
         .unwrap();
         files::set_roots(&root.join("install"), &root.join("sandbox"));
         let mut m = GuestMemory::new();
         m.map(NAME, STACK + 4096 - NAME, READ | WRITE).unwrap();
-        ddruntime::fastmem::write_bulk(&mut m, NAME, b"input.bin\0");
+        ddruntime::fastmem::write_bulk(&mut m, NAME, format!("{name}\0").as_bytes());
         let h = call(
             &mut m,
             files::create_file_a,
@@ -105,6 +108,55 @@ impl Fixture {
         );
         self.m.u32(OUT)
     }
+}
+
+fn completion(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let ov = m.u32(cpu.esp + 12);
+    m.set_u32(ov + 16, 0);
+    cpu.esp += 16;
+}
+
+#[test]
+fn archive_cache_preserves_apc_ranges_eof_and_overlay_reads() {
+    use ddruntime::{dispatch::{Binding, Registry}, threads};
+    // This executable has one cache-setting test; its other tests only use
+    // ReadFile and non-archive files. No other process inherits these changes.
+    unsafe { std::env::set_var("DDRUNTIME_FILE_READ_AHEAD", "1"); }
+    let mut f = Fixture::named("cache", 300001, "input.arc");
+    let mut registry = Registry::new();
+    registry.insert(0x610000, Binding::Lifted(completion)).unwrap();
+    let registry = std::sync::Arc::new(registry);
+    registry.install();
+    const OV: u32 = OUT + 64;
+    for (offset, count) in [(0,131072), (131072,131072), (7,99), (300000,128), (0,0)] {
+        f.m.set_u32(OV+8,offset); f.m.set_u32(OV+12,0); f.m.set_u32(OV+16,1);
+        ddruntime::fastmem::write_bulk(&mut f.m,BUF,&vec![0xcc;count as usize+1]);
+        assert_eq!(call(&mut f.m,files::read_file_ex,&[f.h,BUF,count,OV,0x610000]),1);
+        let got=count.min(300001-offset);
+        assert_eq!(f.m.u32(OV+4),got);
+        assert_eq!(f.m.u32(OV+16),1);
+        for i in 0..got {assert_eq!(f.m.u8(BUF+i),((offset+i)%251) as u8);}
+        assert_eq!(f.m.u8(BUF+got),0xcc);
+        assert_eq!(call(&mut f.m,threads::sleep_ex,&[0,1]),threads::WAIT_IO_COMPLETION);
+        assert_eq!(f.m.u32(OV+16),0);
+    }
+    f.m.set_u32(OV+8,300001);
+    assert_eq!(call(&mut f.m,files::read_file_ex,&[f.h,BUF,64,OV,0x610000]),0);
+    assert_eq!(call(&mut f.m,threads::sleep_ex,&[0,1]),0);
+    call(&mut f.m,files::close_handle,&[f.h]);
+    std::fs::create_dir_all(f.root.join("sandbox/overlay")).unwrap();
+    let overlay=f.root.join("sandbox/overlay/input.arc");
+    std::fs::write(&overlay,vec![0x55;1024]).unwrap();
+    f.h=call(&mut f.m,files::create_file_a,&[NAME,0x80000000,1,0,3,0x80,0]);
+    for value in [0x55,0xaa] {
+        std::fs::write(&overlay,vec![value;1024]).unwrap();
+        f.m.set_u32(OV+8,0);
+        assert_eq!(call(&mut f.m,files::read_file_ex,&[f.h,BUF,16,OV,0x610000]),1);
+        assert_eq!(f.m.u8(BUF),value);
+        assert_eq!(call(&mut f.m,threads::sleep_ex,&[0,1]),threads::WAIT_IO_COMPLETION);
+    }
+    ddnative_base::x86::set_ext_calls(None);
+    unsafe { std::env::remove_var("DDRUNTIME_FILE_READ_AHEAD"); }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
