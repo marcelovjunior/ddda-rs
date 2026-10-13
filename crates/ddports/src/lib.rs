@@ -88,6 +88,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x01140180, mtcore::semantic_draw_b::draw_culled_instances),
             (0x010a35d0, mtcore::semantic_jobs::query_bounds_tree),
             (0x00c24640, mtcore::semantic_instancing::draw_instanced_mesh),
+            (0x010658b0, mtcore::semantic_c2::apply_pass_state),
         ] {
             if !semantic_selected(a) {
                 continue;
@@ -205,6 +206,7 @@ mod tests {
             (0x01145bf0, mtcore::semantic_draw_c::apply_standard_material),
             (0x010a35d0, mtcore::semantic_jobs::query_bounds_tree),
             (0x00c24640, mtcore::semantic_instancing::draw_instanced_mesh),
+            (0x010658b0, mtcore::semantic_c2::apply_pass_state),
         ] {
             assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)), semantic_enabled);
         }
