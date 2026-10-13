@@ -43,6 +43,10 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00e10fc0, mtcore::semantic::intern_dependency_keys),
             (0x01054700, mtcore::semantic::update_joints),
             (0x00fedd60, mtcore::semantic::sort_pairs),
+            (0x00ea23f0, mtcore::semantic_draw_c::primitive_material),
+            (0x00fed190, mtcore::semantic_draw_c::begin_material),
+            (0x00e0f3c0, mtcore::semantic_draw_c::package_key),
+            (0x01008200, mtcore::semantic_draw_c::single_key),
         ] {
             ports.retain(|p| p.0 != a);
             ports.push((a, f));
@@ -111,11 +115,21 @@ mod tests {
             std::ptr::fn_addr_eq(f, mtcore::job_shadow::save_state as LiftFn)),
             std::env::var("DDRUNTIME_JOB_SHADOW_SAVE").as_deref() == Ok("1"));
         let lookup_enabled = std::env::var("DDRUNTIME_JOB_LOOKUP").as_deref() == Ok("1");
+        let semantic_enabled = std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1");
         for (address, body) in [
             (0x01008200, mtcore::job_lookup::single_key as LiftFn),
             (0x01008260, mtcore::job_lookup::pair_key as LiftFn),
         ] {
-            assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)), lookup_enabled);
+            assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)),
+                lookup_enabled && !(address == 0x01008200 && semantic_enabled));
+        }
+        for (address, body) in [
+            (0x00ea23f0, mtcore::semantic_draw_c::primitive_material as LiftFn),
+            (0x00fed190, mtcore::semantic_draw_c::begin_material),
+            (0x00e0f3c0, mtcore::semantic_draw_c::package_key),
+            (0x01008200, mtcore::semantic_draw_c::single_key),
+        ] {
+            assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)), semantic_enabled);
         }
         let mut addrs: Vec<u32> = p.iter().map(|e| e.0).collect();
         addrs.sort_unstable();
