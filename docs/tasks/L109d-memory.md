@@ -141,3 +141,27 @@ state machine can consume bytes or return before reaching the guard.
 The wrapper preserves CPU/guest results; focused wrapper/threshold tests
 and nine parser tests cover this diagnostic. Next head run should pair
 these counters with the requested save-load CPU profile.
+
+### Allocation-free wide-register transfer
+
+The emulator boundary previously built eight XMM input vectors and read
+eight ST/eight XMM values through Unicorn's allocating long-register API.
+Use fixed stack arrays instead: aligned 16-byte read storage covers the
+documented 10-byte ST and 16-byte XMM register ABI, with identical copying
+into the existing CPU/FNSAVE image. This removes 24 owned heap buffers per
+state roundtrip. It does not change emulated code, engine pooling or hooks.
+
+All 16 register reads match Unicorn's allocating API byte-for-byte in the
+new test; the cache-budget test, six fallback integration tests and all
+54 unit tests pass (three ignored). `L109d-emu-stack-tests.log` records this
+focused recheck after the full light suite reported above.
+
+Four alternating old/new pairs pinned to CPU 2, existing debug test binaries:
+100,000 short calls median **2.641 s old / 1.679 s final** (36% lower).
+The initial upgrade without stack buffers measured **2.326 / 2.525 s** in
+an earlier paired batch. Shared-host noise means these batches should not
+be subtracted to estimate a precise allocation cost. The synthetic 3M
+iteration loop remains **81.3 / 161.1 ms** old/final: a remaining upgrade
+regression, reported to head, not hidden by the memory result. No game FPS
+or optimized-build speedup is claimed. Private logs:
+`L109d-emu-paired.log`, `L109d-emu-stack-paired.log` in the task target parent.

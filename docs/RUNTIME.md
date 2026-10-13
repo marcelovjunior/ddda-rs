@@ -30,6 +30,12 @@ state/call tests pass before and after. Whole-game memory and image A/B
 remain with head. `emu_engine_created` reports cumulative engine creation
 under the load-log switch.
 
+Wide-register transfer uses stack buffers instead of 24 owned heap buffers
+per emulator roundtrip. All 16 ST/XMM reads match Unicorn's allocating API;
+six fallback state tests pass. Paired debug short-call time improves 36%
+against the old runtime, while a synthetic hot-loop regression remains
+(81 -> 161 ms); game performance remains unmeasured.
+
 `zlib_entry_totals` buckets inclusive inflate time by entry input/output
 sizes around the original fast-decoder guard (6/258 bytes). These are
 entry-size categories, not observed fast-path executions. They help target

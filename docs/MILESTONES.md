@@ -13,6 +13,10 @@
   commitment 2,153,340,928 -> 10,113,024 bytes; after drop 561,152 bytes.
   Six fallback state/call tests pass before/after; light suite 194 pass,
   one inherited fullscreen-gamma failure, four ignored. No game A/B yet.
+- Follow-up removes 24 heap buffers per emulator state roundtrip; all 16
+  wide-register reads match the allocating API. Six fallback tests and 54
+  unit tests pass. Paired debug short calls 2.641 -> 1.679 s; synthetic hot
+  loop 81 -> 161 ms remains a reported regression, not a game FPS result.
 - Next: head integrates and repeats memory/image/save-load timing run;
   profile remaining load time afterward. c18's 32..45 s contains 7.147 s
   inclusive zlib time vs 0.478 s reads; opt-in entry-buffer counters now

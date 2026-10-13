@@ -159,6 +159,23 @@ fn set_translation_cache(uc: &mut Emu) {
     assert_eq!(unsafe { uc_ctl(uc.get_handle(), control, TRANSLATION_CACHE_BYTES) }, uc_error::OK);
 }
 
+/// The Unicorn long-register convenience API allocates a Box for every read.
+/// Fallback saves sixteen wide registers at every native/emulated boundary;
+/// use fixed stack storage for the only two register families we transfer.
+fn read_state_register(uc: &Emu, register: RegisterX86) -> [u8; 16] {
+    use unicorn_engine::{ffi::uc_reg_read, unicorn_const::uc_error};
+    debug_assert!(ST.contains(&register) || XMM.contains(&register));
+    #[repr(align(16))]
+    struct Wide([u8; 16]);
+    let mut value = Wide([0; 16]);
+    // SAFETY: callers pass ST0..ST7 (10 bytes) or XMM0..XMM7 (16 bytes),
+    // matching Unicorn 2.1.1's value_size_x86 / x86 register-read ABI.
+    // The aligned writable buffer outlives the synchronous call.
+    let result = unsafe { uc_reg_read(uc.get_handle(), register as i32, value.0.as_mut_ptr().cast()) };
+    assert_eq!(result, uc_error::OK);
+    value.0
+}
+
 #[cfg(all(test, windows))]
 mod allocation_test {
     use super::*;
@@ -172,6 +189,18 @@ mod allocation_test {
         // SAFETY: the read form writes one uint32_t to this live local.
         assert_eq!(unsafe { uc_ctl(uc.get_handle(), control, &mut actual) }, uc_error::OK);
         assert_eq!(actual, TRANSLATION_CACHE_BYTES);
+    }
+
+    #[test]
+    fn stack_register_buffers_match_the_allocating_api() {
+        let uc = new_instance();
+        for (i, register) in ST.into_iter().chain(XMM).enumerate() {
+            let size = if i < ST.len() { 10 } else { 16 };
+            let bytes: Vec<u8> = (0..size).map(|b| (b * 17 + i * 31) as u8).collect();
+            uc.reg_write_long(register, &bytes).unwrap();
+            let reference = uc.reg_read_long(register).unwrap();
+            assert_eq!(&read_state_register(&uc, register)[..size], reference.as_ref());
+        }
     }
 
     fn private_bytes() -> usize {
@@ -426,8 +455,8 @@ pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         scratch_write(&mut uc, FPU_IMAGE, &image.0);
         scratch_write(&mut uc, MXCSR_SLOT, &x86::stmxcsr().to_le_bytes());
         for k in 0..8 {
-            let bytes: Vec<u8> = cpu.xmm[k].iter().flat_map(|w| w.to_le_bytes()).collect();
-            scratch_write(&mut uc, XMM_SLOTS + 16 * k as u32, &bytes);
+            let bytes = cpu.xmm[k].map(u32::to_le_bytes);
+            scratch_write(&mut uc, XMM_SLOTS + 16 * k as u32, bytes.as_flattened());
         }
         let resume = uc.get_data().resume;
         scratch_write(&mut uc, JUMP_SLOT, &resume.to_le_bytes());
@@ -456,13 +485,13 @@ pub fn run(registry: &Registry, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         image.0[4..6].copy_from_slice(&word(RegisterX86::FPSW).to_le_bytes());
         image.0[8..10].copy_from_slice(&word(RegisterX86::FPTAG).to_le_bytes());
         for (k, r) in ST.iter().enumerate() {
-            let v = uc.reg_read_long(*r).unwrap();
+            let v = read_state_register(&uc, *r);
             image.0[28 + 10 * k..38 + 10 * k].copy_from_slice(&v[..10]);
         }
         cpu.st.frstor(&image, 0);
         x86::ldmxcsr(uc.reg_read(RegisterX86::MXCSR).unwrap() as u32);
         for (k, r) in XMM.iter().enumerate() {
-            let v = uc.reg_read_long(*r).unwrap();
+            let v = read_state_register(&uc, *r);
             for w in 0..4 {
                 cpu.xmm[k][w] = u32::from_le_bytes(v[4 * w..4 * w + 4].try_into().unwrap());
             }
