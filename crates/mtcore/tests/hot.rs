@@ -531,3 +531,116 @@ fn dependencies_match_original_and_lifted() {
     }
     eprintln!("{} exact whole-machine cases passed", cases.len());
 }
+
+fn recording_vectors() -> Option<Value> {
+    let path = "E:/ddda-re/notes/native-L130/recording.json";
+    match std::fs::read_to_string(path) {
+        Ok(s) => Some(serde_json::from_str(&s).unwrap()),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => None,
+    }
+}
+
+// verifies 0x00fedb80
+#[test]
+fn recording_match_original_and_lifted() {
+    ddnative_host::install();
+    let Some(data) = recording_vectors() else {
+        return;
+    };
+    for case in data["cases"].as_array().unwrap() {
+        run_with_callees(mtcore::hot::save_draw_recording_state, case);
+        // L130_RECORDING_REFERENCE
+    }
+    eprintln!(
+        "{} exact recording cases passed",
+        data["cases"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+#[ignore = "paired recording microbenchmark"]
+fn recording_cost() {
+    ddnative_host::install();
+    ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::Relaxed);
+    let data = recording_vectors().unwrap();
+    let bodies: Vec<(&str, LiftFn)> = vec![("port", mtcore::hot::save_draw_recording_state)]; // L130_RECORDING_COST
+    let mut m = Paged::default();
+    for index in [0, 4, 6] {
+        let case = &data["cases"][index];
+        let initial = pairs(&case["initial"]);
+        let initial_cpu = cpu(&case["before"]);
+        let effects: Vec<_> = case["events"]
+            .as_array()
+            .unwrap()
+            .chunks(2)
+            .map(|e| {
+                let mut runs: Vec<(u32, Vec<u8>)> = Vec::new();
+                for (address, byte) in pairs(&e[1]["effects"]) {
+                    if let Some((start, bytes)) = runs.last_mut() {
+                        if start.wrapping_add(bytes.len() as u32) == address {
+                            bytes.push(byte);
+                            continue;
+                        }
+                    }
+                    runs.push((address, vec![byte]));
+                }
+                (cpu(&e[1]), runs)
+            })
+            .collect();
+        for round in 0..5 {
+            for offset in 0..bodies.len() {
+                let (name, body) = bodies[(round + offset) % bodies.len()];
+                let effects = effects.clone();
+                let cursor = Rc::new(RefCell::new(0usize));
+                let position = cursor.clone();
+                x86::set_ext_calls(Some(Box::new(move |m, c, _| {
+                    let mut i = position.borrow_mut();
+                    let (state, writes) = &effects[*i];
+                    let pt = m.page_table();
+                    for run in writes {
+                        let (address, bytes) = run;
+                        let mut chunks = bytes.chunks_exact(4);
+                        for (i, chunk) in chunks.by_ref().enumerate() {
+                            m.fast_set_u32(
+                                pt,
+                                address.wrapping_add(i as u32 * 4),
+                                u32::from_le_bytes(chunk.try_into().unwrap()),
+                            );
+                        }
+                        let offset = bytes.len() - chunks.remainder().len();
+                        for (i, byte) in chunks.remainder().iter().enumerate() {
+                            m.fast_set_u8(pt, address.wrapping_add((offset + i) as u32), *byte);
+                        }
+                    }
+                    *c = state.clone();
+                    *i += 1;
+                })));
+                let mut elapsed = std::time::Duration::ZERO;
+                for iteration in 0..1020 {
+                    for (&a, &b) in &initial {
+                        m.set_u8(a, b);
+                    }
+                    let mut c = initial_cpu.clone();
+                    *cursor.borrow_mut() = 0;
+                    let start = std::time::Instant::now();
+                    body(std::hint::black_box(&mut m), std::hint::black_box(&mut c));
+                    let time = start.elapsed();
+                    if iteration >= 20 {
+                        elapsed += time;
+                    }
+                    if iteration == 0 {
+                        check(&m, &c, &case["after"], "recording bench gate");
+                    }
+                }
+                eprintln!(
+                    "recording count={} mode={} round={round} {name} ns/call={:.1}",
+                    case["count"],
+                    case["mode"],
+                    elapsed.as_nanos() as f64 / 1000.0
+                );
+                x86::set_ext_calls(None);
+            }
+        }
+    }
+}

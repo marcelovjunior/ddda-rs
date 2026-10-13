@@ -21,7 +21,47 @@ pub const PORTS: &[(u32, x86::LiftFn, u8)] = &[
     (0x0112_bba0, duration_high_nibble32, 0xff),
     (0x0112_bbc0, duration_high_nibble16, 0xff),
     (0x0112_bbe0, duration_high_nibble8, 0xff),
+    (0x00fe_db80, save_draw_recording_state, 0xff),
 ];
+
+// Translated from 0x00fedb80 (DDDA.exe 2017-12-13 Steam).
+/// Save the recording state's variable-length descriptor and sort cursor,
+/// then begin a nested state with the requested 16-bit identifier.
+pub fn save_draw_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
+    use ddnative_base::emit;
+    let pt = m.page_table();
+    emit::push(c.esi, m, pt, c);
+    c.esi = c.ecx;
+    c.eax = m.fast_u32(pt, c.esi.wrapping_add(0x30874));
+    c.ecx = m.fast_u32(pt, c.esp.wrapping_add(12));
+    c.eax = c.esi.wrapping_add(c.eax.wrapping_mul(8)).wrapping_add(0x3084c);
+    m.fast_set_u32(pt, c.eax, c.ecx);
+    c.edx = m.fast_u32(pt, c.esi.wrapping_add(0x48));
+    m.fast_set_u32(pt, c.eax.wrapping_add(4), c.edx);
+    c.eax = m.fast_u32(pt, c.esi.wrapping_add(0x14));
+    c.ecx = c.eax.wrapping_mul(8).wrapping_add(0x144);
+    let depth = m.fast_u32(pt, c.esi.wrapping_add(0x30874));
+    c.eax = depth.wrapping_mul(0x8144);
+    c.fl = x86::Flags::new(x86::IMUL, depth, 0x8144, c.eax, 32);
+    emit::push(c.ecx, m, pt, c);
+    c.edx = c.esi.wrapping_add(0xb4);
+    emit::push(c.edx, m, pt, c);
+    c.ecx = c.eax.wrapping_add(c.esi).wrapping_add(0x81f8);
+    emit::push(c.ecx, m, pt, c);
+    emit::push(0xfedbc7, m, pt, c);
+    x86::call_ext(m, c, 0x12efea0);
+    c.edx = (c.edx & 0xffff0000) | u32::from(m.fast_u16(pt, c.esp.wrapping_add(0x14)));
+    let depth = m.fast_u32(pt, c.esi.wrapping_add(0x30874));
+    m.fast_set_u32(pt, c.esi.wrapping_add(0x30874), depth.wrapping_add(1));
+    c.eax = 0;
+    c.esp = c.fl.alu_add(c.esp, 12, 32);
+    m.fast_set_u16(pt, c.esi.wrapping_add(0x16a), c.edx as u16);
+    for offset in [0x1d4, 0x1d8, 0x1dc, 0x180] {
+        m.fast_set_u32(pt, c.esi.wrapping_add(offset), 0);
+    }
+    c.esi = emit::pop(m, pt, c);
+    ret(c, 8);
+}
 
 // Translated from 0x011787c0 (DDDA.exe 2017-12-13 Steam).
 /// Dispatch a geometry query, constructing the original temporary AABB
