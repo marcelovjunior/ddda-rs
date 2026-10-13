@@ -28,10 +28,16 @@ MODES = {
     'cast_a': dict(entry=0x01166B10, length=0xEC, stubs={0x00FB3790: 0, 0x00DED390: 1, 0x011669B0: 2, 0x011667B0: 3,
                                                           0x01165E00: 3, 0x01164500: 3, 0x01165560: 3}),
     'query': dict(entry=0x00DEA870, length=0xCC, stubs={0x0115F650: 5}),
+    'walk_single_forward': dict(entry=0x011669B0, length=0xB4, stubs={0x011787C0: 6}, args=2),
+    'walk_single_backward': dict(entry=0x01166A60, length=0xB4, stubs={0x011787C0: 6}, args=2),
+    'walk_low_forward': dict(entry=0x011667B0, length=0xE8, stubs={0x011787C0: 6}, args=3),
+    'walk_low_backward': dict(entry=0x011668A0, length=0xE8, stubs={0x011787C0: 6}, args=3),
+    'walk_high_forward': dict(entry=0x01165E00, length=0xF4, stubs={0x011787C0: 6}, args=3),
+    'walk_high_backward': dict(entry=0x01165EF0, length=0xF4, stubs={0x011787C0: 6}, args=3),
     'segcast': dict(entry=0x0115F650, length=0x790, stubs={0x011C3280: 5, 0x01166B10: 2, 0x00DE46F0: 1, 0x00DE6010: 1,
                                                            0x007C6F90: 0, 0x00DEF0C0: 2, 0x011C3A30: 0}),
 }
-REAL = {0x00FB38E0: 8, 0x00BFC7D0: 8, 0x012EFE20: 0x80, 0x011631F0: 0xB8, 0x00B16AF0: 3}
+REAL = {0x00FB38E0: 8, 0x00BFC7D0: 8, 0x012EFE20: 0x80, 0x011631F0: 0xB8, 0x00B16AF0: 3, 0x01170F60: 8}
 FLOATS = [0x0162ADB0, 0x01406CE0, 0x01621124, 0x0162112C, 0x01629510, 0x01629514, 0x01629518, 0x0161C280]
 THIS, BLOB, STACK, SP = 0x20000000, 0x21000000, 0x0F000000, 0x0F008000
 VTABLE = 0x23000000
@@ -94,6 +100,8 @@ class Oracle:
         word = lambda a: struct.unpack('<I', uc.mem_read(a, 4))[0]
         window = [(esp + i, b) for i, b in enumerate(uc.mem_read(esp, 4 * (1 + nargs)))]
         before = dict(regs=self.regs(), memory=window)
+        if self.mode.startswith('walk_high'):   # the cast context {target, query, slot} on its stack
+            before['objects'] = [(a, uc.mem_read(a, 1)[0]) for a in range(self.entry_esp - 0xc, self.entry_esp) if a in self.written]
         if self.mode in ('query', 'segcast'):
             frame, top = self.frame, (0x100 if self.mode == 'query' else 0x2d0)
             before['objects'] = [(a, uc.mem_read(a, 1)[0]) for a in range(frame + 0xc, frame + top) if a in self.written]
@@ -136,6 +144,21 @@ class Oracle:
             uc.mem_write(esp, struct.pack('<IIIII', h.RET, a0, a1, a2, a3))
             self.frame = ((esp - 4) & ~15) - 0xF4 - 0xC
             nbytes = 20
+        elif self.mode.startswith('walk'):
+            query, block = BLOB, BLOB + 0x400
+            uc.mem_write(query + 0x98, struct.pack('<I', block))
+            uc.mem_write(query + 0xB4, bytes([rng.choice((0, 1))]))
+            uc.mem_write(query + 0xB8, struct.pack('<I', rng.randrange(1 << 32)))
+            uc.mem_write(query + 0xE8, struct.pack('<I', rng.randrange(1 << 32)))
+            uc.mem_write(block + 8, struct.pack('<I', rng.choice((0xFFFFFFFF, rng.randrange(1 << 32), rng.randrange(1 << 32) & rng.randrange(1 << 32)))))
+            uc.mem_write(block + 0x14, struct.pack('<I', rng.choice((0, 2, 3, 6, rng.randrange(1 << 32)))))
+            for off in range(0, 0x2A00, 0x40):
+                uc.mem_write(THIS + 0x1C0 + off + 4, struct.pack('<I', rng.choice((0, 0, 1, rng.randrange(1 << 32)))))
+            shape, slot = rng.randrange(1 << 32), rng.randrange(1 << 32)
+            words = [h.RET, shape, query] + ([slot] if self.cfg['args'] == 3 else [])
+            uc.mem_write(esp, struct.pack('<' + 'I' * len(words), *words))
+            self.entry_esp = esp
+            nbytes = 4 * len(words)
         elif self.mode == 'segcast':
             seg, out, query, block = BLOB, BLOB + 0xC00, BLOB + 0x400, BLOB + 0x800
             for k in range(8):

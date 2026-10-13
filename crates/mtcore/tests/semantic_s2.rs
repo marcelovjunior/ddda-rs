@@ -90,6 +90,7 @@ fn stack_args(target: u32) -> u32 {
         0x00de_6010 => 1,
         0x007c_6f90 => 0,
         0x00fb_3790 => 0,
+        0x0117_87c0 => 6,
         0x00de_d390 | 0x0076_7960 => 1,
         0x0116_6a60 | 0x0116_69b0 => 2,
         0x0116_68a0 | 0x0116_5ef0 | 0x0116_67b0 | 0x0116_5e00 | 0x0116_4500 | 0x0116_5560 => 3,
@@ -237,14 +238,31 @@ fn semantic_sweep_step_matches_original() {
 #[test]
 fn semantic_collision_query_matches_original() {
     ddnative_host::install();
-    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/cast_b.json", mtcore::semantic_s2::cast_shape_b);
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/cast_b.json", mtcore::semantic_s2::cast_shape_b_guest_walks);
     eprintln!("{n} ABI-level cast_shape_b cases passed");
-    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/cast_a.json", mtcore::semantic_s2::cast_shape_a);
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/cast_a.json", mtcore::semantic_s2::cast_shape_a_guest_walks);
     eprintln!("{n} ABI-level cast_shape_a cases passed");
     let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/segcast.json", mtcore::semantic_s2::segment_cast);
     eprintln!("{n} ABI-level segment_cast cases passed");
     let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/query.json", mtcore::semantic_s2::world_query);
     eprintln!("{n} ABI-level world_query cases passed");
+}
+
+// verifies the six layer walks 0x011669b0 0x01166a60 0x011667b0 0x011668a0 0x01165e00 0x01165ef0 (ABI level)
+#[test]
+fn semantic_layer_walks_match_original() {
+    ddnative_host::install();
+    for (name, body) in [
+        ("walk_single_forward", mtcore::semantic_s2::walk_single_forward as LiftFn),
+        ("walk_single_backward", mtcore::semantic_s2::walk_single_backward),
+        ("walk_low_forward", mtcore::semantic_s2::walk_low_forward),
+        ("walk_low_backward", mtcore::semantic_s2::walk_low_backward),
+        ("walk_high_forward", mtcore::semantic_s2::walk_high_forward),
+        ("walk_high_backward", mtcore::semantic_s2::walk_high_backward),
+    ] {
+        let n = abi_cases_with_calls(&format!("E:/ddda-re/notes/native-L184/{name}.json"), body);
+        eprintln!("{n} ABI-level {name} cases passed");
+    }
 }
 
 // Backed pages exercise the same fast accessor path as the parallel runtime.
