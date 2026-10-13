@@ -929,6 +929,7 @@ fn replay_fixture(fixture: capture_file::Fixture, raw: Arc<BTreeMap<u32, LiftFn>
             observed,
             fixture.writes,
             raw,
+            &fixture.shaders,
         )
     }))
     .unwrap_or_else(|payload| {
@@ -965,6 +966,7 @@ fn compare_replays(
     observed: mtcore::shadow_lanes::StreamSnapshot,
     observed_writes: BTreeMap<u32, u8>,
     raw: Arc<BTreeMap<u32, LiftFn>>,
+    shaders: &BTreeMap<u32, Vec<u32>>,
 ) -> Result<usize, String> {
     if input.u32(SCHEDULER_GLOBAL) != scheduler {
         return Err("capture scheduler pointer disagrees with recorded memory".into());
@@ -1212,7 +1214,58 @@ fn compare_replays(
             word(&results[1].2)
         );
     }
-    if let Some(diff) = results[0].1.first_difference(&results[1].1) {
+    // Uninitialized constant components (claude-9, docs/tasks/L172): a shader
+    // constant byte may differ only when neither traversal wrote its source
+    // (both executions upload arena residue the producer never set, e.g.
+    // CBSkinning's w, which 0x00FE4960's caller leaves unwritten) and the
+    // bound shader of that stage provably never reads the component
+    // (d3d9shader::Shader::float_reads, conservative). The original's own
+    // parallel branch of DB63E0 allocates from the lanes too, so this residue
+    // differs between its serial and parallel executions as well.
+    let reads: BTreeMap<u32, Option<d3d9shader::FloatReads>> = shaders
+        .iter()
+        .map(|(&handle, tokens)| (handle, d3d9shader::parse(tokens).ok().map(|s| s.float_reads())))
+        .collect();
+    let mut residue: Vec<(Vec<usize>, mtcore::shadow_lanes::ConstByte, u8, u8)> = Vec::new();
+    let mut allow = |path: &[usize],
+                     a: &mtcore::shadow_lanes::Binding,
+                     b: &mtcore::shadow_lanes::Binding,
+                     offset: usize| {
+        let at = offset as u32;
+        let origin = |x: &mtcore::shadow_lanes::Binding| x.constants.iter().find(|(o, _)| *o == at).map(|&(_, c)| c);
+        let (Some(ca), Some(cb)) = (origin(a), origin(b)) else { return false };
+        if ca.section != 1 || (ca.stage, ca.register, ca.byte) != (cb.stage, cb.register, cb.byte) {
+            return false;
+        }
+        if results[0].2.contains_key(&ca.source) || results[1].2.contains_key(&cb.source) {
+            return false;
+        }
+        // the stage's shader handle: metadata (+0x10 vertex, +0x14 pixel),
+        // encoded after the binding's 12 header bytes, equal on both sides
+        let handle_at = 12 + 0x10 + 4 * ca.stage as usize;
+        let handle = |x: &mtcore::shadow_lanes::Binding| {
+            x.bytes.get(handle_at..handle_at + 4).map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+        };
+        let (Some(handle), Some(other)) = (handle(a), handle(b)) else { return false };
+        if handle != other {
+            return false;
+        }
+        let Some(Some(r)) = reads.get(&handle) else { return false };
+        if r.reads(ca.register as usize, (ca.byte / 4) as usize) {
+            return false;
+        }
+        residue.push((path.to_vec(), ca, a.bytes[offset], b.bytes[offset]));
+        true
+    };
+    let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
+    if !residue.is_empty() {
+        let first = &residue[0];
+        eprintln!(
+            "parallel-shadow unread residue bytes allowed={} (first: path {:?} stage {} c{} byte {} serial={:#04x} parallel={:#04x})",
+            residue.len(), first.0, first.1.stage, first.1.register, first.1.byte, first.2, first.3
+        );
+    }
+    if let Some(diff) = first {
         fn entry<'a>(
             stream: &'a mtcore::shadow_lanes::StreamSnapshot,
             path: &[usize],

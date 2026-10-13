@@ -35,6 +35,59 @@ pub struct Shader {
 }
 
 impl Shader {
+    /// The float constant components this shader may read, conservatively:
+    /// a source reads the components its swizzle selects for the lanes the
+    /// instruction uses (the destination write mask for per-component
+    /// operations; x y z for dp3, crs and nrm; x y for dp2add's first two
+    /// sources; all four lanes otherwise), matrix instructions read 2 to 4
+    /// consecutive rows of their second source (3 or 4 lanes each), and a
+    /// relatively indexed source (or a CONST2..4 bank) may read any register
+    /// at the components it selects.
+    pub fn float_reads(&self) -> FloatReads {
+        let mut direct = vec![0u8; 256];
+        let mut any = 0u8;
+        for ins in &self.instructions {
+            let write = ins.dst.as_ref().map_or(0xF, |d| d.mask_or_swizzle & 0xF);
+            for (source, p) in ins.src.iter().enumerate() {
+                if !matches!(p.kind, reg::CONST | reg::CONST2 | reg::CONST3 | reg::CONST4) {
+                    continue;
+                }
+                let (lanes, rows) = match ins.opcode {
+                    op::MOV | op::ADD | op::SUB | op::MAD | op::MUL | op::MIN | op::MAX | op::SLT | op::SGE
+                    | op::FRC | op::LRP | op::CMP | op::CND | op::ABS | op::SGN | op::MOVA | op::DSX
+                    | op::DSY => (write, 1),
+                    op::DP3 | op::CRS | op::NRM => (0b0111, 1),
+                    op::DP4 => (0b1111, 1),
+                    op::DP2ADD if source < 2 => (0b0011, 1),
+                    op::M4X4 if source == 1 => (0b1111, 4),
+                    op::M4X3 if source == 1 => (0b1111, 3),
+                    op::M3X4 if source == 1 => (0b0111, 4),
+                    op::M3X3 if source == 1 => (0b0111, 3),
+                    op::M3X2 if source == 1 => (0b0111, 2),
+                    op::M4X4 | op::M4X3 => (0b1111, 1),
+                    op::M3X4 | op::M3X3 | op::M3X2 => (0b0111, 1),
+                    _ => (0b1111, 1),
+                };
+                let mut components = 0u8;
+                for lane in 0..4 {
+                    if lanes >> lane & 1 != 0 {
+                        components |= 1 << (p.mask_or_swizzle >> (2 * lane) & 3);
+                    }
+                }
+                if p.kind != reg::CONST || p.relative.is_some() {
+                    any |= components;
+                    continue;
+                }
+                for row in 0..rows {
+                    if let Some(m) = direct.get_mut(p.index as usize + row) {
+                        *m |= components;
+                    }
+                }
+            }
+        }
+        FloatReads { direct, any }
+    }
+
     /// Exclusive end of the float constant registers read by this shader.
     /// Relative indexing can reach the entire stage register file. Matrix
     /// instructions implicitly read consecutive rows from their second source.
@@ -61,6 +114,25 @@ impl Shader {
             }
         }
         end.min(limit)
+    }
+}
+
+/// The float constant components a shader may read (`Shader::float_reads`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatReads {
+    /// Per register (0..256): the components (bit 0 x .. bit 3 w) read with
+    /// a constant index.
+    pub direct: Vec<u8>,
+    /// The components read through a relative index (or a register bank this
+    /// analysis does not resolve): any register may be read at these.
+    pub any: u8,
+}
+
+impl FloatReads {
+    /// Whether component `component` (0..4) of `register` may be read.
+    pub fn reads(&self, register: usize, component: usize) -> bool {
+        let bit = 1u8 << component;
+        self.any & bit != 0 || self.direct.get(register).is_none_or(|m| m & bit != 0)
     }
 }
 
