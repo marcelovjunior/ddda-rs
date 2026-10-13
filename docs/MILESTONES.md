@@ -2,6 +2,12 @@
 
 ### L109c boot attribution and inflate default (2026-10-13)
 
+- Gameplay-memory follow-up: opt-in ticks now distinguish process private
+  commitment/residency, live guest-backed bytes and observed unmap churn.
+  Weak handles retain no session. CPU diagnostic: 8 MiB guest pages cost
+  17.62 MB private; three map/unmap cycles retain 52.82 MB until table drop.
+  Two counter/lifetime tests and eight parser tests pass. Game's 13 GB
+  increase is **not yet attributed**; next action is head's counter run.
 - Head combo6: boot archive inflate **4.85 -> 1.39 s**, first Present still
   **5.84–5.86 s**. Cold run has zero shader modules/pipelines through 5.02 s.
 - **632 exact inflate cases** pass again; default-on and explicit-off

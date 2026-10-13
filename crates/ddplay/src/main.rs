@@ -151,6 +151,7 @@ impl App {
                     Err(e) => return status(format!("could not load {exe}: {e}")),
                 };
                 ddruntime::load_log::event("runtime_init_end", format_args!(""));
+                ddruntime::load_log::track_memory(&session.mem);
                 ddruntime::session::install_fault_hook();
                 let _ = proxy.send_event(GameEvent::Input(ddruntime::input::connect()));
                 sink::start(ddruntime::audio::output());

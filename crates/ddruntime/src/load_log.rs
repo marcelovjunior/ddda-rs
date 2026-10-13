@@ -27,6 +27,128 @@ static GEOMETRY_CALLS: AtomicU64 = AtomicU64::new(0);
 static GEOMETRY_NS: AtomicU64 = AtomicU64::new(0);
 static VORBIS_CALLS: AtomicU64 = AtomicU64::new(0);
 static VORBIS_NS: AtomicU64 = AtomicU64::new(0);
+static UNMAP_BACKED_PAGES: AtomicU64 = AtomicU64::new(0);
+static MEMORY_TABLES: std::sync::Mutex<Vec<std::sync::Weak<ddnative_base::mem::PageTable>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Process commitment and resident memory are different measurements.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessMemory {
+    pub private_bytes: u64,
+    pub working_set_bytes: u64,
+    pub peak_working_set_bytes: u64,
+    pub peak_commit_bytes: u64,
+}
+
+#[cfg(windows)]
+pub fn process_memory() -> Option<ProcessMemory> {
+    // PROCESS_MEMORY_COUNTERS_EX, checked against the installed Windows
+    // bindings (windows-sys 0.61.2, Win32/System/ProcessStatus).
+    #[repr(C)]
+    #[derive(Default)]
+    struct Counters {
+        size: u32,
+        faults: u32,
+        peak_working_set: usize,
+        working_set: usize,
+        peak_paged_pool: usize,
+        paged_pool: usize,
+        peak_nonpaged_pool: usize,
+        nonpaged_pool: usize,
+        commit: usize,
+        peak_commit: usize,
+        private_usage: usize,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" { fn GetCurrentProcess() -> *mut std::ffi::c_void; }
+    #[link(name = "psapi")]
+    unsafe extern "system" {
+        fn GetProcessMemoryInfo(process: *mut std::ffi::c_void, counters: *mut Counters, size: u32) -> i32;
+    }
+    let mut counters = Counters { size: std::mem::size_of::<Counters>() as u32, ..Counters::default() };
+    let size = counters.size;
+    // SAFETY: current-process pseudo handle and correctly sized writable
+    // PROCESS_MEMORY_COUNTERS_EX storage. Failure is reported as unavailable.
+    if unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, size) } == 0 {
+        return None;
+    }
+    Some(ProcessMemory {
+        private_bytes: counters.private_usage as u64,
+        working_set_bytes: counters.working_set as u64,
+        peak_working_set_bytes: counters.peak_working_set as u64,
+        peak_commit_bytes: counters.peak_commit as u64,
+    })
+}
+
+#[cfg(not(windows))]
+pub fn process_memory() -> Option<ProcessMemory> { None }
+
+fn track_table(table: std::sync::Weak<ddnative_base::mem::PageTable>) {
+    let mut tables = MEMORY_TABLES.lock().unwrap_or_else(|e| e.into_inner());
+    tables.retain(|table| table.strong_count() != 0);
+    if !tables.iter().any(|existing| existing.ptr_eq(&table)) { tables.push(table); }
+}
+
+/// Register a weak diagnostic handle, never retaining a session's pages.
+pub fn track_memory(memory: &crate::memory::GuestMemory) {
+    if enabled() { track_table(memory.diagnostic_table()); }
+}
+
+pub(crate) fn unmap_backed(pages: u64) {
+    UNMAP_BACKED_PAGES.fetch_add(pages, Relaxed);
+}
+
+fn guest_memory() -> (u64, u64) {
+    let mut tables = MEMORY_TABLES.lock().unwrap_or_else(|e| e.into_inner());
+    tables.retain(|table| table.strong_count() != 0);
+    let mut spaces = 0;
+    let mut pages = 0;
+    for table in tables.iter().filter_map(std::sync::Weak::upgrade) {
+        spaces += 1;
+        pages += table.backed_count() as u64;
+    }
+    (spaces, pages * 4096)
+}
+
+fn memory_totals() {
+    let (spaces, guest_bytes) = guest_memory();
+    // unback retains old allocations until PageTable drops. This cumulative
+    // observation helps identify churn, but is not a retained-byte gauge:
+    // it spans dropped sessions and can race concurrent unmaps.
+    let unmapped = UNMAP_BACKED_PAGES.load(Relaxed) * 4096;
+    if let Some(p) = process_memory() {
+        event("memory_totals", format_args!(
+            "available=1 private_bytes={} working_set_bytes={} peak_working_set_bytes={} peak_commit_bytes={} guest_spaces={} guest_backed_bytes={} guest_unmap_backed_bytes={}",
+            p.private_bytes, p.working_set_bytes, p.peak_working_set_bytes,
+            p.peak_commit_bytes, spaces, guest_bytes, unmapped));
+    } else {
+        event("memory_totals", format_args!(
+            "available=0 guest_spaces={} guest_backed_bytes={} guest_unmap_backed_bytes={}", spaces, guest_bytes, unmapped));
+    }
+}
+
+#[cfg(test)]
+mod memory_counter_tests {
+    use super::*;
+    use ddnative_base::mem::Mem;
+
+    #[test]
+    fn tracks_backed_pages_without_retaining_or_double_counting_a_space() {
+        let mut memory = crate::memory::GuestMemory::new();
+        memory.map_lazy(0x1000, 0x2000, 3).unwrap();
+        let weak = memory.diagnostic_table();
+        track_table(weak.clone());
+        track_table(memory.share().diagnostic_table());
+        assert_eq!(guest_memory(), (1, 0));
+        memory.set_u8(0x1000, 42);
+        assert_eq!(guest_memory(), (1, 4096));
+        memory.unmap(0x1000, 4096);
+        assert_eq!(guest_memory(), (1, 0));
+        drop(memory);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(guest_memory(), (0, 0));
+    }
+}
 
 pub fn enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("DDRUNTIME_LOAD_LOG").as_deref() == Ok("1"))
@@ -147,6 +269,7 @@ pub fn totals() {
     if !enabled() {
         return;
     }
+    memory_totals();
     event("boot_cpu_totals", format_args!(
         "geometry_calls={} geometry_ns={} vorbis_calls={} vorbis_ns={}",
         GEOMETRY_CALLS.load(Relaxed), GEOMETRY_NS.load(Relaxed),

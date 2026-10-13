@@ -71,6 +71,10 @@ impl GuestMemory {
         GuestMemory { space: self.space.clone() }
     }
 
+    pub(crate) fn diagnostic_table(&self) -> std::sync::Weak<PageTable> {
+        std::sync::Arc::downgrade(&self.space)
+    }
+
     fn s(&self) -> &PageTable {
         &self.space
     }
@@ -118,10 +122,14 @@ impl GuestMemory {
     /// Unmap the pages of [addr, addr + len) that are mapped, dropping their
     /// contents (VirtualFree's decommit: the pages fault again).
     pub fn unmap(&mut self, addr: u32, len: u32) {
+        let log = crate::load_log::enabled();
+        let mut backed = 0u64;
         for p in page_range(addr, len) {
+            if log && !self.s().page(p).is_null() { backed += 1; }
             self.s().unback(p);
             self.s().set_perm(p, 0);
         }
+        if log { crate::load_log::unmap_backed(backed); }
     }
 
     pub fn is_mapped(&self, addr: u32) -> bool {

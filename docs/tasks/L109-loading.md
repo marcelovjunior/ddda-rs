@@ -190,6 +190,34 @@ Reset assertion in `d3d9_device`; no checks were weakened. Targeted
 geometry tests pass with registration off and on. No shard or game build
 was performed by this agent; codex-7/head own the combined emitter gate.
 
+#### Memory attribution extension (head 11375)
+
+Head reports process private bytes rising from 2.6 GB to 15.7–17 GB at
+gameplay load. Earlier working-set values are not directly comparable.
+`DDRUNTIME_LOAD_LOG=1` now emits `memory_totals` each existing tick:
+process private commitment, working set, peak working set/commit, number
+of guest address spaces, live guest-backed bytes, and cumulative observed
+backed bytes passed through unmap. Failed/non-Windows process queries are
+explicitly unavailable. Guest tracking uses deduplicated weak handles:
+telemetry does not prolong a session or retain its page allocations.
+
+The unmap counter is an observation, **not a retained-memory gauge**: it
+spans dropped sessions and can race simultaneous unmaps. Code evidence:
+`PageTable::unback` keeps old allocations until the whole table drops.
+CPU-only synthetic measurement on this host: mapping/touching **8 MiB**
+of guest pages raises private commitment by **17.62 MB**; unmap returns
+live pages to zero but retains the commitment. Three cycles reach
+**52.82 MB** with zero live pages. Dropping the table releases it. This
+demonstrates page-allocation overhead and retirement retention, but does
+not yet attribute the game's 13 GB spike.
+
+Validation: real VirtualAlloc/VirtualFree process-counter test passes;
+guest weak-handle/backing/deduplication test passes; eight timeline parser
+tests pass. `cargo test -p ddruntime --no-default-features --test load_memory
+guest_backing_and_retirement_cost -- --ignored --nocapture` reproduces the
+CPU-only diagnostic. Next: head captures gameplay load with these counters
+alongside GPU resource/pipeline counts before choosing a memory fix.
+
 ### Continuation: readable inflate fast loop (2026-10-13)
 
 Rebased onto `task/fps-line`; baseline instrumentation/read scratch is

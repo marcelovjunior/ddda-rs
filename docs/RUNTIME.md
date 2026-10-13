@@ -31,6 +31,14 @@ boundaries**, NaN payloads and MXCSR (original SSE runs on hardware in the
 recorder). Unit values, axis vectors and strings remain in guest memory.
 Visible boot timings and the depth-four game comparison remain pending.
 
+Loading ticks also include `memory_totals`: process private commitment
+and resident working set, live guest page bytes and cumulative backed-page
+unmap observations. The latter is not a retained-memory gauge. Guest
+tracking uses weak handles; it does not keep session memory alive. A
+synthetic map/unmap diagnostic confirms page backing overhead and retention
+until the table drops; attribution of head's gameplay memory spike awaits
+the instrumented run.
+
 `DDRUNTIME_LOAD_LOG=1` adds process-relative startup/movie/file/archive/GPU
 timing and frame counters. `scripts/load_timeline.py` produces a timeline;
 UI milestones require explicit head-observed timestamps. Service totals
