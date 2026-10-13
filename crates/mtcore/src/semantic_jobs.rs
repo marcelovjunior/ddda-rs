@@ -1,7 +1,7 @@
 //! Semantic job-thread routines, with original guest storage and callback order.
 use ddnative_base::{
     mem::{Mem, Pages},
-    x86::{self, Cpu},
+    x86::Cpu,
 };
 
 // Translated from 0x010A35D0 (DDDA.exe 2017-12-13 Steam).
@@ -27,7 +27,7 @@ pub fn query_bounds_tree(m: &mut dyn Mem, c: &mut Cpu) {
             c.esp = c.esp.wrapping_sub(4);
             p.set_u32(m, c.esp, value);
         }
-        x86::call_ext(m, c, 0x010a2460);
+        crate::semantic::call_guest(m, c, 0x010a2460);
     } else {
         let counter = 0x018d5ee8u32.wrapping_add(lane * 4);
         let depth = p.u32(m, counter);
@@ -63,7 +63,7 @@ pub fn query_bounds_tree(m: &mut dyn Mem, c: &mut Cpu) {
                         p.set_u32(m, c.esp, value);
                     }
                     c.ecx = receiver;
-                    x86::call_ext(m, c, callback);
+                    crate::semantic::call_guest(m, c, callback);
                     result |= c.eax;
                 }
             }

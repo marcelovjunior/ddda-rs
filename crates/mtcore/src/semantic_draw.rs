@@ -55,7 +55,7 @@ fn largest_row_norm(m: &dyn Mem, pg: Pages, model: u32) -> f32 {
 }
 
 fn guest(target: u32) -> impl FnOnce(&mut dyn Mem, &mut Cpu) {
-    move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target)
+    move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target)
 }
 
 /// 0x00EA5320, `model->draw_mesh(context, mesh, materials, position,

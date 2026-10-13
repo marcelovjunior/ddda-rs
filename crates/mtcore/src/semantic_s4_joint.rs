@@ -5,7 +5,7 @@
 //! (crates/mtcore/tests/semantic_s4.rs).
 use super::semantic_s4_rt as rt;
 use ddnative_base::mem::{Mem, Pages};
-use ddnative_base::x86::{call_ext, Cpu};
+use ddnative_base::x86::Cpu;
 
 // Translated from 0x0081fd10 (DDDA.exe 2017-12-13 Steam), mechanically by
 // research/native/semport.py (operation order, widths and memory accesses
@@ -1244,7 +1244,7 @@ pub fn joint_rebase(m: &mut dyn Mem, c: &mut Cpu) {
                 esp = esp.wrapping_sub(4); pg.set_u32(m, esp, 0x0082082b);
                 (c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi) = (eax, ecx, edx, ebx, esp, ebp, esi, edi);
                 c.xmm = xmm.map(|v| v.map(f32::to_bits));
-                call_ext(m, c, target);
+                crate::semantic::call_guest(m, c, target);
                 (eax, ecx, edx, ebx, esp, ebp, esi, edi) = (c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi);
                 xmm = c.xmm.map(|v| v.map(f32::from_bits));
                 // 0082082b: test eax, eax
@@ -2511,7 +2511,7 @@ pub fn joint_rebase(m: &mut dyn Mem, c: &mut Cpu) {
                 esp = esp.wrapping_sub(4); pg.set_u32(m, esp, 0x008213c9);
                 (c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi) = (eax, ecx, edx, ebx, esp, ebp, esi, edi);
                 c.xmm = xmm.map(|v| v.map(f32::to_bits));
-                call_ext(m, c, target);
+                crate::semantic::call_guest(m, c, target);
                 (eax, ecx, edx, ebx, esp, ebp, esi, edi) = (c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi);
                 xmm = c.xmm.map(|v| v.map(f32::from_bits));
                 // 008213c9: test eax, eax

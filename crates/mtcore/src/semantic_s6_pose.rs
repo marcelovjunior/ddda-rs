@@ -183,7 +183,7 @@ pub(crate) fn crt_f32_at(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, base: u32, tar
         return v;
     }
     c.xmm[0][0] = x.to_bits();
-    call_from(m, c, pg, base, 0, &[], back, |m, c| ddnative_base::x86::call_ext(m, c, target));
+    call_from(m, c, pg, base, 0, &[], back, |m, c| crate::semantic::call_guest(m, c, target));
     f32::from_bits(c.xmm[0][0])
 }
 

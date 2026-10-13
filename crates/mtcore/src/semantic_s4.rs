@@ -5,7 +5,7 @@
 //! ECX/EDX, the flags and popped stack scratch are not reproduced.
 use crate::semantic::call_from;
 use ddnative_base::mem::{Mem, Pages};
-use ddnative_base::x86::{call_ext, Cpu};
+use ddnative_base::x86::Cpu;
 
 /// What the x87 `FLD m32` / `FSTP m32` pair does to a float's bits: a
 /// signalling NaN comes back quiet, everything else is unchanged.
@@ -40,7 +40,7 @@ pub fn actor_update(m: &mut dyn Mem, c: &mut Cpu) {
     let frame = entry.wrapping_sub(8);
     c.ebx = 1;
     c.esi = this;
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     // a call of a (non-virtual) guest function on `this`
     macro_rules! call {
         ($back:expr, $target:expr) => {
@@ -60,7 +60,7 @@ pub fn actor_update(m: &mut dyn Mem, c: &mut Cpu) {
         () => {{
             c.esp = entry;
             c.ecx = this;
-            call_ext(m, c, 0x00fd_f600);
+            crate::semantic::call_guest(m, c, 0x00fd_f600);
             (c.ebx, c.ebp, c.esi, c.edi) = saved;
             return;
         }};
