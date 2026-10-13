@@ -40,7 +40,7 @@ pub fn comisd(a: [u32; 4], b: [u32; 4]) -> super::Flags {
             1
         }
     };
-    super::Flags::new(super::COMISS, 0, 0, r, 32)
+    super::Flags::make(super::COMISS, 0, 0, r, 32)
 }
 
 macro_rules! binary {
@@ -153,7 +153,7 @@ fn compare_flags(rflags: u64) -> super::Flags {
         (true, false, false) => 0,
         _ => 1,
     };
-    super::Flags::new(super::COMISS, 0, 0, r, 32)
+    super::Flags::make(super::COMISS, 0, 0, r, 32)
 }
 
 /// COMISS (ORDERED) / UCOMISS on the host, under the live MXCSR: the
