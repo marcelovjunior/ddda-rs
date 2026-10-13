@@ -57,3 +57,20 @@ single-binding bench does not exercise.
 - The remaining per-draw guest reads.
 - The per-draw `objects()` dirty check: a lock-free "nothing dirty" test
   needs a counter in d3d9dev (claude-9's file).
+
+## The combo39/42 verify mismatches (fixed in 3d2417f4)
+
+- combo39 had 1 mismatch (ps c4) and combo42 had 4 (vs c9). fefc60d2's
+  verify context showed what they were.
+- In combo42, all four were a written register (not an uncovered one).
+  The binding came "from this frame's cache", and the records shared one
+  binding.
+- The binding had been used earlier in the frame and was used again after
+  other bindings. Its constant source had changed in between. The
+  original's apply (0x00DAA8B0) re-reads the values whenever the context
+  holds another binding. The sink had reused its first read of the frame.
+- Fix: the decoded part is reused only by the draw right after. A use after
+  another binding, a clear, a copy or a nested list reads the values again.
+  The content cache still avoids allocating when they did not change.
+- Oracle test: a binding used again after another one in the same frame
+  sees its new values; the consecutive draw keeps its part.
