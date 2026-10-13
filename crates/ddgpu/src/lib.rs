@@ -472,9 +472,12 @@ impl WgpuBackend {
     /// A backend on the default adapter without a window.
     pub fn headless() -> Option<WgpuBackend> {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        // Permit bounded headless checks on a chosen backend without changing
-        // normal adapter selection or validation flags.
-        descriptor.backends = wgpu::Backends::from_env().unwrap_or(descriptor.backends);
+        // Do not initialize the unused OpenGL backend alongside Vulkan/DX12.
+        // On the NVIDIA Windows driver, parallel headless instance creation
+        // can deadlock Vulkan device/pipeline creation against WGL's instance
+        // thread exiting inside the driver (L96, tests/cache.rs). Native
+        // backends remain available; WGPU_BACKEND can explicitly opt into GL.
+        descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY);
         let instance = wgpu::Instance::new(descriptor);
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         let needed = Self::required_features();
@@ -2155,10 +2158,10 @@ fn rect_or_full(r: [i32; 4], w: u32, h: u32) -> [i32; 4] {
 
 impl GraphicsBackend for WgpuBackend {
     fn copy(&mut self, c: &CopyCall) {
-        self.flush();
         // depth-stencil to depth-stencil (D3D9: whole surfaces, outside a
         // scene): drawn, since WebGPU cannot copy depth-stencil textures
         if is_depth_format(c.src.format) || is_depth_format(c.dst.format) {
+            self.flush();
             if let Err(e) = self.copy_depth(&c.src, &c.dst) {
                 self.errors.push(format!("StretchRect (depth-stencil): {e}"));
             }
@@ -2172,6 +2175,7 @@ impl GraphicsBackend for WgpuBackend {
         // averaged by the GPU's resolve) into a single-sampled texture of
         // its size, which is then copied like any other source
         if stex.sample_count() > 1 {
+            self.flush();
             match self.resolve_texture(&stex, sformat, sw, sh) {
                 Ok(t) => stex = t,
                 Err(e) => {
@@ -2188,15 +2192,28 @@ impl GraphicsBackend for WgpuBackend {
         let same_size = sr[2] - sr[0] == dr[2] - dr[0] && sr[3] - sr[1] == dr[3] - dr[1];
         // (a multisampled destination is drawn into: WebGPU copies need one sample)
         if same_size && sformat == dformat && dtex.sample_count() == 1 && sr[0] >= 0 && sr[1] >= 0 && dr[0] >= 0 && dr[1] >= 0 {
-            let mut enc = self.device.create_command_encoder(&Default::default());
+            // L95: recorded into the open encoder after the draws before it
+            // (the GPU runs them in that order), not a flush plus a
+            // submission of its own; it counts toward the submit limit
+            self.end_pass();
+            {
+                let mut uses = self.open_uses.borrow_mut();
+                uses.extend([&c.src, &c.dst].into_iter().filter_map(|t| t.texture.map(|x| x.resource)));
+            }
+            let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
             enc.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo { texture: &stex, mip_level: slevel, origin: wgpu::Origin3d { x: sr[0] as u32, y: sr[1] as u32, z: slayer }, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyTextureInfo { texture: &dtex, mip_level: dlevel, origin: wgpu::Origin3d { x: dr[0] as u32, y: dr[1] as u32, z: dlayer }, aspect: wgpu::TextureAspect::All },
                 wgpu::Extent3d { width: (sr[2] - sr[0]) as u32, height: (sr[3] - sr[1]) as u32, depth_or_array_layers: 1 },
             );
-            self.queue.submit([enc.finish()]);
+            *self.open.borrow_mut() = Some(enc);
+            self.open_draws.set(self.open_draws.get() + 1);
+            if self.open_draws.get() >= DRAWS_PER_SUBMIT {
+                self.flush();
+            }
             return;
         }
+        self.flush();
         let view = stex.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: slevel, mip_level_count: Some(1),
             base_array_layer: slayer, array_layer_count: Some(1), ..Default::default()

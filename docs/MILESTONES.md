@@ -1978,3 +1978,15 @@ opening (codex-31), route perf (codex-29).
 - Next: head integrates with the relocated L90 snapshot and compares FPS;
   full-suite green also requires resolving the existing gamma/Reset failure.
   Details: `docs/tasks/L98-clean-flush.md`.
+
+### L96 headless encoder-hang investigation (2026-10-13)
+
+- Concurrent cache tests reproduced a driver deadlock: the WGL instance
+  thread spins during shutdown while Vulkan device/pipeline creation waits.
+  No encoder/readback loop was observed; L88/L95 batching remains intact.
+- Headless initialization now selects primary backends by default, keeping
+  `WGPU_BACKEND` overrides. Focused regression checks clear/copy submit
+  limits, resource tracking and upload ordering.
+- Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
+  comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
+- Next: finish the serialized GPU gate and hand the minimal fix to head.
