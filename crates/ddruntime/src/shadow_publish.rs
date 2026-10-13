@@ -19,7 +19,8 @@
 //! order (as the proof does) and everything is restored before the window
 //! closes. Not exclusive: the traversal runs serially, unchanged.
 //!
-//! Guard: every `DDRUNTIME_PARALLEL_SHADOW_CHECK`-th traversal (default 20)
+//! Guard: the first and every `DDRUNTIME_PARALLEL_SHADOW_CHECK`-th traversal (default 1000;
+//! each proof runs seven private replays and stalls the game for seconds)
 //! runs serially with the private serial==parallel proof of the proof
 //! runner instead; any refused proof turns publication off for the rest of
 //! the run. Counts are logged every 512 traversals.
@@ -41,7 +42,7 @@ pub(super) fn enabled() -> bool {
 fn check_every() -> u64 {
     static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
-        std::env::var("DDRUNTIME_PARALLEL_SHADOW_CHECK").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(20)
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_CHECK").ok().and_then(|v| v.parse().ok()).filter(|&n| n > 0).unwrap_or(1000)
     })
 }
 
@@ -112,6 +113,9 @@ pub(super) struct Storage {
 static STORAGE: Mutex<Option<Storage>> = Mutex::new(None);
 
 fn allocate(size: u32) -> u32 {
+    // the heap is guest state: under the service lock (translated code runs
+    // without it in parallel mode)
+    let _lock = crate::threads::service();
     crate::services::with_state(|st| st.heap.alloc(size)).expect("guest heap for the parallel shadow copies")
 }
 
