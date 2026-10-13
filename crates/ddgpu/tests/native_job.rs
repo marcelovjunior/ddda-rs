@@ -234,6 +234,7 @@ fn native_job_encoding_cost() {
     let full_banks = std::env::var("L164_FULL_BANKS").as_deref() == Ok("1");
     if full_banks {
         for constants in [&mut seed.ps_constants, &mut seed.vs_constants] {
+            let constants = Arc::make_mut(constants);
             constants.ints.push(NativeIntWrite { first: 0, registers: vec![[0; 4]; 16].into() });
             constants.bools.push(NativeBoolWrite { first: 0, registers: vec![0; 16].into() });
         }

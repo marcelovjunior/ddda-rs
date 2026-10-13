@@ -252,6 +252,7 @@ fn autoplay(events: EventSender) {
             if high >= 2 {
                 eprintln!("ddplay stage: gameplay t={t:.0}s");
                 playing = true;
+                autowalk(events.clone());
                 continue;
             }
             if p > 0 {
@@ -260,6 +261,33 @@ fn autoplay(events: EventSender) {
                     std::thread::sleep(std::time::Duration::from_millis(80));
                 }
             }
+        }
+    });
+}
+
+/// `DDPLAY_AUTOWALK=1` (L179): 15 s into gameplay the autoplay walks the
+/// character, holding W 6 s, D 2 s, W 6 s, A 2 s, over and over, so an
+/// unattended run streams the world in and out as a player moving around
+/// does (a standing run never releases textures: the train 7 dips only
+/// showed up while the user moved).
+fn autowalk(events: EventSender) {
+    if std::env::var_os("DDPLAY_AUTOWALK").is_none() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("autowalk".into()).spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(15));
+        // (vk, scan, seconds held): W, D, W, A
+        let pattern = [(0x57u8, 0x11u8, 6.0f64), (0x44, 0x20, 2.0), (0x57, 0x11, 6.0), (0x41, 0x1e, 2.0)];
+        for &(vk, scan, hold) in pattern.iter().cycle() {
+            eprintln!("ddplay autowalk vk={vk:#04x} {hold}s");
+            if events.send(Event::Key { hwnd: 0, vk, scan, down: true, extended: false, system: false }).is_err() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs_f64(hold));
+            if events.send(Event::Key { hwnd: 0, vk, scan, down: false, extended: false, system: false }).is_err() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     });
 }

@@ -93,6 +93,9 @@ use std::time::{Duration, Instant};
 
 #[path = "ndraw_compare.rs"]
 pub mod comparison;
+#[path = "ndraw_ops.rs"]
+mod ops;
+pub(crate) use ops::{observe_op, Op};
 
 /// What `DDDRAW_NATIVE` asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,14 +211,17 @@ pub enum Refusal {
     /// inside a span of type-7 commands (a query begun and not ended): the
     /// D3D9 path draws it, so the backend counts its samples
     Query,
+    /// a Clear's colour check under an x87 rounding mode other than to
+    /// nearest (ops::clear_args)
+    Precision,
 }
 
 impl Refusal {
-    const ALL: [Refusal; 18] = [
+    const ALL: [Refusal; 19] = [
         Refusal::Instanced, Refusal::NotScene, Refusal::NullBinding, Refusal::Decode, Refusal::ViewportGlobals,
         Refusal::BlendFactor, Refusal::NoColourTarget, Refusal::NoIndices, Refusal::ZeroStride, Refusal::Missing,
         Refusal::Shader, Refusal::FloatsUncovered, Refusal::IntsUncovered, Refusal::BoolsUncovered,
-        Refusal::SamplersUncovered, Refusal::Device, Refusal::Primitive, Refusal::Query,
+        Refusal::SamplersUncovered, Refusal::Device, Refusal::Primitive, Refusal::Query, Refusal::Precision,
     ];
 }
 
@@ -756,27 +762,81 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         }
     }
     // the same as the binding's part of an earlier frame: that part; else
-    // a new part, keeping an unchanged stage's bank (one bank copied when
-    // only the other stage's registers changed)
+    // a part of the same content seen lately (L180: the game's bindings
+    // move between frames, their content mostly does not), else a new part,
+    // keeping an unchanged stage's bank
     let part = match previous {
-        Some(p) if Arc::ptr_eq(&p.meta, &meta) && p.alpha == alpha && p.written == written
-            && *p.constants[0] == banks[0] && *p.constants[1] == banks[1] => p.clone(),
-        _ => Arc::new(BindingPart {
-            meta,
-            alpha,
-            // a changed bank moves into the part (the scratch bank starts
-            // over: an allocation, not a copy of the whole bank)
-            constants: std::array::from_fn(|stage| match previous {
-                Some(p) if *p.constants[stage] == banks[stage] => p.constants[stage].clone(),
-                _ => Arc::new(std::mem::take(&mut banks[stage])),
-            }),
-            written,
-            native: Default::default(),
-            uncovered,
-        }),
+        Some(p) if same_part(p, &meta, alpha, &written, &banks) => p.clone(),
+        _ => {
+            let key = content_key(&meta, alpha, &written, &banks);
+            match c.by_content.get_mut(&key) {
+                Some((seen, p)) if same_part(p, &meta, alpha, &written, &banks) => {
+                    *seen = c.frame;
+                    p.clone()
+                }
+                _ => {
+                    let part = Arc::new(BindingPart {
+                        meta,
+                        alpha,
+                        // a changed bank moves into the part (the scratch bank
+                        // starts over: an allocation, not a copy of the bank)
+                        constants: std::array::from_fn(|stage| match previous {
+                            Some(p) if *p.constants[stage] == banks[stage] => p.constants[stage].clone(),
+                            _ => Arc::new(std::mem::take(&mut banks[stage])),
+                        }),
+                        written,
+                        native: Default::default(),
+                        uncovered,
+                    });
+                    c.by_content.insert(key, (c.frame, part.clone()));
+                    part
+                }
+            }
+        }
     };
     c.banks = banks;
     Ok(part)
+}
+
+/// Whether part `p` is what these decoded values make.
+fn same_part(p: &BindingPart, meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64; 4], u16, u16); 2], banks: &[Constants; 2]) -> bool {
+    Arc::ptr_eq(&p.meta, meta) && p.alpha == alpha && p.written == *written && *p.constants[0] == banks[0] && *p.constants[1] == banks[1]
+}
+
+/// A binding's content key (L180): its metadata, alpha test and the
+/// registers it writes, with their values (a hash; `same_part` decides).
+fn content_key(meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64; 4], u16, u16); 2], banks: &[Constants; 2]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = crate::fasthash::FxHasher::default();
+    h.write_usize(Arc::as_ptr(meta) as usize);
+    h.write_u64(alpha.map_or(u64::MAX, |(f, r)| (f as u64) << 32 | r as u64));
+    for (stage, (floats, ints, bools)) in written.iter().enumerate() {
+        let bank = &banks[stage];
+        for (word, &mask) in floats.iter().enumerate() {
+            h.write_u64(mask);
+            let mut m = mask;
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                if let Some(r) = bank.f.get(n) {
+                    h.write_u64(r[0] as u64 | (r[1] as u64) << 32);
+                    h.write_u64(r[2] as u64 | (r[3] as u64) << 32);
+                }
+            }
+        }
+        h.write_u32(*ints as u32 | (*bools as u32) << 16);
+        for n in 0..16 {
+            if ints >> n & 1 != 0 {
+                let r = bank.i[n];
+                h.write_u64(r[0] as u32 as u64 | (r[1] as u32 as u64) << 32);
+                h.write_u64(r[2] as u32 as u64 | (r[3] as u32 as u64) << 32);
+            }
+            if bools >> n & 1 != 0 {
+                h.write_u32(bank.b[n]);
+            }
+        }
+    }
+    h.finish()
 }
 
 /// A draw whose binding leaves float registers its shaders read unwritten:
@@ -989,6 +1049,27 @@ impl Mirror {
                 .flatten()
                 .map(|info| TextureBinding { sampler: stage_of(i), resource: h, states: m.rows[i], ..info })
         });
+        // a list of the same content used lately (L180: the draws' texture
+        // sets repeat; no allocation, and no drop later)
+        let key = {
+            use std::hash::Hasher;
+            let mut h = crate::fasthash::FxHasher::default();
+            for t in found.iter().flatten() {
+                h.write_u32(t.sampler);
+                h.write_u32(t.resource);
+                h.write_u32(t.format ^ t.width << 8 ^ t.height << 20);
+                for &s in &t.states {
+                    h.write_u32(s);
+                }
+            }
+            h.finish()
+        };
+        if let Some((seen, list)) = c.texture_lists.get_mut(&key) {
+            if list.iter().eq(found.iter().flatten()) {
+                *seen = c.frame;
+                return list.clone();
+            }
+        }
         // the slots bound, in order: an exact-length iterator, so the slice
         // is allocated once (no Vec first)
         let mut at = [0u8; 21];
@@ -999,7 +1080,9 @@ impl Mirror {
                 n += 1;
             }
         }
-        at[..n].iter().map(|&i| found[i as usize].clone().unwrap()).collect()
+        let list: Arc<[TextureBinding]> = at[..n].iter().map(|&i| found[i as usize].clone().unwrap()).collect();
+        c.texture_lists.insert(key, (c.frame, list.clone()));
+        list
     }
 }
 
@@ -1021,9 +1104,11 @@ fn shadow_samplers(g: &G, ctx: u32, binding: u32, meta: &MetaPart, info: &FrameI
                     let words = |o: u32| -> [u32; 3] { std::array::from_fn(|k| g.u32(o.wrapping_add(0x30 + 4 * k as u32))) };
                     let new = words(sampler);
                     let old_words = (old != 0).then(|| words(old));
-                    for c in mtstate::packed(mtstate::SAMPLER, &new, old_words.as_ref().map(|w| &w[..]), Some(slot.stage), info.filtering) {
-                        sh.sampler_states.push((c.args[0], c.args[1], c.args[2]));
-                    }
+                    // (no Vec of calls: L180)
+                    let stage = slot.stage;
+                    mtstate::packed_each(mtstate::SAMPLER, &new, old_words.as_ref().map(|w| &w[..]), Some(stage), info.filtering, |state, value| {
+                        sh.sampler_states.push((stage, state, value))
+                    });
                 }
                 sh.write(cache, sampler);
             }
@@ -1232,6 +1317,12 @@ pub struct Caches {
     bindings: FxMap<u32, (u64, Result<Arc<BindingPart>, Refusal>)>,
     /// the banks a binding's constants are read into
     banks: [Constants; 2],
+    /// binding parts by content (`content_key`), with the frame they were
+    /// last used in: a binding at a new address with content seen lately
+    /// takes that part (no allocation, and no drop later)
+    by_content: FxMap<u64, (u64, Arc<BindingPart>)>,
+    /// texture lists by content, with the frame they were last used in
+    texture_lists: FxMap<u64, (u64, Arc<[TextureBinding]>)>,
     /// stream and target bindings by address, with the frame they were last
     /// built in (kept across frames: `kept_part`)
     streams: FxMap<u32, (u64, Result<Arc<StreamPart>, Refusal>)>,
@@ -1252,8 +1343,13 @@ impl Caches {
     /// (with the D3D lock held).
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
-        if self.bindings.len() > 16384 {
-            self.bindings.clear();
+        // bindings and contents unused for three frames go (every eighth
+        // frame; L180: clearing the whole table dropped every part at once)
+        if self.frame % 8 == 0 {
+            let frame = self.frame;
+            self.bindings.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.by_content.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.texture_lists.retain(|_, (seen, _)| *seen + 3 > frame);
         }
         if self.streams.len() > 16384 {
             self.streams.clear();
@@ -1392,6 +1488,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         r?
     };
     let s = kept_part(&mut c.streams, c.frame, streams, || stream_part(&g, streams))?;
+    let rebuilt = !matches!(c.bindings.get(&shader), Some((frame, _)) if *frame == c.frame);
     let b = match c.bindings.get(&shader) {
         Some((frame, r)) if *frame == c.frame => r.clone()?,
         other => {
@@ -1515,7 +1612,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         targets: t.targets.clone(),
         depth: t.depth.clone(),
     };
-    Ok(Decoded { call, shadow: sh, binding: b })
+    Ok(Decoded { call, shadow: sh, binding: b, rebuilt })
 }
 
 /// A decoded draw: its DrawCall, the sampler section's effects and the
@@ -1524,6 +1621,8 @@ pub struct Decoded {
     pub call: DrawCall,
     pub shadow: Shadow,
     pub binding: Arc<BindingPart>,
+    /// the binding was decoded for this draw (not this frame's cached part)
+    pub rebuilt: bool,
 }
 
 /// Make a taken draw's sampler section effects: the context words and the
@@ -1871,6 +1970,8 @@ struct Totals {
     /// native jobs sent, and their draws
     jobs: u64,
     native: u64,
+    /// clears and copies (types 4 and 5)
+    ops: ops::Stats,
 }
 
 struct Inner {
@@ -2016,9 +2117,18 @@ impl Native {
                 }
             }
         }
-        if kind > 3 {
-            return Taken::Default;
+        match kind {
+            0..=3 => {}
+            4 if ops::enabled() => return self.clear(g, m, context, record),
+            5 if ops::enabled() => return self.copy(g, m, record),
+            _ => return Taken::Default,
         }
+        self.draw(g, m, context, record, kind)
+    }
+
+    /// A draw record (types 0..3, and a Clear's fallback draw as type 0).
+    fn draw(&self, g: &mut Inner, m: &mut dyn Mem, context: u32, record: u32, kind: u32) -> Taken {
+        let f = &mut g.frame;
         let size = target_size(m, record);
         *f.draws_by_size.entry(size).or_default() += 1;
         if self.mode == Mode::Census {
@@ -2047,12 +2157,20 @@ impl Native {
                 *t.refused.entry(r).or_default() += 1;
                 Taken::Default
             }
-            Ok(Decoded { call: d, .. }) if self.mode == Mode::Verify => {
+            Ok(Decoded { call: d, binding, rebuilt, .. }) if self.mode == Mode::Verify => {
                 let reads = [&d.vertex_shader, &d.pixel_shader].map(|t| {
                     let key = t.as_ref().map_or(0, |t| Arc::as_ptr(t) as *const u32 as usize);
                     g.caches.reads.get(&key).map(|r| r.1).unwrap_or_default()
                 });
-                expect(Expected { call: d, reads });
+                // what a mismatch report says about the draw's binding
+                let context = VerifyContext {
+                    record,
+                    binding: m.u32(record.wrapping_add(0xC)),
+                    rebuilt,
+                    written: [binding.written[0].0, binding.written[1].0],
+                    uncovered: binding.uncovered,
+                };
+                expect(Expected { call: d, reads, context });
                 t.taken += 1;
                 Taken::Default
             }
@@ -2060,14 +2178,15 @@ impl Native {
                 t.taken += 1;
                 Taken::Default
             }
-            Ok(Decoded { call: d, shadow, binding }) if self.mode == Mode::DrawCall || !g.native => {
+            Ok(Decoded { call: d, shadow, binding, .. }) if self.mode == Mode::DrawCall || !g.native => {
                 commit(m, &g.info, &mut g.caches, shadow, &d.textures);
                 g.uploads.add(&binding);
                 g.handled = true;
                 // an upload goes after the draws taken before it; nothing
                 // the draw reads is dirty: nothing to flush (the D3D lock
-                // keeps the dirty set as it is meanwhile)
-                if objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
+                // keeps the dirty set as it is meanwhile; a count of 0, read
+                // without it, skips the lookup)
+                if crate::d3d9dev::dirty_count() != 0 && objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
                     send_batch(&mut g.batch);
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
                 }
@@ -2076,7 +2195,7 @@ impl Native {
                 t.taken += 1;
                 Taken::Handled
             }
-            Ok(Decoded { call: d, shadow, binding }) => match native_draw(&d, &binding, identity(m, record), &mut g.caches) {
+            Ok(Decoded { call: d, shadow, binding, .. }) => match native_draw(&d, &binding, identity(m, record), &mut g.caches) {
                 Err(r) => {
                     *t.refused.entry(r).or_default() += 1;
                     Taken::Default
@@ -2088,7 +2207,7 @@ impl Native {
                     if self.mode == Mode::Compare {
                         // Finish before any upload can replace resources used
                         // by an earlier draw in the pending shadow pass.
-                        let dirty = objects(|o| reads_of(&d).any(|r| o.dirty.contains(&r)));
+                        let dirty = crate::d3d9dev::dirty_count() != 0 && objects(|o| reads_of(&d).any(|r| o.dirty.contains(&r)));
                         if dirty {
                             crate::d3d9draw::backend_unlocked(|b| g.comparison.finish(b));
                         }
@@ -2173,8 +2292,10 @@ fn report(mode: Mode, t: &Totals) {
         out += &format!("  native jobs {:.1}, draws in them {:.1} (a job the backend rejects goes as its DrawCalls)\n",
                         per(t.jobs), per(t.native));
     }
+    out += &t.ops.report(t.frames);
     if mode == Mode::Verify {
         out += &verify_report();
+        out += &ops::verify_report();
     }
     out += "  refused:";
     for r in Refusal::ALL {
@@ -2250,6 +2371,28 @@ mod tests {
             assert_eq!(sink.decide(&mut sink.inner.lock().unwrap(), &mut m, 0, scene, 1), Taken::Default);
             assert_eq!(refused(&sink, Refusal::Query), inside.is_some() as u64);
         }
+    }
+
+    /// L180: bindings at other addresses with the same content take the
+    /// same part (the game's bindings move between frames); other content
+    /// (here the alpha test) a part of its own.
+    #[test]
+    fn bindings_at_new_addresses_with_the_same_content_share_a_part() {
+        let mut m = TestMem::default();
+        for binding in [0x1000, 0x3000, 0x5000] {
+            m.set_u32(binding + 8, 0x2000);
+        }
+        m.set_u32(0x5000, 0x18_0000 | 2 << 3 | 7 << 11);
+        let b = binding_writing(0, 0, 0);
+        let mut c = Caches::default();
+        c.metas.insert(0x2000, b.meta.clone());
+        let g = G::new(&m);
+        let first = binding_part(&g, &mut c, 0x1000, None).ok().unwrap();
+        let moved = binding_part(&g, &mut c, 0x3000, None).ok().unwrap();
+        assert!(Arc::ptr_eq(&first, &moved));
+        let other = binding_part(&g, &mut c, 0x5000, None).ok().unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        assert_eq!(other.alpha, Some((3, 7)));
     }
 
     /// Parts kept across frames: the same frame's part from the map; a new
@@ -2708,6 +2851,8 @@ mod tests {
         }
         let all = mirror.textures(&Shadow::default(), &mut c);
         assert_eq!(all.len(), 21);
+        // L180: the same content again: the same list
+        assert!(Arc::ptr_eq(&all, &mirror.textures(&Shadow::default(), &mut c)));
         for (i, t) in all.iter().enumerate() {
             assert_eq!((t.sampler, t.resource, t.states), (stage_of(i), 0x1000 + i as u32, [i as u32; 14]));
         }
@@ -2844,6 +2989,33 @@ mod tests {
 struct Expected {
     call: DrawCall,
     reads: [Reads; 2],
+    /// the draw's record and binding, for a mismatch report
+    context: VerifyContext,
+}
+
+/// A verified draw's record and binding (printed with a mismatch).
+#[derive(Default)]
+struct VerifyContext {
+    record: u32,
+    binding: u32,
+    /// decoded for this draw, not this frame's cached part
+    rebuilt: bool,
+    /// float registers written and uncovered, per stage
+    written: [[u64; 4]; 2],
+    uncovered: [[u64; 4]; 2],
+}
+
+impl std::fmt::Display for VerifyContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "record {:#x}, binding {:#x} {}, written vs {:x?} ps {:x?}, uncovered vs {:x?} ps {:x?}",
+            self.record,
+            self.binding,
+            if self.rebuilt { "decoded for this draw" } else { "from this frame's cache" },
+            self.written[0], self.written[1], self.uncovered[0], self.uncovered[1],
+        )
+    }
 }
 
 thread_local! {
@@ -2896,7 +3068,7 @@ pub(crate) fn observe(d: &DrawCall) {
         let printed = v.printed.entry(field).or_default();
         if *printed < 5 {
             *printed += 1;
-            eprintln!("ndraw native verify: {field} differs: {detail}");
+            eprintln!("ndraw native verify: {field} differs: {detail} ({})", e.context);
         }
     }
 }
@@ -2905,7 +3077,7 @@ pub(crate) fn observe(d: &DrawCall) {
 /// it, its shaders reading `reads`) and the D3D9 path's `actual` differ.
 pub fn differences(expected: &DrawCall, reads: [Reads; 2], actual: &DrawCall) -> Vec<(&'static str, String)> {
     let mut wrong = Vec::new();
-    compare(&Expected { call: expected.clone(), reads }, actual, &mut wrong);
+    compare(&Expected { call: expected.clone(), reads, context: Default::default() }, actual, &mut wrong);
     wrong
 }
 
