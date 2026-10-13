@@ -292,6 +292,11 @@ pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u32(at(cpu, BATCH), cpu.ebx);
     m.set_u32(at(cpu, BATCH_START), cpu.ebx);
     m.set_u32(at(cpu, BATCH_COUNT), cpu.ebx);
+    // L119: a native sink, if one is installed, is offered the commands
+    let sink = crate::sink::sink();
+    if let Some(s) = &sink {
+        s.frame_begin(m, cpu.esi, at(cpu, CONTEXT));
+    }
 
     let mut next = Next::Reload;
     loop {
@@ -312,7 +317,19 @@ pub fn execute(m: &mut dyn Mem, cpu: &mut Cpu) {
                 None => {}
             }
         }
+        if let Some(s) = &sink {
+            let kind = m.u16(cpu.esi.wrapping_add(2)) as u32 & 0xF;
+            // nested lists are walked here whatever the sink does
+            if kind != 6 && s.command(m, at(cpu, CONTEXT), cpu.esi, kind) == crate::sink::Taken::Handled {
+                next = Next::Reload;
+                continue;
+            }
+        }
         next = dispatch(m, cpu);
+    }
+    if let Some(s) = &sink {
+        let render = m.u32(at(cpu, RENDER));
+        s.frame_end(m, render, at(cpu, CONTEXT));
     }
     finish(m, cpu);
 }

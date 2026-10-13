@@ -1,0 +1,254 @@
+//! L119: the DrawCall the native sink builds for an nDraw draw record
+//! straight from the objects equals the DrawCall the D3D9 path makes for
+//! it: the apply functions' calls (crates/mtstate, verified against the
+//! original executable) made on the runtime's device, then the draw.
+//! Needs the installed game (DDDA_EXE) for a session; skipped without it.
+use ddnative_base::mem::Mem;
+use ddruntime::ndraw_native::{decode, draw_call, draw_params, identity, native_draw, Caches, FrameInfo, Pending};
+use ddruntime::session::{Outcome, Session};
+
+const SCRATCH: u32 = 0x7EFF_0000;
+const PP: u32 = SCRATCH + 0x200;
+const OUT: u32 = SCRATCH + 0x300;
+const DATA: u32 = SCRATCH + 0x1000;
+/// the nDraw objects
+const NDRAW: u32 = SCRATCH + 0x4000;
+/// the call data the D3D9 path passes by pointer
+const ARGS: u32 = SCRATCH + 0xF000;
+
+fn installed_exe() -> Option<ddexe::ExeFile> {
+    let path = std::env::var("DDDA_EXE").unwrap_or_else(|_| r"E:\SteamLibrary\steamapps\common\DDDA\DDDA.exe".into());
+    ddexe::ExeFile::open(path).ok()
+}
+
+/// A session with a window and a D3D9 device: (session, device).
+fn device_session() -> Option<(Session, u32)> {
+    let exe = installed_exe()?;
+    let path = exe.path.to_string_lossy().to_string();
+    let mut s = Session::new(&path).expect("session");
+    let token = |s: &Session, n: &str| s.imports.iter().find(|i| i.full_name() == n).unwrap().token;
+    let (wc, name) = (SCRATCH, SCRATCH + 0x100);
+    s.mem.set_u16(name, b'W' as u16);
+    s.mem.set_u32(wc + 8, token(&s, "USER32.dll!DefWindowProcW"));
+    s.mem.set_u32(wc + 40, name);
+    let Outcome::Returned(_) = s.call(token(&s, "USER32.dll!RegisterClassExW"), 0, &[wc]) else { panic!() };
+    let Outcome::Returned(cpu) = s.call(token(&s, "USER32.dll!CreateWindowExW"), 0, &[0, name, 0, 0x00CA_0000, 0, 0, 1286, 749, 0, 0, 0x0040_0000, 0]) else { panic!() };
+    let hwnd = cpu.eax;
+    let Outcome::Returned(cpu) = s.call(token(&s, "d3d9.dll!Direct3DCreate9"), 0, &[32]) else { panic!() };
+    let d3d = cpu.eax;
+    for (k, v) in [0, 0, 0, 0, 0, 0, 1, hwnd, 1, 1, 75, 0, 0, 0u32].into_iter().enumerate() {
+        s.mem.set_u32(PP + 4 * k as u32, v);
+    }
+    let create = s.mem.u32(s.mem.u32(d3d) + 4 * 16);
+    let Outcome::Returned(_) = s.call(create, 0, &[d3d, 0, 1, hwnd, 0x46, PP, OUT]) else { panic!() };
+    let dev = s.mem.u32(OUT);
+    Some((s, dev))
+}
+
+/// Call COM method `slot` of `obj` with `args` (this first); eax.
+fn com(s: &mut Session, obj: u32, slot: u32, args: &[u32]) -> u32 {
+    let f = s.mem.u32(s.mem.u32(obj) + 4 * slot);
+    let mut a = vec![obj];
+    a.extend_from_slice(args);
+    match s.call(f, 0, &a) {
+        Outcome::Returned(c) => c.eax,
+        o => panic!("slot {slot}: {o}"),
+    }
+}
+
+fn out(s: &mut Session, obj: u32, slot: u32, args: &[u32]) -> u32 {
+    assert_eq!(com(s, obj, slot, args), 0, "slot {slot}");
+    s.mem.u32(OUT)
+}
+
+fn put(s: &mut Session, at: u32, words: &[u32]) {
+    for (k, w) in words.iter().enumerate() {
+        s.mem.set_u32(at + 4 * k as u32, *w);
+    }
+}
+
+/// vs_3_0: position and texcoord in and out, `n` adds of c0..c(n-1).
+fn vertex_shader(n: u32) -> Vec<u32> {
+    let mut t = vec![0xFFFE_0300, 0x0200_001F, 0x8000_0000, 0x900F_0000, 0x0200_001F, 0x8000_0005, 0x900F_0001,
+                     0x0200_001F, 0x8000_0000, 0xE00F_0000, 0x0200_001F, 0x8000_0005, 0xE00F_0001,
+                     0x0200_0001, 0x800F_0000, 0x90E4_0000];
+    for k in 0..n {
+        t.extend([0x0300_0002, 0x800F_0000, 0x80E4_0000, 0xA0E4_0000 | k]);
+    }
+    t.extend([0x0200_0001, 0xE00F_0000, 0x80E4_0000, 0x0200_0001, 0xE00F_0001, 0x90E4_0001, 0x0000_FFFF]);
+    t
+}
+
+/// ps_3_0: texld from s0, then `n` adds of c0..c(n-1).
+fn pixel_shader(n: u32) -> Vec<u32> {
+    let mut t = vec![0xFFFF_0300, 0x0200_001F, 0x8000_0005, 0x900F_0000, 0x0200_001F, 0x9000_0000, 0xA00F_0800,
+                     0x0300_0042, 0x800F_0000, 0x90E4_0000, 0xA0E4_0800];
+    for k in 0..n {
+        t.extend([0x0300_0002, 0x800F_0000, 0x80E4_0000, 0xA0E4_0000 | k]);
+    }
+    t.extend([0x0200_0001, 0x800F_0800, 0x80E4_0000, 0x0000_FFFF]);
+    t
+}
+
+/// The executor context the decoders run against: guest memory with a
+/// zeroed context of their own (nothing applied yet).
+struct Context<'a> {
+    m: &'a dyn Mem,
+    words: Vec<u32>,
+}
+const CTX: u32 = 0xFFFF_E000;
+impl mtstate::Memory for Context<'_> {
+    fn read32(&self, a: u32) -> u32 {
+        match a.wrapping_sub(CTX) {
+            o if o < 0xE28 => self.words[o as usize / 4],
+            _ => self.m.u32(a),
+        }
+    }
+    fn write32(&mut self, a: u32, v: u32) {
+        if let o @ 0..0xE28 = a.wrapping_sub(CTX) {
+            self.words[o as usize / 4] = v;
+        }
+    }
+}
+
+/// Make the D3D9 calls an apply made, as the lifted code makes them:
+/// pointer arguments point at the data.
+fn make(s: &mut Session, dev: u32, calls: &[mtstate::Call]) {
+    for c in calls {
+        let args: Vec<u32> = match c.slot {
+            47 | 75 => {
+                put(s, ARGS, &c.data);
+                vec![ARGS]
+            }
+            94 | 96 | 98 | 109 | 111 | 113 => {
+                put(s, ARGS, &c.data);
+                vec![c.args[0], ARGS, c.args[1]]
+            }
+            _ => c.args.clone(),
+        };
+        assert_eq!(com(s, dev, c.slot, &args), 0, "slot {} {:?}", c.slot, c.args);
+    }
+}
+
+#[test]
+fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
+    let Some((mut s, dev)) = device_session() else {
+        eprintln!("skipped: no installed game");
+        return;
+    };
+    // the D3D9 objects
+    let texture = out(&mut s, dev, 23, &[256, 256, 1, 0, 21, 1, OUT, 0]);
+    let target_texture = out(&mut s, dev, 23, &[1920, 1080, 1, 1, 21, 0, OUT, 0]);
+    let target = out(&mut s, target_texture, 18, &[0, OUT]);
+    let depth = out(&mut s, dev, 29, &[1920, 1080, 75, 0, 0, 0, OUT, 0]);
+    let vb = out(&mut s, dev, 26, &[3200, 8, 0, 1, OUT, 0]);
+    let ib = out(&mut s, dev, 27, &[600, 8, 101, 1, OUT, 0]);
+    put(&mut s, DATA, &[0x0000_0000, 0x0000_0003, 0x0010_0000, 0x0005_0001, 0x0000_00FF, 0x0000_0011]);
+    let declaration = out(&mut s, dev, 86, &[DATA, OUT]);
+    put(&mut s, DATA, &vertex_shader(8));
+    let vs = out(&mut s, dev, 91, &[DATA, OUT]);
+    put(&mut s, DATA, &pixel_shader(4));
+    let ps = out(&mut s, dev, 106, &[DATA, OUT]);
+
+    // the nDraw objects (docs/NDRAW.md sections 2, 3 and 5)
+    let a = |k: u32| NDRAW + 0x100 * k;
+    let (record, targets, fixed, shader, streams) = (a(0), a(1), a(2), a(3), a(4));
+    let (rtv, dsv, blend, depth_state, raster) = (a(5), a(6), a(7), a(8), a(9));
+    let (meta, descs, vbo, ibo, sampler, tex) = (a(10), a(11), a(12), a(13), a(14), a(15));
+    let (vs_values, ps_values) = (a(16), a(17));
+    s.mem.set_u16(record + 2, 1);
+    put(&mut s, record + 4, &[targets, fixed, shader, streams, 30, 3, 2]);
+    put(&mut s, targets, &[rtv, 0, 0, 0, dsv, 0]);
+    put(&mut s, targets + 0x18, &[0, 0, 1920, 1080, 0, 0, 0, 0, 16, 8, 1900, 1000]);
+    s.mem.set_u16(targets + 0x58, 1920);
+    s.mem.set_u16(targets + 0x5A, 1080);
+    s.mem.set_u32(rtv + 0x14, target);
+    s.mem.set_u32(dsv + 0x14, depth);
+    put(&mut s, fixed, &[0x8040_2010, 7, blend, depth_state, raster]);
+    // blend: SRCALPHA / INVSRCALPHA add, alpha ONE / ZERO, all written
+    s.mem.set_u32(blend + 0x20, 1 | 5 << 1 | 6 << 6 | 1 << 11 | 2 << 14 | 1 << 19 | 1 << 24 | 15 << 27);
+    // depth: on, written, LESSEQUAL; stencil on, read/write masks, ALWAYS
+    s.mem.set_u32(depth_state + 0x18, 1 | 1 << 1 | 4 << 2 | 1 << 6 | 0xFF << 8 | 0xFF << 16 | 1 << 24 | 3 << 28);
+    s.mem.set_u32(depth_state + 0x1C, 1 | 8 << 4);
+    // raster: solid, cull CCW, scissor on, depth bias 0
+    s.mem.set_u32(raster + 0x20, 3 | 3 << 8 | 1 << 17);
+    put(&mut s, streams, &[vbo, 0, 0, 0]);
+    s.mem.set_u8(streams + 0x10, 32);
+    s.mem.set_u32(streams + 0x28, ibo);
+    put(&mut s, vbo + 0x14, &[3200, 0, 0, vb]);
+    s.mem.set_u32(ibo + 0x20, ib);
+    // shader binding: triangle list; values: sampler, texture, VS and PS floats
+    put(&mut s, shader, &[3 << 21, 0, meta, sampler, tex, vs_values, ps_values]);
+    put(&mut s, meta, &[0, descs, 1 | 1 << 12, 2 | 1 << 8 | 1 << 12, vs, ps, declaration]);
+    // VS: c0..c7 from value 2; PS: s0 (sampler value 0, texture value 1),
+    // c0..c3 from value 3
+    put(&mut s, descs, &[2 << 1 | 8 << 24, 1 << 22, 3 << 1 | 4 << 24]);
+    put(&mut s, vs_values, &(0..32).map(|k| (k as f32 + 0.5).to_bits()).collect::<Vec<_>>());
+    put(&mut s, ps_values, &(0..16).map(|k| (k as f32 * 2.0).to_bits()).collect::<Vec<_>>());
+    // linear, wrapping
+    s.mem.set_u32(sampler + 0x30, 1 | 1 << 3 | 1 << 6 | 2 << 9 | 2 << 13 | 2 << 17);
+    s.mem.set_u32(tex + 0x34, texture);
+    assert_eq!(com(&mut s, dev, 41, &[]), 0); // BeginScene
+
+    // the native sink's DrawCall
+    let info = FrameInfo { device: dev, srgb: false, filtering: 0, invalid_viewport: [0; 4] };
+    let mut caches = Caches::default();
+    let (native, reads) = draw_call(&s.mem, &info, &mut caches, record, 1).expect("the draw is taken");
+    assert!(reads.contains(&texture) && reads.contains(&vb) && reads.contains(&ib) && reads.contains(&target));
+
+    // the D3D9 path: the applies' calls on the device, then the draw
+    let mut ctx = Context { m: &s.mem, words: vec![0; 0xE28 / 4] };
+    let mut calls = mtstate::targets(&mut ctx, CTX, targets, [0; 4]);
+    calls.extend(mtstate::fixed(&mut ctx, CTX, fixed));
+    calls.extend(mtstate::streams(&mut ctx, CTX, streams));
+    calls.extend(mtstate::shader(&mut ctx, CTX, shader, false, 0).unwrap());
+    let extent = ctx.words[0xE20 / 4];
+    drop(ctx);
+    make(&mut s, dev, &calls);
+    let (primitive, primitives, start, base, vertices) = draw_params(&s.mem, record, 1, extent).unwrap();
+    assert_eq!(decode(&s.mem, record, [0; 4], false).unwrap().extent, extent);
+    assert_eq!(com(&mut s, dev, 82, &[primitive, base as u32, 0, vertices, start, primitives]), 0);
+    let d3d9 = ddruntime::d3d9draw::recorded(|r| r.draws.last().cloned()).flatten().expect("the D3D9 path drew");
+
+    // equal, but for the render states the native one leaves out (the
+    // backend reads only those it carries) and the registers no shader reads
+    let mut a = d3d9.clone();
+    let mut b = native.clone();
+    for (s, v) in b.render_states.iter() {
+        let on_device = a.render_states.iter().find(|e| e.0 == *s).map(|e| e.1);
+        assert_eq!(on_device, Some(*v), "render state {s}");
+    }
+    for s in [7, 8, 14, 15, 19, 20, 22, 23, 27, 52, 53, 54, 55, 56, 57, 58, 59, 162, 168, 171, 174, 175, 185, 186,
+              187, 188, 189, 190, 191, 192, 193, 194, 195, 206, 207, 208, 209] {
+        assert!(b.render_states.iter().any(|e| e.0 == s), "render state {s} carried");
+    }
+    a.render_states = Default::default();
+    b.render_states = Default::default();
+    assert_eq!(a.vs_constants.f[..8], b.vs_constants.f[..8]);
+    assert_eq!(a.ps_constants.f[..4], b.ps_constants.f[..4]);
+    a.vs_constants = b.vs_constants.clone();
+    a.ps_constants = b.ps_constants.clone();
+    assert_eq!(a, b);
+
+    // the native draw carries the same state
+    let id = identity(&s.mem, record);
+    assert_eq!((id.blend.address, id.depth.address, id.raster.address, id.raster_flip), (blend, depth_state, raster, false));
+    let n = native_draw(&native, id, &mut caches).expect("native");
+    assert_eq!(&n.state.render_states[..], &native.render_states[..]);
+    assert_eq!(&n.vs_constants.floats[0].registers[..], &native.vs_constants.f[..]);
+    assert_eq!(n.vs_constants.floats[0].first, 0);
+    assert_eq!(n.scissor, Some([16, 8, 1900, 1000]));
+    assert_eq!((n.indices.unwrap().resource, n.indices.unwrap().format), (ib, 101));
+    assert_eq!(n.streams.len(), 1);
+    assert_eq!((n.streams[0].resource, n.streams[0].stride), (vb, 32));
+    assert_eq!((n.primitive, n.primitives, n.start, n.base_vertex, n.vertex_count), (4, 10, 3, 2, 98));
+    // two draws into the same targets: one pass
+    let mut p = Pending::default();
+    p.push(n.clone(), native.clone());
+    p.push(n, native);
+    let (job, calls) = p.take().unwrap();
+    assert_eq!((job.passes.len(), job.passes[0].draws.len(), calls.len()), (1, 2, 2));
+    assert_eq!(job.passes[0].colours[0].as_ref().unwrap().surface, target);
+    assert!(p.take().is_none());
+    assert_eq!(com(&mut s, dev, 42, &[]), 0); // EndScene
+}
