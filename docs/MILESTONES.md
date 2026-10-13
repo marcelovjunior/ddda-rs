@@ -1,5 +1,21 @@
 # Milestones
 
+### L122 gameplay pass map (2026-10-13)
+
+- Frame7539: **951 target runs / 5,295 draws**, including **864 SoftBody
+  simulation runs**; full target sequence, eight copies and sampled-resource
+  dependencies in `docs/FRAME_PASSES.md`.
+- **402 shader identities (225 VS / 177 PS)** in 50 sets; 334 byte-exact
+  root-package matches. Shader reflection identifies sky-scattering half-float
+  targets, material mip chains, God Rays, DOF, color-correction LUT and GUI.
+  These correct the earlier size-only tone-map/bloom/luminance guesses.
+- Draw offsets/counts, shader END boundaries, hash uniqueness and the
+  108,502-command slice digest checked. Static issuers cited with DTI/Ghidra
+  evidence; dynamic object-to-command joins remain unresolved. No runtime
+  changes, game/GPU/shard runs, image-equivalence or FPS claim.
+- Next: head's same-run capture with producer tags; existing L111 stats alone
+  lack caller/class identities. L113 retains SoftBody replacement ownership.
+
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 
 - Head instr1: at 16.032 s, archive inflate **4.854 s**, file reads
