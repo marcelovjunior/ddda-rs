@@ -308,3 +308,159 @@ fn overflow_and_null_ranges_are_rejected_before_reading() {
         0
     );
 }
+
+#[test]
+fn shader_snapshots_cover_original_recorded_constant_uploads() {
+    // Reuse L117's original DAA8B0 call oracle. Those sparse fixtures omit
+    // emitter-only metadata+20; give the diagnostic the fixture's three
+    // indexed values (texture, sampler, constants). This extra extent is not
+    // read by DAA8B0 and is not evidence about a live game's metadata object.
+    let path = "E:/ddda-re/notes/native-L117/state-vectors.json";
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {error}"),
+        Err(_) => return,
+    };
+    let root: serde_json::Value = serde_json::from_str(&text).unwrap();
+    struct Sparse(Memory);
+    impl Mem for Sparse {
+        fn u8(&self, a: u32) -> u8 {
+            *self.0 .0.get(&a).unwrap_or(&0)
+        }
+        fn set_u8(&mut self, a: u32, v: u8) {
+            self.0.set_u8(a, v);
+        }
+    }
+    struct Wire<'a> {
+        bytes: &'a [u8],
+        at: usize,
+    }
+    impl Wire<'_> {
+        fn word(&mut self) -> u32 {
+            let value = u32::from_le_bytes(self.bytes[self.at..self.at + 4].try_into().unwrap());
+            self.at += 4;
+            value
+        }
+        fn block(&mut self) -> Vec<u32> {
+            let bytes = self.word();
+            assert_eq!(bytes % 4, 0);
+            (0..bytes / 4).map(|_| self.word()).collect()
+        }
+    }
+    let (mut accepted, mut refused, mut uploads) = (0, 0, 0);
+    for case in root["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "shader")
+    {
+        let mut m = Sparse(Memory::default());
+        for pair in case["words"].as_array().unwrap() {
+            m.set_u32(pair[0].as_u64().unwrap() as u32, pair[1].as_u64().unwrap() as u32);
+        }
+        let binding = 0x0e002000;
+        m.set_u32(m.u32(binding + 8) + 0x20, 3);
+        let bytes = match capture_shader(&m, binding, 1024 * 1024) {
+            Ok(bytes) => bytes,
+            Err(CaptureError::Shader(_)) => {
+                refused += 1;
+                continue;
+            }
+            Err(error) => panic!("unexpected L117 capture rejection {error:?}"),
+        };
+        let mut wire = Wire { bytes: &bytes, at: 0 };
+        let _header = wire.block();
+        let metadata = wire.block();
+        let mut calls = Vec::<(u32, Vec<u32>, Vec<u32>)>::new();
+        for stage in 0..2 {
+            for _ in 0..metadata[2 + stage] & 255 {
+                let section = wire.word();
+                let descriptor = wire.word();
+                if section == 0 {
+                    wire.word();
+                    wire.word();
+                    continue;
+                }
+                let slot = (if stage == 0 { 94 } else { 109 })
+                    + match section {
+                        2 => 2,
+                        3 => 4,
+                        _ => 0,
+                    };
+                let register = (descriptor >> 16) & 255;
+                let mut count = descriptor >> 24;
+                if section == 4 {
+                    wire.word(); // resource identity
+                    let a = wire.word();
+                    let b = wire.word();
+                    let dims = [a & 0xffff, (a >> 16) & 0x3fff, (b >> 16) & 0x7ff];
+                    let mut data = dims
+                        .map(|n| {
+                            if (descriptor >> 8) & 255 == 3 {
+                                (1.0 / (n as f32)).to_bits()
+                            } else {
+                                (n as f32).to_bits()
+                            }
+                        })
+                        .to_vec();
+                    data.push(0);
+                    if count == 0 {
+                        data.clear();
+                    }
+                    calls.push((slot, vec![register, count], data));
+                } else {
+                    let tag = wire.word();
+                    if section == 1 && tag != 0 {
+                        count = count.min(tag * 16);
+                    }
+                    let data = wire.block();
+                    if section == 1 && descriptor & 1 != 0 {
+                        for (i, vec4) in data.chunks_exact(4).enumerate() {
+                            calls.push((
+                                slot,
+                                vec![register + i as u32, 1],
+                                vec4.iter().map(|n| (*n as i32 as f32).to_bits()).collect(),
+                            ));
+                        }
+                    } else {
+                        calls.push((slot, vec![register, count], data));
+                    }
+                }
+            }
+        }
+        let expected: Vec<_> = case["calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|call| {
+                let slot = call["slot"].as_u64().unwrap() as u32;
+                let words = |field: &str| {
+                    call[field]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|n| n.as_u64().unwrap() as u32)
+                        .collect::<Vec<_>>()
+                };
+                matches!(slot, 94 | 96 | 98 | 109 | 111 | 113).then(|| (slot, words("args"), words("data")))
+            })
+            .collect();
+        if m.u32(0x0e000010) == 0 {
+            assert_eq!(calls, expected);
+        } else {
+            let mut remaining = calls.as_slice();
+            for call in &expected {
+                let index = remaining
+                    .iter()
+                    .position(|decoded| decoded == call)
+                    .expect("original upload missing from frozen snapshot");
+                remaining = &remaining[index + 1..];
+            }
+        }
+        uploads += expected.len();
+        accepted += 1;
+    }
+    assert!(accepted >= 100);
+    assert!(uploads > 0);
+    eprintln!("original DAA8B0: {accepted} shader snapshots, {uploads} uploads matched; {refused} conservative refusals");
+}

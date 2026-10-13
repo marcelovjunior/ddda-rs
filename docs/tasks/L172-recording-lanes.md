@@ -54,6 +54,88 @@ cascades serial; contiguous unit partitions and ascending lane merge are
 necessary to preserve serial root order. Dynamic work stealing alone does
 not provide that guarantee.
 
+### Private scheduler callback ABI (lead request #14033)
+
+Disassembly audit `00DBD8D0` / `00DBE560`, not the decompiler's inferred
+prototypes. DBD8D0 is cdecl, one stack argument pointing to a worker slot;
+it loads recording context from `slot+0x10`. Main slot is scheduler
+`+0x1bdc0`. It reads mode at `*0x018d0b28+0x94`, count at `+0x8c`,
+and atomically increments claim cursor `+0x90`. Queue starts at `+0xc0`.
+Neither DBD8D0 nor DBE560 contains direct FS/TEB accesses.
+
+| Mode | Entry stride | Callback ECX | Stack arguments at callback entry, after return address | Original return site |
+|---|---|---|---|---|
+| 0 | 8 | entry[0] | none | `00DBD958` |
+| 1 | 8 | entry[0] | lane context | `00DBD9CB` |
+| 2 | 12 | entry[0] | entry[2] | `00DBDA4C` |
+| 3 | 12 | entry[0] | lane context, entry[2] | `00DBDABC` |
+
+Entry[1] is the callback. Modes 0/1 call through EDX; modes 2/3 put the
+callback in EAX and entry[2] in EDX. Mode 3 pushes entry[2] first, context
+second. There is no caller stack adjustment after these calls: modes 1/2
+require callee `ret 4`, mode 3 `ret 8`. DB7620 confirms `ret 4` and calls
+unit vf11 with ECX=unit and the context stack argument. `010B7440` is a
+five-byte vtable tail thunk (ECX=this, slot `+0x3c`), retaining both mode-3
+arguments; Ghidra does not define a standalone function at that address.
+
+Callback nonvolatiles: ESI=entry, EDI=count. Modes 1/3 keep EBX=context,
+EBP=queue base; mode 2 keeps EBX=queue base and EBP=InterlockedIncrement
+IAT target. A private ABI adapter must preserve its own caller's nonvolatiles
+and returned stack, not leak helper-thread register contents.
+
+Optional trace callback `scheduler+0x1c14c` runs first, with
+ECX=`scheduler+0x1c148` and four stack args `(mode, object, context-or-zero,
+entry[2]-or-zero)`; the dispatcher does not pop those arguments either.
+Nonzero trace hooks therefore need their own contained call boundary.
+
+DBE560 is thiscall (ECX=scheduler), mode stack argument, `ret 4`:
+
+- Empty queue clears the two trace-hook fields only.
+- Otherwise, if byte `+0x6d` is zero, DBDF30 lazily creates seven OS workers
+  and events, calls GetCurrentThreadId, starts workers and waits. A private
+  replay must initialize this state or explicitly intercept that path.
+- Sets claim cursor `+0x90=0`, mode `+0x94`. The single-job/participant path
+  temporarily forces `+0x98=1`, calls DBD8D0 on the main slot, restores
+  participant count, then clears queue count and trace-hook fields.
+- Multi-participant path sets `+0xb8=1`, wakes active slot events, runs main
+  DBD8D0, waits workers, and clears queue count/hooks/`+0xb8`. DC5C20 around
+  this phase writes **both** global nesting bytes `018d0bb0` and `018d0404`.
+  Isolating only the first byte is incomplete. Thread entry DBDEF0 dispatches
+  scheduler vtable slot `+0x50`; it is not a direct DBD8D0 call.
+
+### Primitive capture preseed (lead request #14049)
+
+E61010's parallel begin treats its count argument as zero/nonzero, then
+walks **all** sPrimitive `+0xd0` pools, not only active scheduler lanes.
+E60DE0 initializes that count to eight. Inactive lanes therefore still need
+captured pool/list pages. Useful source-proven ranges (not a complete model
+draw graph) are:
+
+| Owner/field | Range | Source |
+|---|---|---|
+| sPrimitive singleton | `0x1d0` bytes | E66B40 allocation at 41B1E0 |
+| sPrimitive `+0x30+4*i` | cPrim `0x280` bytes | E60DE0 allocation, 1124D20 ctor |
+| cPrim `+4` | cPrimTagList `0x84` bytes | 1124D20 / 11921F0 |
+| cPrim `+8` | cPrimBuffer `0x18` bytes | 1124D20 / 107FBF0 |
+| sPrimitive `+0xd8` | cPrimBufferManager `0x14`; arena `[manager+4, +capacity)` where capacity=`manager+0xc` | 11927F0 |
+| sPrimitive `+0xdc` | cPrimTagManager `0x14`; descriptor arena at `manager+4` size `n*0x28`, entry arena at `manager+8` size `n*8`, n=`manager+0x10` | 11925E0 |
+
+Begin alone touches no manager backing buffers: 111D610 checks cPrim
+`+0x54<6`, calls 1192260 on cPrim `+4`, writes the flag byte and two zero
+words at cPrim `+0xc+depth*12`, then increments cPrim depth. 1192260 checks
+its independent depth `+0x64<6`, saves cursors `+0x74/+0x78` in its frame
+at `+4+depth*16`, zeroes frame `+8` and byte `+0xc`, then increments depth.
+End 1192290 restores those two cursors and subtracts saved count from
+`+0x80`. Frame reads/writes fit the `0x84` tag-list allocation.
+
+Full drawing additionally consumes the shared arenas above and the texture
+handle manager at sPrimitive `+0xd4` (layout not yet audited here). Arena
+copies are input capture, **not** proof they can be excluded from output
+memory comparison: shared allocations require an ordered source-specific
+merge or rejection. Likewise pool-private descriptors may refer to shared
+resources. Missing graph pages must reject instead of falling back to live
+memory; seed layouts alone do not establish a coherent capture boundary.
+
 ## Implemented oracle
 
 `mtcore::shadow_lanes::capture_context(m, context, limits)` snapshots the root
@@ -90,11 +172,13 @@ Two failed captures never count as a match.
 - **Implemented:** lane pointer snapshot/restore and conservative stream
   comparison in `crates/mtcore/src/shadow_lanes.rs`; module export belongs to
   codex-11's integration commit. No production shadow override in this batch.
-- **Tested:** 11 focused CPU tests pass. They cover relocation, 13 individual
+- **Tested:** 11 initial focused CPU tests pass. They cover relocation, 13 individual
   key/header/payload/binding/constant corruptions, order/count differences,
   reused-pointer identity, nested mismatch paths, clear/copy children,
   refusal bounds/cycles/unknown shader forms, tagged floats, BOOL widths,
   zero uploads, and exact restoration of only the eight slot words.
+  Full mtcore suite: **32 passed / zero failed / nine ignored**. One further
+  original shader-call test below passes; the final focused gate is **12/12**.
 - **Compared against original:** eight FED3B0 returns (0..3 lanes, with and
   without nested lists), executing original memcpy too, no mocked calls.
   Original merged output snapshots equal the input lane streams concatenated
@@ -104,6 +188,16 @@ Two failed captures never count as a match.
   `50516a50f8430d2409fb753a4c31814bf31ea8bdc44c73ee3fb75d2c7ae7e62d`.
   The manifest records the installed analysis image SHA and both binary
   fixture hashes per case. Regenerator: `research/native/shadow_lane_vectors.py`.
+- **Shader consumer evidence:** 227 supported L117 original DAA8B0 fixtures
+  reproduce **1,704** recorded constant uploads from snapshot bytes; 29
+  conservative refusals are not matches. Checks exact upload order for an
+  empty original cache, ordered subsequences when the original suppresses
+  unchanged values. Fixture-only metadata `+0x20=3` supplies the known three
+  input values (texture/sampler/constants); the old sparse consumer fixtures
+  omit that emitter-only field. This enrichment does not alter any DAA8B0
+  input it consumes, but is not evidence of a live metadata object layout.
+  Existing private corpus `E:/ddda-re/notes/native-L117/state-vectors.json`,
+  SHA-256 `fb4cf88b99ba0a89e1f64c3dc662d21d91742d1d59908fb44b1a2724f7773777`.
 - Runtime light: initial suite reached 116 passed / one inherited Present
   timing failure / five ignored; the isolated timing retry passed. The second
   run (skipping that timing test) caught the concurrently added lead-owned
@@ -111,8 +205,8 @@ Two failed captures never count as a match.
   the fixture and owns the final full light gate in `L172-parallel-shadow.md`.
   My private logs are in `C:/ddda-targets/L172-codex7/runtime-*.log`.
 - **Not proven:** same-run original serial vs candidate parallel shadow
-  streams, callback side-effect isolation, original shader-consumer replay
-  for the new diagnostic decoder, image equality, speedup or FPS. Do not
+  streams, callback side-effect isolation, live shader snapshot coverage,
+  image equality, speedup or FPS. Do not
   advertise this prerequisite batch as acceptance of parallel shadow.
 
 Reproduce with `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`,
