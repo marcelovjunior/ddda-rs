@@ -31,6 +31,9 @@ constant blocks from them again. That re-derivation is the cost:
 | combo12 (+L118 step 3) | 14.7 / 15.3-16.7 | render thread 89% (snapshot 24%, draw calls 31%) |
 | combo14 (+float-compare fusion, regenerated shards) | 14.4 / 14.0-15.3 | first Present at 3.7 s (was 5.8 s) |
 | combo15, DDDRAW_NATIVE=drawcall (L119: scene draws from the nDraw objects, no D3D9 services/snapshot) | 14.2 / 15.3-16.0 | the render thread waits 90% on the main thread: the game's own code is the bound now |
+| combo16, drawcall (+L125 apply ports) | 15.3 / 16.0 | main thread 64% busy, waiting 38% in the job scheduler (0x00DBE560) for the game-logic job threads (~45% each); render thread 48%: game logic is the bound |
+| combo17, drawcall (+L129 dead flags, L132 helpers, L130 port, boot geometry port) | 17.4 / 21.3-22.0 | no thread saturated: main 52%, render 48%, wgpu-finish 55% |
+| combo17, DDDRAW_NATIVE=1 (native device draws ~3,470 scene draws/frame in ~68 jobs, 0 rejected) | 15.0 / 16.7-19.3 | first in-game frames through our own renderer; slower than drawcall so far |
 
 (average / end of the run; L114, inlining the memory and flag helpers into
 the shards, gave no gain for 2.5x the compile time and was dropped.)

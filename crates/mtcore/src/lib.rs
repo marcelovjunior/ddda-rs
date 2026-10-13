@@ -25,6 +25,7 @@ pub mod allocator;
 pub mod array;
 pub mod dti;
 pub mod hash;
+pub mod hot;
 pub mod machine;
 pub mod object;
 pub mod property;

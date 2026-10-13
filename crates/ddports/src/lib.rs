@@ -11,7 +11,7 @@ use ddnative_base::x86::{self, LiftFn};
 
 /// Every verified readable port: (address, adapter).
 pub fn ports() -> Vec<(u32, LiftFn)> {
-    mtmath::abi::PORTS.iter().chain(mtcore::abi::PORTS).chain(mtframe::abi::PORTS).chain(mtdraw::abi::PORTS)
+    mtmath::abi::PORTS.iter().chain(mtcore::abi::PORTS).chain(mtcore::hot::PORTS).chain(mtframe::abi::PORTS).chain(mtdraw::abi::PORTS)
         .map(|&(a, f, _)| (a, f))
         .collect()
 }

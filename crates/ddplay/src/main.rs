@@ -22,6 +22,7 @@
 //! runtime's input seam (`input.rs`). Audio plays on the default output
 //! device (`sink.rs`, brief L19).
 mod input;
+mod alloc_log;
 mod present;
 mod sink;
 
@@ -377,6 +378,11 @@ fn main() {
         let _ = std::thread::Builder::new().name("load-log".into()).spawn(|| loop {
             std::thread::sleep(Duration::from_secs(1));
             ddruntime::load_log::totals();
+            if let Some(a) = alloc_log::snapshot() {
+                ddruntime::load_log::event("allocator_totals", format_args!(
+                    "rust_live_bytes={} rust_peak_live_bytes={} rust_live_allocations={} rust_aligned_page_bytes={} rust_total_requested_bytes={}",
+                    a.live_bytes, a.peak_live_bytes, a.live_allocations, a.aligned_page_bytes, a.total_requested_bytes));
+            }
             let (draws, presents) = ddruntime::d3d9draw::counts();
             ddruntime::load_log::event("frame_totals", format_args!("draws={draws} presents={presents}"));
             let p = ddgpu::pipeline_stats();

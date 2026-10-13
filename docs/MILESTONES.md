@@ -1,5 +1,34 @@
 # Milestones
 
+### L109d memory ownership diagnostics (2026-10-13)
+
+- Head reports 2.6 -> 15.7–17 GB private memory at save load; cause remains
+  unmeasured. L109c process/guest counters are ready in `e7099da7`.
+- New opt-in `DDPLAY_ALLOC_LOG=1` measures live Rust requested bytes and
+  4 KiB aligned allocations through the unchanged System allocator.
+  Standalone off/on tests cover allocation, zeroing, realloc and real global
+  allocator startup. No game run by agent.
+- Next: head's combined process/guest/Rust counter run, then an attributed
+  memory fix; save-load time follows. `docs/tasks/L109d-memory.md`.
+
+### L129 combined integer/float flag fusion gate (2026-10-13)
+
+- Merged FPS-line `05b35e35` with both lifter emitters and regenerated
+  **59,734 functions / 33 crates**, preserving 44 scoped step functions.
+- **178,130 original lifted cases pass; zero failing lifted functions**.
+  Full required-vector native gate: **49 tests pass**, readable ports and
+  inventory checks pass; **26 focused Python tests** also pass.
+- Corrected one pre-L62 x87 test to use documented `park()` host boundaries;
+  host assertions retained, guest continuity assertions added. No runtime
+  change or weakened fixture checks. Existing 5 coverage gaps remain.
+- Clean shard compilation: **264.95 s wall span**, **434.82 MiB rlibs**;
+  generated source **+0.2194%**. No comparative compile-speed/FPS claim.
+- Next: head's same-scene loading/image/FPS measurement. Details and
+  timing/profile limits: `docs/tasks/L129-dead-flags.md`.
+
+### L119 native sink, step 2b (2026-10-13)
+
+### L119 native sink, step 2b (2026-10-13)
 ### L119 native sink, steps 2b-2d (2026-10-13)
 
 - `DDDRAW_NATIVE=drawcall|1|verify|census` (crates/ddruntime/src/ndraw_native.rs):
@@ -26,7 +55,40 @@
   Unexpected worker rejection is logged loudly (head-approved contract).
 - **8 transport tests pass**, including upload/native/query ordering and
   unsupported-job ownership. Worker and game comparison pending.
-- Next: ddgpu native worker adapter; `docs/tasks/L126-native-worker.md`.
+- Worker now executes through native::Device with immutable state/shader /
+  texture-group identity caches on the same device/queue. **4 Vulkan GPU tests
+  pass** (16 backend/host-driver image cases plus FIFO/resource/rejection tests),
+  **14 ddgpu CPU tests pass**. Per-job compact recorder; persistent resident /
+  bundle reuse and game/FPS comparison remain separate work.
+- L127 shadow hooks compiled; next: end-to-end shadow gate and head N2 run.
+  **14 ddgpu CPU tests pass**. Persistent resident recorder and finisher
+  handoff now compile; focused GPU gate pending shared HEAVY_BIG availability.
+- L127 five shadow integration tests pass; runtime light **182 pass / one
+  inherited gamma-reset failure / three ignored**. Next: final resident /
+  finisher GPU gate, then head N2 image/FPS run.
+  **14 ddgpu CPU tests pass**. Final resident-recorder/finisher gate:
+  **16 Vulkan tests pass** (six API, five worker, five shadow), including
+  zero-reupload for identical jobs and async shadow submission ordering.
+- Persistent source `e3599f42` + ordering fix `542111eb`; bundles opt-in.
+  Runtime light **182 pass / one inherited gamma-reset failure / three
+  ignored**. Next: head N2 image/FPS run.
+  Details: `docs/tasks/L126-native-worker.md`.
+
+### L123 native resident constants and bundles (2026-10-13)
+
+- Stable constant snapshots upload changed 16-byte registers in one packed
+  transfer + ordered compute scatter. Exact repeated draw sequences reuse
+  render bundles; dynamic state splits sequences. Persistent texture/sampler
+  groups retain identity keys. Existing direct API remains available.
+- Matched optimized 5,000 draws / 40 pipelines / 200 sampled sets, synthetic
+  8,200 VS + 7,300 PS register writes/frame: full **1.644**, resident **1.264**,
+  resident + bundles **0.843 us/draw**, including upload/finish/submit.
+  Three alternating repeats; bundle range 0.822–0.868. Uploads **15.67 MB ->
+  340 KB/frame**. Minimal shaders; no gameplay/FPS claim.
+- **6 GPU tests / 11 CPU tests pass**; runtime light **171 pass / 1 inherited
+  fullscreen gamma-reset failure / 3 ignored**. Core `e062d80a`.
+- Next: head-assigned L126 owned NativeJob FIFO + WgpuBackend worker adapter
+  for L119 N2. Exact conditions and limitations: `docs/tasks/L123-native-device-2.md`.
 
 ### L122 gameplay pass map (2026-10-13)
 
@@ -55,8 +117,13 @@
   added; wrapper-effects regression and eight parser tests pass.
 - Float compare/LAHF/TEST/Jcc fusion covers **1,537 sites / 701 functions**,
   nine in FE9580. Three tests pass, including **401,408 native oracle
-  cases** preserving AH, flags and MXCSR. Whole geometry port is WIP.
-  Next: head integration regeneration/gate and counter run; UI timings
+  cases** preserving AH, flags and MXCSR. Whole-function original replay
+  also passes before/after fusion (three fixtures, **6,155 call boundaries**).
+  Whole geometry port now passes **12 cases / 18,499 boundaries**, including
+  NaNs/subnormals, with original SSE executed on hardware for exact MXCSR.
+  Finite-position indexing removes redundant scans; opt-in via
+  `DDRUNTIME_GEOMETRY_PORT=1`, off pending head A/B.
+  Next: head integration regeneration/gate and geometry A/B; UI timings
   need head marks. No measured geometry or first-Present speedup yet.
 
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
@@ -2192,6 +2259,13 @@ opening (codex-31), route perf (codex-29).
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
 
+### L127 asynchronous native comparison reduction (2026-10-13)
+
+- GPU color/depth/stencil summaries retain pass and target identity; exact loaded-channel comparisons, differing pixels and maximum difference. Bounded async MAP_READ returns 16 bytes per target without a GPU wait.
+- Four focused Vulkan tests and one CPU summary test pass. Scale fixture: 128 pending targets, 16,650,240 pixels, 2,048 readback bytes; 58.73 ms synthetic diagnostic (no gameplay/FPS claim).
+- Next: integrate L119 compare sink and L126 pre-oracle shadow lifecycle, run light runtime suite, then head-run in-game comparison. Details: docs/tasks/L127-native-compare.md.
+
+
 
 ### L121 copy submission boundaries (2026-10-13)
 
@@ -2244,3 +2318,20 @@ opening (codex-31), route perf (codex-29).
   ignored**; ddports test passes. No game, GPU, shard build or FPS claim.
 - Next: head's matched boot/save/frame/profile comparison and L119 adoption
   of the pure shader/constant source iterators.
+### L127 asynchronous native comparison reduction (2026-10-13)
+
+### L127 integrated comparison gate (2026-10-13)
+
+
+### L127 compare producer (2026-10-13)
+
+- DDDRAW_NATIVE=compare now emits pre-oracle begin and single-pass end markers from the L119 sink. Real targets receive D3D9 exactly once; rejected comparisons never redraw them. Attachment/fallback/frame boundaries and dirty uploads close pending comparisons.
+- Three pure transport tests pass, including DeferredBackend FIFO and rejection recovery. Earlier light runtime:173 pass,1 inherited fullscreen-gamma failure,3 ignored. Backend-path oracle shares L119 decoder, separately checked against runtime D3D9 calls.
+- Next: validate synthetic NativeJobs after L126 shadow hooks land, then head's in-game run. No gameplay equivalence claim.
+
+### L127 integrated comparison gate (2026-10-13)
+
+- DDDRAW_NATIVE=compare producer, L126 shadow worker and asynchronous GPU reduction integrated with L119 cache-2c. Five end-to-end GPU tests pass (nine GPU cases total), one summary CPU test, three producer tests and eight transport tests pass.
+- 42 matched and three intentional mismatched target summaries; five explicit rejection diagnostics. Blended pre-pass loads, repeated shadows, mip attachments and D24S8 isolation checked; real targets unchanged, zero pending comparisons on test shutdown.
+- Runtime: 180 distinct passes across full suite plus isolated timing retry; one inherited fullscreen-gamma failure, three ignored. No checks weakened; no game/shard run or game image/FPS claim.
+- Next: head-run DDDRAW_NATIVE=compare gameplay and inspect mismatch/unverified/pending counts. Details: docs/tasks/L127-native-compare.md.
