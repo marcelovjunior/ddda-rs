@@ -675,3 +675,48 @@ negative starts reach c2. Normalization is used for that reason.
    Classify each by its consumers, never by masking.
 2. Publication boundary, the same-run check and live A/B, as the handoff
    above says.
+
+### Offline proof PASSES (claude-9, head decisions #14516)
+
+`serial/parallel proof passed` on both captures:
+
+| Capture | Entries | Undefined stream bytes |
+|---|---|---|
+| v4 `shadow-24392-0` | 79 | 161 |
+| v3 `shadow-48124-0` | 66 | 104 |
+
+Acceptance = stream equality modulo undefined bytes, plus ABI/FP, plus
+final memory within a closed set of region classes. Every class is
+counted on every run; anything outside it still refuses.
+
+**Definedness.** Four extra normalized runs: serial 0x00/0xFF, then
+parallel 0x00/0xFF. They poison the command arena's free space and the
+256 KiB of stack below ESP; the parallel runs also fill fresh private
+storage (`parallel_shadow::PRIVATE_FILL`). A differing stream byte is
+accepted only if it is undefined in BOTH executions, that is, its own
+poisoned runs change it. A refused or misshapen poisoned run classifies
+nothing.
+
+**Final-memory region classes** (shadow_replay.rs, final gate):
+
+| Class | Rule | v4 bytes | v3 bytes |
+|---|---|---|---|
+| Root context recording state | Differs only where the parallel run kept the input value. Includes the free part of the root context's own arena block (its +0x24 cursor to +0x28 end). DB63E0's parallel branch records into lane contexts; FED3B0 merges only their command arrays (compared through the stream). | 2374 | 2269 |
+| Root-entry record pointers | The +4 of each 8-byte root entry: records at other arena addresses, followed and found equal by the stream comparison. | 342 | 292 |
+| Fresh command-arena bytes | At or above the input cursor (render +0x33DC0[ring] + cursor); new allocations reached only through the stream. Below the input cursor stays exact. | 26337 | 23474 |
+| Renderer arena cursor (render +0x33DC8) | Both runs advanced it and the parallel value stays within capacity; lanes refill whole pages (+0x1000 here). | 2 | 2 |
+| Lane state-stack slots above the live top | sPrimitive ([0x018D1848]) has one state object per lane (+0x30 + 4 * lane, lane < +0xD0). vf11 0x00E61010 pushes onto every lane's object in parallel mode and onto the running one serially, through 0x0111D610 (12-byte slots from +0xC, count +0x54) and 0x01192260 on [object+4] (16-byte slots from +4, count +0x64), six deep. Slots at or above a final count that is equal in both runs are dead. | 39 | 49 |
+
+**x87.** The FNSAVE environment (bytes 0..28: control, status with TOP,
+tag word, pointers) must be equal. Register contents may differ only in
+registers tagged empty, which no instruction can read.
+
+Light gates: the focused `shadow` lib tests (37), the mtcore lane tests
+(12) and the d3d9shader tests pass.
+
+**Live validation-only mode.** It is the existing proof runner
+(`DDRUNTIME_PARALLEL_SHADOW=1`). The live traversal runs serially and
+publishes. Its captured input is then replayed privately (plain serial,
+normalized serial, parallel, four definedness runs) and compared in the
+same run. The log reads `parallel-shadow sample=N audit=Ok(entries)` or
+`audit=Err(...)` with `publish=serial`, plus the per-class counts above.
