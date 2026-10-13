@@ -48,6 +48,13 @@ the synthetic memory are skipped), private output
 
 ## Results
 
+Registered (crates/ddports): 0x01066B10, 0x01067790, 0x01062F20
+(`DDRUNTIME_MATERIAL=1`), 0x00FEFB90 (`DDRUNTIME_SET_TARGET=1`),
+0x00FF0780, 0x00FF0AD0, 0x00FF0D20, 0x00FF0E60 (`DDRUNTIME_CULL=1`). The
+L176 ports of 0x01066590, 0x010655A0 and 0x00FEDD60 stay with their tests
+but are not registered: the head keeps claude-2's (L170), codex-10's
+(L174) and the head's (L171) for the train (board #14277).
+
 - `crates/mtdraw/src/material.rs`: `find_parameter` (0x01066590),
   `bind_parameter` (0x01066B10), `apply_material_state` (0x010655A0).
 - `crates/mtdraw/tests/material.rs`: 762, 766 and 1080 ABI-level cases
