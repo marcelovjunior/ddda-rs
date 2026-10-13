@@ -1724,7 +1724,7 @@ fn compare_replays(
     // - the renderer's arena cursor (+0x33DC8) when both runs advanced it and
     //   the parallel one stays within capacity (lanes refill whole pages).
     let mut root_untouched = 0usize;
-    let mut relocated = [0usize; 3];
+    let mut relocated = [0usize; 4];
     let final_word = |run: &ReplayResult, address: u32| -> u32 {
         u32::from_le_bytes(std::array::from_fn(|i| {
             let at = address + i as u32;
@@ -1738,6 +1738,28 @@ fn compare_replays(
     let cursor_word = render + 0x33dc8;
     let cursors = (final_word(&results[0], cursor_word), final_word(&results[1], cursor_word));
     let cursor_ok = cursors.0 >= cursor_in && cursors.1 >= cursor_in && cursors.1 <= capacity;
+    // - sPrimitive lane state-stack slots above the live top: sPrimitive
+    //   ([0x018D1848]) keeps one state object per lane (+0x30 + 4 * lane,
+    //   lane < +0xD0). Its vf11 0x00E61010 pushes onto the running lane's
+    //   object serially and onto every lane's object in parallel mode, through
+    //   0x0111D610 (12-byte slots from +0xC, count +0x54, six) and 0x01192260
+    //   on [object + 4] (16-byte slots from +4, count +0x64, six). Slots at or
+    //   above a final count equal in both runs are dead (the next push writes
+    //   them before any read).
+    let mut dead_slots: Vec<Range<u32>> = Vec::new();
+    {
+        let sp = input.u32(0x018d1848);
+        let lanes = input.u32(sp + 0xd0).min(8);
+        for lane in 0..lanes {
+            let object = input.u32(sp + 0x30 + 4 * lane);
+            for (base, count_at, stride) in [(object + 0xc, object + 0x54, 12u32), (input.u32(object + 4) + 4, input.u32(object + 4) + 0x64, 16)] {
+                let (a, b) = (final_word(&results[0], count_at), final_word(&results[1], count_at));
+                if a == b && a <= 6 {
+                    dead_slots.push(base + stride * a..base + stride * 6);
+                }
+            }
+        }
+    }
     let entries = |run: &ReplayResult| (final_word(run, context + 0x44), final_word(run, context + 0x48));
     let (entry_base, entry_count) = entries(&results[1]);
     let entries_same = entries(&results[0]) == (entry_base, entry_count);
@@ -1780,6 +1802,10 @@ fn compare_replays(
                 relocated[2] += 1;
                 continue;
             }
+            if dead_slots.iter().any(|r| r.contains(address)) {
+                relocated[3] += 1;
+                continue;
+            }
             return Err(format!(
                 "streams matched {} entries; serial/parallel memory mismatch at {address:#x}: serial={a:#04x} parallel={b:#04x} input={:#04x} (root context bytes the parallel branch left untouched: {root_untouched})",
                 observed.entries.len(),
@@ -1788,8 +1814,8 @@ fn compare_replays(
         }
     }
     eprintln!(
-        "parallel-shadow final memory accepted: root context left untouched {root_untouched}, relocated record pointers {}, fresh arena {}, arena cursor {} (cursor {:#x} serial / {:#x} parallel, capacity {capacity:#x})",
-        relocated[0], relocated[1], relocated[2], cursors.0, cursors.1
+        "parallel-shadow final memory accepted: root context left untouched {root_untouched}, relocated record pointers {}, fresh arena {}, arena cursor {} (cursor {:#x} serial / {:#x} parallel, capacity {capacity:#x}), dead lane state-stack slots {}",
+        relocated[0], relocated[1], relocated[2], cursors.0, cursors.1, relocated[3]
     );
     if abi(&results[0].0) != abi(&results[1].0) {
         return Err("serial/parallel ABI mismatch".into());
