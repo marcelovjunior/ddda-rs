@@ -2,6 +2,10 @@
 
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
+- Continuation: capture v2 preserves live outgoing MXCSR; replay compares
+  x87 and thread control state. Five focused replay tests pass; real
+  capture and production publication remain pending.
+
 - Private contiguous helper lanes, dependency-checked ordered merge, and
   strict command/resource-byte comparison are implemented. Opt-in proof
   runner captures the real serial traversal and replays raw serial/queued

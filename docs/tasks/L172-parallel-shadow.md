@@ -153,6 +153,14 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Continuation: replay now checks the full x87 image, saved/live MXCSR and
+thread control state in addition to its existing ABI/stream/memory gates.
+Capture format v2 retains live outgoing MXCSR separately from the saved
+CPU value; v1 refuses because that evidence was absent. Five focused
+replay tests pass, including distinct saved/live MXCSR round-trip and
+11 deliberate FP/control-state mutations. Real capture remains pending.
+
+
 Default light gate before the final capture-file addition: **271 passed,
 zero failures, seven ignored**. Final focused shadow gate: **17 passed**
 (includes eight executor tests, three private replay tests, one bounded

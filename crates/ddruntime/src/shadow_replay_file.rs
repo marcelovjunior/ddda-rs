@@ -3,7 +3,7 @@
 use super::*;
 use std::io::{self, Read, Write};
 
-const MAGIC: &[u8; 8] = b"DDSH172\x01";
+const MAGIC: &[u8; 8] = b"DDSH172\x02";
 const CPU_WORDS: usize = 84;
 
 pub(super) struct Fixture {
@@ -11,6 +11,7 @@ pub(super) struct Fixture {
     pub incoming: Cpu,
     pub outgoing: Cpu,
     pub mxcsr: u32,
+    pub result_mxcsr: u32,
     pub context: u32,
     pub scheduler: u32,
     pub stack: Range<u32>,
@@ -95,7 +96,7 @@ impl Fixture {
             put(out, value)?;
         }
         write_cpu(out, &self.incoming, self.mxcsr)?;
-        write_cpu(out, &self.outgoing, self.outgoing.mxcsr.0)?;
+        write_cpu(out, &self.outgoing, self.result_mxcsr)?;
         self.input.write_to(out)?;
         put(out, self.writes.len() as u32)?;
         for (&address, &value) in &self.writes {
@@ -112,7 +113,7 @@ impl Fixture {
         }
         let (context, scheduler, low, high) = (word(input)?, word(input)?, word(input)?, word(input)?);
         let (incoming, mxcsr) = read_cpu(input)?;
-        let (outgoing, _) = read_cpu(input)?;
+        let (outgoing, result_mxcsr) = read_cpu(input)?;
         if low >= incoming.esp || incoming.esp >= high || outgoing.esp > high || high - low > 8 << 20 {
             return Err(invalid());
         }
@@ -139,6 +140,7 @@ impl Fixture {
             incoming,
             outgoing,
             mxcsr,
+            result_mxcsr,
             context,
             scheduler,
             stack: low..high,
@@ -172,6 +174,7 @@ mod tests {
             incoming,
             outgoing,
             mxcsr: 0x1f80,
+            result_mxcsr: 0x3f80,
             context: 0x1000,
             scheduler: 0x1100,
             stack: 0x1000..0x2000,
@@ -182,6 +185,8 @@ mod tests {
         let decoded = Fixture::read(&mut &bytes[..]).unwrap();
         assert_eq!(decoded.incoming.ecx, fixture.incoming.ecx);
         assert_eq!(decoded.outgoing.eax, fixture.outgoing.eax);
+        assert_eq!(decoded.result_mxcsr, 0x3f80);
+        assert_ne!(decoded.result_mxcsr, decoded.outgoing.mxcsr.0);
         assert_eq!(decoded.writes, fixture.writes);
         assert_eq!(decoded.input.u32(0x1100), 0);
         let mut again = Vec::new();
