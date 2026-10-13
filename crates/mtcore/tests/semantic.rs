@@ -105,6 +105,13 @@ fn abi_cases_with_calls(path: &str, body: LiftFn) -> usize {
 /// `returns`: false for a void function, whose EAX is left over and not
 /// part of its ABI.
 fn abi_cases_with_calls_ret(path: &str, body: LiftFn, returns: bool) -> usize {
+    abi_cases_full(path, body, returns, &[])
+}
+
+/// `native_callees`: recorded calls the semantic port does natively (a
+/// CRT memcpy, say): their events are dropped and the final memory check
+/// covers their effects.
+fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32]) -> usize {
     use ddnative_base::x86;
     use std::{cell::RefCell, rc::Rc};
     let text = match std::fs::read_to_string(path) {
@@ -120,7 +127,14 @@ fn abi_cases_with_calls_ret(path: &str, body: LiftFn, returns: bool) -> usize {
         let after = regs(&case["after"]);
         let mut c = Cpu::default();
         [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = before;
-        let events = Rc::new(case["events"].as_array().unwrap().clone());
+        let events: Vec<Value> = case["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e.get("target").map_or(true, |t| !native_callees.contains(&n(t))))
+            .cloned()
+            .collect();
+        let events = Rc::new(events);
         let cursor = Rc::new(RefCell::new(0usize));
         let (trace, position) = (events.clone(), cursor.clone());
         // Two recorded formats: a "call" event followed by its "return"
@@ -206,4 +220,11 @@ fn semantic_update_joints_matches_original() {
     ddnative_host::install();
     let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L165/job_joints.json", mtcore::semantic::update_joints, false);
     eprintln!("{n} ABI-level joints cases passed");
+}
+
+// verifies 0x00fedd60 (ABI level; its CRT memcpy calls are done natively)
+#[test]
+fn semantic_sort_pairs_matches_original() {
+    let n = abi_cases_full("E:/ddda-re/notes/native-L165/job_sort.json", mtcore::semantic::sort_pairs, true, &[0x012e_fea0]);
+    eprintln!("{n} ABI-level sort cases passed");
 }

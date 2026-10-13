@@ -305,3 +305,101 @@ pub fn update_joints(m: &mut dyn Mem, c: &mut Cpu) {
     }
     c.esp = entry.wrapping_add(4 + 0xc);
 }
+
+/// 0x00FEDD60, `sort_pairs(records, count, scratch) -> sorted` (stdcall,
+/// `ret 0xc`): a stable bottom-up merge sort of `count` 8-byte (key,
+/// value) records by their unsigned key, ping-ponging between `records`
+/// and `scratch`; returns the buffer holding the result.
+///
+/// Both buffers stay as the original leaves them: a pair pass writes all
+/// records into `scratch`, then merges of runs of 2, 4, 8, ... alternate
+/// direction (`scratch -> records -> scratch ...`) while the merged width
+/// does not exceed the next power of two of `count`. On equal keys the
+/// left run's record goes first.
+pub fn sort_pairs(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let records = arg(m, 0);
+    let count = arg(m, 1) as i32;
+    c.esp = entry.wrapping_add(4 + 0xc);
+    // the next power of two of `count` (at most 32 doublings)
+    let mut span: i32 = 1;
+    for _ in 0..32 {
+        if count <= span {
+            break;
+        }
+        span = span.wrapping_mul(2);
+    }
+    if span < 2 {
+        c.eax = records;
+        return;
+    }
+    let scratch = arg(m, 2);
+    let n = count as usize;
+    let read = |m: &dyn Mem, base: u32| -> Vec<[u32; 2]> {
+        (0..n as u32).map(|i| [pg.u32(m, base + 8 * i), pg.u32(m, base + 8 * i + 4)]).collect()
+    };
+    let mut a = read(m, records);
+    // pair pass: records -> scratch
+    let mut b = Vec::with_capacity(n);
+    for pair in a.chunks(2) {
+        match pair {
+            [x, y] if y[0] < x[0] => b.extend([*y, *x]),
+            _ => b.extend_from_slice(pair),
+        }
+    }
+    let mut a_written = false;
+    // merge passes; `in_scratch`: the current runs live in `b`
+    let mut in_scratch = true;
+    let mut width: i32 = 4;
+    if span > 3 {
+        while width <= span {
+            let (src, dst) = if in_scratch { (&b, &mut a) } else { (&a, &mut b) };
+            merge_runs(src, dst, (width / 2) as usize);
+            if in_scratch {
+                a_written = true;
+            }
+            in_scratch = !in_scratch;
+            width = width.wrapping_mul(2);
+        }
+    }
+    let write = |m: &mut dyn Mem, base: u32, v: &[[u32; 2]]| {
+        for (i, r) in v.iter().enumerate() {
+            pg.set_u32(m, base + 8 * i as u32, r[0]);
+            pg.set_u32(m, base + 8 * i as u32 + 4, r[1]);
+        }
+    };
+    write(m, scratch, &b);
+    if a_written {
+        write(m, records, &a);
+    }
+    c.eax = if in_scratch { scratch } else { records };
+}
+
+/// One merge pass: each pair of adjacent `run`-long runs of `src` merged
+/// into the same range of `dst` (stable; the right record first only when
+/// its key is strictly smaller).
+fn merge_runs(src: &[[u32; 2]], dst: &mut [[u32; 2]], run: usize) {
+    let n = src.len();
+    let mut start = 0;
+    while start < n {
+        let mid = (start + run).min(n);
+        let end = (mid + run).min(n);
+        let (mut l, mut r, mut out) = (start, mid, start);
+        while l < mid && r < end {
+            if src[r][0] < src[l][0] {
+                dst[out] = src[r];
+                r += 1;
+            } else {
+                dst[out] = src[l];
+                l += 1;
+            }
+            out += 1;
+        }
+        dst[out..out + (mid - l)].copy_from_slice(&src[l..mid]);
+        out += mid - l;
+        dst[out..out + (end - r)].copy_from_slice(&src[r..end]);
+        start += 2 * run;
+    }
+}
