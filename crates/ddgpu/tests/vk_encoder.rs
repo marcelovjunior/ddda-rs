@@ -758,3 +758,180 @@ fn shadow_same_run_mrt_depth_stencil() {
     assert_eq!(after.skipped_passes, before.skipped_passes, "{after:?}");
     assert_eq!(after.pending_aspects, 0, "{after:?}");
 }
+
+/// L166: dimensions/pass counts from cap1's documented pass census, with
+/// synthetic shaders/data. This is a synchronization stress fixture, not a
+/// replay or a claim of original-game image equivalence. Run in a fresh process
+/// with DDGPU_VK_SHADOW unset, 1, or 997 and a hard external 60-second timeout.
+#[test]
+#[ignore = "GPU stress: isolated process, pause gate and 60 second timeout"]
+fn tdr_pass_mix_stress() {
+    let _lock = SERIAL.lock().unwrap();
+    let frames: u32 = std::env::var("DDGPU_TDR_FRAMES").ok()
+        .and_then(|s| s.parse().ok()).filter(|n| *n > 0).unwrap_or(64);
+    let mut expected = None;
+    for vk in [false, true] {
+        let mut gpu = backend(vk);
+        gpu.set_encode_threads(4);
+        gpu.draws_per_submit = 127;
+        gpu.read_frames = false;
+        let before = ddgpu::vk::stats();
+        let shadow_before = ddgpu::vk::shadow_stats();
+        let mut scene = target(0x100, 21);
+        scene.width = 1920;
+        scene.height = 1080;
+        let mut depth = depth_target();
+        depth.width = scene.width;
+        depth.height = scene.height;
+        let mut tiny = target(0x200, 116);
+        tiny.width = 64;
+        tiny.height = 8;
+        let mut images = blake3::Hasher::new();
+        for frame in 0..frames {
+            for t in [&scene, &tiny] {
+                let mut clear = clear_of(&[t.clone()], 0xff294763);
+                clear.viewport[2] = t.width;
+                clear.viewport[3] = t.height;
+                if t == &scene {
+                    clear.flags = 7;
+                    clear.depth = Some(depth.clone());
+                    clear.stencil = 19;
+                }
+                gpu.clear(&clear);
+            }
+            // Alternate small float work with a full-size depth/stencil pass.
+            // Flushes split raw runs, forcing the tracked/raw boundary often.
+            for pass in 0..15 {
+                for t in [&tiny, &scene] {
+                    let mut d = draw(&[[(frame % 64) as f32 / 64.0, pass as f32 / 16.0, 0.75, 1.0]],
+                        [Some(t.clone()), None, None, None], 0.4,
+                        &[(7,1),(14,1),(23,8),(52,1),(53,1),(54,1),(55,3),(56,8),(57,73),(58,255),(59,255)]);
+                    d.viewport[2] = t.width;
+                    d.viewport[3] = t.height;
+                    if t == &scene { d.depth = Some(depth.clone()); }
+                    let count = if t == &tiny { 60 } else { 1 };
+                    for n in 0..count {
+                        if t == &tiny { d.targets[0].as_mut().unwrap().surface = 0x200 + n % 2; }
+                        gpu.draw(&d);
+                    }
+                }
+            }
+            gpu.present(&scene);
+            if frame % 16 == 15 || frame + 1 == frames {
+                images.update(&gpu.read_back(&scene).expect("scene readback"));
+                images.update(&gpu.read_back(&tiny).expect("tiny readback"));
+            }
+        }
+        gpu.wait_idle();
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+        let after = ddgpu::vk::stats();
+        let shadow_after = ddgpu::vk::shadow_stats();
+        if vk {
+            assert!(after.passes > before.passes);
+            assert_eq!(after.encode_errors, before.encode_errors);
+            assert_eq!(shadow_after.mismatched_aspects, shadow_before.mismatched_aspects);
+            assert_eq!(shadow_after.errors, shadow_before.errors);
+            assert_eq!(shadow_after.pending_aspects, 0);
+            if std::env::var("DDGPU_VK_SHADOW").is_ok() {
+                assert!(shadow_after.matched_aspects > shadow_before.matched_aspects);
+            }
+        }
+        let hash = images.finalize();
+        eprintln!("L166 mix vk={vk} frames={frames} hash={hash} raw_passes={} raw_draws={} mapped_restarts={} shadow={shadow_after:?}",
+            after.passes - before.passes, after.draws - before.draws, after.mapped_restarts - before.mapped_restarts);
+        if let Some(expected) = expected { assert_eq!(hash, expected); }
+        else { expected = Some(hash); }
+    }
+}
+
+/// Replays private capture commands without creating a window or running any
+/// game code. Blobs remain file-backed with a bounded decompression cache.
+#[test]
+#[ignore = "requires DDGPU_TDR_CAPTURE; pause gate and external 60 second timeout"]
+fn tdr_private_capture_replay() {
+    let _lock = SERIAL.lock().unwrap();
+    let path = std::env::var("DDGPU_TDR_CAPTURE").expect("private capture path required");
+    // Optional stress slice: preserve latest uploads/releases before FIRST,
+    // omit earlier rendering. This does NOT reconstruct the original frame's
+    // load state; the same-run shadow still sees identical input load state.
+    let first: u32 = std::env::var("DDGPU_TDR_FIRST_FRAME").ok()
+        .and_then(|s| s.parse().ok()).unwrap_or(0);
+    let last: u32 = std::env::var("DDGPU_TDR_LAST_FRAME").ok()
+        .and_then(|s| s.parse().ok()).unwrap_or(u32::MAX);
+    let repeats: u32 = std::env::var("DDGPU_TDR_REPEAT").ok()
+        .and_then(|s| s.parse().ok()).unwrap_or(0);
+    let entry = unsafe { ash::Entry::load() }.expect("Vulkan loader");
+    for layer in unsafe { entry.enumerate_instance_layer_properties() }.expect("layers") {
+        eprintln!("L166 Vulkan layer {:?}", layer.layer_name_as_c_str().unwrap());
+    }
+    let mut gpu = backend(true);
+    gpu.read_frames = false;
+    let mut frames = 0;
+    let mut draws = 0;
+    let mut held = std::collections::BTreeMap::new();
+    let mut frame_commands = Vec::new();
+    let mut last_commands = Vec::new();
+    let mut last_target = None;
+    let started = std::time::Instant::now();
+    for command in d3d9frame::Reader::open_indexed(path, 128 << 20).expect("capture") {
+        let command = command.expect("capture command");
+        if frames < first {
+            match command {
+                d3d9frame::Command::Upload(u) => {
+                    let key = match &u {
+                        d3d9cmd::Upload::Buffer { resource, .. } => (*resource, 0),
+                        d3d9cmd::Upload::Image { resource, index, .. } => (*resource, *index),
+                    };
+                    held.insert(key, u);
+                }
+                d3d9frame::Command::Release(r) => held.retain(|&(resource, _), _| resource != r),
+                d3d9frame::Command::Present(_) => frames += 1,
+                _ => {}
+            }
+            continue;
+        }
+        if !held.is_empty() {
+            eprintln!("L166 slice starts at frame={frames}, {} retained uploads; earlier rendering omitted", held.len());
+            for (_, upload) in std::mem::take(&mut held) { gpu.upload(upload); }
+        }
+        command.apply(&mut gpu);
+        // Repeated work keeps the captured pass mix, not frame evolution.
+        // Upload/release history is executed once; repeat the last frame's
+        // rendering and queries against those resident resources.
+        if repeats > 0 && !matches!(&command,
+            d3d9frame::Command::Upload(_) | d3d9frame::Command::Release(_)) {
+            frame_commands.push(command.clone());
+        }
+        match command {
+            d3d9frame::Command::Draw(_) => draws += 1,
+            d3d9frame::Command::Present(target) => {
+                frames += 1;
+                last_target = Some(target);
+                gpu.wait_idle();
+                last_commands = std::mem::take(&mut frame_commands);
+                eprintln!("L166 capture elapsed={:?} frames={frames} draws={draws} raw={:?} shadow={:?}", started.elapsed(),
+                    ddgpu::vk::stats(), ddgpu::vk::shadow_stats());
+                if frames > last { break; }
+            }
+            _ => {}
+        }
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    }
+    for repeat in 0..repeats {
+        for command in &last_commands { command.apply(&mut gpu); }
+        gpu.wait_idle();
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+        eprintln!("L166 repeat={repeat} elapsed={:?} raw={:?} shadow={:?}", started.elapsed(),
+            ddgpu::vk::stats(), ddgpu::vk::shadow_stats());
+    }
+    gpu.wait_idle();
+    let image = gpu.read_back(last_target.as_ref().expect("captured Present")).expect("final readback");
+    eprintln!("L166 final image bytes={} hash={}", image.len(), blake3::hash(&image));
+    assert!(frames > 0 && draws > 0);
+    assert!(ddgpu::vk::stats().passes > 0);
+    assert_eq!(ddgpu::vk::stats().encode_errors, 0);
+    let shadow = ddgpu::vk::shadow_stats();
+    assert_eq!(shadow.errors, 0);
+    assert_eq!(shadow.mismatched_aspects, 0);
+    assert_eq!(shadow.pending_aspects, 0);
+}
