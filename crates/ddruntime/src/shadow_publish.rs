@@ -105,6 +105,9 @@ pub(super) struct Storage {
     pub(super) manager: u32,
     /// (address, capacity)
     pub(super) secondary: (u32, u32),
+    /// the scheduler and manager copies already hold the current bytes
+    /// (the replay test builds them in its snapshot)
+    pub(super) prefilled: bool,
 }
 static STORAGE: Mutex<Option<Storage>> = Mutex::new(None);
 
@@ -171,11 +174,12 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
             scheduler: allocate(0x1c150),
             manager: allocate(0xd40 + 8 * LANE_BYTES),
             secondary: (0, 0),
+            prefilled: false,
         });
         if st.secondary.1 < capacity {
             st.secondary = (allocate(capacity.max(1)), capacity);
         }
-        Storage { scheduler: st.scheduler, manager: st.manager, secondary: st.secondary }
+        Storage { scheduler: st.scheduler, manager: st.manager, secondary: st.secondary, prefilled: false }
     };
     let result = run_window(m, cpu, original, &storage);
     crate::threads::waits::close();
@@ -197,9 +201,11 @@ pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, stora
     let context = m.u32(cpu.esp + 4);
     let (private_scheduler, private_manager, secondary) = (storage.scheduler, storage.manager, storage.secondary.0);
     // the private copies and the top-level globals (as the proof replay)
-    copy(m, scheduler, private_scheduler, 0x1c150);
     let manager = cpu.ecx;
-    copy(m, manager, private_manager, 0xd40 + 8 * LANE_BYTES);
+    if !storage.prefilled {
+        copy(m, scheduler, private_scheduler, 0x1c150);
+        copy(m, manager, private_manager, 0xd40 + 8 * LANE_BYTES);
+    }
     let nesting = [m.u8(NESTING), m.u8(NESTING_OTHER)];
     let use_secondary = m.u32(context + 0x54) == 0;
     if use_secondary {
