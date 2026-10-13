@@ -1021,6 +1021,8 @@ pub struct Caches {
     /// native fixed state by identity and render-state list (its address:
     /// the list is held in `states`)
     native_fixed: FxMap<(NativeStateIdentity, u64), Arc<NativeFixedState>>,
+    /// native register arrays by constant bank (held)
+    native_constants: FxMap<usize, (Arc<Constants>, NativeConstants)>,
     // this frame's
     /// shader bindings by address, with the frame they were last built
     /// or checked in (kept across frames: an unchanged binding keeps its
@@ -1512,10 +1514,25 @@ pub fn native_draw(d: &DrawCall, identity: NativeStateIdentity, caches: &mut Cac
     let state = caches.native_fixed.entry((identity, d.render_states.address())).or_insert_with(|| {
         Arc::new(NativeFixedState { identity, render_states: d.render_states.iter().copied().collect::<Vec<_>>().into() })
     }).clone();
-    let constants = |c: &Constants| NativeConstants {
-        floats: vec![NativeFloatWrite { first: 0, registers: c.f.as_slice().into() }],
-        ints: vec![NativeIntWrite { first: 0, registers: c.i.as_slice().into() }],
-        bools: vec![NativeBoolWrite { first: 0, registers: c.b.as_slice().into() }],
+    // one set of register arrays per constant bank (banks are shared by the
+    // draws of a binding, across frames while unchanged), so the worker can
+    // tell an unchanged bank by its pointer
+    let mut constants = |c: &Arc<Constants>| {
+        let key = Arc::as_ptr(c) as usize;
+        if let Some((_, n)) = caches.native_constants.get(&key) {
+            return n.clone();
+        }
+        if caches.native_constants.len() > 8192 {
+            caches.native_constants.clear();
+        }
+        let n = NativeConstants {
+            floats: vec![NativeFloatWrite { first: 0, registers: c.f.as_slice().into() }],
+            ints: vec![NativeIntWrite { first: 0, registers: c.i.as_slice().into() }],
+            bools: vec![NativeBoolWrite { first: 0, registers: c.b.as_slice().into() }],
+        };
+        // the bank is held, so its address is not reused while cached
+        caches.native_constants.insert(key, (c.clone(), n.clone()));
+        n
     };
     let scissor = d.render_states.iter().any(|&(s, v)| s == 174 && v != 0);
     Ok(NativeDraw {
