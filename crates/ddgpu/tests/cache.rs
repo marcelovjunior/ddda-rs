@@ -167,7 +167,7 @@ fn frame_of(rng: &mut Rng, count: usize) -> (Vec<Upload>, Vec<ClearCall>, Vec<Dr
             } else {
                 vec![]
             },
-            render_states: states,
+            render_states: states.into(),
             viewport: [vp[0], vp[1], vp[2].min(W - vp[0]), vp[3].min(H - vp[1]), 0f32.to_bits(), 1f32.to_bits()],
             scissor: [(rng.next() % 8) as i32, (rng.next() % 8) as i32, 8 + (rng.next() % 8) as i32, 8 + (rng.next() % 8) as i32],
             targets: [Some(back_buffer()), mrt.then(|| second.clone()), None, None],

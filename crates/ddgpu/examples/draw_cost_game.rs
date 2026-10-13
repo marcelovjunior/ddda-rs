@@ -92,7 +92,7 @@ fn main() {
             vs_constants: vs_c.into(),
             ps_constants: ps_c.into(),
             textures: (0..6).map(|s| TextureBinding { sampler: s, resource: 0x200 + set + s, kind: TexKind::Flat, format: 21, width: 64, height: 64, depth: 1, levels: 7, usage: 0, states: sampler }).collect(),
-            render_states: states.clone(),
+            render_states: states.clone().into(),
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],
             scissor: [0, 0, w as i32, h as i32],
             targets: [Some(bb.clone()), None, None, None],

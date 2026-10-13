@@ -50,7 +50,7 @@ fn draw(colour: [f32; 4], points: [[f32; 2]; 3], z: f32, rt: &Target, depth: Opt
         declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]].into(), fvf: 0,
         vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
         ps_constants: c.into(), textures: vec![],
-        render_states: states(extra),
+        render_states: states(extra).into(),
         viewport: [0, 0, W, H, 0f32.to_bits(), 1f32.to_bits()],
         scissor: [0, 0, W as i32, H as i32],
         targets: [Some(rt.clone()), None, None, None],

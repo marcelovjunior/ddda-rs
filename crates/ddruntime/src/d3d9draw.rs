@@ -297,7 +297,7 @@ fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, 
     // state, every map of it, was cloned for each draw)
     struct Read {
         textures: Vec<(u32, u32, [u32; 14])>,
-        render_states: Vec<(u32, u32)>,
+        render_states: d3d9cmd::RenderStateList,
         vertices: Vertices,
         indices: u32,
         shaders: (u32, u32),
@@ -317,7 +317,7 @@ fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, 
         Read {
             textures,
             // in state order already
-            render_states: state.render.as_slice().to_vec(),
+            render_states: state.render.shared(),
             vertices: vertices.unwrap_or_else(|| Vertices::Streams(
                 state.streams.iter().enumerate().filter(|(_, s)| s.0 != 0)
                     .map(|(k, s)| (k as u32, s.0, s.1, s.2, state.stream_freq[k])).collect(),

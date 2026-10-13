@@ -701,7 +701,7 @@ impl Dec<'_> {
             textures.push(TextureBinding { sampler, resource, kind, format, width, height, depth, levels, usage, states });
         }
         let words = tokens(self.blob()?);
-        let render_states = words.chunks_exact(2).map(|p| (p[0], p[1])).collect();
+        let render_states = words.chunks_exact(2).map(|p| (p[0], p[1])).collect::<Vec<_>>().into();
         let mut viewport = [0u32; 6];
         for v in &mut viewport {
             *v = self.u32()?;
@@ -874,7 +874,7 @@ mod tests {
             vertex_shader: Some((vec![0xFFFE_0300, 0x0000_FFFF]).into()), pixel_shader: None,
             declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]].into(), fvf: 0, vs_constants: vs.into(), ps_constants: Constants::default().into(),
             textures: vec![TextureBinding { sampler: 257, resource: 0x300, kind: TexKind::Cube, format: 113, width: 16, height: 16, depth: 1, levels: 5, usage: 1, states: [7; 14] }],
-            render_states: vec![(7, 1), (27, 0)], viewport: [0, 0, 8, 4, 0, 0x3F80_0000], scissor: [0, 0, 8, -4],
+            render_states: vec![(7, 1), (27, 0)].into(), viewport: [0, 0, 8, 4, 0, 0x3F80_0000], scissor: [0, 0, 8, -4],
             targets: [Some(target(0x101, Some(tex))), None, Some(target(0x102, None)), None], depth: Some(target(0x180, None)),
         };
         let mut inline = draw.clone();
