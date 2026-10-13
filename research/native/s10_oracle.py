@@ -90,8 +90,20 @@ class Oracle:
         esp = uc.reg_read(x.UC_X86_REG_ESP)
         window = [(esp + i, b) for i, b in enumerate(uc.mem_read(esp, 4 * (1 + nargs + extra)))]
         before = dict(regs=self.regs(), memory=window)
+        # optional extra memory the callee reads (stub[3](oracle, regs, esp) -> [(address, length)])
+        if len(stub) > 3:
+            before['checks'] = [(a + i, b) for a, n in stub[3](self, self.regs(), esp) for i, b in enumerate(uc.mem_read(a, n))]
         self._stub_writes = set()
-        eax = behaviour(self, self.regs(), esp) & M32
+        result = behaviour(self, self.regs(), esp)
+        if isinstance(result, dict):
+            # a native stub (real code at the address runs on): only record the call
+            r = self.regs()
+            r[4] = esp + 4 + 4 * nargs
+            ev = dict(target=address, before=before, after=dict(regs=r, memory=[]))
+            ev.update(result)
+            self.events.append(ev)
+            return
+        eax = result & M32
         back = self.u32(esp)
         uc.reg_write(x.UC_X86_REG_EAX, eax)
         # scribble the caller-saved registers: a port must not rely on them
