@@ -18,6 +18,7 @@ struct Fuzz {
     base: BTreeMap<u32, u8>,
     writes: BTreeMap<u32, u8>,
     budget: std::cell::Cell<i64>,
+    reads: RefCell<BTreeMap<u32, u8>>,
 }
 fn mix(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
@@ -34,16 +35,19 @@ impl Mem for Fuzz {
         if let Some(&b) = self.writes.get(&a) {
             return b;
         }
-        if let Some(&b) = self.base.get(&a) {
-            return b;
-        }
-        let h = mix(self.seed ^ (u64::from(a) << 20));
-        // zero-biased: counts and flags stay small
-        if h & 3 != 0 {
-            0
+        let value = if let Some(&b) = self.base.get(&a) {
+            b
         } else {
-            (h >> 8) as u8
-        }
+            let h = mix(self.seed ^ (u64::from(a) << 20));
+            // zero-biased: counts and flags stay small
+            if h & 3 != 0 {
+                0
+            } else {
+                (h >> 8) as u8
+            }
+        };
+        self.reads.borrow_mut().entry(a).or_insert(value);
+        value
     }
     fn set_u8(&mut self, a: u32, v: u8) {
         self.budget.set(self.budget.get() - 1);
@@ -77,6 +81,14 @@ const STACK_ARGS: &[(u32, u32)] = &[
     (0x00ff_00a0, 5),
     (0x0106_6c60, 2),
     (0x0114_4fe0, 2),
+    (0x00ff_1920, 0),
+    (0x00fe_ef20, 0),
+    (0x00fe_e320, 2),
+    (0x0d00_0040, 8),
+    (0x0d00_0034, 4),
+    (0x00e1_32b0, 7),
+    (0x00da_7d70, 1),
+    (0x00fe_ef80, 0),
 ];
 
 type Log = Vec<(u32, u32, u32)>;
@@ -85,24 +97,13 @@ struct Outcome {
     writes: BTreeMap<u32, u8>,
     log: Log,
     dispatched: Vec<u32>,
+    reads: BTreeMap<u32, u8>,
 }
 
-/// Run `body` once. `dispatch`: ports standing in for guest calls (the
-/// unfolded run); `folded`: targets that are not logged.
-fn run(body: LiftFn, case: &Value, seed: u64, dispatch: &[(u32, LiftFn)], folded: &[u32], prepare: Option<fn(&mut BTreeMap<u32, u8>, &Cpu)>) -> Option<Outcome> {
-    let regs: Vec<u32> = case["before"]["regs"].as_array().unwrap().iter().map(n).collect();
-    let mut c = Cpu::default();
-    [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = regs.clone().try_into().unwrap();
-    let entry = c.esp;
-    let mut base = pairs(&case["initial"]);
-    if let Some(prepare) = prepare {
-        prepare(&mut base, &c);
-    }
-    let mut m = Fuzz { seed, base, writes: BTreeMap::new(), budget: std::cell::Cell::new(40_000) };
-    let log = Rc::new(RefCell::new(Log::new()));
-    let dispatched = Rc::new(RefCell::new(Vec::<u32>::new()));
-    let dispatched2 = dispatched.clone();
-    let (log2, folded2, dispatch2) = (log.clone(), folded.to_vec(), dispatch.to_vec());
+/// Install the guest-call handler of a run (shared by the tests and the benchmark).
+fn install_handler(seed: u64, dispatch: &[(u32, LiftFn)], folded: &[u32], log: Rc<RefCell<Log>>, dispatched: Rc<RefCell<Vec<u32>>>) {
+    let dispatched2 = dispatched;
+    let (log2, folded2, dispatch2) = (log, folded.to_vec(), dispatch.to_vec());
     let calls = Rc::new(std::cell::Cell::new(0u64));
     x86::set_ext_calls(Some(Box::new(move |m, c, target| {
         if !folded2.contains(&target) {
@@ -127,6 +128,23 @@ fn run(body: LiftFn, case: &Value, seed: u64, dispatch: &[(u32, LiftFn)], folded
         c.edx = 0xd1a0;
         c.esp = c.esp.wrapping_add(4 + 4 * args);
     })));
+}
+
+/// Run `body` once. `dispatch`: ports standing in for guest calls (the
+/// unfolded run); `folded`: targets that are not logged.
+fn run(body: LiftFn, case: &Value, seed: u64, dispatch: &[(u32, LiftFn)], folded: &[u32], prepare: Option<fn(&mut BTreeMap<u32, u8>, &Cpu)>, budget: i64) -> Option<Outcome> {
+    let regs: Vec<u32> = case["before"]["regs"].as_array().unwrap().iter().map(n).collect();
+    let mut c = Cpu::default();
+    [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = regs.clone().try_into().unwrap();
+    let entry = c.esp;
+    let mut base = pairs(&case["initial"]);
+    if let Some(prepare) = prepare {
+        prepare(&mut base, &c);
+    }
+    let mut m = Fuzz { seed, base, writes: BTreeMap::new(), budget: std::cell::Cell::new(budget), reads: RefCell::new(BTreeMap::new()) };
+    let log = Rc::new(RefCell::new(Log::new()));
+    let dispatched = Rc::new(RefCell::new(Vec::<u32>::new()));
+    install_handler(seed, dispatch, folded, log.clone(), dispatched.clone());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut m, &mut c)));
     x86::set_ext_calls(None);
     match result {
@@ -141,10 +159,11 @@ fn run(body: LiftFn, case: &Value, seed: u64, dispatch: &[(u32, LiftFn)], folded
     let writes = m.writes.into_iter().filter(|&(a, _)| !(entry.wrapping_sub(0x4000)..entry).contains(&a)).collect();
     let log = log.borrow().clone();
     let dispatched = dispatched.borrow().clone();
-    Some(Outcome { regs: [c.eax, c.ebx, c.esp, c.ebp, c.esi, c.edi], writes, log, dispatched })
+    let reads = m.reads.borrow().clone();
+    Some(Outcome { regs: [c.eax, c.ebx, c.esp, c.ebp, c.esi, c.edi], writes, log, dispatched, reads })
 }
 
-fn differential(path: &str, entry: Option<u32>, prepare: Option<fn(&mut BTreeMap<u32, u8>, &Cpu)>, unfolded: LiftFn, folded_body: LiftFn, dispatch: &[(u32, LiftFn)], folded: &[u32], seeds: u64, compare_eax: bool) {
+fn differential(path: &str, entry: Option<u32>, prepare: Option<fn(&mut BTreeMap<u32, u8>, &Cpu)>, unfolded: LiftFn, folded_body: LiftFn, dispatch: &[(u32, LiftFn)], folded: &[u32], seeds: u64, compare_eax: bool, budget: i64) {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
@@ -161,8 +180,8 @@ fn differential(path: &str, entry: Option<u32>, prepare: Option<fn(&mut BTreeMap
         }
         for k in 0..seeds {
             let seed = (i as u64) << 8 | k;
-            let a = run(unfolded, case, seed, dispatch, folded, prepare);
-            let b = run(folded_body, case, seed, &[], folded, prepare);
+            let a = run(unfolded, case, seed, dispatch, folded, prepare, budget);
+            let b = run(folded_body, case, seed, &[], folded, prepare, budget);
             let (Some(a), Some(b)) = (a, b) else {
                 skipped += 1;
                 continue;
@@ -201,6 +220,7 @@ fn select_material_pass_folded_matches_guest_calls() {
         &[0x00ff_1090, 0x0106_55a0, 0x0106_2f20],
         4,
         true,
+        40_000,
     );
 }
 
@@ -222,6 +242,7 @@ fn apply_standard_material_folded_matches_guest_calls() {
         &[0x0106_6c60, 0x00ff_1090, 0x0106_55a0, 0x0106_2f20],
         6,
         true,
+        40_000,
     );
 }
 
@@ -234,4 +255,182 @@ fn material_vtable(base: &mut BTreeMap<u32, u8>, c: &Cpu) {
             base.insert(a + i as u32, b);
         }
     }
+}
+
+/// CRT memcpy (cdecl) as a port.
+fn memcpy_port(m: &mut dyn Mem, c: &mut Cpu) {
+    let (dst, src, bytes) = (m.u32(c.esp + 4), m.u32(c.esp + 8), m.u32(c.esp + 12));
+    let data: Vec<u8> = (0..bytes).map(|i| m.u8(src.wrapping_add(i))).collect();
+    for (i, b) in data.into_iter().enumerate() {
+        m.set_u8(dst.wrapping_add(i as u32), b);
+    }
+    c.eax = dst;
+    c.esp = c.esp.wrapping_add(4);
+}
+
+// 0x01140180 with the shadow-draw replay 0x00FF1920, the commit 0x00FEEF20
+// (and 0x00FEE320 below it) and the CRT memcpy folded in
+#[test]
+fn draw_culled_instances_folded_matches_guest_calls() {
+    differential(
+        "E:/ddda-re/notes/native-L174/01140180.json",
+        None,
+        None,
+        mtcore::semantic_draw_b::draw_culled_instances_guest_callees,
+        mtcore::semantic_draw_b::draw_culled_instances,
+        &[
+            (0x00ff_1920, mtcore::semantic_draw_a::shadow_draws as LiftFn),
+            (0x00fe_ef20, mtcore::semantic_draw_c::commit_current_state_guest_commit),
+            (0x00fe_e320, mtcore::semantic_draw_c::commit_primitive_state),
+            (0x012e_fea0, memcpy_port),
+        ],
+        &[0x00ff_1920, 0x00fe_ef20, 0x00fe_e320, 0x012e_fea0],
+        4,
+        true,
+        600_000,
+    );
+}
+
+// ---- benchmark: unfolded (guest calls dispatched to the ports) versus folded ----
+
+/// Backed pages, as the runtime's fast accessor path.
+#[derive(Default)]
+struct Paged {
+    table: ddnative_base::mem::PageTable,
+}
+impl Mem for Paged {
+    fn page_table(&self) -> Option<std::ptr::NonNull<ddnative_base::mem::PageTable>> {
+        Some(std::ptr::NonNull::from(&self.table))
+    }
+    fn u8(&self, a: u32) -> u8 {
+        let p = self.table.page((a >> 12) as usize);
+        if p.is_null() {
+            return 0;
+        }
+        // SAFETY: this table owns the backed page.
+        unsafe { ddnative_base::mem::load_at(p.add((a & 4095) as usize), 1) as u8 }
+    }
+    fn set_u8(&mut self, a: u32, v: u8) {
+        let page = (a >> 12) as usize;
+        let p = self.table.backed_page(page);
+        self.table.set_perm(page, 3);
+        // SAFETY: this table owns the backed page.
+        unsafe { ddnative_base::mem::store_at(p.add((a & 4095) as usize), 1, v as u32) }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bench(label: &str, path: &str, entry: Option<u32>, prepare: Option<fn(&mut BTreeMap<u32, u8>, &Cpu)>, unfolded: LiftFn, folded_body: LiftFn, dispatch: &[(u32, LiftFn)], folded: &[u32], budget: i64) {
+    ddnative_host::install();
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut totals = [0f64; 2];
+    let mut count = 0usize;
+    for (i, case) in data["cases"].as_array().unwrap().iter().enumerate() {
+        if entry.is_some_and(|e| case.get("entry").map(n) != Some(e)) {
+            continue;
+        }
+        for k in 0..2u64 {
+            let seed = (i as u64) << 8 | k;
+            let (Some(a), Some(b)) = (run(unfolded, case, seed, dispatch, folded, prepare, budget), run(folded_body, case, seed, &[], folded, prepare, budget)) else {
+                continue;
+            };
+            if a.dispatched.is_empty() {
+                continue;
+            }
+            // the memory both runs saw: every byte the unfolded run read
+            let mut reads = a.reads.clone();
+            reads.extend(b.reads.iter().map(|(&x, &y)| (x, y)));
+            let mut memory = Box::new(Paged::default());
+            for (&x, &y) in &reads {
+                memory.set_u8(x, y);
+            }
+            let regs: Vec<u32> = case["before"]["regs"].as_array().unwrap().iter().map(n).collect();
+            for variant in 0..2 {
+                let body = if variant == 0 { unfolded } else { folded_body };
+                let table: &[(u32, LiftFn)] = if variant == 0 { dispatch } else { &[] };
+                let log = Rc::new(RefCell::new(Log::new()));
+                let dispatched = Rc::new(RefCell::new(Vec::new()));
+                install_handler(seed, table, folded, log, dispatched);
+                let mut elapsed = std::time::Duration::ZERO;
+                for iteration in 0..60 {
+                    for (&x, &y) in &reads {
+                        memory.set_u8(x, y);
+                    }
+                    let mut c = Cpu::default();
+                    [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = regs.clone().try_into().unwrap();
+                    let start = std::time::Instant::now();
+                    body(std::hint::black_box(&mut *memory), &mut c);
+                    let dt = start.elapsed();
+                    ddnative_base::x87::park();
+                    if iteration >= 10 {
+                        elapsed += dt;
+                    }
+                }
+                x86::set_ext_calls(None);
+                totals[variant] += elapsed.as_secs_f64() / 50.0;
+            }
+            count += 1;
+        }
+        if count >= 120 {
+            break;
+        }
+    }
+    eprintln!(
+        "{label}: {count} runs; unfolded {:.0} ns/call, folded {:.0} ns/call, speedup {:.2}x",
+        totals[0] * 1e9 / count as f64,
+        totals[1] * 1e9 / count as f64,
+        totals[0] / totals[1]
+    );
+}
+
+#[test]
+#[ignore = "benchmark; run with --ignored --nocapture"]
+fn fold_benchmarks() {
+    bench(
+        "0x01066C60 select_material_pass",
+        "E:/ddda-re/notes/native-L174/01066c60.json",
+        None,
+        None,
+        mtcore::semantic_draw_b::select_material_pass_guest_callees,
+        mtcore::semantic_draw_b::select_material_pass,
+        &[
+            (0x00ff_1090, mtcore::semantic::set_pass as LiftFn),
+            (0x0106_55a0, mtcore::semantic_draw_b::apply_material_guest_finalizer),
+            (0x0106_2f20, mtcore::semantic_draw_b::finalize_material_abi),
+        ],
+        &[0x00ff_1090, 0x0106_55a0, 0x0106_2f20],
+        40_000,
+    );
+    bench(
+        "0x01145BF0 apply_standard_material",
+        "E:/ddda-re/notes/native-L177/01145bf0.json",
+        Some(0x0114_5bf0),
+        Some(material_vtable),
+        mtcore::semantic_draw_c::apply_standard_material_guest_callee,
+        mtcore::semantic_draw_c::apply_standard_material,
+        &[
+            (0x0106_6c60, mtcore::semantic_draw_b::select_material_pass_guest_callees as LiftFn),
+            (0x00ff_1090, mtcore::semantic::set_pass),
+            (0x0106_55a0, mtcore::semantic_draw_b::apply_material_guest_finalizer),
+            (0x0106_2f20, mtcore::semantic_draw_b::finalize_material_abi),
+        ],
+        &[0x0106_6c60, 0x00ff_1090, 0x0106_55a0, 0x0106_2f20],
+        40_000,
+    );
+    bench(
+        "0x01140180 draw_culled_instances",
+        "E:/ddda-re/notes/native-L174/01140180.json",
+        None,
+        None,
+        mtcore::semantic_draw_b::draw_culled_instances_guest_callees,
+        mtcore::semantic_draw_b::draw_culled_instances,
+        &[
+            (0x00ff_1920, mtcore::semantic_draw_a::shadow_draws as LiftFn),
+            (0x00fe_ef20, mtcore::semantic_draw_c::commit_current_state_guest_commit),
+            (0x00fe_e320, mtcore::semantic_draw_c::commit_primitive_state),
+            (0x012e_fea0, memcpy_port),
+        ],
+        &[0x00ff_1920, 0x00fe_ef20, 0x00fe_e320, 0x012e_fea0],
+        600_000,
+    );
 }

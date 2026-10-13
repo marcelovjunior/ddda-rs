@@ -260,6 +260,75 @@ pub fn commit_primitive_state(m: &mut dyn Mem, c: &mut Cpu) {
     c.esp = entry.wrapping_add(12);
 }
 
+// Translated from 0x00FEEF20 (DDDA.exe 2017-12-13 Steam).
+/// `draw->commit_current()` (thiscall, plain `ret`; returns 0): unless the
+/// context's flag 0x40 (+0x5c) is set, commit the primitive state of the
+/// bank entry the context currently selects (key +0x1cc, bank +0x20, 8
+/// bytes per key; variant byte +0x169, 0xff meaning 0) through
+/// [`commit_primitive_state`] and record the packet cursor (+0x48 -> +0x60)
+/// with flag 0x8 when it produced a packet, else 0x10.
+pub fn commit_current_state_abi(m: &mut dyn Mem, c: &mut Cpu) {
+    let p = Pages::of(m);
+    let entry = c.esp;
+    let draw = c.ecx;
+    commit_current_state(m, c, p, draw, entry.wrapping_add(4), commit_native);
+    c.eax = 0;
+    c.esp = entry.wrapping_add(4);
+}
+
+/// [`commit_current_state_abi`] with the commit as the original's guest call.
+pub fn commit_current_state_guest_commit(m: &mut dyn Mem, c: &mut Cpu) {
+    let p = Pages::of(m);
+    let entry = c.esp;
+    let draw = c.ecx;
+    commit_current_state(m, c, p, draw, entry.wrapping_add(4), commit_guest);
+    c.eax = 0;
+    c.esp = entry.wrapping_add(4);
+}
+
+/// The commit step: (memory, cpu, pages, draw, bank entry, variant, the
+/// commit's entry ESP) -> its EAX.
+type Commit = fn(&mut dyn Mem, &mut Cpu, Pages, u32, u32, u32, u32) -> u32;
+
+fn commit_native(m: &mut dyn Mem, c: &mut Cpu, p: Pages, draw: u32, bank_entry: u32, variant: u32, entry: u32) -> u32 {
+    p.set_u32(m, entry.wrapping_add(4), bank_entry);
+    p.set_u32(m, entry.wrapping_add(8), variant);
+    let primitive = bank_entry.wrapping_add(0x1c).wrapping_add(variant.wrapping_mul(40));
+    commit_state(m, c, p, entry, draw, primitive)
+}
+
+fn commit_guest(m: &mut dyn Mem, c: &mut Cpu, p: Pages, draw: u32, bank_entry: u32, variant: u32, entry: u32) -> u32 {
+    draw_call(m, c, p, entry.wrapping_add(4 + 8), 0x00fe_e320, 0x00fe_ef54, draw, &[bank_entry, variant])
+}
+
+/// [`commit_current_state_abi`] called directly: `frame` is the caller's ESP
+/// at its call (the original pushes the return address and ESI, then the
+/// two arguments of the commit).
+pub(crate) fn commit_current_state_native(m: &mut dyn Mem, c: &mut Cpu, p: Pages, draw: u32, frame: u32) {
+    commit_current_state(m, c, p, draw, frame, commit_native);
+}
+
+fn commit_current_state(m: &mut dyn Mem, c: &mut Cpu, p: Pages, draw: u32, frame: u32, commit: Commit) {
+    if p.u8(m, draw.wrapping_add(0x5c)) & 0x40 != 0 {
+        return;
+    }
+    let key = p.u32(m, draw.wrapping_add(0x1cc)) & 0xfff;
+    let bank = p.u32(m, draw.wrapping_add(0x20));
+    let bank_entry = p.u32(m, bank.wrapping_add(key.wrapping_mul(8)));
+    let variant = match p.u8(m, draw.wrapping_add(0x169)) {
+        0xff => 0,
+        v => u32::from(v),
+    };
+    // commit_primitive_state(bank_entry, variant): entry ESP below the two
+    // arguments and the return address
+    let commit_entry = frame.wrapping_sub(16).wrapping_sub(8);
+    let committed = commit(m, c, p, draw, bank_entry, variant, commit_entry);
+    let cursor = p.u32(m, draw.wrapping_add(0x48));
+    let flags = p.u32(m, draw.wrapping_add(0x5c));
+    p.set_u32(m, draw.wrapping_add(0x5c), flags | if committed as u8 != 0 { 8 } else { 0x10 });
+    p.set_u32(m, draw.wrapping_add(0x60), cursor);
+}
+
 fn commit_state(m: &mut dyn Mem, c: &mut Cpu, p: Pages, entry: u32, context: u32, primitive: u32) -> u32 {
     if p.u32(m, context.wrapping_add(0x150)) != 0 {
         p.set_u32(m, context.wrapping_add(0x150), 0);

@@ -276,3 +276,11 @@ fn semantic_finalize_material_matches_original() {
     );
     eprintln!("{cases} ABI-level finalize_material cases passed; calls {made:x?}");
 }
+
+// verifies 0x00feef20 (ABI level; returns 0)
+#[test]
+fn semantic_commit_current_state_matches_original() {
+    let callees = [Callee { target: 0x00fe_e320, reads: &[ECX], stack_args: 2 }];
+    let (cases, made) = run_cases(&vectors("commit_current.json"), mtcore::semantic_draw_c::commit_current_state_guest_commit, true, &callees, &[]);
+    eprintln!("{cases} ABI-level commit_current cases passed; calls {made:x?}");
+}

@@ -187,7 +187,7 @@ fn culled_instances_original() {
     ddnative_host::install();
     verify(
         "E:/ddda-re/notes/native-L174/01140180.json",
-        mtcore::semantic_draw_b::draw_culled_instances,
+        mtcore::semantic_draw_b::draw_culled_instances_guest_callees,
     );
 }
 
@@ -249,7 +249,7 @@ fn page_backed_originals() {
         for (path, body) in [
             (
                 "E:/ddda-re/notes/native-L174/01140180.json",
-                mtcore::semantic_draw_b::draw_culled_instances as LiftFn,
+                mtcore::semantic_draw_b::draw_culled_instances_guest_callees as LiftFn,
             ),
             (
                 "E:/ddda-re/notes/native-L174/00ffc9f0.json",

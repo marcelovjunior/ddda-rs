@@ -286,6 +286,18 @@ fn bind_shader_key(m: &mut dyn Mem, p: Pages, draw: u32, key: u32) {
 /// optionally repeat with the secondary material, then clear transient
 /// state. Bounds, counts, sort keys and bindings remain runtime guest data.
 pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
+    draw_culled(m, cpu, true);
+}
+
+/// [`draw_culled_instances`] with 0x00FF1920, 0x00FEEF20 and the CRT memcpy
+/// as guest calls, as the original makes them (differential tests).
+pub fn draw_culled_instances_guest_callees(m: &mut dyn Mem, cpu: &mut Cpu) {
+    draw_culled(m, cpu, false);
+}
+
+/// `native`: run the shadow-draw replay, the current-state commit and the
+/// parameter copy directly instead of as guest calls.
+fn draw_culled(m: &mut dyn Mem, cpu: &mut Cpu, native: bool) {
     let p = Pages::of(m);
     let sp = cpu.esp;
     let frame = ((sp.wrapping_sub(4)) & !15).wrapping_sub(0x60);
@@ -300,7 +312,7 @@ pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
     }
     let primitive = p.u32(m, sp + 8);
     let mask = p.u8(m, primitive + 7) & 7;
-    call(m, cpu, p, frame, 0xff1920, draw, &[], 0x11401d4);
+    shadow_draws_call(m, cpu, p, frame, draw, 0x11401d4, native);
     bind_shader_key(m, p, draw, 0x8771a00f);
     let key = p.u32(m, table + 0x64);
     let resource = p.u32(m, table + 0x60);
@@ -315,9 +327,9 @@ pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
         p.set_u32(m, draw + 0x150, 1);
     }
     bind_bank(m, p, draw, 0x2ff8, 0x2e00, 0x5c0);
-    let first_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, false);
+    let first_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, false, native);
     if first_drawn {
-        call(m, cpu, p, frame, 0xff1920, draw, &[], 0x11405a5);
+        shadow_draws_call(m, cpu, p, frame, draw, 0x11405a5, native);
     }
     if p.u8(m, object + 0x26) != 0 {
         bind_bank(m, p, draw, 0x2ee0, 0x2cf0, 0x2399759e);
@@ -336,14 +348,14 @@ pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
         let manager = p.u32(m, 0x18d2c80);
         let texture = p.u32(m, manager + 0x2cc);
         bind_resource(m, p, draw, 0x1cf0, texture, 0x45fbb000, 0);
-        instance_parameter(m, cpu, p, frame, draw, true);
+        instance_parameter(m, cpu, p, frame, draw, true, native);
         bind_shader_key(m, p, draw, 0x8771a00f);
-        let second_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, true);
+        let second_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, true, native);
         if second_drawn {
-            call(m, cpu, p, frame, 0xff1920, draw, &[], 0x1140c32);
+            shadow_draws_call(m, cpu, p, frame, draw, 0x1140c32, native);
         }
         bind_bank(m, p, draw, 0x2eb0, 0x2cc8, 0x950a6599);
-        instance_parameter(m, cpu, p, frame, draw, false);
+        instance_parameter(m, cpu, p, frame, draw, false, native);
         bind_bank(m, p, draw, 0x2ee0, 0x2ce8, 0x59d);
     }
     bind_shader_key(m, p, draw, 0);
@@ -353,13 +365,34 @@ pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
         p.set_u32(m, draw + 0x144, 0);
         p.set_u32(m, draw + 0x150, 1);
     }
-    call(m, cpu, p, frame, 0xfeef20, draw, &[], 0x1140edb);
+    commit_current_call(m, cpu, p, frame, draw, 0x1140edb, native);
     cpu.esp = sp.wrapping_add(16);
+}
+
+/// `draw->shadow_draws()` (0x00FF1920): direct, or the original's guest call.
+fn shadow_draws_call(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, resume: u32, native: bool) {
+    if native {
+        cpu.ecx = draw;
+        cpu.esp = frame.wrapping_sub(4);
+        crate::semantic_draw_a::shadow_draws(m, cpu);
+    } else {
+        call(m, cpu, p, frame, 0xff1920, draw, &[], resume);
+    }
+}
+
+/// `draw->commit_current()` (0x00FEEF20): direct, or the original's guest call.
+fn commit_current_call(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, resume: u32, native: bool) {
+    if native {
+        crate::semantic_draw_c::commit_current_state_native(m, cpu, p, draw, frame);
+        cpu.eax = 0;
+    } else {
+        call(m, cpu, p, frame, 0xfeef20, draw, &[], resume);
+    }
 }
 
 /// 0114085E..01140938 / 01140CC1..01140D9E: copy the parameter template
 /// through the original cdecl memcpy, then toggle its third float.
-fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, enabled: bool) {
+fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, enabled: bool, native: bool) {
     let flags = p.u32(m, draw + 0x5c);
     p.set_u32(m, draw + 0x5c, flags | 2);
     save_pair(m, p, draw, 0x1330, 0x227);
@@ -388,16 +421,20 @@ fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw
     if output != 0 {
         let size = u32::from(p.u16(m, descriptor + 0x18)) * 4;
         let source = p.u32(m, descriptor + 0x24);
-        call(
-            m,
-            cpu,
-            p,
-            frame,
-            0x12efea0,
-            if enabled { size } else { memcpy_this },
-            &[output, source, size],
-            if enabled { 0x1140928 } else { 0x1140d93 },
-        );
+        if native {
+            crate::semantic_s10::copy_words(m, p, output, source, size / 4);
+        } else {
+            call(
+                m,
+                cpu,
+                p,
+                frame,
+                0x12efea0,
+                if enabled { size } else { memcpy_this },
+                &[output, source, size],
+                if enabled { 0x1140928 } else { 0x1140d93 },
+            );
+        }
     }
     let value = if enabled { p.u32(m, 0x1406ce0) } else { 0 };
     p.set_u32(m, output + 8, value);
@@ -418,6 +455,7 @@ fn instance_ranges(
     table: u32,
     mask: u8,
     secondary: bool,
+    native: bool,
 ) -> bool {
     let mut drawn = false;
     for i in 0..3u32 {
@@ -431,16 +469,7 @@ fn instance_ranges(
             continue;
         }
         if drawn {
-            call(
-                m,
-                cpu,
-                p,
-                frame,
-                0xff1920,
-                draw,
-                &[],
-                if secondary { 0x11409ff } else { 0x1140371 },
-            );
+            shadow_draws_call(m, cpu, p, frame, draw, if secondary { 0x11409ff } else { 0x1140371 }, native);
         }
         let sort = p.u32(m, table + 0x20 + i * 4);
         let old = p.u32(m, draw + 0x164);
@@ -486,16 +515,7 @@ fn instance_ranges(
             &[draw, first, second, sphere],
             if secondary { 0x1140ad1 } else { 0x1140443 },
         );
-        call(
-            m,
-            cpu,
-            p,
-            frame,
-            0xfeef20,
-            draw,
-            &[],
-            if secondary { 0x1140ad8 } else { 0x114044a },
-        );
+        commit_current_call(m, cpu, p, frame, draw, if secondary { 0x1140ad8 } else { 0x114044a }, native);
         let values = [
             p.u32(m, primitive + 0x18),
             p.u32(m, primitive + 0x1c),
