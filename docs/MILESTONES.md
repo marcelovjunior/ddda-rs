@@ -181,6 +181,38 @@
   5,000-draw jobs **1.804 -> 1.832** (regression). Same bytes/submits/hashes;
   no gameplay gain claimed. Next: head native VK=1 A/B and zero-mismatch
   compare. Details and limitations: `docs/tasks/L164-native-backend.md`.
+### L161c opt-in guest register/flag locals (2026-10-13)
+
+- Default-off `LIFT_REG_LOCALS=1` keeps GPRs and Flags in host locals,
+  flushing at known full-Cpu calls and exits. Split parts and helper
+  boundaries covered; restartable steps unchanged. DD42C0 opt2 Cpu ESP
+  loads/stores **23/14 -> 3/3**; EDI loads **6 -> 3**.
+- **51 focused tests**, **40 original cases per variant at opt0/1/2**,
+  paired full-state/byte checks, and **234 light runtime tests pass**
+  (seven ignored). No shard/game/GPU run or full-corpus gate.
+- No general timing gain: four hot-function opt2 fixture ratios
+  **0.974..1.007x**. Locals also inhibit default opt2 dispatcher removal
+  in DD42C0; isolated LLVM clone-rate-32 removes that dispatcher but still
+  gives no sparse-fixture win. Compiler profiles/defaults unchanged.
+  Next: head's combined train and real worker corpus, including the
+  separate inline-flags candidate. Details: `docs/tasks/L161-codegen.md`.
+
+### L161b adjacent-result zero predicates (2026-10-13)
+
+- Default-off `LIFT_RESULT_ZF=1` replaces adjacent 32-bit result ZF
+  helper calls with direct zero tests; preserves all flag writes, memory,
+  calls and restartable steps. Selected fourteen-body audit removes eleven
+  ZF calls across four bodies, with no other source changes.
+- **47 focused tests pass**, including 13,608 synthetic state/access/fault
+  cases at each opt0/opt1; **31 original cases** pass for each variant at
+  both levels. Recorded FEDD60 loops with synthetic inputs improve median
+  thread cycles **1.054..1.213x opt0 / 1.005..1.155x opt1**. No game gain
+  claimed; not additive when codex-6's pending FEDD60 port is enabled.
+- Push fusion and CFG experiments rejected. No shard generation/build or
+  game/GPU run. Full corpus and gameplay acceptance remain with the head.
+  Next: shared train with the switch enabled; broader redesign measured on
+  codex-6's forthcoming corpus. Details: `docs/tasks/L161-codegen.md`.
+
 ### L161 generator flag fixed point (2026-10-13)
 
 - Audited ten hot main/job lifted routines against raw stacks and opt1

@@ -818,7 +818,7 @@ pub fn f_005ec780(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x5EC780;
     loop {
         match pc {
-            0x5EC780 => { cpu.esp = cpu.fl.alu_sub(cpu.esp, 0x8u32, 32); emit::push(cpu.ebx, m, pt, cpu); cpu.ebx = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); cpu.eax = cpu.eax.wrapping_sub(1); emit::push(cpu.esi, m, pt, cpu); cpu.fl.alu_sub(cpu.eax, 0x4u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x5EC83F } else { 0x5EC793 }; continue; }
+            0x5EC780 => { cpu.esp = cpu.esp.wrapping_sub(0x8u32); emit::push(cpu.ebx, m, pt, cpu); cpu.ebx = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); cpu.eax = cpu.eax.wrapping_sub(1); emit::push(cpu.esi, m, pt, cpu); cpu.fl.alu_sub(cpu.eax, 0x4u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x5EC83F } else { 0x5EC793 }; continue; }
             0x5EC793 => { { let t = m.fast_u32(pt, cpu.eax.wrapping_mul(4).wrapping_add(0x5EC84C)); if matches!(t, 0x5EC79A | 0x5EC7A1 | 0x5EC7A8 | 0x5EC7AF | 0x5EC7B6) { pc = t; continue; }  x86::call_ext(m, cpu, t); return; } }
             0x5EC79A => { cpu.esi = 0x1u32; pc = 0x5EC7BB; continue; }
             0x5EC7A1 => { cpu.esi = 0x2u32; pc = 0x5EC7BB; continue; }

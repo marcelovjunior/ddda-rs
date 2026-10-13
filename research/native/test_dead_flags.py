@@ -113,7 +113,7 @@ class Flow(unittest.TestCase):
             path = Path(tmp) / 'check.rs'
             exe = Path(tmp) / 'check.exe'
             path.write_text(source)
-            for opt in (0, 1):
+            for opt in (0, 1, 2):
                 for command in (['rustc', '--edition=2021', '-Awarnings', f'-Copt-level={opt}', str(path), '-o', str(exe)], [str(exe)]):
                     run = subprocess.run(command, capture_output=True, text=True, timeout=60)
                     self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
