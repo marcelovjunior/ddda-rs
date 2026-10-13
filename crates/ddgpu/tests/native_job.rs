@@ -228,7 +228,16 @@ fn native_job_encoding_cost() {
     let passes: usize = std::env::var("L152_PASSES").ok().and_then(|s|s.parse().ok()).unwrap_or(1);
     assert!(passes > 0 && passes <= draws);
     let mut j = NativeJob { passes: vec![] };
-    let seed = draw(false,false,false,[0.0;4]);
+    let mut seed = draw(false,false,false,[0.0;4]);
+    // Match the nDraw sink's full integer/boolean bank transport, even when
+    // the shader reads neither bank. Both paths must still validate ranges.
+    let full_banks = std::env::var("L164_FULL_BANKS").as_deref() == Ok("1");
+    if full_banks {
+        for constants in [&mut seed.ps_constants, &mut seed.vs_constants] {
+            constants.ints.push(NativeIntWrite { first: 0, registers: vec![[0; 4]; 16].into() });
+            constants.bools.push(NativeBoolWrite { first: 0, registers: vec![0; 16].into() });
+        }
+    }
     for p in 0..passes {
         let mut pass = job(seed.clone(),&t,None).passes.remove(0);
         pass.draws = (p*draws/passes..(p+1)*draws/passes).map(|i| {
@@ -256,14 +265,17 @@ fn native_job_encoding_cost() {
     let before=backend.native_job_stats();
     let start=std::time::Instant::now();
     for job in queued { assert!(backend.native(job).is_ok()); }
+    let producer_elapsed=start.elapsed();
     backend.set_async_submit(false); // Includes ordered finish/submit, no GPU wait.
     let elapsed=start.elapsed();
     let result=backend.read_back(&t).unwrap();
     assert_eq!(result,if churn && jobs%2 == 0 { alternate_expected } else { expected });
     assert!(backend.errors.is_empty(),"{:?}",backend.errors);
     let after=backend.native_job_stats();
-    eprintln!("L152 native_cost jobs={jobs} draws_per_job={draws} passes={passes} churn={churn} ns_per_draw={:.1} upload_bytes={} hash={} vk={:?}",
-        elapsed.as_nanos() as f64/(jobs*draws) as f64,after.upload_bytes-before.upload_bytes,blake3::hash(&result),ddgpu::vk::stats());
+    eprintln!("L152 native_cost jobs={jobs} draws_per_job={draws} passes={passes} churn={churn} full_banks={full_banks} ns_per_draw={:.1} ns_per_job={:.1} producer_ns_per_job={:.1} drain_us={:.1} upload_bytes={} submit_batches={} hash={} vk={:?}",
+        elapsed.as_nanos() as f64/(jobs*draws) as f64,elapsed.as_nanos() as f64/jobs as f64,
+        producer_elapsed.as_nanos() as f64/jobs as f64,(elapsed-producer_elapsed).as_secs_f64()*1e6,
+        after.upload_bytes-before.upload_bytes,after.submit_batches-before.submit_batches,blake3::hash(&result),ddgpu::vk::stats());
 }
 
 #[test]

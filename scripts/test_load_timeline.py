@@ -3,6 +3,15 @@ from load_timeline import add_mark, movie_spans, parse, phases, render, render_l
 
 
 class TimelineTests(unittest.TestCase):
+    def test_boot_details_do_not_split_milestones(self):
+        events = parse("load-log t=1 event=movie_end\n"
+                       "load-log t=2 event=boot_detail kind=storage mode=7 timer_bits=0x42f00000\n"
+                       "load-log t=3 event=boot_detail kind=gui gui_state=2\n"
+                       "load-log t=8 event=main_menu state=0x00531a20")
+        self.assertEqual([(e.name, d) for e, d in phases(events)],
+                         [("movie_end", None), ("main_menu", 7)])
+        self.assertEqual(events[1].fields["timer_bits"], "0x42f00000")
+
     def test_rank_uses_transition_deltas_and_retains_availability(self):
         events = parse("load-log t=2 event=interval from=boot to=title wall_ns=2000000000 zlib_ns=3000000000 gpu_available=false state=0x00532110\n"
                        "load-log t=3 event=io_totals read_ns=99999999999\n"
