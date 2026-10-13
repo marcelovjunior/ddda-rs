@@ -4394,6 +4394,8 @@ dependencies = [
  "ddnative-base",
  "ddnative-host",
  "mtcore",
+ "mtstate",
+ "serde_json",
 ]
 
 [[package]]

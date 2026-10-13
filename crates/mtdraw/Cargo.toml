@@ -9,8 +9,10 @@ publish.workspace = true
 [dependencies]
 ddnative-base = { path = "../ddnative-base" }
 mtcore = { path = "../mtcore" }
+mtstate = { path = "../mtstate" }
 
 [dev-dependencies]
+serde_json = "1"
 ddnative-host = { path = "../ddnative-host" }
 # the lifted executor, the differential test's reference
 ddlift-hot-00 = { path = "../ddlift/lift_hot_00" }

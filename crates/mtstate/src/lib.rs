@@ -4,6 +4,46 @@
 pub mod descriptor;
 pub mod layout;
 
+/// A float/int/bool constant source in a shader binding. The float source's
+/// low pointer nibble limits the upload to nibble*16 registers; integer/bool
+/// lists only strip that nibble. Translated from 0x00DAA8B0
+/// (DDDA.exe 2017-12-13 Steam), DAABE7..DAAC35 and DAB0C7..DAB10F.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConstantRange {
+    pub address: u32,
+    pub register: u32,
+    pub count: u32,
+    pub convert_signed: bool,
+}
+
+pub fn constant_range(descriptor: u32, value: u32, float: bool) -> ConstantRange {
+    let mut count = descriptor >> 24;
+    if float && value & 15 != 0 {
+        count = count.min((value & 15) * 16);
+    }
+    ConstantRange {
+        address: (value & !15).wrapping_add(((descriptor >> 6) & 1023) * 4),
+        register: (descriptor >> 16) & 255,
+        count,
+        convert_signed: float && descriptor & 1 != 0,
+    }
+}
+
+/// Shared call-level conversion for the native decoder and shader oracle.
+/// Translated from 0x00DAAE3C..0x00DAAEFA (DDDA.exe 2017-12-13 Steam).
+/// The ABI wrapper separately preserves the original x87 status/control.
+pub fn derived_dimensions(dimensions: [u32; 3], reciprocal: bool) -> [u32; 4] {
+    let mut result = [0; 4];
+    for (i, n) in dimensions.into_iter().enumerate() {
+        result[i] = if reciprocal {
+            (1.0f32 / (n as f32)).to_bits()
+        } else {
+            (n as f32).to_bits()
+        };
+    }
+    result
+}
+
 /// Recording representation: COM slot, arguments excluding `this`, and copied
 /// pointee words (viewport, scissor, shader constants or declaration).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -406,7 +446,6 @@ pub fn shader(
         old_ps = 0;
     }
     let descriptors = m.read32(metadata + 4);
-    let mut derived = [0; 4];
     for pixel in [false, true] {
         let summary = m.read32(metadata + if pixel { 12 } else { 8 });
         let mut desc = descriptors
@@ -497,14 +536,7 @@ pub fn shader(
                         m.read16(value + 0x22) & 0x3fff,
                         m.read16(value + 0x26) & 0x7ff,
                     ];
-                    for (i, n) in dimensions.into_iter().enumerate() {
-                        derived[i] = if kind == 3 {
-                            (1.0f32 / (n as f32)).to_bits()
-                        } else {
-                            (n as f32).to_bits()
-                        };
-                    }
-                    derived[3] = 0;
+                    let derived = derived_dimensions(dimensions, kind == 3);
                     data_call(
                         &mut out,
                         slot,
@@ -512,11 +544,10 @@ pub fn shader(
                         if count == 0 { vec![] } else { derived.to_vec() },
                     );
                 } else {
-                    let pointer = (value & !15) + (d >> 6 & 1023) * 4;
-                    if section == 0 && value & 15 != 0 {
-                        count = count.min((value & 15) * 16);
-                    }
-                    if section == 0 && d & 1 != 0 {
+                    let range = constant_range(d, value, section == 0);
+                    let pointer = range.address;
+                    count = range.count;
+                    if range.convert_signed {
                         for i in 0..count {
                             let converted = (0..4)
                                 .map(|j| (m.read32(pointer + i * 16 + j * 4) as i32 as f32).to_bits())

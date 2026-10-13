@@ -18,5 +18,7 @@
 //! lifted body on generated command lists).
 
 pub mod abi;
+pub mod apply;
+mod apply_shader;
 pub mod executor;
 pub mod sink;
