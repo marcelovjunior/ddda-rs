@@ -804,6 +804,9 @@ impl Drop for Capture {
 }
 
 impl GraphicsBackend for Capture {
+    fn fence(&mut self) {
+        self.inner.fence();
+    }
     fn upload(&mut self, upload: Upload) {
         self.record(Cmd::Upload(&upload));
         self.inner.upload(upload);

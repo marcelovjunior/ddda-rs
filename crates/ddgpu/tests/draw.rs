@@ -1000,3 +1000,68 @@ fn indexed_strips_match_the_d3d9_driver() {
     let (ours, driver) = compare(&[], &blue_clear(), &[d]);
     assert_eq!(ours, driver);
 }
+
+/// The queue must preserve mutable uploads/constants, copies, query boundaries,
+/// release/reuse and the actual presentation sink, not just a clear's pixels.
+#[test]
+fn deferred_frame_matches_synchronous_image() {
+    use std::sync::{Arc, Mutex};
+    struct Sink(Arc<Mutex<Vec<std::thread::ThreadId>>>);
+    impl ddgpu::PresentSink for Sink {
+        fn present(&mut self, _: &ddgpu::Presented) {
+            self.0.lock().unwrap().push(std::thread::current().id());
+        }
+    }
+    fn render(deferred: bool) -> (Vec<Vec<u8>>, Vec<Vec<u8>>, Vec<std::thread::ThreadId>) {
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let threads = Arc::new(Mutex::new(Vec::new()));
+        let mut gpu = ddgpu::WgpuBackend::headless().expect("adapter");
+        let output = frames.clone();
+        gpu.on_present = Some(Box::new(move |frame| output.lock().unwrap().push(frame.rgba.clone())));
+        gpu.present_sink = Some(Box::new(Sink(threads.clone())));
+        let mut backend: Box<dyn GraphicsBackend> = if deferred {
+            Box::new(d3d9cmd::DeferredBackend::with_capacity(Box::new(gpu), 8))
+        } else { Box::new(gpu) };
+        let bb = back_buffer();
+        let copy = Target { surface: 0x400, ..bb.clone() };
+        let mut reads = Vec::new();
+        for colour in [[1.0f32, 0.2, 0.0, 1.0], [0.0, 1.0, 0.2, 1.0]] {
+            backend.clear(&ClearCall { rects: vec![], flags: 1, colour: 0xFF0000FF, z: 1.0, stencil: 0,
+                targets: [Some(bb.clone()), None, None, None], depth: None, viewport: [0, 0, 4, 4, 0, 0], scissor: None, srgb: false });
+            backend.upload(Upload::Buffer { resource: 0x300, bytes: triangle() });
+            backend.upload(Upload::Buffer { resource: 0x301, bytes: [0u16, 1, 2].into_iter().flat_map(u16::to_le_bytes).collect() });
+            let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+            c.f[0] = colour.map(f32::to_bits);
+            let mut d = draw(ps_constant(), c, vec![]);
+            d.vertices = Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]);
+            d.indices = Indices::Buffer(0x301, 101);
+            backend.query_begin(0x500);
+            backend.draw(&d);
+            d.ps_constants = Constants::default().into();
+            // Neither later writes nor releasing/reusing an ID may affect the draw.
+            backend.upload(Upload::Buffer { resource: 0x300, bytes: vec![0; 72] });
+            backend.query_end(0x500);
+            backend.copy(&d3d9cmd::CopyCall { src: bb.clone(), dst: copy.clone(), src_rect: [0, 0, 4, 4], dst_rect: [0, 0, 4, 4], filter: 1 });
+            backend.fill(&d3d9cmd::FillCall { dst: bb.clone(), rect: [0, 0, 1, 1], colour: 0xFFFFFFFF });
+            backend.present(&bb);
+            reads.push(backend.read_back(&copy).expect("copied image"));
+            assert_eq!(backend.query_result(0x500), Some(16));
+            backend.release(0x300);
+            backend.release(0x301);
+        }
+        drop(backend);
+        let frames = frames.lock().unwrap().clone();
+        let threads = threads.lock().unwrap().clone();
+        (reads, frames, threads)
+    }
+    let (sync_reads, sync_frames, sync_threads) = render(false);
+    let (async_reads, async_frames, async_threads) = render(true);
+    assert_eq!(sync_reads, async_reads);
+    assert_eq!(sync_frames, async_frames);
+    assert_ne!(sync_frames[0], sync_frames[1]);
+    assert_eq!(&sync_frames[0][0..4], &[255; 4]);
+    assert_eq!(&sync_frames[0][4..8], &[255, 51, 0, 255]);
+    assert!(sync_threads.iter().all(|id| *id == std::thread::current().id()));
+    assert!(async_threads.iter().all(|id| *id != std::thread::current().id()));
+    assert_eq!(async_threads[0], async_threads[1]);
+}

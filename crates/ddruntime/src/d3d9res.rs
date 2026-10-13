@@ -359,6 +359,9 @@ pub fn surface_lock_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = if !lockable(usage, pool) {
         D3DERR_INVALIDCALL
     } else {
+        if usage & USAGE_RENDERTARGET != 0 {
+            crate::d3d9draw::backend(|b| b.fence());
+        }
         let mut img = surface_image(this, |_, i| std::mem::take(i));
         let r = lock_rect(m, &mut img, locked, rect);
         surface_image(this, |_, i| *i = img);
@@ -387,6 +390,9 @@ fn texture_lock(m: &mut dyn Mem, tex: u32, face: u32, level: u32, locked: u32, r
     let (usage, pool) = texture(tex, |t| (t.usage, t.pool));
     match level_surface(tex, face, level) {
         Some(s) if lockable(usage, pool) => {
+            if usage & USAGE_RENDERTARGET != 0 {
+                crate::d3d9draw::backend(|b| b.fence());
+            }
             let mut img = surface_image(s, |_, i| std::mem::take(i));
             let r = lock_rect(m, &mut img, locked, rect);
             surface_image(s, |_, i| *i = img);

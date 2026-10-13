@@ -237,6 +237,11 @@ pub fn query_issue(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn query_get_data(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (q, data, size) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     let (ty, state, value) = query(q, |ty, state, value| (*ty, *state, *value));
+    // query_result itself is a FIFO round trip. Host-side query answers must
+    // also wait for recorded commands, without doubling occlusion round trips.
+    if ty != QUERY_OCCLUSION || state != QueryState::Ended {
+        backend(|b| b.fence());
+    }
     let occlusion = if ty != QUERY_OCCLUSION {
         None
     } else {

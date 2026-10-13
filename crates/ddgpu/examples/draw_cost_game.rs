@@ -100,7 +100,7 @@ fn main() {
     };
     let stream: Vec<DrawCall> = (0..draws).map(draw).collect();
     let clear = ClearCall { rects: vec![], flags: 7, colour: 0xFF20_2020, z: 1.0, stencil: 0, targets: [Some(bb.clone()), None, None, None], depth: Some(depth.clone()), viewport: [0, 0, w, h, 0, 0], scissor: None, srgb: false };
-    let frame = |gpu: &mut ddgpu::WgpuBackend| {
+    let frame = |gpu: &mut dyn GraphicsBackend| {
         let t = Instant::now();
         gpu.clear(&clear);
         for d in &stream {
@@ -123,4 +123,18 @@ fn main() {
              submit * 1e6 / (draws * frames) as f64, total * 1e3 / frames as f64);
     let (recorded, passes) = gpu.pass_counts();
     println!("{recorded} draws in {passes} render passes ({:.1} draws per pass)", recorded as f64 / passes.max(1) as f64);
+    // Reuse the same warmed device, shaders and pipelines. The submission
+    // interval now includes owned snapshot copies and bounded-queue handoff;
+    // total time still waits for actual GPU completion through read_back.
+    let mut deferred = d3d9cmd::DeferredBackend::new(Box::new(gpu));
+    frame(&mut deferred);
+    let (mut queued_submit, mut queued_total) = (0.0, 0.0);
+    for _ in 0..frames {
+        let (s, t) = frame(&mut deferred);
+        queued_submit += s.as_secs_f64();
+        queued_total += t.as_secs_f64();
+    }
+    println!("deferred: {:.2} us per draw recorded, {:.2} ms per frame with the GPU waited for; producer speedup {:.2}x",
+        queued_submit * 1e6 / (draws * frames) as f64,
+        queued_total * 1e3 / frames as f64, submit / queued_submit);
 }

@@ -739,3 +739,27 @@ initializer side effects and exits, dynamic frame/worker frontier, guest
 exception/control-state requirements, complete renderer/audio contracts,
 and the player-ownership adaptation. No runtime behavior is claimed tested
 or compared against the running original by this design task.
+
+### Deferred graphics backend (L89)
+
+`d3d9draw::set_backend` moves the supplied backend and optional capture onto
+one `d3d9-backend` host thread. `d3d9cmd::DeferredBackend` records owned
+commands into one FIFO, bounded to 2048 pending commands (a command-count
+bound, not a byte limit). Full queues block producers. Upload bytes and draw
+snapshots remain alive until execution; resource release and address reuse
+follow the same FIFO. The default headless Recorder remains immediate.
+
+At most two Presents can be outstanding; the first command of a third frame
+waits for the oldest Present. The window's `present_sink` executes on the
+worker, with the frame's copied `Presentation` installed in worker-local
+storage. It never reads runtime state or acquires the guest/device lock.
+Readbacks and occlusion results execute on the worker after preceding commands
+and return through a reply channel. Host-side query answers and render-target
+LockRect fence the queue first. Existing LockRect CPU-shadow behavior is
+unchanged; this does not implement its missing GPU-to-shadow readback.
+
+`DDRUNTIME_SYNC_BACKEND=1` keeps the previous synchronous installation path.
+Dropping/replacing the deferred backend drains accepted commands and joins the
+worker. A worker panic disconnects producers/results rather than leaving them
+waiting indefinitely. Test coverage and measurement limits are recorded in
+`tasks/L89-backend-worker.md`; gameplay FPS must be measured by the head.

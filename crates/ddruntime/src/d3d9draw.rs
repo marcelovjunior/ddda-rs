@@ -97,11 +97,18 @@ impl Default for Graphics {
 /// every command it is given is also written to that file (the frame
 /// oracle's capture, docs/FRAME_ORACLE.md; `DDDA_CAPTURE_FRAMES` stops
 /// recording after that many Presents).
+/// Commands execute on one bounded FIFO worker, including the capture and
+/// presentation sink. `DDRUNTIME_SYNC_BACKEND=1` retains immediate execution.
 pub fn set_backend(backend: Box<dyn GraphicsBackend>) {
     // the backend replaced (the default recorder's capture included) is
     // dropped, and its file closed, before the new capture creates it again
     crate::runtime::with(|rt| graphics(rt).0 = Box::new(Recorder::default()));
     let backend = d3d9frame::Capture::from_env(backend);
+    let backend: Box<dyn GraphicsBackend> = if std::env::var_os("DDRUNTIME_SYNC_BACKEND").is_some_and(|v| v == "1") {
+        backend
+    } else {
+        Box::new(d3d9cmd::DeferredBackend::new(backend))
+    };
     crate::runtime::with(|rt| graphics(rt).0 = backend);
 }
 
@@ -476,7 +483,62 @@ pub fn present_back_buffer(m: &dyn Mem, back_buffer: u32) {
     flush(m, back_buffer);
     if let Some(t) = target(back_buffer) {
         // read under the guest lock for the host's sink (d3d9dev::presented)
-        crate::d3d9dev::set_presented(crate::d3d9dev::presentation());
-        backend_unlocked(|b| b.present(&t));
+        let presentation = crate::d3d9dev::presentation();
+        backend_unlocked(|b| present_with_context(b, &t, presentation));
+    }
+}
+
+fn present_with_context(b: &mut dyn GraphicsBackend, target: &Target, presentation: Option<crate::d3d9dev::Presentation>) {
+    if let Some(queue) = (b as &mut dyn std::any::Any).downcast_mut::<d3d9cmd::DeferredBackend>() {
+        queue.present_with(target, move || crate::d3d9dev::set_presented(presentation));
+    } else {
+        crate::d3d9dev::set_presented(presentation);
+        b.present(target);
+    }
+}
+
+#[cfg(test)]
+mod deferred_tests {
+    use super::*;
+    use crate::d3d9dev::Presentation;
+    use std::sync::mpsc;
+
+    struct Context(mpsc::Sender<(Option<Presentation>, std::thread::ThreadId)>);
+    impl GraphicsBackend for Context {
+        fn upload(&mut self, _: Upload) {}
+        fn draw(&mut self, _: &DrawCall) {}
+        fn clear(&mut self, _: &ClearCall) {}
+        fn present(&mut self, _: &Target) {
+            self.0.send((crate::d3d9dev::presented(), std::thread::current().id())).unwrap();
+        }
+        fn copy(&mut self, _: &CopyCall) {}
+        fn fill(&mut self, _: &FillCall) {}
+        fn read_back(&mut self, _: &Target) -> Option<Vec<u8>> { None }
+        fn query_begin(&mut self, _: u32) {}
+        fn query_end(&mut self, _: u32) {}
+        fn query_result(&mut self, _: u32) -> Option<u64> { None }
+        fn gamma(&mut self, _: Option<&GammaRamp>) {}
+        fn release(&mut self, _: u32) {}
+    }
+
+    #[test]
+    fn deferred_present_keeps_each_frames_display_mode() {
+        let target = Target { surface: 1, format: 21, width: 4, height: 4, texture: None, level: 0, samples: 0, quality: 0 };
+        let first = Presentation { width: 1280, height: 720, windowed: true, refresh: 0, interval: 1 };
+        let second = Presentation { width: 1920, height: 1080, windowed: false, refresh: 60, interval: 0x8000_0000 };
+        let (sender, receiver) = mpsc::channel();
+        let mut queue = d3d9cmd::DeferredBackend::new(Box::new(Context(sender)));
+        present_with_context(&mut queue, &target, Some(first));
+        present_with_context(&mut queue, &target, Some(second));
+        queue.drain();
+        let (a, thread_a) = receiver.recv().unwrap();
+        let (b, thread_b) = receiver.recv().unwrap();
+        assert_eq!((a, b), (Some(first), Some(second)));
+        assert_eq!(thread_a, thread_b);
+        assert_ne!(thread_a, std::thread::current().id());
+
+        let (sender, receiver) = mpsc::channel();
+        present_with_context(&mut Context(sender), &target, Some(first));
+        assert_eq!(receiver.recv().unwrap(), (Some(first), std::thread::current().id()));
     }
 }
