@@ -10,7 +10,10 @@
   Provisional profile list has 83 functions; 230 hot replay cases match.
 - No compile improvement from predicate/accessor experiments; not retained.
   Head owns base helpers. Full sampled list and runtime baseline are pending.
-- Next: matched hot replay/main-loop comparison. See
+- Scope narrowed to layout/gate: emission, base structure and toolchain
+  work handed to L73/L74/L75. Extra baseline/replay remains queued behind
+  another lane's GPU test; results will post to head/L75.
+- Next: complete hot sample and head-run clean FPS comparison. See
   `docs/tasks/L66-build-speed.md` for conditions and limits.
 
 ### L28c remaining recorder review (2026-10-12)

@@ -129,6 +129,23 @@ $env:NATIVE_PROFILE = 'play'
 python E:/ddda-re/tools/heavy.py codex -- bash scripts/native_gate.sh
 ```
 
-Next: obtain the complete sampled function list and compare hot replay and
-main-loop timing against the all-optimized baseline. Support commit:
-`881a977a`; layout `509fd759`; production-emitter test cleanup `74dedfba`.
+### Handoff / remaining measurements
+
+The layout lane is ready for review. Support: `881a977a`; layout:
+`509fd759`; test refinements: `74dedfba`, `8229a74b`; scope/measurement
+clarifications: `ada62e99`.
+
+A same-source all-opt1/eight-thread baseline and alternating hot replay are
+queued through heavy.py (`HEAVY_BIG=1`, four-job request), since 20:21.
+At handoff they remain blocked behind L71's GPU draw test; the owner/head
+were notified with its process details. No result from this queued batch
+is claimed here. Its private driver, `E:/ddda-re/notes/L66/baseline-full.py`,
+restores the committed split83 sources/lock, checks that restoration with
+Git, and posts success/failure to head and claude-9. Planned receipts:
+`full-play-allopt1-threads8.json`, `replay-comparison.json` in notes/L66.
+L75 can use those measurements without duplicating the baseline build.
+
+Next: head supplies the complete sampled function list and runs the clean
+loading/movie/title FPS comparison. Compare private `ddplay-split83.exe`
+with `ddplay-allopt1.exe` after the queued baseline succeeds. No FPS
+acceptance claim is made from the incomplete list or the loaded smoke run.
