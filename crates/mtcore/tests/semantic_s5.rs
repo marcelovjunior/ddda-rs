@@ -134,6 +134,7 @@ fn cases(path: &str, body: x86::LiftFn, input_registers: fn(u32) -> &'static [us
 fn input_registers(target: u32) -> &'static [usize] {
     match target {
         0x00fe_d890 => &[0, 1, 5, 6, 7],   // frame allocator: EAX = description, ECX = state, EBP = byte, ESI = state, EDI = size
+        0x0113_4a90 | 0x0113_4ca0 | 0x0113_4bd0 | 0x0113_4e40 | 0x00fb_4bf0 | 0x0113_1290 => &[1], // release functions: ECX (EBX, EBP, ESI, EDI are the original's loop state)
         0x00cf_dc80 => &[0, 1],            // blend: EAX = &identity, ECX = &matrix
         0x0086_4660..=0x0086_d180 => &[0, 1, 6, 7], // matrix providers: EAX, ECX, ESI, EDI
         _ => &[0, 1],                       // the parent accessor (ECX = model)
@@ -284,4 +285,12 @@ fn semantic_set_byte_constant_matches_original() {
     ddnative_host::install();
     let count = cases("E:/ddda-re/notes/native-L184/state_byte.json", mtcore::semantic_s5_render::set_byte_constant, input_registers, false);
     eprintln!("{count} ABI-level 0x00fe4f30 cases passed");
+}
+
+// verifies 0x00defa60 (ABI level; void)
+#[test]
+fn semantic_release_pending_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/release_pending.json", mtcore::semantic_s5_render::release_pending, input_registers, false);
+    eprintln!("{count} ABI-level 0x00defa60 cases passed");
 }

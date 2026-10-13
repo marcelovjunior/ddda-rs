@@ -90,3 +90,79 @@ pub fn set_byte_constant(m: &mut dyn Mem, c: &mut Cpu) {
     }
     c.esp = entry.wrapping_add(4 + 8);
 }
+
+// ---------------------------------------------------------------------
+// 0x00DEFA60: release the render context's pending resources
+
+use crate::semantic::call_from;
+
+/// One kind of deferred release of the render context 0x00DEFA60 empties.
+struct Pending {
+    /// dword counting the elements of all 25 buckets of this kind
+    total: u32,
+    /// first of the 25 buckets (16 bytes each: element count, ?, element array pointer, ?)
+    buckets: u32,
+    /// how an element is addressed
+    element: Element,
+    /// the release function (thiscall, one stack argument, `ret 4`)
+    release: u32,
+    /// its return address in 0x00DEFA60
+    back: u32,
+    /// the object it is called on: the context itself or its embedded pool (`+ 0x1a0`)
+    on_pool: bool,
+}
+
+enum Element {
+    /// records of `size` bytes; the release gets the record's address
+    Record(u32),
+    /// pointers; the release gets the pointer stored in the array
+    Pointer,
+}
+
+const PENDING: [Pending; 6] = [
+    Pending { total: 0x10e10, buckets: 0x10c84, element: Element::Record(0x50), release: 0x0113_4a90, back: 0x00de_faa1, on_pool: true },
+    Pending { total: 0x11460, buckets: 0x112d4, element: Element::Record(0x50), release: 0x0113_4ca0, back: 0x00de_faf1, on_pool: true },
+    Pending { total: 0x10fa4, buckets: 0x10e18, element: Element::Record(0xc), release: 0x0113_4bd0, back: 0x00de_fb41, on_pool: true },
+    Pending { total: 0x115f4, buckets: 0x11468, element: Element::Record(8), release: 0x0113_4e40, back: 0x00de_fb92, on_pool: true },
+    Pending { total: 0x112cc, buckets: 0x11140, element: Element::Pointer, release: 0x00fb_4bf0, back: 0x00de_fbde, on_pool: false },
+    Pending { total: 0x11138, buckets: 0x10fac, element: Element::Record(0x14), release: 0x0113_1290, back: 0x00de_fc31, on_pool: true },
+];
+
+/// 0x00DEFA60 `context->release_pending()` (fastcall: ECX = context, plain
+/// `ret`): for each of six kinds of deferred releases that has entries
+/// (its total is positive), call the kind's release function once per element
+/// of each of the 25 buckets, clear the bucket's count, then clear the total.
+/// The element array pointer is read again before every call (a release
+/// may change it); the element count once per bucket.
+// Translated from 0x00DEFA60 (DDDA.exe 2017-12-13 Steam)
+pub fn release_pending(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let context = c.ecx;
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // the original's ESP at its calls: 8 bytes of locals and four saved registers
+    let frame = entry.wrapping_sub(8 + 16);
+    for kind in &PENDING {
+        if (pg.u32(m, context + kind.total) as i32) <= 0 {
+            continue;
+        }
+        for bucket in 0..25u32 {
+            let at = context + kind.buckets + 16 * bucket;
+            let count = pg.u32(m, at);
+            for index in 0..count {
+                let data = pg.u32(m, at + 8);
+                let argument = match kind.element {
+                    Element::Record(size) => data.wrapping_add(index.wrapping_mul(size)),
+                    Element::Pointer => pg.u32(m, data.wrapping_add(4 * index)),
+                };
+                let this = if kind.on_pool { context + 0x1a0 } else { context };
+                let release = kind.release;
+                call_from(m, c, pg, frame, this, &[argument], kind.back, |m, c| ddnative_base::x86::call_ext(m, c, release));
+            }
+            pg.set_u32(m, at, 0);
+        }
+        pg.set_u32(m, context + kind.total, 0);
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4);
+}
