@@ -1,6 +1,6 @@
 """L184 s7 oracle: the CRT acosf (0x012F161F, SSE2 entry: x in xmm0, result in
 xmm0) run as the original's code in Unicorn on random floats of every
-magnitude class. Output: {tables: [[addr, [bytes]]...], cases: [[x_bits, result_bits]...]}
+magnitude class. Optional third argument: the entry (hex), e.g. 012F0D4C for asinf. Output: {tables: [[addr, [bytes]]...], cases: [[x_bits, result_bits]...]}
 (the tables are the guest memory the routine reads, for the harness).
 Run with E:/ddda-re/tools/pyenv/Scripts/python.exe."""
 import json, random, struct, sys
@@ -10,8 +10,8 @@ import harness as h
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_32
 import unicorn.x86_const as x
 
-ENTRY = 0x012F161F
-TABLES = [(0x0144DE60, 0x810), (0x0144E660, 0x400), (0x0144EA60, 0x30)]
+ENTRY = 0x012F161F if len(sys.argv) < 4 else int(sys.argv[3], 16)
+TABLES = [(0x0144DE60, 0x810), (0x0144E660, 0x400), (0x0144EA60, 0x30), (0x0144C640, 0x810), (0x0144CE40, 0x400), (0x0144D240, 0x60)]
 
 def main():
     out, n = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 30000
