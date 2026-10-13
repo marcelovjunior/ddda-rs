@@ -602,6 +602,9 @@ pub struct BindingPart {
     /// the banks as native register arrays, made by the first native draw
     /// (shared by every draw of the part, across frames while unchanged)
     native: std::sync::OnceLock<[Arc<NativeConstants>; 2]>,
+    /// per stage: float registers the shaders read and the binding does not
+    /// write (the device's values at the draw: `fill_uncovered`)
+    uncovered: [[u64; 4]; 2],
 }
 
 /// A shader binding's state as the full apply sets it (0x00DAA8B0 with
@@ -639,6 +642,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         bank.b = [0; 16];
     }
     let mut written = [([0u64; 4], 0u16, 0u16); 2];
+    let mut uncovered = [[0u64; 4]; 2];
     for stage in 0..2 {
         let bank = &mut banks[stage];
         let w = &mut written[stage];
@@ -687,12 +691,12 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                 }
             }
         }
-        // every register the shaders read comes from here (a refusal gives
-        // the banks back, so the next binding reuses their storage)
+        // every register the shaders read comes from here, but floats the
+        // device holds already (a refusal gives the banks back, so the next
+        // binding reuses their storage)
         let r = &meta.reads[stage];
-        let refusal = if (0..4).any(|k| r.floats[k] & !w.0[k] != 0) {
-            Some(Refusal::FloatsUncovered)
-        } else if r.ints & !w.1 != 0 {
+        uncovered[stage] = std::array::from_fn(|k| r.floats[k] & !w.0[k]);
+        let refusal = if r.ints & !w.1 != 0 {
             Some(Refusal::IntsUncovered)
         } else if r.bools & !w.2 != 0 {
             Some(Refusal::BoolsUncovered)
@@ -714,10 +718,84 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             constants: [Arc::new(banks[0].clone()), Arc::new(banks[1].clone())],
             written,
             native: Default::default(),
+            uncovered,
         }),
     };
     c.banks = banks;
     Ok(part)
+}
+
+/// A draw whose binding leaves float registers its shaders read unwritten:
+/// the D3D9 path draws with what the device holds in them (the binding's
+/// own apply does not touch them, so their value now is their value at the
+/// draw). That is the last pending upload of the draws taken since the
+/// last flush (`flush_uploads`'s rule: the newest binding writing the
+/// register decides), else the device's. The call gets banks of its own.
+pub fn fill_uncovered(call: &mut DrawCall, b: &BindingPart, uploads: &Uploads, device: u32) -> Result<(), Refusal> {
+    if b.uncovered == [[0; 4]; 2] {
+        return Ok(());
+    }
+    let mut banks = [(*call.vs_constants).clone(), (*call.ps_constants).clone()];
+    let missing = fill_from_uploads(&mut banks, b.uncovered, uploads)?;
+    if missing != [[0; 4]; 2] {
+        objects(|o| {
+            let Some(Kind::Device(d)) = o.live.get(&device).map(|x| &x.kind) else {
+                return Err(Refusal::Device);
+            };
+            fill_registers(&mut banks, missing, |stage, n| {
+                let c = if stage == 0 { &d.state.vs } else { &d.state.ps };
+                c.f.get(n).copied()
+            })
+        })?;
+    }
+    let [vs, ps] = banks;
+    call.vs_constants = Arc::new(vs);
+    call.ps_constants = Arc::new(ps);
+    Ok(())
+}
+
+/// Fill the `missing` float registers from the pending uploads (the newest
+/// binding writing a register decides, as at the flush; its bank lacking
+/// it, the device keeps its own); what is left for the device.
+fn fill_from_uploads(banks: &mut [Constants; 2], mut missing: [[u64; 4]; 2], uploads: &Uploads) -> Result<[[u64; 4]; 2], Refusal> {
+    let mut device = [[0u64; 4]; 2];
+    for u in uploads.bindings.iter().rev() {
+        for stage in 0..2 {
+            for word in 0..4 {
+                let mut take = missing[stage][word] & u.written[stage].0[word];
+                missing[stage][word] &= !take;
+                while take != 0 {
+                    let n = word * 64 + take.trailing_zeros() as usize;
+                    take &= take - 1;
+                    match u.constants[stage].f.get(n) {
+                        Some(&v) => *banks[stage].f.get_mut(n).ok_or(Refusal::FloatsUncovered)? = v,
+                        None => device[stage][word] |= 1 << (n % 64),
+                    }
+                }
+            }
+        }
+    }
+    Ok(std::array::from_fn(|stage| std::array::from_fn(|word| missing[stage][word] | device[stage][word])))
+}
+
+/// Fill the `missing` float registers with `value(stage, register)`; a
+/// register outside the bank or without a value refuses the draw.
+fn fill_registers(
+    banks: &mut [Constants; 2],
+    missing: [[u64; 4]; 2],
+    value: impl Fn(usize, usize) -> Option<[u32; 4]>,
+) -> Result<(), Refusal> {
+    for stage in 0..2 {
+        for word in 0..4 {
+            let mut m = missing[stage][word];
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                *banks[stage].f.get_mut(n).ok_or(Refusal::FloatsUncovered)? = value(stage, n).ok_or(Refusal::FloatsUncovered)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn set_float(bank: &mut Constants, written: &mut ([u64; 4], u16, u16), n: u32, r: [u32; 4]) {
@@ -1593,19 +1671,21 @@ pub fn native_draw(
     // the binding's part (banks are shared by the draws of a binding, across
     // frames while unchanged), so the worker can tell an unchanged bank by
     // its pointer
-    debug_assert!(Arc::ptr_eq(&d.vs_constants, &binding.constants[0]) && Arc::ptr_eq(&d.ps_constants, &binding.constants[1]));
-    let [vs_constants, ps_constants] = binding
-        .native
-        .get_or_init(|| {
-            binding.constants.each_ref().map(|c| {
-                Arc::new(NativeConstants {
-                    floats: vec![NativeFloatWrite { first: 0, registers: c.f.as_slice().into() }],
-                    ints: vec![NativeIntWrite { first: 0, registers: c.i.as_slice().into() }],
-                    bools: vec![NativeBoolWrite { first: 0, registers: c.b.as_slice().into() }],
-                })
-            })
+    // (a draw filling registers from the device has banks of its own: its
+    // arrays are its own too)
+    let arrays = |c: &Constants| {
+        Arc::new(NativeConstants {
+            floats: vec![NativeFloatWrite { first: 0, registers: c.f.as_slice().into() }],
+            ints: vec![NativeIntWrite { first: 0, registers: c.i.as_slice().into() }],
+            bools: vec![NativeBoolWrite { first: 0, registers: c.b.as_slice().into() }],
         })
-        .clone();
+    };
+    let [vs_constants, ps_constants] =
+        if Arc::ptr_eq(&d.vs_constants, &binding.constants[0]) && Arc::ptr_eq(&d.ps_constants, &binding.constants[1]) {
+            binding.native.get_or_init(|| binding.constants.each_ref().map(|c| arrays(c))).clone()
+        } else {
+            [arrays(&d.vs_constants), arrays(&d.ps_constants)]
+        };
     let scissor = d.render_states.iter().any(|&(s, v)| s == 174 && v != 0);
     Ok(NativeDraw {
         state,
@@ -1875,7 +1955,10 @@ impl Native {
         }
         let started = Instant::now();
         let lock = crate::d3d9dev::device_lock();
-        let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind);
+        let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind).and_then(|mut d| {
+            fill_uncovered(&mut d.call, &d.binding, &g.uploads, g.info.device)?;
+            Ok(d)
+        });
         let taken = match decoded {
             Err(r) => {
                 *t.refused.entry(r).or_default() += 1;
@@ -2344,6 +2427,41 @@ mod tests {
         assert!(again.is_empty() && again.ctx.is_empty());
     }
 
+    /// Float registers a binding reads and does not write: noted (not
+    /// refused), then filled from the newest pending upload writing them,
+    /// else the device.
+    #[test]
+    fn uncovered_floats_come_from_the_newest_upload_else_the_device() {
+        let mut m = TestMem::default();
+        m.set_u32(0x1008, 0x2000);
+        let mut b = binding_writing(0, 0, 0);
+        let meta = Arc::get_mut(&mut Arc::get_mut(&mut b).unwrap().meta).unwrap();
+        // the VS reads c0..c7; the binding (no uploads) writes none
+        meta.reads[0].floats[0] = 0xFF;
+        let mut c = Caches::default();
+        c.metas.insert(0x2000, b.meta.clone());
+        let part = binding_part(&G::new(&m), &mut c, 0x1000, None).ok().expect("not refused");
+        assert_eq!(part.uncovered, [[0xFF, 0, 0, 0], [0; 4]]);
+        // pending: an older binding writing c0..c7 (seed 1), a newer one c0..c5 (seed 2)
+        let mut uploads = Uploads::default();
+        uploads.add(&binding_writing(8, 0, 1));
+        uploads.add(&binding_writing(6, 0, 2));
+        let mut banks = [(*part.constants[0]).clone(), (*part.constants[1]).clone()];
+        let left = fill_from_uploads(&mut banks, part.uncovered, &uploads).unwrap();
+        assert_eq!(left, [[0; 4]; 2]);
+        let expected: Vec<[u32; 4]> = (0..8).map(|k| [if k < 6 { 2 } else { 1 }, k, 0, 0]).collect();
+        assert_eq!(banks[0].f[..8], expected[..]);
+        assert_eq!(banks[0].f[8..], part.constants[0].f[8..]);
+        // nothing pending: all from the device
+        let left = fill_from_uploads(&mut banks, part.uncovered, &Uploads::default()).unwrap();
+        assert_eq!(left, part.uncovered);
+        fill_registers(&mut banks, left, |stage, n| Some([stage as u32, n as u32, 9, 9])).unwrap();
+        let expected: Vec<[u32; 4]> = (0..8).map(|k| [0, k, 9, 9]).collect();
+        assert_eq!(banks[0].f[..8], expected[..]);
+        // no device value: refused
+        assert_eq!(fill_registers(&mut banks, left, |_, _| None), Err(Refusal::FloatsUncovered));
+    }
+
     /// Instanced draws: each stream with an object and a handle gets the
     /// frequency the executor sets; instance data starts at its instance
     /// offset (step * stride + its own offset).
@@ -2501,7 +2619,7 @@ mod tests {
     /// constant banks back: the next binding reuses their storage.
     #[test]
     fn refused_bindings_keep_the_constant_banks() {
-        for (kind, expected) in [(0, Refusal::FloatsUncovered), (1, Refusal::IntsUncovered), (2, Refusal::BoolsUncovered)] {
+        for (kind, expected) in [(1, Refusal::IntsUncovered), (2, Refusal::BoolsUncovered)] {
             let mut m = TestMem::default();
             m.set_u32(0x1008, 0x2000);
             let mut b = binding_writing(0, 0, 0);
@@ -2544,6 +2662,7 @@ mod tests {
             constants: [Arc::new(bank(vs, 256)), Arc::new(bank(ps, 224))],
             written: [(mask(vs), 0, 0), (mask(ps), 0, 0)],
             native: Default::default(),
+            uncovered: [[0; 4]; 2],
         })
     }
 

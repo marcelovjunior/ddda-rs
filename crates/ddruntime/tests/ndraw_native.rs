@@ -328,6 +328,30 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
         });
     }
 
+    // a binding whose VS reads c0..c7 and writes c0..c5 (another binding,
+    // meta and descriptors): the D3D9 path draws with the device's c6, c7
+    let (shader2, meta2, descs2) = (NDRAW + 0x100 * 19, NDRAW + 0x100 * 20, NDRAW + 0x100 * 21);
+    put(&mut s, shader2, &[3 << 21, 0, meta2, sampler, tex, vs_values, ps_values]);
+    put(&mut s, meta2, &[0, descs2, 1 | 1 << 12, 2 | 1 << 8 | 1 << 12, vs, ps, declaration]);
+    put(&mut s, descs2, &[2 << 1 | 6 << 24, 1 << 22, 3 << 1 | 4 << 24]);
+    put(&mut s, DATA, &[7, 8, 9, 10, 11, 12, 13, 14].map(|k| (k as f32).to_bits()));
+    assert_eq!(com(&mut s, dev, 94, &[6, DATA, 2]), 0); // SetVertexShaderConstantF c6, c7
+    s.mem.set_u32(record + 0xC, shader2);
+    caches.begin_frame(&info);
+    let mut filled = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("not refused");
+    ddruntime::ndraw_native::fill_uncovered(&mut filled.call, &filled.binding, &Default::default(), dev).expect("filled");
+    assert_eq!(filled.call.vs_constants.f[6..8], [[7, 8, 9, 10], [11, 12, 13, 14]].map(|r| r.map(|k| (k as f32).to_bits())));
+    let mut ctx = Context { m: &s.mem, words: vec![0; 0xE28 / 4] };
+    let calls = mtstate::shader(&mut ctx, CTX, shader2, false, 0).unwrap();
+    drop(ctx);
+    make(&mut s, dev, &calls);
+    let extent = decode(&s.mem, record, [0; 4], false).unwrap().extent;
+    let (primitive, primitives, start, base, vertices) = draw_params(&s.mem, record, 1, extent).unwrap();
+    assert_eq!(com(&mut s, dev, 82, &[primitive, base as u32, 0, vertices, start, primitives]), 0);
+    let d3d9 = ddruntime::d3d9draw::recorded(|r| r.draws.last().cloned()).flatten().expect("the D3D9 path drew");
+    assert_eq!(differences(&filled.call, r, &d3d9), vec![]);
+    s.mem.set_u32(record + 0xC, shader);
+
     // an instanced draw (type 3): stream 1 instance data (stride 16,
     // offset 8), 5 instances, instance step 2. The D3D9 path: the stream
     // apply, then the calls 0x00DAB480's type 3 makes around the draw
