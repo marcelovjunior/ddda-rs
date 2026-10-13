@@ -6,7 +6,7 @@ hdr = '''//! Float kernels of the uCnsEdit matrix providers (0x00864660, ...), g
 //! original's order and grouping, including the multiplications by 0.0 whose
 //! NaN/infinity propagation the original has, so results are bit-identical.
 //! Do not edit by hand: regenerate.
-#![allow(clippy::all, unused_parens, dead_code, non_upper_case_globals)]
+#![allow(clippy::all, unused_parens, unused_variables, dead_code, non_upper_case_globals)]
 use super::{read_f32 as rd, Bases, Matrix};
 use ddnative_base::mem::{Mem, Pages};
 

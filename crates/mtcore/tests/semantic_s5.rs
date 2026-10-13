@@ -226,3 +226,40 @@ fn semantic_scale_providers_match_original() {
         eprintln!("{count} ABI-level {label} cases passed");
     }
 }
+
+// verifies 0x00867420 (mode 8): ABI level, EAX = the output buffer
+#[test]
+fn semantic_euler_parent_translation_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/cns_m8.json", mtcore::semantic_s5::euler_parent_translation_provider, input_registers, true);
+    eprintln!("{count} ABI-level 0x00867420 cases passed");
+}
+
+// verifies 0x00868000 (mode 12): ABI level, EAX = the output buffer
+#[test]
+fn semantic_rebase_joint_provider_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/cns_m12.json", mtcore::semantic_s5::rebase_joint_provider, input_registers, true);
+    eprintln!("{count} ABI-level 0x00868000 cases passed");
+}
+
+// verifies 0x00869260 (mode 13) and 0x0086a100 (mode 14): ABI level, EAX = the output buffer
+#[test]
+fn semantic_reference_providers_match_original() {
+    ddnative_host::install();
+    for (name, body, label) in [
+        ("m13", mtcore::semantic_s5::euler_reference_provider_13 as x86::LiftFn, "0x00869260"),
+        ("m14", mtcore::semantic_s5::euler_reference_provider_14, "0x0086a100"),
+    ] {
+        let count = cases(&format!("E:/ddda-re/notes/native-L184/cns_{name}.json"), body, input_registers, true);
+        eprintln!("{count} ABI-level {label} cases passed");
+    }
+}
+
+// verifies 0x00cfdc80 (the blend toward a matrix): ABI level (void)
+#[test]
+fn semantic_blend_toward_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/cns_blend.json", mtcore::semantic_s5::blend_toward_provider, input_registers, false);
+    eprintln!("{count} ABI-level 0x00cfdc80 cases passed");
+}

@@ -35,8 +35,6 @@ const DEGREES_TO_RADIANS: f32 = f32::from_bits(0x3c8e_fa35);
 const SCALE_EPSILON: f32 = f32::from_bits(0x3586_37be);
 const IDENTITY: [f32; 16] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
 
-/// Guest functions the edit calls.
-const BLEND_TOWARD_IDENTITY: u32 = 0x00cf_dc80;
 const SINF: u32 = 0x012f_0906;
 const COSF: u32 = 0x012f_0a55;
 
@@ -331,44 +329,6 @@ fn apply_offset_and_scale(m: &dyn Mem, pg: Pages, this: u32, local: &mut Matrix)
     }
 }
 
-/// How a mode obtains its local matrix from a guest function: where it is
-/// called from, the registers and stack arguments it takes (offsets are
-/// relative to the original's frame, `F`).
-struct Provider {
-    target: u32,
-    /// Return address of the call site in 0x00860AC0.
-    back: u32,
-    regs: Registers,
-    args: [u32; 3],
-    nargs: usize,
-    /// Whether the angle vector at `F + 0x120` (the three angles in
-    /// radians and a zero) must be on the stack: the provider is passed its
-    /// address.
-    angles: bool,
-    /// Whether the constraint's translation and scale are applied after.
-    offset_and_scale: bool,
-}
-
-/// Offset of the angle vector in the original's frame.
-const F_ANGLES: u32 = 0x120;
-
-/// The guest function of `mode` 6..=15 (`None` for 16, which is native, and above). `this`, `joint` and
-/// `model` are the constraint, joint record and model; `frame` is `F`.
-fn provider_for(mode: u32, this: u32, joint: u32, model: u32, frame: u32) -> Option<Provider> {
-    let f = |offset: u32| frame.wrapping_add(offset);
-    let angles = f(F_ANGLES);
-    // mode: (target, call site return, [eax, ecx, esi, edi], args, angles, offset and scale)
-    let (target, back, r, args, nargs, takes_angles, offset_and_scale) = match mode {
-        8 => (0x0086_7420, 0x0086_163c, [angles, this, f(0x200), this], [this, joint, model], 3, true, false),
-        12 => (0x0086_8000, 0x0086_1803, [12, model, joint, f(0x1c0)], [this, 0, 0], 1, false, false),
-        13 => (0x0086_9260, 0x0086_18d6, [model, this, joint, f(0x240)], [this, model, angles], 3, true, false),
-        14 => (0x0086_a100, 0x0086_19a9, [14, angles, joint, f(0x2c0)], [this, model, angles], 3, true, false),
-        _ => return None,
-    };
-    let regs = Registers { eax: r[0], ecx: r[1], esi: r[2], edi: r[3] };
-    Some(Provider { target, back, regs, args, nargs, angles: takes_angles, offset_and_scale })
-}
-
 /// 0x00860AC0 `uCnsEdit::vf24(joint, model)` (thiscall, `ret 8`), see the
 /// module documentation.
 // Translated from 0x00860AC0 (DDDA.exe 2017-12-13 Steam)
@@ -398,29 +358,6 @@ fn euler_local_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, mode: 
     let sines = [0, 1, 2].map(|k| crt_sincos(m, c, pg, frame, angles[k], false, back(k as u32)));
     let cosines = [0, 1, 2].map(|k| crt_sincos(m, c, pg, frame, angles[k], true, back(3 + k as u32)));
     euler_matrix(mode, sines, cosines)
-}
-
-/// The local matrix from a guest provider (modes 6..=15).
-fn provider_local_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, provider: &Provider, frame: u32) -> Matrix {
-    if provider.angles {
-        let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
-        for (k, v) in angles.iter().enumerate() {
-            pg.set_u32(m, frame + F_ANGLES + 4 * k as u32, v.to_bits());
-        }
-        pg.set_u32(m, frame + F_ANGLES + 12, 0);
-    }
-    let result = guest_call(m, c, pg, frame, provider.target, provider.back, provider.regs, &provider.args[..provider.nargs]);
-    read_matrix(m, pg, result)
-}
-
-/// Blend `local` toward identity by `weight` through the guest function
-/// 0x00CFDC80, which works in place on the matrix at `F + 0x30`.
-fn blend_toward_identity(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, frame: u32, weight: f32, local: &Matrix) -> Matrix {
-    write_matrix(m, pg, frame + 0x30, local);
-    write_matrix(m, pg, frame + 0x140, &IDENTITY);
-    let regs = Registers { eax: frame + 0x140, ecx: frame + 0x30, esi: c.esi, edi: this };
-    guest_call(m, c, pg, frame, BLEND_TOWARD_IDENTITY, 0x0086_1ddf, regs, &[frame + 0x30, frame + 0x140, weight.to_bits()]);
-    read_matrix(m, pg, frame + 0x30)
 }
 
 /// The parent bone's matrix for the parent-space multiply: the joint of the
@@ -456,6 +393,19 @@ fn apply(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, model: 
         let callee_entry = frame.wrapping_sub(8);
         let callee_frame = (callee_entry.wrapping_sub(4) & !15).wrapping_sub(0xdc + 4);
         (aim_twist_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame), true)
+    } else if mode == 13 || mode == 14 {
+        let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
+        let (locals, matrix_fn): (u32, fn(&mut dyn Mem, &mut Cpu, Pages, u32, u32, u32, Angles, u32, u32) -> Matrix) =
+            if mode == 13 { (0xdc, euler_reference_matrix_13) } else { (0xec, euler_reference_matrix_14) };
+        let callee_frame = (frame.wrapping_sub(16).wrapping_sub(4) & !15).wrapping_sub(locals + 4);
+        (matrix_fn(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame, frame + if mode == 13 { 0x240 } else { 0x2c0 }), false)
+    } else if mode == 12 {
+        let callee_frame = (frame.wrapping_sub(8).wrapping_sub(4) & !15).wrapping_sub(0xec + 4);
+        (rebase_joint_matrix(m, c, pg, this, model, joint, callee_frame, frame + 0x1c0), false)
+    } else if mode == 8 {
+        let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
+        let callee_frame = (frame.wrapping_sub(16).wrapping_sub(4) & !15).wrapping_sub(0xd8 + 8);
+        (euler_parent_translation_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame, frame + 0x200), false)
     } else if mode == 9 || mode == 10 {
         let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
         let callee_frame = (frame.wrapping_sub(16).wrapping_sub(4) & !15).wrapping_sub(0x5c + 4);
@@ -475,8 +425,6 @@ fn apply(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, model: 
         (euler_twist_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame, frame + 0x380), false)
     } else if mode <= 5 {
         (euler_local_matrix(m, c, pg, this, mode, frame), true)
-    } else if let Some(provider) = provider_for(mode, this, joint, model, frame) {
-        (provider_local_matrix(m, c, pg, this, &provider, frame), provider.offset_and_scale)
     } else {
         // mode > 16: the original reads its (uninitialised) stack slots
         (read_matrix(m, pg, frame + 0x30), true)
@@ -486,7 +434,7 @@ fn apply(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, model: 
     }
     let weight = read_f32(m, pg, this + 0x44);
     if weight != 1.0 {
-        local = blend_toward_identity(m, c, pg, this, frame, weight, &local);
+        local = blend_toward(m, pg, &local, &IDENTITY, weight);
     }
     let joint_matrix = joint + 0x10;
     if pg.u32(m, this + 0xa0) == 0 {
@@ -611,6 +559,8 @@ pub(crate) struct Bases {
     r: [f32; 3],
     /// the model's scale (`model + 0x60..0x68`), read only when the kernel needs it
     mscale: [f32; 3],
+    /// a second matrix (the blend target)
+    other: Matrix,
 }
 
 /// The joint record of `model` for joint index `index` (the byte table at
@@ -662,7 +612,7 @@ fn aim_twist_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u
     if model == 0 {
         return matrix;
     }
-    let mut trig = |sites: [u32; 2]| {
+    let trig = |sites: [u32; 2]| {
         move |m: &mut dyn Mem, c: &mut Cpu, cosine: bool, x: f32| crt_sincos(m, c, pg, frame, x, cosine, sites[cosine as usize])
     };
     let a0 = angles.get(m, pg, 0);
@@ -671,20 +621,20 @@ fn aim_twist_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u
         if index < pg.u32(m, model + 0x360) {
             let child = joint_record(m, pg, model, index);
             let inputs = kernels::load_m6_aim(m, pg, &Bases { joint, child, angle: a0, ..Default::default() }, &matrix);
-            let mut t = trig(AIM_TRIG_SITES);
+            let t = trig(AIM_TRIG_SITES);
             matrix = kernels::kernel_m6_aim(&inputs, &mut |cosine, x| t(m, c, cosine, x));
         }
     }
     let a1 = angles.get(m, pg, 1);
     if a1 > ANGLE_EPSILON {
         let inputs = kernels::load_m6_pitch(m, pg, &Bases { angle: a1, ..Default::default() }, &matrix);
-        let mut t = trig(PITCH_TRIG_SITES);
+        let t = trig(PITCH_TRIG_SITES);
         matrix = kernels::kernel_m6_pitch(&inputs, &mut |cosine, x| t(m, c, cosine, x));
     }
     let a2 = angles.get(m, pg, 2);
     if a2 > ANGLE_EPSILON {
         let inputs = kernels::load_m6_roll(m, pg, &Bases { angle: a2, ..Default::default() }, &matrix);
-        let mut t = trig(ROLL_TRIG_SITES);
+        let t = trig(ROLL_TRIG_SITES);
         matrix = kernels::kernel_m6_roll(&inputs, &mut |cosine, x| t(m, c, cosine, x));
     }
     matrix
@@ -725,12 +675,13 @@ const DECOMPOSE_ROTATION: u32 = 0x00cf_c9e0;
 /// The parent bone's matrix (joint byte `+0x91`; 0xFF: the model's virtual
 /// +0x58(-1) accessor) as a guest address. `back` is the call site's return
 /// address when the accessor is called.
-fn parent_matrix_address(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, joint: u32, model: u32, frame: u32, regs: Registers, back: u32) -> u32 {
+fn parent_matrix_address(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, joint: u32, model: u32, frame: u32, regs: Registers, back: u32, method_in_eax: bool) -> u32 {
     let index = pg.u8(m, joint + 0x91);
     if index == 0xff {
         let vtable = pg.u32(m, model);
         let method = pg.u32(m, vtable + 0x58);
-        guest_call(m, c, pg, frame, method, back, Registers { eax: vtable, edi: regs.edi, ..regs }, &[0xffff_ffff])
+        let eax = if method_in_eax { method } else { vtable };
+        guest_call(m, c, pg, frame, method, back, Registers { eax, edi: regs.edi, ..regs }, &[0xffff_ffff])
     } else {
         let joints = pg.u32(m, model + 0x364);
         joints.wrapping_add(index as u32 * 0xa0).wrapping_add(0x10)
@@ -754,7 +705,7 @@ fn euler_twist_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model:
     matrix = kernels::kernel_m7_euler(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, EULER_TRIG_SITES[cosine as usize]));
     if read_f32(m, pg, this + 0x84) != 1.0 {
         let regs = Registers { eax: 0, ecx: model, esi: out, edi: joint };
-        bases.parent = parent_matrix_address(m, c, pg, joint, model, frame, regs, 0x0086_5b62);
+        bases.parent = parent_matrix_address(m, c, pg, joint, model, frame, regs, 0x0086_5b62, false);
         let inputs = kernels::load_m7_in_parent_space(m, pg, &bases, &matrix);
         let relative = kernels::kernel_m7_in_parent_space(&inputs, &mut |_, x| x);
         // the helper reads the matrix at F + 0x130 and writes three angles to the buffer at F + 0xf0
@@ -911,4 +862,217 @@ pub fn euler_or_ratio_provider(m: &mut dyn Mem, c: &mut Cpu) {
     c.eax = out;
     c.esp = entry.wrapping_add(4 + 8);
     c.esi = out;
+}
+
+// ---------------------------------------------------------------------
+// 0x00867420: mode 8, Euler rotation with a parent-relative translation
+
+const M8_TRIG_SITES: [u32; 2] = [0x0086_7442, 0x0086_7488];
+
+/// Matrix of mode 8 (0x00867420): the Euler rotation of the angles; when the
+/// weight at `this + 0x84` or the one at `this + 0x88` is not 1, its
+/// translation row is computed from the parent bone's matrix and the
+/// joint's own translation and `this + 0x08`-th element (the weights
+/// interpolate the joint's translation toward the parent's frame); then the
+/// translation at `this + 0x90` is added.
+fn euler_parent_translation_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u32, joint: u32, angles: Angles, frame: u32, out: u32) -> Matrix {
+    let angles = [angles.get(m, pg, 0), angles.get(m, pg, 1), angles.get(m, pg, 2)];
+    let mut bases = Bases { this, joint, angles, ..Default::default() };
+    let inputs = kernels::load_m8_euler(m, pg, &bases, &IDENTITY);
+    let mut matrix = kernels::kernel_m8_euler(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, M8_TRIG_SITES[cosine as usize]));
+    if read_f32(m, pg, this + 0x84) != 1.0 || read_f32(m, pg, this + 0x88) != 1.0 {
+        let regs = Registers { eax: 0, ecx: model, esi: out, edi: joint };
+        bases.parent = parent_matrix_address(m, c, pg, joint, model, frame, regs, 0x0086_7606, false);
+        let inputs = kernels::load_m8_parent(m, pg, &bases, &matrix);
+        matrix = kernels::kernel_m8_parent(&inputs, &mut |_, x| x);
+    }
+    let inputs = kernels::load_m8_finish(m, pg, &bases, &matrix);
+    kernels::kernel_m8_finish(&inputs, &mut |_, x| x)
+}
+
+/// 0x00867420 (usercall: EAX = pointer to the three angles, ESI = output
+/// buffer; stack arguments `this`, `joint`, `model`; `ret 0xc`).
+// Translated from 0x00867420 (DDDA.exe 2017-12-13 Steam)
+pub fn euler_parent_translation_provider(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let (this, joint, model) = (pg.u32(m, entry + 4), pg.u32(m, entry + 8), pg.u32(m, entry + 12));
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0xd8 + 8);
+    let (angles, out, saved_edi) = (c.eax, c.esi, c.edi);
+    let matrix = euler_parent_translation_matrix(m, c, pg, this, model, joint, Angles::Memory(angles), frame, out);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 12);
+    c.esi = out;
+    c.edi = saved_edi;
+}
+
+// ---------------------------------------------------------------------
+// 0x00868000: mode 12, re-base the joint on its parent
+
+const DECOMPOSE_QUATERNION_SITE: u32 = 0x0086_833e;
+
+/// Write `matrix` as the joint's matrix (record + 0x10), touching only the
+/// elements that change.
+fn write_joint_matrix_changes(m: &mut dyn Mem, pg: Pages, joint: u32, matrix: &Matrix) {
+    for (k, v) in matrix.iter().enumerate() {
+        let address = joint + 0x10 + 4 * k as u32;
+        if pg.u32(m, address) != v.to_bits() {
+            pg.set_u32(m, address, v.to_bits());
+        }
+    }
+}
+
+/// Mode 12 (0x00868000): the output matrix is the identity with its
+/// translation moved by the constraint's weights; as a side effect the joint's
+/// own matrix is re-based on the parent bone: its rows are scaled by the
+/// inverse of the lengths of the joint's rows (when they differ from 1),
+/// multiplied by the matrix of the joint's quaternion (`joint + 0x60`, via
+/// 0x007E4B60, folded in) and the parent, and the translation difference
+/// between the old and new frame, weighted by `this + 0x80..0x88`, goes to the
+/// output's translation row.
+///
+/// Returns the output matrix; the joint matrix is updated in guest memory.
+fn rebase_joint_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u32, joint: u32, frame: u32, out: u32) -> Matrix {
+    let regs = Registers { eax: 0, ecx: model, esi: joint, edi: out };
+    let bases = Bases { this, joint, parent: parent_matrix_address(m, c, pg, joint, model, frame, regs, 0x0086_81aa, true), ..Default::default() };
+    let inputs = kernels::load_m12(m, pg, &bases, &IDENTITY);
+    let result = kernels::kernel_m12(&inputs, &mut |_, x| x);
+    let out_matrix: Matrix = std::array::from_fn(|k| result[k]);
+    let joint_matrix: Matrix = std::array::from_fn(|k| result[16 + k]);
+    write_joint_matrix_changes(m, pg, joint, &joint_matrix);
+    let _ = DECOMPOSE_QUATERNION_SITE;
+    out_matrix
+}
+
+/// 0x00868000 (usercall: ECX = model, ESI = joint, EDI = output buffer; stack
+/// argument `this`; `ret 4`).
+// Translated from 0x00868000 (DDDA.exe 2017-12-13 Steam)
+pub fn rebase_joint_provider(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = pg.u32(m, entry + 4);
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0xec + 4);
+    let (model, joint, out) = (c.ecx, c.esi, c.edi);
+    let matrix = rebase_joint_matrix(m, c, pg, this, model, joint, frame, out);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 4);
+    c.esi = joint;
+    c.edi = out;
+}
+
+// ---------------------------------------------------------------------
+// 0x00869260 (mode 13) and 0x0086A100 (mode 14): Euler rotation with a
+// translation taken relative to a reference joint
+
+const M13_TRIG_SITES: [u32; 2] = [0x0086_9282, 0x0086_92c5];
+const M14_TRIG_SITES: [u32; 2] = [0x0086_a11f, 0x0086_a15c];
+
+/// The reference joint record of the constraint: joint `this + 0xAC` of the
+/// model at `this + 0x54` (0 when none: index 0xFF, a missing joint or a
+/// null record).
+fn reference_joint(m: &dyn Mem, pg: Pages, this: u32) -> u32 {
+    let index = pg.u32(m, this + 0xac);
+    if index == 0xff {
+        return 0;
+    }
+    let model = pg.u32(m, this + 0x54);
+    joint_record(m, pg, model, index)
+}
+
+/// Matrix of mode 13 (0x00869260): the Euler rotation; with a reference joint
+/// its translation row becomes a blend, per axis weight `this + 0x80..0x88`, of
+/// the reference joint's translation and the joint's own translation moved by
+/// `this + 0x90` through the parent bone, relative to the joint's matrix.
+fn euler_reference_matrix_13(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u32, joint: u32, angles: Angles, frame: u32, out: u32) -> Matrix {
+    let angles = [angles.get(m, pg, 0), angles.get(m, pg, 1), angles.get(m, pg, 2)];
+    let mut bases = Bases { this, joint, angles, ..Default::default() };
+    let inputs = kernels::load_m13_euler(m, pg, &bases, &IDENTITY);
+    let mut matrix = kernels::kernel_m13_euler(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, M13_TRIG_SITES[cosine as usize]));
+    bases.child = reference_joint(m, pg, this);
+    if bases.child != 0 {
+        let regs = Registers { eax: 0, ecx: model, esi: joint, edi: out };
+        bases.parent = parent_matrix_address(m, c, pg, joint, model, frame, regs, 0x0086_9454, true);
+        let inputs = kernels::load_m13_ref(m, pg, &bases, &matrix);
+        matrix = kernels::kernel_m13_ref(&inputs, &mut |_, x| x);
+    }
+    matrix
+}
+
+/// Matrix of mode 14 (0x0086A100): like mode 13, without the per-axis weights.
+fn euler_reference_matrix_14(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u32, joint: u32, angles: Angles, frame: u32, out: u32) -> Matrix {
+    let angles = [angles.get(m, pg, 0), angles.get(m, pg, 1), angles.get(m, pg, 2)];
+    let mut bases = Bases { this, joint, angles, ..Default::default() };
+    let inputs = kernels::load_m14_euler(m, pg, &bases, &IDENTITY);
+    let mut matrix = kernels::kernel_m14_euler(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, M14_TRIG_SITES[cosine as usize]));
+    bases.child = reference_joint(m, pg, this);
+    if bases.child != 0 {
+        let regs = Registers { eax: 0, ecx: model, esi: joint, edi: out };
+        bases.parent = parent_matrix_address(m, c, pg, joint, model, frame, regs, 0x0086_a356, false);
+        let inputs = kernels::load_m14_ref(m, pg, &bases, &matrix);
+        matrix = kernels::kernel_m14_ref(&inputs, &mut |_, x| x);
+    }
+    matrix
+}
+
+/// 0x00869260 (mode 13; usercall: ESI = joint, EDI = output buffer; stack
+/// arguments `this`, `model`, pointer to the angles; `ret 0xc`).
+// Translated from 0x00869260 (DDDA.exe 2017-12-13 Steam)
+pub fn euler_reference_provider_13(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let (this, model, angles) = (pg.u32(m, entry + 4), pg.u32(m, entry + 8), pg.u32(m, entry + 12));
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0xdc + 4);
+    let (joint, out) = (c.esi, c.edi);
+    let matrix = euler_reference_matrix_13(m, c, pg, this, model, joint, Angles::Memory(angles), frame, out);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 12);
+    c.esi = joint;
+    c.edi = out;
+}
+
+/// 0x0086A100 (mode 14; usercall: ESI = joint, EDI = output buffer; stack
+/// arguments `this`, `model`, pointer to the angles; `ret 0xc`).
+// Translated from 0x0086A100 (DDDA.exe 2017-12-13 Steam)
+pub fn euler_reference_provider_14(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let (this, model, angles) = (pg.u32(m, entry + 4), pg.u32(m, entry + 8), pg.u32(m, entry + 12));
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0xec + 4);
+    let (joint, out) = (c.esi, c.edi);
+    let matrix = euler_reference_matrix_14(m, c, pg, this, model, joint, Angles::Memory(angles), frame, out);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 12);
+    c.esi = joint;
+    c.edi = out;
+}
+
+// ---------------------------------------------------------------------
+// 0x00CFDC80: blend a matrix toward another (the identity) by a weight
+
+/// `matrix` blended toward `other` by `weight` (0x00CFDC80, `other` is the identity
+/// for the uCnsEdit): each row's rotation part is scaled in angle, its length
+/// interpolated, and the translation row interpolated linearly. Pure float
+/// math, kept in the original's order by the generated kernel.
+pub fn blend_toward(m: &dyn Mem, pg: Pages, matrix: &Matrix, other: &Matrix, weight: f32) -> Matrix {
+    let bases = Bases { angle: weight, other: *other, ..Default::default() };
+    let inputs = kernels::load_blend(m, pg, &bases, matrix);
+    kernels::kernel_blend(&inputs, &mut |_, x| x)
+}
+
+/// 0x00CFDC80 (usercall: ECX = the matrix to blend, which is also the first
+/// stack argument; stack arguments matrix, other matrix, weight; `ret 0xc`).
+// Translated from 0x00CFDC80 (DDDA.exe 2017-12-13 Steam)
+pub fn blend_toward_provider(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let (matrix_address, other_address, weight) = (pg.u32(m, entry + 4), pg.u32(m, entry + 8), f32::from_bits(pg.u32(m, entry + 12)));
+    let matrix = read_matrix(m, pg, matrix_address);
+    let other = read_matrix(m, pg, other_address);
+    let result = blend_toward(m, pg, &matrix, &other, weight);
+    write_matrix(m, pg, c.ecx, &result);
+    c.esp = entry.wrapping_add(4 + 12);
 }

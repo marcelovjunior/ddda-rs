@@ -31,17 +31,23 @@ def split_ops(s): return [o.strip() for o in re.split(r',(?![^\[]*\])',s)] if s 
 isx=lambda s: re.match(r'^XMM\d$',s.upper())
 
 class State:
-    def __init__(self): self.x={}; self.slot={}; self.mem={}; self.flags=None; self.st=None
+    def __init__(self): self.x={}; self.slot={}; self.islot={}; self.mem={}; self.flags=None; self.st=None
     def clone(self):
-        s=State(); s.x={k:list(v) for k,v in self.x.items()}; s.slot=dict(self.slot); s.mem=dict(self.mem); s.flags=self.flags; s.st=self.st
+        s=State(); s.x={k:list(v) for k,v in self.x.items()}; s.slot=dict(self.slot); s.islot=dict(self.islot); s.mem=dict(self.mem); s.flags=self.flags; s.st=self.st
         return s
 
 class Sym:
     def __init__(self,dag,asmfile,regs,leafname=None):
         """regs: register name -> role letter of the guest record it points at (loads become leaves 'role+dword index')."""
-        self.d=dag; self.asm,self.nxt,self.prv=load_asm(asmfile); self.regs=regs
+        self.d=dag; self.asm,self.nxt,self.prv=load_asm(asmfile); self.regs=regs; self.inline={}
         self.ireg={r:(role,0) for r,role in regs.items()}   # integer registers: int | (role, byte offset)
         self.z=dag.leaf('0.0'); self.st=State(); self.trace=[]; self.adj=0; self.args={}
+    def add_inline(self, asmfile, entry, start, args):
+        """Inline a small callee (asmfile: its own dump) at its CALLs: it starts executing at `start` (after its prologue)
+        with stack arguments `args` (offset from its EBP -> value) and its own stack frame."""
+        a,n,p=load_asm(asmfile)
+        self.asm.update(a); self.nxt.update(n); self.prv.update(p)
+        self.inline[entry]=(start,args)
     # ---- operands
     def ival(self,tok):
         tok=tok.strip()
@@ -127,6 +133,10 @@ class Sym:
             elif mn=='MOV' and ({ops[0].upper(),ops[1].upper()} & {'EBP','ESP'}): pass
             elif mn=='MOV' and not re.search(r'\[',ops[1]) :
                 self.ireg[ops[0].upper()]=self.ival(ops[1])
+            elif mn=='MOV' and re.search(r'\[ESP',ops[0]) and not re.search(r'\[',ops[1]):   # integer spill to the stack
+                b,o=self.addr(ops[0]); S.islot[o+self.adj]=self.ival(ops[1])
+            elif mn=='MOV' and re.search(r'\[ESP',ops[1]):
+                b,o=self.addr(ops[1]); self.ireg[ops[0].upper()]=S.islot[o+self.adj]
             elif mn=='MOV': pass
             elif mn=='LEA':
                 b,o=self.addr(ops[1]); self.ireg[ops[0].upper()]=o if b is None else (b,o)
@@ -141,6 +151,14 @@ class Sym:
             elif mn in ('LAHF','TEST'): pass
             elif mn=='FLD': S.st=self.load1(S,ops[0])
             elif mn=='FSTP': self.store1(S,ops[0],d.op('quiet',S.st))
+            elif mn=='CALL' and int(ops[0],16) in self.inline:
+                start,cargs=self.inline[int(ops[0],16)]
+                saved=(S.slot,self.adj,self.args)
+                S.slot={}; self.adj=0; self.args=cargs
+                self.run(S,start,EXIT)
+                S.slot,self.adj,self.args=saved
+                self.adj+=4*len(cargs)   # the callee popped its stack arguments
+                self._ipdom_stale=True
             elif mn=='CALL':
                 name={0x12f0906:'sin',0x12f0a55:'cos'}[int(ops[0],16)]
                 S.x[0]=[d.op(name,S.x[0][0])]+S.x[0][1:]
@@ -157,24 +175,45 @@ class Sym:
                 else:
                     cond={'JBE':d.op('not',d.op('gt',a,b)),'JA':d.op('gt',a,b),'JNC':d.op('ge',a,b),'JC':d.op('not',d.op('ge',a,b)),
                           'JP':d.op('not',d.op('eq',a,b)),'JNP':d.op('eq',a,b)}[mn]
-                # structure: if-then (fallthrough arm reaches tgt), if-else (arm before tgt ends with JMP) or if-return (arm before tgt ends with RET)
-                prev=self.prv[tgt]; pm,po=self.asm[prev]
-                if pm=='RET':
-                    join=EXIT; fall_stop=EXIT; taken_start=tgt
-                elif pm=='JMP' and int(po,16)>tgt:
-                    join=int(po,16); fall_stop=join; taken_start=tgt
-                else:
-                    join=tgt; fall_stop=tgt; taken_start=None
+                join=self.ipdom_of(pc)
                 adj0=self.adj
-                Sf=S.clone(); self.run(Sf,nx,fall_stop); adj_f=self.adj; self.adj=adj0
-                St=S.clone()
-                if taken_start is not None: self.run(St,taken_start,join)
-                if taken_start is None: self.adj=adj_f   # if-then: the fallthrough arm's net push/pop count carries on
+                Sf=S.clone(); self.run(Sf,nx,join); adj_f=self.adj; self.adj=adj0
+                St=S.clone(); self.run(St,tgt,join)
+                if join!=EXIT: self.adj=adj_f
                 S2=self.merge(cond,St,Sf)   # cond true => taken arm
                 S.__dict__.update(S2.__dict__)
                 nx=join
             else: raise NotImplementedError('%x %s %s'%(pc,mn,ops))
             pc=nx
+    def ipdom_of(self,pc):
+        """Immediate post-dominator of the branch at pc: where both arms are guaranteed to meet (EXIT if they return)."""
+        if not hasattr(self,'_ipdom'):
+            succ={}
+            for a,(mn,ops) in self.asm.items():
+                nx=self.nxt.get(a,EXIT)
+                if mn=='JMP': succ[a]=[int(ops,16)]
+                elif mn.startswith('J'): succ[a]=[int(ops,16),nx]
+                elif mn=='RET': succ[a]=[EXIT]
+                else: succ[a]=[nx]
+            nodes=list(succ)
+            pd={n:set(nodes)|{EXIT} for n in nodes}; pd[EXIT]={EXIT}
+            changed=True
+            while changed:
+                changed=False
+                for n in nodes:
+                    inter=None
+                    for s in succ[n]:
+                        inter=set(pd[s]) if inter is None else inter&pd[s]
+                    new={n}|(inter or set())
+                    if new!=pd[n]: pd[n]=new; changed=True
+            ip={}
+            for n in nodes:
+                cand=pd[n]-{n}
+                # the immediate one: post-dominated by all the others, i.e. its own pd set equals the candidates
+                for c in cand:
+                    if pd.get(c,{c})==cand: ip[n]=c; break
+            self._ipdom=ip
+        return self._ipdom[pc]
     def merge(self,cond,St,Sf):
         d=self.d; M=State()
         def sel(a,b): return a if a==b else d.op('sel',cond,a,b)

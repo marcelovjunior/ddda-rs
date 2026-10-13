@@ -33,7 +33,7 @@ ENTRY, END = 0x00860AC0, 0x008645A8  # code through RET 8 at 0x00864560 plus the
 SINCOS = (0x012F0906, 0x012F0BAC)
 BLEND, VSTUB, DECOMPOSE = 0x00CFDC80, 0x30000058, 0x00CFC9E0  # DECOMPOSE: rotation matrix -> three angles (stub; ECX = matrix, stack: output buffer)
 # lengths of the providers that can run as the original's real code (argv[3]: comma-separated addresses)
-REAL_LENGTH = {0x00864660: 0x1326, 0x00865990: 0x1a87, 0x00867420: 0x749, 0x00867B70: 0x48d, 0x00868000: 0x1251,
+REAL_LENGTH = {0x00CFDC80: 0x97B, 0x00864660: 0x1326, 0x00865990: 0x1a87, 0x00867420: 0x749, 0x00867B70: 0x48d, 0x00868000: 0x1251,
                0x00869260: 0xe99, 0x0086A100: 0xee3, 0x0086AFF0: 0x2e8, 0x0086B2E0: 0x1e9b, 0x0086D180: 0x418}
 REAL = set()
 # target: (stack arguments, output-buffer register, takes a pointer to the angle vector)
@@ -61,12 +61,14 @@ class Oracle:
         uc.mem_write(ENTRY, h.code(ENTRY, END - ENTRY))
         for target in PROVIDERS:
             uc.mem_write(target, h.code(target, REAL_LENGTH[target]) if target in REAL else bytes([0xc3]))
+        uc.mem_map(0x007E4000, 0x1000)
+        uc.mem_write(0x007E4B60, h.code(0x007E4B60, 0x144))  # quaternion -> matrix, called by mode 12
         uc.mem_map(0x00421000, 0x1000)
         uc.mem_write(0x00421ED0, h.code(0x00421ED0, 0x2F))  # joint accessor the aim provider calls
-        for page in (0x014F0000, 0x014F9000, 0x0150A000, 0x00CFD000, 0x00CFE000, 0x012F0000, 0x0144B000, 0x01521000, 0x01531000, 0x0161C000, 0x01629000):
+        for page in (0x01406000, 0x01407000, 0x014F0000, 0x014F9000, 0x0150A000, 0x00CFD000, 0x00CFE000, 0x012F0000, 0x0144B000, 0x01521000, 0x01531000, 0x0161C000, 0x01629000):
             uc.mem_map(page, 0x1000)
             uc.mem_write(page, h.code(page, 0x1000))
-        uc.mem_write(BLEND, b'\xc3')  # stub (the page's real bytes are not needed)
+        uc.mem_write(BLEND, h.code(BLEND, REAL_LENGTH[BLEND]) if BLEND in REAL else bytes([0xC3]))  # stub unless run as real code
         uc.mem_map(0x00CFC000, 0x1000)
         uc.mem_write(DECOMPOSE, bytes([0xC3]))
         uc.mem_map(0x30000000, 0x1000)
@@ -121,9 +123,9 @@ class Oracle:
             uc.emu_stop()
             return
         spec = PROVIDERS.get(address)
-        if (address in PROVIDERS and address not in REAL) or address in (BLEND, VSTUB, DECOMPOSE):
+        if (address in PROVIDERS and address not in REAL) or (address == BLEND and BLEND not in REAL) or address in (VSTUB, DECOMPOSE):
             return self.stub(uc, address, spec)
-        assert ENTRY <= address < END or 0x421ED0 <= address < 0x421EFF or SINCOS[0] <= address < SINCOS[1] or any(a <= address < a + REAL_LENGTH[a] for a in REAL), hex(address)
+        assert ENTRY <= address < END or 0x421ED0 <= address < 0x421EFF or 0x7E4B60 <= address < 0x7E4CA4 or SINCOS[0] <= address < SINCOS[1] or any(a <= address < a + REAL_LENGTH[a] for a in REAL), hex(address)
 
     def stub(self, uc, address, spec):
         esp = uc.reg_read(x.UC_X86_REG_ESP)
@@ -241,6 +243,8 @@ class Oracle:
         w(THIS + 0x54, struct.pack('<I', MODEL))
         w(THIS + 0xAC, struct.pack('<I', rng.choice((0xFF, 0xFF, 0, 1, 2, 3, 0x1FF))))
         w(JOINT + 0x93, bytes([rng.choice((0, 1, 2, 2, 3))]))
+        w(JOINT + 0x60, b''.join(f32(rng.uniform(-1, 1)) for _ in range(4)))   # mode 12: the joint's quaternion and scale
+        w(JOINT + 0x80, b''.join(f32(rng.choice((1.0, rng.uniform(0.2, 2)))) for _ in range(3)))
         for k in range(4):
             if rng.random() < 0.9:
                 w(JOINTS + 0xA0 * k + 0x10, self.matrix())
@@ -256,7 +260,9 @@ class Oracle:
         self.remember(esp, 12)
         before = dict(regs=self.regs())
         uc.emu_start(ENTRY, h.RET, count=100000)
-        self.remember(THIS + 0xC0, 12)  # the port loads mode 11's per-axis weights up front
+        # fields the ports load although the original reads them only on some paths (all live objects)
+        for a, n in ((THIS + 0x80, 24), (THIS + 0xC0, 12), (JOINT + 0x10, 64), (JOINT + 0x60, 16), (JOINT + 0x80, 12)) + tuple((JOINTS + 0xA0 * k + 0x10, 64) for k in range(4)) + ((JOINTS + index * 0xA0 + 0x10, 64),):
+            self.remember(a, n)
         after = dict(regs=self.regs(), memory=[(a, uc.mem_read(a, 1)[0]) for a in sorted(self.written)])
         return dict(seed=seed, mode=mode, before=before, initial=sorted(self.initial.items()), events=self.events, after=after)
 

@@ -21,7 +21,7 @@ import unicorn.x86_const as x  # noqa: E402
 REGS = [getattr(x, 'UC_X86_REG_' + n) for n in ('EAX', 'ECX', 'EDX', 'EBX', 'ESP', 'EBP', 'ESI', 'EDI')]
 STACK, SP = 0x0F000000, 0x0F008000
 # constant pages the providers read (identity matrix, epsilons, 0.5/2.0, sign mask, zero, one) and sinf/cosf with their tables
-DATA_PAGES = (0x014F0000, 0x014F9000, 0x0150A000, 0x01521000, 0x01531000, 0x0161C000, 0x01629000, 0x012F0000, 0x0144B000)
+DATA_PAGES = (0x01406000, 0x01407000, 0x014F0000, 0x014F9000, 0x0150A000, 0x01521000, 0x01531000, 0x0161C000, 0x01629000, 0x012F0000, 0x0144B000)
 IDENTITY = [1.0 if i % 5 == 0 else 0.0 for i in range(16)]
 
 
