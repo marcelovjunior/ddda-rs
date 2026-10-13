@@ -21,6 +21,11 @@
 //!   sent before that command (or at the frame's end), so the backend
 //!   receives everything in the executor's order. A job the backend
 //!   rejects is sent as the draws' DrawCalls instead.
+//! - `compare`: sends both decoded DrawCalls to the real D3D9 targets and
+//!   NativeJobs to pre-pass shadow targets. This compares backend paths;
+//!   the separate decode oracle test covers their shared nDraw decoder.
+//!   Original indexed merging is bypassed just as in `drawcall`/`1`, so
+//!   every compared record is offered to this sink.
 //!
 //! How a taken draw is decoded: the four apply functions' semantics
 //! (crates/mtstate, verified against the original on 17,928 D3D9 calls)
@@ -65,6 +70,9 @@ use mtdraw::sink::{CommandSink, Taken};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[path = "ndraw_compare.rs"]
+pub mod comparison;
+
 /// What `DDDRAW_NATIVE` asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -75,6 +83,8 @@ pub enum Mode {
     DrawCall,
     /// take them as native jobs
     Native,
+    /// D3D9 oracle on real targets, native jobs on pre-pass shadows.
+    Compare,
 }
 
 pub fn mode() -> Mode {
@@ -82,6 +92,7 @@ pub fn mode() -> Mode {
         Ok("census") => Mode::Census,
         Ok("drawcall") => Mode::DrawCall,
         Ok("1") => Mode::Native,
+        Ok("compare") => Mode::Compare,
         _ => Mode::Off,
     }
 }
@@ -799,6 +810,7 @@ struct Inner {
     scene: (u32, u32),
     caches: Caches,
     pending: Pending,
+    comparison: comparison::Comparison,
 }
 
 struct Native {
@@ -814,6 +826,7 @@ impl Native {
             inner: Mutex::new(Inner {
                 frame: Frame::default(), totals: Totals::default(), since: Instant::now(),
                 info: FrameInfo::default(), scene: (0, 0), caches: Caches::default(), pending: Pending::default(),
+                comparison: comparison::Comparison::default(),
             }),
             every,
         }
@@ -862,6 +875,9 @@ impl CommandSink for Native {
 
 impl Inner {
     fn send(&mut self) {
+        if self.comparison.is_active() {
+            crate::d3d9draw::backend_unlocked(|b| self.comparison.finish(b));
+        }
         if let Some((n, accepted)) = self.pending.send() {
             self.totals.jobs += 1;
             if accepted {
@@ -918,6 +934,20 @@ impl Native {
                     Taken::Default
                 }
                 Ok(native) => {
+                    if self.mode == Mode::Compare {
+                        // Finish before any upload can replace resources used
+                        // by an earlier draw in the pending shadow pass.
+                        let dirty = objects(|o| reads.iter().any(|r| o.dirty.contains(r)));
+                        if dirty {
+                            crate::d3d9draw::backend_unlocked(|b| g.comparison.finish(b));
+                        }
+                        crate::d3d9draw::flush_reads(m, reads);
+                        crate::d3d9draw::backend_unlocked(|b| g.comparison.draw(b, native, &d));
+                        t.taken += 1;
+                        drop(lock);
+                        t.decode += started.elapsed();
+                        return Taken::Handled;
+                    }
                     crate::d3d9draw::flush_reads(m, reads);
                     g.pending.push(native, d);
                     t.taken += 1;
@@ -958,6 +988,11 @@ impl Inner {
         t.targets += f.targets.len() as u64;
         if g.since.elapsed() >= every {
             report(mode, t);
+            if mode == Mode::Compare {
+                let c = std::mem::take(&mut g.comparison.stats);
+                eprintln!("ndraw native compare: begun={} submitted={} rejected={} oracle_draws={} shadow_draws={} (GPU verification reported asynchronously)",
+                    c.begun, c.submitted, c.rejected, c.oracle_draws, c.shadow_draws);
+            }
             *t = Totals::default();
             g.since = Instant::now();
         }

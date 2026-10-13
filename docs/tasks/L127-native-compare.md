@@ -6,9 +6,10 @@ no game execution, lifted-shard build, or writes to the installed game.
 
 ## Scope and integration contract
 
-- L119 / claude-2 selects `DDDRAW_NATIVE=compare`, emits a FIFO
-  `NativeCompareBegin` before the oracle's first attachment write, keeps
-  D3D9 oracle draws, then sends the matching single-pass NativeJob.
+- L127's follow-up to the L119 sink (head board #11263) selects
+  `DDDRAW_NATIVE=compare`, emits a FIFO `NativeCompareBegin` before the
+  oracle's first attachment write, keeps D3D9 oracle draws, then sends
+  the matching single-pass NativeJob.
 - L126 / codex-9 owns transport and backend worker: snapshot real color
   and depth/stencil to same-format shadow attachments before the oracle,
   execute the native pass into shadows, and submit comparisons. Keep
@@ -38,6 +39,24 @@ shadowing is outside the first worker adapter's supported set.
 PNG output is optional in the assignment and is not implemented in this
 batch. No game data or private captures belong in the repository.
 
+## Producer semantics
+
+The real targets receive L119's decoded DrawCalls through the D3D9 backend;
+shadows receive NativeJobs. This is a backend-path comparison, not an
+independent re-decoding of the command record. L119's separate oracle test
+checks its decoded DrawCall against the runtime's original D3D9 call path.
+Returning the command to the original executor here would be incorrect:
+its indexed-draw merging can skip the sink for subsequent merged records.
+Comparison therefore handles the same records as the native/drawcall sink.
+
+Comparison ends at attachment changes, fallback commands, frame end, and
+before dirty uploads can replace pending native input resources. Begin or
+end rejection never repeats a D3D9 draw: the oracle executes exactly once.
+Pass IDs increase across frames. Producer diagnostics distinguish begun,
+submitted, rejected, oracle draws and shadow draws. Submitted is not GPU
+verified; GPU summaries arrive separately. Only the first 16 producer
+rejection details per reporting interval print; all refusals count.
+
 ## Results
 
 Step 1: four focused Vulkan tests pass (0.39-0.94 s each), each with a
@@ -52,6 +71,12 @@ The scale fixture checks 128 pending target summaries (8 at 1920x1080,
 submissions and polling; this is a synthetic diagnostic, not a frame cost
 or FPS claim. Production code never calls `PollType::Wait`.
 
-L119 producer and L126 worker integration remain in progress. Runtime
-light suite follows source handoff. In-game verification belongs to the
-head; no gameplay equivalence has been claimed.
+Step 2: compare producer and **three pure transport tests pass**, covering
+marker ordering, subresource splits, rejection without duplicate oracle
+draws, and deferred FIFO ordering across uploads/fallbacks. The first
+runtime light suite (before L119 integration) is **173 pass / one inherited
+fullscreen-gamma failure / three ignored**, all 25 test targets reached.
+No checks weakened. A final integrated suite follows worker integration.
+
+L126 worker integration remains in progress. In-game verification belongs
+to the head; no gameplay equivalence has been claimed.

@@ -2176,3 +2176,10 @@ opening (codex-31), route perf (codex-29).
 - Four focused Vulkan tests and one CPU summary test pass. Scale fixture: 128 pending targets, 16,650,240 pixels, 2,048 readback bytes; 58.73 ms synthetic diagnostic (no gameplay/FPS claim).
 - Next: integrate L119 compare sink and L126 pre-oracle shadow lifecycle, run light runtime suite, then head-run in-game comparison. Details: docs/tasks/L127-native-compare.md.
 
+
+### L127 compare producer (2026-10-13)
+
+- DDDRAW_NATIVE=compare now emits pre-oracle begin and single-pass end markers from the L119 sink. Real targets receive D3D9 exactly once; rejected comparisons never redraw them. Attachment/fallback/frame boundaries and dirty uploads close pending comparisons.
+- Three pure transport tests pass, including DeferredBackend FIFO and rejection recovery. Earlier light runtime:173 pass,1 inherited fullscreen-gamma failure,3 ignored. Backend-path oracle shares L119 decoder, separately checked against runtime D3D9 calls.
+- Next: validate synthetic NativeJobs after L126 shadow hooks land, then head's in-game run. No gameplay equivalence claim.
+
