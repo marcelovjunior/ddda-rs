@@ -506,3 +506,78 @@ pub fn find_identifier(m: &mut dyn Mem, c: &mut Cpu) {
         .unwrap_or(0);
     c.esp = c.esp.wrapping_add(4);
 }
+
+// Translated from 0x00dd42c0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00DD42C0, `this->dispatch(event)` (thiscall, `ret 4`): hand `event`
+/// to every live listener of the `this + 0x4cd48` listeners (0x6e0 bytes
+/// each from `this + 0x30`) that matches it, then walk up to the event's
+/// parent id and repeat, at most `this[0x4cd50]` levels.
+///
+/// A listener is live when it has a handle (+4) and is not in state 2
+/// (+8), or its state is 1 or 5, or its weight (+0xc8) is above the
+/// constant at 0x01561738. It matches when its owner (+0xc), id (+0x14)
+/// and channel (+0x18) equal the event's (+0x30, +4 then the parents,
+/// +8), an event value of 0 (owner) or -1 (id, channel) matching any.
+/// A match calls 0x00DCC3E0 `this->deliver(listener, event)`, which may
+/// change the listeners, so the count is read again after every one. The
+/// parent of an id comes from 0x00F73B90 on the event's owner.
+pub fn dispatch_event(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (this, entry) = (c.ecx, c.esp);
+    let event = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // the original's frame after its five pushes: its calls are made here
+    let frame = entry.wrapping_sub(0x14);
+    let weight_floor = f32::from_bits(pg.u32(m, 0x0156_1738));
+    let mut id = pg.u32(m, event.wrapping_add(4));
+    let mut level = 0u32;
+    loop {
+        let mut i = 0u32;
+        while i < pg.u32(m, this.wrapping_add(0x4cd48)) {
+            let listener = this.wrapping_add(0x30).wrapping_add(i.wrapping_mul(0x6e0));
+            let state = pg.u32(m, listener.wrapping_add(8));
+            let live = (pg.u32(m, listener.wrapping_add(4)) != 0 && state != 2)
+                || state == 1
+                || state == 5
+                || f32::from_bits(pg.u32(m, listener.wrapping_add(0xc8))) > weight_floor;
+            if live {
+                let owner = pg.u32(m, event.wrapping_add(0x30));
+                let channel = pg.u32(m, event.wrapping_add(8));
+                let matches = (owner == pg.u32(m, listener.wrapping_add(0xc)) || owner == 0)
+                    && (id == pg.u32(m, listener.wrapping_add(0x14)) || id == u32::MAX)
+                    && (channel == pg.u32(m, listener.wrapping_add(0x18)) || channel == u32::MAX);
+                if matches {
+                    (c.ebx, c.ebp, c.esi, c.edi) = (i, id, listener.wrapping_add(8), event);
+                    call_from(m, c, pg, frame, this, &[listener, event], 0x00dd_4377, |m, c| {
+                        ddnative_base::x86::call_ext(m, c, 0x00dc_c3e0)
+                    });
+                }
+            }
+            i += 1;
+        }
+        let owner = pg.u32(m, event.wrapping_add(0x30));
+        let mut parent = u32::MAX;
+        if owner != 0 {
+            (c.ebx, c.ebp, c.esi, c.edi) = (i, id, this.wrapping_add(0x38).wrapping_add(i.wrapping_mul(0x6e0)), event);
+            let found = call_from(m, c, pg, frame, owner, &[id], 0x00dd_439b, |m, c| {
+                ddnative_base::x86::call_ext(m, c, 0x00f7_3b90)
+            });
+            if found != 0 {
+                let up = pg.u16(m, found.wrapping_add(0x1c)) as i16 as i32 as u32;
+                if up != id {
+                    parent = up;
+                }
+            }
+        }
+        if pg.u8(m, event.wrapping_add(0x2c)) == 0 || parent == u32::MAX {
+            break;
+        }
+        id = parent;
+        level += 1;
+        if level > pg.u32(m, this.wrapping_add(0x4cd50)) {
+            break;
+        }
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(8);
+}
