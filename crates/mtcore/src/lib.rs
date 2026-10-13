@@ -67,4 +67,5 @@ pub mod semantic_s7_math;
 pub mod semantic_s7_trig;
 pub mod semantic_s7_collision;
 pub mod semantic_s7_falloff;
+pub mod semantic_s8_sweep;
 pub mod tree;
