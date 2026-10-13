@@ -34,7 +34,8 @@ The source trace SHA-256 is included in JSON.
 Wake count is not configured participation: `DBE599` bypasses worker wakes
 for a single queued job, and `DBE5E5` conditionally wakes each slot. Old
 traces without the Batch `participants` field therefore report null for
-active count and jobs/participant. L158 owner asked to add +98 at #13252.
+active count and jobs/participant. L158 owner added +98, configured +9C
+and dispatch mode at #13257 (commit pending their post-pause gate).
 
 The gaps are **not proof of kernel idleness or unclaimed queue entries**:
 claiming and dispatch are outside callback boundaries. They include wake,

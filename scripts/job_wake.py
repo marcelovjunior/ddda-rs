@@ -75,6 +75,7 @@ def batch_timeline(ident, batch, end, jobs, pairs, joins):
     return {"batch": ident, "frame": batch["frame"], "queued": batch["queued"],
             "signaled_workers": len(pairs), "signaled_lanes_with_main": len(pairs) + 1,
             "participants": participants,
+            "configured_participants": batch.get("configured"), "mode": batch.get("mode"),
             "workers_with_callbacks": sum(p["worker_jobs"] > 0 for p in pairs),
             "jobs_per_participant": batch["queued"] / participants if participants else None,
             "batch_ns": end["ns"] - batch["ns"],

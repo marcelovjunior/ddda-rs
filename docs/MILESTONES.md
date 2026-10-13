@@ -1,5 +1,20 @@
 # Milestones
 
+### L162 original job participation and wake diagnostics (2026-10-13)
+
+- Opt-in `DDRUNTIME_JOB_PARTICIPANTS=1..8` calls original `00DBD620`
+  after construction; original CPU/eight clamp and frame activation remain.
+  No cap patch. Intended head A/B: seven vs eight participants, main included.
+- Wake analyzer reports per-batch jobs/participants, callback gaps,
+  final-job solo tails and join overlaps; **13 parser tests pass**.
+  Signaled lanes are distinct from active participation (one-job bypass).
+- Initial runtime library **86 pass / inherited Present timing failure /
+  five ignored**, including two new ABI/configuration tests passing.
+  Full light gate paused during head combo30; actual wake latency and
+  performance/image acceptance pending. No speculative sync fix.
+- Next: head capture with L158 and this setter, exact env in
+  `docs/tasks/L162-job-wake.md`; analyze matched 7/8 joins and hashes.
+
 ### L160 job worker sizing and wake analysis (2026-10-13)
 
 - Original constructor caps participation at min(CPUs,8), minus one for
