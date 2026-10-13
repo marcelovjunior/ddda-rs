@@ -201,6 +201,7 @@ SSE = ["{ let a = esp.wrapping_add(0x10); xmm1 = [m.u32(a), m.u32(a.wrapping_add
        "m.u32(a.wrapping_add(12))]; for k in 0..4 { let (d, s) = (xmm3[k], s[k]); xmm3[k] = d ^ s; } }",
        "{ let a = esp.wrapping_add(0x20); xmm4 = [m.u32(a), m.u32(a.wrapping_add(4)), 0, 0]; }",
        "{ let a = esp.wrapping_sub(0x20); for k in 0..4u32 { m.set_u32(a.wrapping_add(4 * k), xmm2[k as usize]); } }",
+       "{ let a = esp.wrapping_sub(0x30); m.set_u32(a, xmm4[0]); m.set_u32(a.wrapping_add(4), xmm4[1]); }",
        "edx = m.u32(0u32.wrapping_add(0x2468));"]
 
 
@@ -210,7 +211,7 @@ class Differential(unittest.TestCase):
         arms = [
             "0x1000 => { " + " ".join([
                 push("ebp"), alu("add", "eax", "0x1u32"), alu("sub", "ecx", "eax"), alu("and", "edx", "0x7Fu32", 8),
-                shl("ebx", "ecx"), alu("xor", "esi", "esi"), inc("edi"),
+                shl("ebx", "ecx"), shl("esi", "0x2u32"), alu("xor", "edi", "esi"), inc("edi"),
                 alu("sub", "", "0x4u32", mem="esp.wrapping_add(0x4)"), alu("or", "ebp", "eax", 16), *SSE, alu("cmp", "eax", "ecx"),
                 'pc = if fl.cond("e") { 0x1020 } else { 0x1010 }; continue; }']),
             "0x1010 => { " + " ".join([
@@ -224,6 +225,7 @@ class Differential(unittest.TestCase):
                 f"(|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_ext(m, cpu, 0x402000))(m, cpu); {L}",
                 alu("sub", "edx", "eax"), alu("xor", "eax", "edx"), shl("eax", "0x3u32"),
                 f"{{ let t = edx; esp = esp.wrapping_sub(4); m.set_u32(esp, 0x1040); {S} x86::call_ext(m, cpu, t); {L} }}",
+                f"{{ let t = 0x403000u32; esp = esp.wrapping_sub(4); m.set_u32(esp, 0x1050); {S} x86::call_ext(m, cpu, t); {L} }}",
                 alu("cmp", "eax", "0x5u32"), pop("ecx"), f"esp = esp.wrapping_add(4 + 0); {S} return; }}"]),
         ]
         try:
@@ -234,11 +236,16 @@ class Differential(unittest.TestCase):
         finally:
             lift.LEAN = True
         for wanted in ("emit::push(", "emit::pop(", "cpu.eax = cpu.eax.wrapping_add(0x1u32);",
-                       "x86::call_ext(m, cpu, 0x402000);", "emit::load128(m, pt, a)", "emit::load64(m, pt, a)",
-                       "emit::store128(cpu.xmm[2], m, pt, a);", "cpu.xmm[1] = x86::mulps(cpu.xmm[1], cpu.xmm[2]);",
+                       "x86::call_ext(m, cpu, 0x402000);", "cpu.xmm[1] = emit::load128(m, pt, cpu.esp.wrapping_add(0x10));",
+                       "cpu.xmm[4] = emit::load64(m, pt, cpu.esp.wrapping_add(0x20));",
+                       "emit::store128(cpu.xmm[2], m, pt, cpu.esp.wrapping_sub(0x20));",
+                       "emit::store64(cpu.xmm[4], m, pt, cpu.esp.wrapping_sub(0x30));",
+                       "cpu.esi = cpu.esi << 0x2u32;", "cpu.edi = cpu.edi.wrapping_add(1);",
+                       "emit::push(0x1050, m, pt, cpu); x86::call_ext(m, cpu, 0x403000u32);",
+                       "let n = 0x3u32; let r = (a << n) & u32::MAX; cpu.fl = Flags::new(x86::SHL", "cpu.xmm[1] = x86::mulps(cpu.xmm[1], cpu.xmm[2]);",
                        "cpu.xmm[3] = x86::addps(cpu.xmm[3], cpu.xmm[3]);",
                        "cpu.xmm[2] = emit::andnps(cpu.xmm[2], cpu.xmm[1]);",
-                       "cpu.xmm[3] = emit::xorps(cpu.xmm[3], s);", "m.fast_u32(pt, 0x2468u32)"):
+                       "cpu.xmm[3] = emit::xorps(cpu.xmm[3], emit::load128(m, pt, cpu.ebx & 0xFF0u32));", "m.fast_u32(pt, 0x2468u32)"):
             self.assertIn(wanted, lean)
         self.assertNotIn("x86::SHL, a, n, r, 32); cpu.ebx", lean)  # dies: the xor overwrites it
         self.assertIn("x86::SHL, a, n, r, 32); cpu.eax", lean)  # live: cmp is past a call

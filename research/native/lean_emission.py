@@ -203,65 +203,110 @@ def dead_flags(arm):
     return fold_results("".join(out))
 
 
-# a plain block: after a statement, a block or an arm head, never an `if`
-# (group 1 keeps that prefix)
-PLAIN = r"(^|[;{}] *|=> *)"
-FOLD = re.compile(r"" + PLAIN + r"\{ let r = ([^;{}\"]*); (cpu\.(?:" + "|".join(GPR) + r")) = r; \}")
+# A plain block: after a statement, a block or an arm head, never an `if`
+# body. Zero-width, so adjacent matches all apply.
+PLAIN = r"(?:(?<=[;{}])|(?<=[;{}] )|(?<=[;{}]  )|(?<==> )|^)"
+REG = r"cpu\.(?:" + "|".join(GPR) + r")"
+XMM = r"cpu\.xmm\[[0-7]\]"
+FOLD = re.compile(PLAIN + r"\{ let r = ([^;{}\"]*); (" + REG + r") = r; \}")
 
 
 def fold_results(arm):
     """`{ let r = E; cpu.R = r; }` -> `cpu.R = E;` (E has no side effect on
     cpu.R, and is evaluated before the store either way)."""
-    return FOLD.sub(lambda m: f"{m[1]}{m[3]} = {m[2]};", arm)
+    return FOLD.sub(lambda m: f"{m[2]} = {m[1]};", arm)
 
 
-PUSH = re.compile(r"" + PLAIN + r"\{ let v = ([^;{}\"]*); cpu\.esp = cpu\.esp\.wrapping_sub\(4\); m\.fast_set_u32\(pt, cpu\.esp, v\); \}")
+CONST_SHIFT = re.compile(r"let n = (0x[0-9A-F]+)u32 & 31; if n != 0 \{ ([^{}]*) \} \}")
+
+
+def const_shifts(arm):
+    """SHL/SHR/SAR by an immediate: `let n = imm & 31; if n != 0 { .. }`
+    with a nonzero masked count always runs its body, so the body (and its
+    flag write, which then kills like any other) is emitted unconditionally.
+    A zero count stays as it is (no effect, flags unchanged)."""
+    def replace(m):
+        n = int(m[1], 16) & 31
+        return f"let n = 0x{n:X}u32; {m[2]} }}" if n else m[0]
+    return CONST_SHIFT.sub(replace, arm)
+
+
+DROP_R = re.compile(PLAIN + r"\{ let r = (cpu\.fl\.alu_(?:add|sub|and|or|xor)\([^;{}\"]*\)); \}")
+INC_DEC = re.compile(PLAIN + r"\{ let a = (" + REG + r") & u32::MAX; let r = a\.(wrapping_add|wrapping_sub)\(1\) & u32::MAX; \1 = r; \}")
+SHIFT = re.compile(PLAIN + r"\{ let a = (" + REG + r") & u32::MAX; let n = (0x[0-9A-F]+u32); let r = \(a (<<|>>) n\) & u32::MAX; \1 = r; \}")
+
+
+def tidy(arm):
+    """Blocks the dead-flag pass left trivial: a compare whose result is
+    unused (CMP/TEST: only the flags), a 32-bit INC/DEC or SHL/SHR by an
+    immediate without its flag write."""
+    arm = DROP_R.sub(lambda m: f"{m[1]};", arm)
+    arm = INC_DEC.sub(lambda m: f"{m[1]} = {m[1]}.{m[2]}(1);", arm)
+    return SHIFT.sub(lambda m: f"{m[1]} = {m[1]} {m[3]} {m[2]};", arm)
+
+
+PUSH = re.compile(PLAIN + r"\{ let v = ([^;{}\"]*); cpu\.esp = cpu\.esp\.wrapping_sub\(4\); m\.fast_set_u32\(pt, cpu\.esp, v\); \}")
 PUSH_CONST = re.compile(r"cpu\.esp = cpu\.esp\.wrapping_sub\(4\); m\.fast_set_u32\(pt, cpu\.esp, (0x[0-9A-F]+)\);")
-POP = re.compile(r"" + PLAIN + r"\{ let v = m\.fast_u32\(pt, cpu\.esp\); cpu\.esp = cpu\.esp\.wrapping_add\(4\); ")
-POP_REG = re.compile(r"\{ let v = emit::pop\(m, pt, cpu\); (cpu\.(?:" + "|".join(GPR) + r")) = v; \}")
+POP = re.compile(PLAIN + r"\{ let v = m\.fast_u32\(pt, cpu\.esp\); cpu\.esp = cpu\.esp\.wrapping_add\(4\); ")
+POP_REG = re.compile(r"\{ let v = emit::pop\(m, pt, cpu\); (" + REG + r") = v; \}")
 CLOSURE = re.compile(r"\(\|m: &mut dyn Mem, cpu: &mut Cpu\| (x86::call_(?:lifted|ext)\(m, cpu, 0x[0-9A-F]+\))\)\(m, cpu\)")
+# a constant call_ext target needs no binding before the return address
+CALL_CONST = re.compile(PLAIN + r"\{ let t = (0x[0-9A-F]+u32); (emit::push\(0x[0-9A-F]+, m, pt, cpu\);) +x86::call_ext\(m, cpu, t\); +\}")
+ABSOLUTE = re.compile(r"\b0u32\.wrapping_add\((0x[0-9A-F]+)\)")  # 0 + disp: an absolute address
 
 
 def idioms(arm):
     """Push/pop through ddnative_base::emit, direct call targets."""
-    arm = PUSH.sub(lambda m: f"{m[1]}emit::push({m[2]}, m, pt, cpu);", arm)
+    arm = PUSH.sub(lambda m: f"emit::push({m[1]}, m, pt, cpu);", arm)
     arm = PUSH_CONST.sub(lambda m: f"emit::push({m[1]}, m, pt, cpu);", arm)
-    arm = POP.sub(lambda m: m[1] + "{ let v = emit::pop(m, pt, cpu); ", arm)
+    arm = POP.sub("{ let v = emit::pop(m, pt, cpu); ", arm)
     arm = POP_REG.sub(lambda m: f"{m[1]} = emit::pop(m, pt, cpu);", arm)
     arm = CLOSURE.sub(lambda m: m[1], arm)
+    arm = CALL_CONST.sub(lambda m: f"{m[2]} x86::call_ext(m, cpu, {m[1]});", arm)
     arm = ABSOLUTE.sub(lambda m: f"{m[1]}u32", arm)
     return sse(arm)
 
 
-XMM = r"cpu\.xmm\[[0-7]\]"
-ABSOLUTE = re.compile(r"\b0u32\.wrapping_add\((0x[0-9A-F]+)\)")  # 0 + disp: an absolute address
 LOAD128 = re.compile(r"\[m\.fast_u32\(pt, a(?:\.wrapping_add\(0\))?\), m\.fast_u32\(pt, a\.wrapping_add\(4\)\), "
                      r"m\.fast_u32\(pt, a\.wrapping_add\(8\)\), m\.fast_u32\(pt, a\.wrapping_add\(12\)\)\]")
 LOAD64 = re.compile(r"\[m\.fast_u32\(pt, a(?:\.wrapping_add\(0\))?\), m\.fast_u32\(pt, a\.wrapping_add\(4\)\), 0, 0\]")
 STORE128 = re.compile(r"for k in 0\.\.4u32 \{ m\.fast_set_u32\(pt, a\.wrapping_add\(4 \* k\), (" + XMM + r")\[k as usize\]\); \}")
+STORE64 = re.compile(r"m\.fast_set_u32\(pt, a, (" + XMM + r")\[0\]\); m\.fast_set_u32\(pt, a\.wrapping_add\(4\), \1\[1\]\);")
 LANES_FLOAT = re.compile(r"for k in 0\.\.4 \{ (" + XMM + r")\[k\] = x86::(add|sub|mul)ss\(\1\[k\], (" + XMM + r")\[k\]\); \}")
 LANES_LOGIC = re.compile(r"for k in 0\.\.4 \{ let \(d, s\) = \((" + XMM + r")\[k\], (" + XMM + r"|s)\[k\]\); \1\[k\] = "
                          r"(d \^ s|d & s|d \| s|!d & s); \}")
 LOGIC = {"d ^ s": "xor", "d & s": "and", "d | s": "or", "!d & s": "andn"}
+# a single-use address binding (`let a`) folded into the one helper call
+ADDRESS = r"\{ let a = ([^;{}\"]*); "
+A_LOAD = re.compile(PLAIN + ADDRESS + r"(" + XMM + r") = (emit::load(?:128|64))\(m, pt, a\); \}")
+A_LOAD_EXPR = re.compile(ADDRESS + r"(emit::load(?:128|64))\(m, pt, a\) \}")
+A_STORE = re.compile(PLAIN + ADDRESS + r"(emit::store(?:128|64))\((" + XMM + r"), m, pt, a\); \}")
+A_LOGIC = re.compile(PLAIN + ADDRESS + r"let s = emit::load128\(m, pt, a\); (" + XMM + r") = (emit::\w+ps)\(\2, s\); \}")
 
 
 def sse(arm):
-    """Packed SSE templates: the 16/8-byte loads and the 16-byte store as
-    one call each (same accesses in the same order), the lane loops of
-    ADDPS/SUBPS/MULPS xmm, xmm as the packed helper the memory form already
-    uses (the original instruction, one host MULPS instead of four MULSS:
-    per-lane IEEE results and the sticky MXCSR flags are the same), and
-    the bitwise lane loops as emit helpers."""
-    if "a" in arm:
-        arm = LOAD128.sub("emit::load128(m, pt, a)", arm)
-        arm = LOAD64.sub("emit::load64(m, pt, a)", arm)
-        arm = STORE128.sub(lambda m: f"emit::store128({m[1]}, m, pt, a);", arm)
-    if "for k" in arm:
-        arm = LANES_FLOAT.sub(lambda m: f"{m[1]} = x86::{m[2]}ps({m[1]}, {m[3]});", arm)
-        arm = LANES_LOGIC.sub(lambda m: f"{m[1]} = emit::{LOGIC[m[3]]}ps({m[1]}, {m[2]});", arm)
+    """Packed SSE templates: the 16/8-byte loads and stores as one call
+    each (same accesses in the same order), the lane loops of ADDPS/SUBPS/
+    MULPS xmm, xmm as the packed helper the memory form already uses (the
+    original instruction, one host MULPS instead of four MULSS: per-lane
+    IEEE results and the sticky MXCSR flags are the same), and the bitwise
+    lane loops as emit helpers. The address is evaluated before the access
+    either way, and neither reads nor writes what the other uses."""
+    if "let a = " not in arm and "for k" not in arm:
+        return arm
+    arm = LOAD128.sub("emit::load128(m, pt, a)", arm)
+    arm = LOAD64.sub("emit::load64(m, pt, a)", arm)
+    arm = STORE128.sub(lambda m: f"emit::store128({m[1]}, m, pt, a);", arm)
+    arm = STORE64.sub(lambda m: f"emit::store64({m[1]}, m, pt, a);", arm)
+    arm = LANES_FLOAT.sub(lambda m: f"{m[1]} = x86::{m[2]}ps({m[1]}, {m[3]});", arm)
+    arm = LANES_LOGIC.sub(lambda m: f"{m[1]} = emit::{LOGIC[m[3]]}ps({m[1]}, {m[2]});", arm)
+    arm = A_LOAD.sub(lambda m: f"{m[2]} = {m[3]}(m, pt, {m[1]});", arm)
+    arm = A_LOAD_EXPR.sub(lambda m: f"{m[2]}(m, pt, {m[1]})", arm)
+    arm = A_STORE.sub(lambda m: f"{m[2]}({m[3]}, m, pt, {m[1]});", arm)
+    arm = A_LOGIC.sub(lambda m: f"{m[2]} = {m[3]}({m[2]}, emit::load128(m, pt, {m[1]}));", arm)
     return arm
 
 
 def lean(arm):
     """All lean passes, in order, for one lowered whole-function arm."""
-    return idioms(fold_results(dead_flags(arm)))
+    return idioms(tidy(fold_results(dead_flags(const_shifts(arm)))))

@@ -71,3 +71,11 @@ pub fn orps(d: [u32; 4], s: [u32; 4]) -> [u32; 4] {
 pub fn andnps(d: [u32; 4], s: [u32; 4]) -> [u32; 4] {
     [!d[0] & s[0], !d[1] & s[1], !d[2] & s[2], !d[3] & s[3]]
 }
+
+/// 8-byte store of the low half (MOVQ/MOVSD m64, xmm): lane 0 to a, then
+/// lane 1 to a+4.
+#[inline]
+pub fn store64(x: [u32; 4], m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) {
+    m.fast_set_u32(pt, a, x[0]);
+    m.fast_set_u32(pt, a.wrapping_add(4), x[1]);
+}
