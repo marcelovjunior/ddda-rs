@@ -71,7 +71,7 @@ fn stack_args(target: u32) -> u32 {
 }
 
 /// Run `body` on every case of `path`.
-fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu)) -> usize {
+fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu), matrix_at: u32, returns: bool) -> usize {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
@@ -132,6 +132,9 @@ fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu)) -> usize {
         body(&mut m, &mut c);
         x86::set_ext_calls(None);
         assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
+        if returns {
+            assert_eq!(c.eax, after[EAX], "case {i}: eax");
+        }
         let got = [c.ebx, c.esp, c.ebp, c.esi, c.edi];
         let want = [after[EBX], after[ESP], after[EBP], after[ESI], after[EDI]];
         assert_eq!(got, want, "case {i}: ebx/esp/ebp/esi/edi");
@@ -144,7 +147,7 @@ fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu)) -> usize {
         // original's).
         let mut nan_words = Vec::new();
         for k in 0..16u32 {
-            let at = JOINT + 0x10 + 4 * k;
+            let at = matrix_at + 4 * k;
             if let (Some(want), Some(got)) = (word(&expected, at), word(&m.bytes, at)) {
                 let is_nan = |w: u32| w & 0x7fff_ffff > 0x7f80_0000;
                 if is_nan(want) && is_nan(got) {
@@ -175,6 +178,15 @@ fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu)) -> usize {
 fn semantic_motion_filter_matches_original() {
     ddnative_host::install();
     let path = std::env::var("L184_S6_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/motfilter.json".into());
-    let cases = motion_filter_cases(&path, mtcore::semantic_s6::motion_filter_apply);
+    let cases = motion_filter_cases(&path, mtcore::semantic_s6::motion_filter_apply, JOINT + 0x10, false);
     eprintln!("{cases} ABI-level motion filter cases passed");
+}
+
+// verifies 0x00829ec0 (ABI level): the aim and twist pose builder
+#[test]
+fn semantic_aim_pose_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("L184_S6_AIM_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/aimpose.json".into());
+    let cases = motion_filter_cases(&path, mtcore::semantic_s6_aim::aim_pose, 0x2600_0000, true);
+    eprintln!("{cases} ABI-level aim pose cases passed");
 }

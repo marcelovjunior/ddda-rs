@@ -365,8 +365,16 @@ pub fn invert4(m: &Mat4) -> Option<Mat4> {
     }
     let inverse_det = 1.0 / det;
     Some(std::array::from_fn(|k| {
-        // the checkerboard of signs: odd (row + column) is negated
-        let scaled = minors[k] * inverse_det;
-        if (k ^ (k >> 2)) & 1 != 0 { -scaled } else { scaled }
+        // The checkerboard of signs: an odd (row + column) is negated. The
+        // original multiplies the first row's cofactors from the left with
+        // the sign already applied and the others negated after the
+        // product; the values are the same, only a NaN's sign could differ.
+        let negative = (k ^ (k >> 2)) & 1 != 0;
+        if k < 4 {
+            inverse_det * if negative { -minors[k] } else { minors[k] }
+        } else {
+            let scaled = minors[k] * inverse_det;
+            if negative { -scaled } else { scaled }
+        }
     }))
 }
