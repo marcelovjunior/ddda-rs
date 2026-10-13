@@ -308,3 +308,57 @@ pub fn draw_cascades(m: &mut dyn Mem, c: &mut Cpu) {
     guest_call(m, c, pg, frame, this, &[ctx, 1], 0x00ef_dfc1, 0x00ee_a950);
     finish(c)
 }
+
+// Translated from 0x00ee2c90 (DDDA.exe 2017-12-13 Steam), uShadow::vf11.
+/// 0x00EE2C90, `shadow->draw(ctx)` (thiscall, `ret 4`): for a draw context
+/// whose pass flags (`ctx[0x16A] & 1`) ask for shadows, and a shadow that is
+/// not disabled (`this[0x78] == 0`), runs 0x00EDE9C0 `this->prepare(ctx)`
+/// and then the shadow's virtual method 0x60 `(ctx)`.
+pub fn draw_shadow(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let ctx = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.esi, c.edi);
+    // the original's frame after its two pushes
+    let frame = entry.wrapping_sub(8);
+    (c.esi, c.edi) = (this, ctx);
+    if pg.u8(m, ctx.wrapping_add(0x16a)) & 1 != 0 && pg.u8(m, this.wrapping_add(0x78)) == 0 {
+        guest_call(m, c, pg, frame, this, &[ctx], 0x00ee_2cad, 0x00ed_e9c0);
+        let target = pg.u32(m, pg.u32(m, this).wrapping_add(0x60));
+        guest_call(m, c, pg, frame, this, &[ctx], 0x00ee_2cb7, target);
+    }
+    (c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(8);
+}
+
+// Translated from 0x00db7620 (DDDA.exe 2017-12-13 Steam).
+/// 0x00DB7620, `unit->run_job(arg)` (thiscall, `ret 4`): the per-unit job the
+/// shadow traversal queues. When 0x00DA7DB0 `scheduler->nested()` (ECX =
+/// `[0x018D08F4]`) says no, it runs the unit's virtual method 0x2C `(arg)`;
+/// otherwise it tail-jumps to 0x00BFC7D0 with ECX = the scheduler, leaving
+/// the stack (return address and `arg`) to that function.
+pub fn run_unit_job(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let scheduler = pg.u32(m, 0x018d_08f4);
+    let saved = c.esi;
+    c.esi = this;
+    // the original's frame after its push of ESI
+    let frame = entry.wrapping_sub(4);
+    let nested = guest_call(m, c, pg, frame, scheduler, &[], 0x00db_762e, 0x00da_7db0) & 0xff != 0;
+    if !nested {
+        let arg = pg.u32(m, entry.wrapping_add(4));
+        let target = pg.u32(m, pg.u32(m, this).wrapping_add(0x2c));
+        guest_call(m, c, pg, frame, this, &[arg], 0x00db_7640, target);
+        c.esi = saved;
+        c.esp = entry.wrapping_add(8);
+    } else {
+        // jmp: the stack is as the caller left it
+        c.esi = saved;
+        c.esp = entry;
+        c.ecx = pg.u32(m, 0x018d_08f4);
+        call_guest(m, c, 0x00bf_c7d0);
+    }
+}

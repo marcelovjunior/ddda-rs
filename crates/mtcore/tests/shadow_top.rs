@@ -48,6 +48,8 @@ fn stack_args(target: u32) -> u32 {
         0x0120_0010 | 0x00fe_d890 => 1,
         0x00ed_e880 => 7,
         0x00ee_5ce0 => 6,
+        0x00ed_e9c0 | 0x3100_0060 | 0x3100_0020 | 0x00bf_c7d0 => 1,
+        0x00da_7db0 => 0,
         0x00ef_d240 => 3,
         0x00ee_a950 => 2,
         0x00ee_a130 | 0x0120_0030 => 3,
@@ -205,4 +207,20 @@ fn semantic_draw_cascades_matches_original() {
     let n = abi_cases_full("E:/ddda-re/notes/native-L172-p2d/cascades.json", mtcore::shadow_top::draw_cascades, false, &[]);
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
     eprintln!("{n} ABI-level draw_cascades cases passed");
+}
+
+// verifies 0x00ee2c90 (ABI level; void)
+#[test]
+fn semantic_draw_shadow_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L172-p2d/wrap_draw.json", mtcore::shadow_top::draw_shadow, false, &[]);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
+}
+
+// verifies 0x00db7620 (ABI level; ends in a tail jump, so ESP and EAX come from the callee)
+#[test]
+fn semantic_run_unit_job_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L172-p2d/wrap_job.json", mtcore::shadow_top::run_unit_job, true, &[]);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
 }
