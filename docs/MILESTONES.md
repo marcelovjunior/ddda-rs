@@ -9,7 +9,7 @@
 - Matched optimized 5,000 draws / 40 pipelines / 200 sampled sets, synthetic
   8,200 VS + 7,300 PS register writes/frame: full **1.644**, resident **1.264**,
   resident + bundles **0.843 us/draw**, including upload/finish/submit.
-  Three alternating repeats; bundle range 0.822–0.868. Uploads **15.67 MB ->
+  Three alternating repeats; bundle range 0.822â€“0.868. Uploads **15.67 MB ->
   340 KB/frame**. Minimal shaders; no gameplay/FPS claim.
 - **6 GPU tests / 11 CPU tests pass**; runtime light **171 pass / 1 inherited
   fullscreen gamma-reset failure / 3 ignored**. Core `e062d80a`.

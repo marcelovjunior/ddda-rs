@@ -935,3 +935,20 @@ round-trip tests pass; full light tests retain the independently reproduced
 fullscreen-gamma Reset failure. GPU tests/examples compile; execution gate
 is pending head's exclusive run. See the L90 brief for details and L97/L98
 merge notes.
+
+
+## L123 native resident constants and bundles (2026-10-13)
+
+Opt-in `ddgpu::native::Recorder::with_resident_constants(device, bytes, true)`
+preserves per-draw snapshot offsets while uploading only registers changed
+relative to the preceding submission. One compute scatter applies deltas
+before rendering on the same queue. `enable_bundles(true)` compares exact
+resource/draw/offset sequences; dynamic pass state splits them. Keep the
+recorder alive across submissions to retain caches. Existing `Recorder::new`
+and all setter/draw signatures remain compatible.
+
+Optimized synthetic 5,000-draw/40-pipeline/200-set, cap1-sized register churn:
+full 1.644 -> resident 1.264 -> resident + bundles 0.843 us/draw including
+upload/finish/submit; 15.67 MB -> 340 KB uploaded per frame. Six GPU tests and
+11 CPU tests pass. This is not game/FPS evidence. Head #11087 assigns L126's
+owned NativeJob/worker adapter next. See `tasks/L123-native-device-2.md`.
