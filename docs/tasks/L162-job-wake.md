@@ -6,6 +6,103 @@ Assigned by head/user 2026-10-13. Runtime only, no agent game/shard runs.
 
 ## Results
 
+### L162e: whole FEE320 capture and timing checkpoint (2026-10-13)
+
+**Implemented, isolated-tested; real capture and native decision pending.**
+This batch installs no native FEE320 replacement and makes no speedup claim.
+The earlier sampled stacks cannot supply its precise wall-time share or
+real inputs. L158's existing leaf corpus is synthetic, not a gameplay
+snapshot (codex-7 confirmed board #13680). No game/GPU/shard execution here.
+
+`DDRUNTIME_FEE320_TRACE=<private directory>` installs three observational
+wrappers: original frame `0041DD60`, shadow callback `00EE2C90`, and whole
+original lifted body `00FEE320`. Only callbacks whose object vtable is
+`0160DF98` (uSkyStableShadow) are selected. Existing frame wrappers are
+chained; a preexisting FEE320 port is rejected. No env switch means no
+wrappers. `DDRUNTIME_FEE320_FIRST` and `DDRUNTIME_FEE320_FRAMES` select
+application frame IDs (default 0/30). One exclusively-created JSON file
+per selected callback avoids overwritten captures. Use a new directory
+for every run. Dispatch hook coordination: claude-2 approved #13707.
+
+- **CAPTURE=0 (default):** the usual Mem/page table remains in place.
+  Records callback wall ns, FEE320 calls/inclusive ns, and top-level
+  external-call ns inside FEE320. Nested external calls are not double
+  counted. The remainder is caller work **plus instrumentation overhead**,
+  not uninstrumented CPU self time. Host descheduling remains included.
+- **CAPTURE=1:** the original lift runs once through a Mem observer with
+  the page-table bypass disabled. Each call records all 84 CPU words
+  (GPRs, all XMM lanes, lazy flags, segments, saved/live MXCSR, full x87),
+  ordered read/write values and widths, probes, allocation returns, and
+  entry/exit CPU at external-call boundaries. Access widths are forwarded
+  intact. Captured durations are deliberately excluded from cost reports.
+- External callees still run normally. Service effects through runtime
+  state or another memory reference are **not** comprehensively observed;
+  replay treats callees as explicit opaque contracts. This proves the
+  complete caller under those observed inputs/contracts, not the original
+  machine instructions or transitive platform implementation. Raw x87
+  host FIP/FDP are kept in captures but excluded from cross-process CPU
+  equality (two dwords only): ASLR/stack addresses differ; guest FNSAVE
+  uses instruction-supplied guest addresses in `x87.rs::fnsave`.
+- Logs bound events/bytes/call records and mark any truncation invalid.
+  The analyzer rejects panic, overflow, missing calls, unbalanced seams,
+  mixed modes/objects and incomplete/duplicate requested frame coverage.
+  The observer preserves MXCSR and parks/restores guest x87 ownership.
+
+`scripts/shadow_fee320.py --replay` extracts only FEE320 and its four
+generated block helpers into a private opt1 crate (base/host opt3). Its
+strict transcript Mem checks every caller access, write and external-call
+entry CPU, restores each recorded callee exit, and checks caller exit
+CPU and full transcript consumption. It is **not a performance harness**:
+transcript parsing/access checking must not be timed as generated-code
+execution. A Pages-backed memory corpus with fully represented callee
+effects is still needed for candidate throughput measurement. This limit
+and the reusable capture API were sent to codex-6 (#13724).
+The shared `capture_call`/`write_call` API also returns original panics for
+the caller to resume. Nested captures are rejected (`capturing()` lets a
+generic wrapper retain its original body instead); direct local/lifted
+call seams require further work for the ranked corpus. FEE320's own calls
+are external or redirected memcpy. Scope agreed on board #13743/#13754.
+
+**Verification:** 128 synthetic whole-lift record/replay cases pass, each
+also rejects a corrupted output CPU. Includes dirty-state copies, resource
+handles, allocation/shader seams, float/x87 writes and memcpy. Callee
+returns in these machinery tests are explicitly synthetic; no gameplay
+branch-coverage or original-instruction oracle claim. Five focused runtime
+tests pass (width/effects, CPU/MXCSR, limits, unwind, nested external seams), six Python analyzer
+tests pass. Full light suite: **259 reported passes / zero failures /
+seven ignored**, four build jobs, no incremental, `C:/ddda-targets/L162`.
+Private log: `E:/ddda-re/notes/native-L162e/light.log`. Game-feature hook
+integration still belongs to the head's one train build.
+The final shared-API refinement passes the focused runtime gate and all
+six isolated tests (five recorder checks plus the 128-case lift test).
+
+**Next required action (head only, after the user's playtest):** integrate
+this checkpoint and collect independent timing and oracle windows from
+the same route with other opt-ins fixed. Example uses frame 6600; choose
+the actual late-game application frame for the new run:
+
+```powershell
+$env:DDRUNTIME_FEE320_TRACE = 'E:/ddda-re/notes/native-L162e/timing-01'
+$env:DDRUNTIME_FEE320_FIRST = '6600'
+$env:DDRUNTIME_FEE320_FRAMES = '30'
+$env:DDRUNTIME_FEE320_CAPTURE = '0'
+# Head launches its integration executable, preserving build/env/exe hash.
+python scripts/shadow_fee320.py E:/ddda-re/notes/native-L162e/timing-01 --first 6600 --frames 30
+
+# Separate head run, new output directory, one frame to bound overhead:
+$env:DDRUNTIME_FEE320_TRACE = 'E:/ddda-re/notes/native-L162e/capture-01'
+$env:DDRUNTIME_FEE320_FRAMES = '1'
+$env:DDRUNTIME_FEE320_CAPTURE = '1'
+# Head launches its integration executable again.
+python scripts/shadow_fee320.py E:/ddda-re/notes/native-L162e/capture-01 --first 6600 --frames 1 --replay
+```
+
+The head must return the capture directories, actual frame selection,
+executable SHA-256, integration commit and full env. Then measure FEE320's
+inclusive and callee-excluded share before deciding whether a complete
+native Rust port can justify the required isolated >=1.5x gain. Neither
+that criterion nor a switch to another family member is established yet.
+
 ### L162d: exact long-callback identity and ownership (2026-10-13)
 
 **Analysis posted first:** board #13612, #13635; family split #13641 in

@@ -1,5 +1,17 @@
 # Milestones
 
+### L162e whole FEE320 capture prerequisite (2026-10-13)
+
+- Opt-in exact sky-shadow wrapper records FEE320 inclusive/external-call
+  wall time, or separately full lifted-caller CPU/ordered memory traces.
+  External callees remain explicit opaque contracts; no native port yet.
+- Isolated whole-lift machinery: 128 synthetic round trips and corruption
+  rejections pass; five runtime/six analyzer tests pass. Light suite:
+  259 reported passes, zero failures, seven ignored. No game/GPU/shards.
+- Real per-frame oracle, precise cost and >=1.5x candidate proof remain
+  open. Next: head's separate timing30/capture1 windows, after playtest;
+  protocol and limitations in `docs/tasks/L162-job-wake.md` (L162e).
+
 ### L162d sky-shadow critical callback attribution (2026-10-13)
 
 - Exact c31 h0 sky-shadow object: DB7620 -> EE2C90, uSkyStableShadow
