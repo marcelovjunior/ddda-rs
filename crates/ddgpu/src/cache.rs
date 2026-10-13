@@ -162,7 +162,10 @@ pub(crate) struct PipelineKey {
 
 /// A texture bind group: the stage and, per sampler, its number, view
 /// dimension, texture, sRGB read and sampler states.
-pub(crate) type TexGroupKey = (bool, Vec<(u32, u8, u32, bool, [u32; 14])>);
+pub(crate) type TexGroupKey = (bool, Vec<TexGroupEntry>);
+/// One sampler of a texture bind group: number, view dimension, texture,
+/// sRGB read, sampler states.
+pub(crate) type TexGroupEntry = (u32, u8, u32, bool, [u32; 14]);
 
 /// A target view: surface, texture, level, D3D format, sRGB view.
 /// A translated shader: (token hash, linked vertex shader hash, depth bias,

@@ -378,6 +378,11 @@ pub struct WgpuBackend {
     pipeline_layouts: cache::FxMap<(SamplerKinds, SamplerKinds), wgpu::PipelineLayout>,
     pipelines: cache::FxMap<PipelineKey, wgpu::RenderPipeline>,
     tex_groups: cache::FxMap<TexGroupKey, wgpu::BindGroup>,
+    /// per stage (0 pixel, 1 vertex): the last draw's bind group key and
+    /// group (L94b: a draw binding what the previous one bound takes no
+    /// lookup), and a reused buffer the key is built in
+    last_group: [(Vec<cache::TexGroupEntry>, Option<wgpu::BindGroup>); 2],
+    group_key: [Vec<cache::TexGroupEntry>; 2],
     target_views: cache::FxMap<TargetKey, Option<(wgpu::TextureView, wgpu::TextureFormat)>>,
     /// the draws' pipelines are created through this cache, kept on disk
     /// ([`enable_pipeline_cache`](Self::enable_pipeline_cache))
@@ -555,6 +560,8 @@ impl WgpuBackend {
             pipeline_layouts: Default::default(),
             pipelines: Default::default(),
             tex_groups: Default::default(),
+            last_group: Default::default(),
+            group_key: Default::default(),
             target_views: Default::default(),
             pipeline_cache: None,
         }
@@ -1721,22 +1728,47 @@ impl WgpuBackend {
                 snapshots.insert(b.resource, copy);
             }
         }
-        // texture bind groups, by what they bind
-        let mut groups = Vec::new();
-        for (kinds, layout, base, vs) in [(&ps_kinds, &layout1, 0u32, false), (&vs_kinds, &layout2, 257u32, true)] {
-            let mut gkey = Vec::with_capacity(kinds.len());
-            for &(n, kind) in kinds {
+        // texture bind groups, by what they bind. L94b: the key is built in
+        // a reused buffer and looked up without allocating; a stage whose key
+        // equals the previous draw's reuses its group without a lookup
+        let mut groups: [Option<wgpu::BindGroup>; 2] = [None, None];
+        for (stage, (kinds, layout, base, vs)) in [(&ps_kinds, &layout1, 0u32, false), (&vs_kinds, &layout2, 257u32, true)].into_iter().enumerate() {
+            let mut entries = std::mem::take(&mut self.group_key[stage]);
+            entries.clear();
+            for &(n, kind) in kinds.iter() {
                 match d.textures.iter().find(|t| t.sampler == base + n) {
-                    Some(b) => gkey.push((n, kind, b.resource, b.states[11] != 0, b.states)),
-                    None => return Err(format!("sampler s{n} has no texture bound")),
+                    Some(b) => entries.push((n, kind, b.resource, b.states[11] != 0, b.states)),
+                    None => {
+                        self.group_key[stage] = entries;
+                        return Err(format!("sampler s{n} has no texture bound"));
+                    }
                 }
             }
-            let gkey = (vs, gkey);
-            let feedback = gkey.1.iter().any(|e| snapshots.contains_key(&e.2));
-            if let Some(g) = self.tex_groups.get(&gkey).filter(|_| !feedback) {
-                groups.push(g.clone());
-                continue;
+            let feedback = !snapshots.is_empty() && entries.iter().any(|e| snapshots.contains_key(&e.2));
+            if !feedback {
+                let last = &self.last_group[stage];
+                if let (Some(g), true) = (&last.1, last.0 == entries) {
+                    groups[stage] = Some(g.clone());
+                    self.group_key[stage] = entries;
+                    continue;
+                }
+                let key = (vs, entries);
+                let found = self.tex_groups.get(&key).cloned();
+                let entries = key.1;
+                if let Some(g) = found {
+                    let last = &mut self.last_group[stage];
+                    last.0.clear();
+                    last.0.extend_from_slice(&entries);
+                    last.1 = Some(g.clone());
+                    groups[stage] = Some(g);
+                    self.group_key[stage] = entries;
+                    continue;
+                }
+                self.group_key[stage] = entries;
+            } else {
+                self.group_key[stage] = entries;
             }
+            let gkey = (vs, self.group_key[stage].clone());
             let mut views = Vec::new();
             for &(n, kind, _, srgb_read, states) in &gkey.1 {
                 let b = d.textures.iter().find(|t| t.sampler == base + n).expect("checked above");
@@ -1758,23 +1790,29 @@ impl WgpuBackend {
             }
             let g = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout, entries: &entries });
             if !feedback {
+                let last = &mut self.last_group[stage];
+                last.0.clear();
+                last.0.extend_from_slice(&gkey.1);
+                last.1 = Some(g.clone());
                 self.tex_groups.insert(gkey, g.clone()); // a snapshot is for this draw only
             }
-            groups.push(g);
+            groups[stage] = Some(g);
         }
+        let groups = groups.map(|g| g.expect("both stages bound"));
         // uniforms: half-pixel offset from the viewport; alpha test from the states
         let (vw, vh_) = (d.viewport[2].max(1) as f32, d.viewport[3].max(1) as f32);
         // D3D9 samples pixels at their integer corner, wgpu at the centre:
         // the geometry moves half a pixel right and down
         let hp = [(1.0 / vw).to_bits(), (-1.0 / vh_).to_bits(), 0, 0];
         // the alpha test, then each pixel sampler's MIPMAPLODBIAS (float bits)
-        let mut ps_extra = vec![[state(15), state(25), state(24) & 0xFF, 0], [0; 4], [0; 4], [0; 4], [0; 4]];
+        let mut ps_extra = [[state(15), state(25), state(24) & 0xFF, 0], [0; 4], [0; 4], [0; 4], [0; 4], [0; 4]];
         for t in d.textures.iter().filter(|t| t.sampler < 16) {
             ps_extra[1 + t.sampler as usize / 4][t.sampler as usize % 4] = t.states[8];
         }
         if depth_bias {
-            ps_extra.push([state(195), state(175), 0, 0]);
+            ps_extra[5] = [state(195), state(175), 0, 0];
         }
+        let ps_extra = &ps_extra[..if depth_bias { 6 } else { 5 }];
         // vertex and index data
         let mut vbufs = Vec::new();
         for &s in &streams {
@@ -1825,7 +1863,7 @@ impl WgpuBackend {
         } };
         // the constant blocks last: a ring restart above (a flush) must not
         // separate them from this draw
-        let ps_off = self.constants(&d.ps_constants, 224, &ps_extra, PS_BLOCK, 0);
+        let ps_off = self.constants(&d.ps_constants, 224, ps_extra, PS_BLOCK, 0);
         let vs_off = self.constants(&d.vs_constants, 256, &[hp], VS_BLOCK, 1);
         // a draw made while guest occlusion queries count gets its own slot
         let slot = (!self.active_queries.is_empty()).then(|| self.occlusion_slot());
@@ -1843,11 +1881,16 @@ impl WgpuBackend {
             uses.extend(d.textures.iter().map(|t| t.resource));
             uses.extend(d.targets.iter().chain(std::iter::once(&d.depth)).flatten().filter_map(|t| t.texture.map(|x| x.resource)));
         }
-        let key: PassKey = (colour[..max_out].iter().map(|c| c.as_ref().map(|(v, _)| v.clone())).collect(),
-                            depth.as_ref().map(|(v, _)| v.clone()), query_set.clone());
         let scissor = state(174) != 0;
-        let same_pass = matches!(&*self.pass.borrow(), Some(p) if p.key == key && (scissor || !p.scissored));
+        // (L94b: compared in place; the key is built for a new pass only)
+        let same_pass = matches!(&*self.pass.borrow(), Some(p) if (scissor || !p.scissored)
+            && p.key.0.len() == max_out
+            && p.key.0.iter().zip(&colour[..max_out]).all(|(a, c)| a.as_ref() == c.as_ref().map(|(v, _)| v))
+            && p.key.1.as_ref() == depth.as_ref().map(|(v, _)| v)
+            && p.key.2 == query_set);
         if !same_pass {
+            let key: PassKey = (colour[..max_out].iter().map(|c| c.as_ref().map(|(v, _)| v.clone())).collect(),
+                                depth.as_ref().map(|(v, _)| v.clone()), query_set.clone());
             self.end_pass();
             let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
             let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = colour[..max_out].iter().map(|c| c.as_ref().map(|(view, _)| wgpu::RenderPassColorAttachment {
@@ -2380,6 +2423,7 @@ impl GraphicsBackend for WgpuBackend {
         self.flush();
         // cached views and bind groups may hold the resource
         self.tex_groups.clear();
+        self.last_group = Default::default();
         self.target_views.clear();
         self.textures.remove(&resource);
         self.pending.remove(&resource);
