@@ -74,8 +74,9 @@ if [ -n "$gate" ]; then
     mkdir -p "$(dirname "$gexe")" && rustc -O --edition=2021 scripts/rustc_gate.rs -o "$gexe" || exit 2
   fi
   free_mb=$(powershell -NoProfile -Command "[int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1KB)")
-  # a shard rustc peaks at ~2 GB (opt-level 0) to ~3 GB (opt-level 1); keep 4 GB spare
-  slots=$(( (free_mb - 4096) / 3072 )); [ $slots -lt 1 ] && slots=1; [ $slots -gt 8 ] && slots=8
+  # a shard rustc peaks at ~2 GB (opt-level 0) to ~3 GB (opt-level 1, split modules);
+  # the gate also holds a shard back while less than DDDA_GATE_FREE_MB is free
+  slots=$(( (free_mb - 3072) / 2560 )); [ $slots -lt 1 ] && slots=1; [ $slots -gt 8 ] && slots=8
   export RUSTC_WRAPPER=$gexe DDDA_GATE_SHARDS=${DDDA_GATE_SHARDS:-$slots} DDDA_GATE_FREE_MB=${DDDA_GATE_FREE_MB:-3500}
   jobs=(-j 16)
   echo "build_play: gate: $DDDA_GATE_SHARDS shard compilers at once ($free_mb MB free), 16 job tokens"
