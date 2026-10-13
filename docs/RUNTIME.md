@@ -1526,3 +1526,12 @@ the original CPU/eight cap; the normal frame-start path activates it.
 Absent preserves defaults. It neither patches caps nor changes CPU reporting.
 See `docs/tasks/L162-job-wake.md` for exact 7/8 capture env, verification
 status and the `scripts/job_wake.py` per-join latency/tail report.
+
+## L165 worker dispatcher candidate
+
+`DDRUNTIME_JOB_JOINTS=1` selects the exact 01054700 joint-index dispatcher;
+its evaluators/virtual callbacks stay original. Default remains lifted and
+explicit mods win. Original-instruction replay passes 840 returns / 5,092
+callback boundaries on both memory paths; isolated dispatch median speed
+ratios are 1.545–2.476x, excluding actual callees. No combined native gate
+or live image/FPS acceptance yet. See `tasks/L165-worker-speed.md`.

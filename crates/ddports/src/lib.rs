@@ -19,6 +19,11 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_JOB_HASH").as_deref() == Ok("1") {
         ports.push((0x00e0e5e0, mtcore::job_hash::dependency_hash));
     }
+    // L165: joint dispatcher only; evaluators remain original callbacks.
+    // Await the head's combined gate and matched worker capture.
+    if std::env::var("DDRUNTIME_JOB_JOINTS").as_deref() == Ok("1") {
+        ports.push((0x01054700, mtcore::job_joints::evaluate_joint_indices));
+    }
     ports
 }
 

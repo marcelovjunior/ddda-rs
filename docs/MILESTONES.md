@@ -1,5 +1,16 @@
 # Milestones
 
+### L165 worker-code follow-up (2026-10-13)
+
+- Head redirected loading to three worker ports. Latest nearest-sample
+  candidates: FEDD60 57, 1054700 36, 10A35D0 35 across c31def+c31p8;
+  excluded critical-job chains retained. See `tasks/L165-worker-speed.md`.
+- First candidate: opt-in JOB_JOINTS dispatcher, 840 original returns /
+  5,092 callback boundaries match both sparse and atomic-page replay.
+  Twenty isolated median speed ratios 1.545–2.476x; callees excluded.
+- No full native/game acceptance or FPS claim. Next: exact merge-sort
+  and bounds-traversal ports, then head's shared integration train.
+
 ### L165 autoplay proposal (2026-10-13)
 
 - Follow-up skip correctness: 256 composed original/Rust returns and 129
