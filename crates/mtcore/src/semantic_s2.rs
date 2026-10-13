@@ -690,3 +690,194 @@ pub fn world_query(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4 + 0x10);
 }
+
+// Translated from 0x0115f650 (DDDA.exe 2017-12-13 Steam).
+/// 0x0115F650, `world->segment_cast(segment, flag, out, query, cast) ->
+/// hit_kind` (thiscall, `ret 0x14`): cast the segment (start xyz at +0,
+/// end xyz at +0x10) through the world with the cast routine `cast`
+/// (0x01166B10 or 0x01166C00, called as `cast(shape, query)`), where
+/// `shape` is the segment itself (long segments, squared length at least
+/// `this[0x115F8]`) or its padded bounding box (short ones).
+///
+/// The original builds the segment's ray (direction, length) on its stack
+/// next to the result buffer, which `query + 0x94` points at while `cast`
+/// runs. Returns 0 for no hit; on a hit the buffer's inner object is
+/// released (0x00DE46F0), the hit position and normal are transformed by
+/// the hit's matrix when the buffer's kind byte (+0xCC) is 1, written to
+/// `out` (when not null, after 0x00DE6010), and the result is 0x81, 0x102
+/// or 0x204 by the hit's material mask against `this[0x44]`, `[0x48]`,
+/// `[0x4C]`, else 0x00DEF0C0's value for the hit depth.
+///
+/// The no-op 0x00B16AF0 calls are skipped; every other callee stays a
+/// guest call. The stack objects are rebuilt at the original's addresses.
+pub fn segment_cast(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let (this, entry) = (c.ecx, c.esp);
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (seg, out, query, cast) = (arg(m, 0), arg(m, 2), arg(m, 3), arg(m, 4));
+    let flag = pg.u8(m, entry.wrapping_add(8));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // push ebp; and esp,-16; sub esp,0x2c4; push ebx/esi/edi
+    let s = (entry.wrapping_sub(4) & !15).wrapping_sub(0x2c4 + 0xc);
+    let at = |off: u32| s.wrapping_add(off);
+    (c.ebx, c.ebp, c.esi, c.edi) = (out, entry.wrapping_sub(4), seg, this);
+    let rd = |m: &dyn Mem, a: u32| f32::from_bits(pg.u32(m, a));
+    let wr = |m: &mut dyn Mem, a: u32, v: f32| pg.set_u32(m, a, v.to_bits());
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let buffer = at(0x100);
+    let segment_at = |m: &dyn Mem, k: u32| pg.u32(m, seg.wrapping_add(4 * k));
+
+    // two line shapes of the segment, handed to 0x011C3280 to set the buffer up
+    let epsilon = pg.u32(m, 0x0162_adb0);
+    let ends = [segment_at(m, 0), segment_at(m, 1), segment_at(m, 2), segment_at(m, 4), segment_at(m, 5), segment_at(m, 6)];
+    for base in [0xd0u32, 0xa0] {
+        for (off, v) in [(0u32, 0x0142_bc80u32), (4, 2), (8, epsilon), (0x10, ends[0]), (0x14, ends[1]), (0x18, ends[2]), (0x1c, 0),
+                         (0x20, ends[3]), (0x24, ends[4]), (0x28, ends[5]), (0x2c, 0)] {
+            pg.set_u32(m, at(base + off), v);
+        }
+    }
+    call_from(m, c, pg, s, buffer, &[0x018c_fe80, 0x018c_fe80, at(0xd0), at(0xa0), out], 0x0115_f77e, guest(0x011c_3280));
+
+    // the ray: direction and length
+    let (x0, y0, z0) = (rd(m, seg), rd(m, seg + 4), rd(m, seg + 8));
+    let (x1, y1, z1) = (rd(m, seg + 0x10), rd(m, seg + 0x14), rd(m, seg + 0x18));
+    let (dx, dy, dz) = (x1 - x0, y1 - y0, z1 - z0);
+    let one = rd(m, 0x0140_6ce0);
+    let squared = dx * dx + dy * dy + dz * dz;
+    let length = squared.sqrt();
+    let (ux, uy, uz) = (one / length * dx, one / length * dy, one / length * dz);
+    wr(m, at(0x18), squared);
+    wr(m, at(0x1c), length);
+    for (off, v) in [(0x200u32, dx), (0x204, dy), (0x208, dz), (0x20c, 0.0), (0x240, length), (0x244, length), (0x248, length), (0x24c, 0.0),
+                     (0x220, ux), (0x224, uy), (0x228, uz), (0x22c, 0.0)] {
+        wr(m, at(off), v);
+    }
+    pg.set_u8(m, at(0x2b0), flag);
+    // (sNetwork::vf11 on the segment, 0x00B16AF0, is a no-op)
+
+    let epsilon = pg.u32(m, 0x0162_adb0);
+    pg.set_u32(m, at(0x78), epsilon);
+    pg.set_u32(m, at(0x38), epsilon);
+    let threshold = rd(m, this.wrapping_add(0x115f8));
+    for (off, v) in [(0x70u32, 0x0142_bc80u32), (0x8c, 0), (0x9c, 0), (0x74, 2), (0x34, 7), (0x30, 0x0159_4890), (0x4c, 0), (0x5c, 0)] {
+        pg.set_u32(m, at(off), v);
+    }
+    let shape = if threshold > rd(m, at(0x18)) {
+        // a short segment: its bounding box, grown by the margins
+        let (z0, z1) = (rd(m, seg + 8), rd(m, seg + 0x18));
+        let min_z = if z1 > z0 { z0 } else { z1 };
+        let (y0, y1) = (rd(m, seg + 4), rd(m, seg + 0x14));
+        pg.set_u32(m, at(0x18), y0.to_bits());
+        pg.set_u32(m, at(0x1c), y1.to_bits());
+        let min_y = if y1 > y0 { y0 } else { y1 };
+        let (x0, x1) = (rd(m, seg), rd(m, seg + 0x10));
+        let min_x = if x1 > x0 { x0 } else { x1 };
+        let max_z = if z0 > z1 { z0 } else { z1 };
+        let max_y = if y0 > y1 { y0 } else { y1 };
+        let max_x = if x0 > x1 { x0 } else { x1 };
+        let (margin_x, margin_y, margin_z) = (rd(m, 0x0162_9510), rd(m, 0x0162_9514), rd(m, 0x0162_9518));
+        for (off, v) in [(0x4cu32, 0.0), (0x5c, 0.0), (0x50, max_x + margin_x), (0x54, max_y + margin_y), (0x58, max_z + margin_z),
+                         (0x40, min_x - margin_x), (0x44, min_y - margin_y), (0x48, min_z - margin_z)] {
+            wr(m, at(off), v);
+        }
+        at(0x30)
+    } else {
+        let (x0, y0, z0) = (segment_at(m, 0), segment_at(m, 1), segment_at(m, 2));
+        let (x1, y1, z1) = (segment_at(m, 4), segment_at(m, 5), segment_at(m, 6));
+        for (off, v) in [(0x80u32, x0), (0x84, y0), (0x88, z0), (0x90, x1), (0x94, y1), (0x8c, 0), (0x98, z1), (0x9c, 0)] {
+            pg.set_u32(m, at(off), v);
+        }
+        at(0x70)
+    };
+
+    // run the cast routine with the buffer attached to the query
+    c.esi = query;
+    let previous = pg.u32(m, query.wrapping_add(0x98));
+    pg.set_u32(m, query.wrapping_add(0x94), buffer);
+    pg.set_u32(m, at(0x1e4), previous);
+    let release = |m: &mut dyn Mem| {
+        pg.set_u32(m, at(0x30), 0x0155_8134);
+        pg.set_u32(m, at(0x70), 0x0155_8134);
+    };
+    let hit = call_from(m, c, pg, s, this, &[shape, query], 0x0115_faad, guest(cast));
+    if hit == 0 {
+        release(m);
+        call_from(m, c, pg, s, buffer, &[], 0x0115_faca, guest(0x011c_3a30));
+        c.eax = 0;
+        (c.ebx, c.ebp, c.esi, c.edi) = saved;
+        c.esp = entry.wrapping_add(4 + 0x14);
+        return;
+    }
+    let block = pg.u32(m, query.wrapping_add(0x98));
+    call_from(m, c, pg, s, block, &[at(0x184)], 0x0115_fae8, guest(0x00de_46f0));
+    if pg.u8(m, at(0x1cc)) == 1 {
+        // move the hit position, normal and plane into world space by the hit's matrix
+        let matrix = pg.u32(m, at(0x1d0));
+        let row = |m: &dyn Mem, r: u32| [0u32, 1, 2, 3].map(|k| rd(m, matrix.wrapping_add(16 * r + 4 * k)));
+        let (r0, r1, r2, r3) = (row(m, 0), row(m, 1), row(m, 2), row(m, 3));
+        let (px, py, pz) = (rd(m, at(0x280)), rd(m, at(0x284)), rd(m, at(0x288)));
+        let p = [0usize, 1, 2, 3].map(|k| ((px * r0[k] + py * r1[k]) + pz * r2[k]) + r3[k]);
+        let (qx, qy, qz) = (rd(m, at(0x2a0)), rd(m, at(0x2a4)), rd(m, at(0x2a8)));
+        let q = [0usize, 1, 2, 3].map(|k| (qx * r0[k] + qy * r1[k]) + qz * r2[k]);
+        let (rx, ry, rz) = (rd(m, at(0x290)), rd(m, at(0x294)), rd(m, at(0x298)));
+        let r = [0usize, 1, 2, 3].map(|k| (r0[k] * rx + r1[k] * ry) + r2[k] * rz);
+        let dot = (q[1] * p[1] + q[0] * p[0]) + q[2] * p[2];
+        let negated = f32::from_bits(dot.to_bits() ^ pg.u32(m, 0x0161_c280));
+        // scratch lanes the original leaves in its frame
+        for k in 0..4u32 {
+            pg.set_u32(m, at(0x20 + 4 * k), q[k as usize].to_bits());
+            pg.set_u32(m, at(0x60 + 4 * k), r[k as usize].to_bits());
+        }
+        wr(m, at(0x284), p[1]);
+        wr(m, at(0x280), p[0]);
+        wr(m, at(0x288), p[2]);
+        pg.set_u32(m, at(0x28c), 0);
+        for k in 0..3u32 {
+            wr(m, at(0x290 + 4 * k), r[k as usize]);
+            wr(m, at(0x2a0 + 4 * k), q[k as usize]);
+        }
+        pg.set_u32(m, at(0x29c), 0);
+        wr(m, at(0x2ac), negated);
+    }
+    if out != 0 {
+        call_from(m, c, pg, s, out, &[at(0x184)], 0x0115_fca6, guest(0x00de_6010));
+        for (src, dst) in [(0x280u32, 0x70u32), (0x284, 0x74), (0x288, 0x78)] {
+            let v = pg.u32(m, at(src));
+            pg.set_u32(m, out.wrapping_add(dst), v);
+        }
+        pg.set_u32(m, out.wrapping_add(0x7c), 0);
+        pg.set_u32(m, out.wrapping_add(0x8c), 0);
+        for (src, dst) in [(0x290u32, 0x80u32), (0x294, 0x84), (0x298, 0x88)] {
+            let v = pg.u32(m, at(src));
+            pg.set_u32(m, out.wrapping_add(dst), v);
+        }
+        for (src, scratch) in [(0x2a0u32, 0x20u32), (0x2a4, 0x24), (0x2a8, 0x28)] {
+            let v = pg.u32(m, at(src));
+            pg.set_u32(m, at(scratch), v);
+        }
+        for (src, dst) in [(0x20u32, 0x60u32), (0x24, 0x64), (0x28, 0x68)] {
+            let v = pg.u32(m, at(src));
+            pg.set_u32(m, out.wrapping_add(dst), v);
+        }
+        let v = pg.u32(m, at(0x2ac));
+        pg.set_u32(m, out.wrapping_add(0x6c), v);
+        let v = pg.u32(m, at(0x2b4));
+        pg.set_u32(m, out.wrapping_add(0x90), v);
+    }
+    let material = call_from(m, c, pg, s, at(0x184), &[], 0x0115_fd7d, guest(0x007c_6f90));
+    let kind = if pg.u32(m, this.wrapping_add(0x44)) & material != 0 {
+        0x81
+    } else if pg.u32(m, this.wrapping_add(0x48)) & material != 0 {
+        0x102
+    } else if pg.u32(m, this.wrapping_add(0x4c)) & material != 0 {
+        0x204
+    } else {
+        let depth = pg.u32(m, at(0x2a4));
+        call_from(m, c, pg, s, this, &[0, depth], 0x0115_fdb9, guest(0x00de_f0c0))
+    };
+    release(m);
+    call_from(m, c, pg, s, buffer, &[], 0x0115_fdd4, guest(0x011c_3a30));
+    c.eax = kind;
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 0x14);
+}

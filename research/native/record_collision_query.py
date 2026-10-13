@@ -28,9 +28,11 @@ MODES = {
     'cast_a': dict(entry=0x01166B10, length=0xEC, stubs={0x00FB3790: 0, 0x00DED390: 1, 0x011669B0: 2, 0x011667B0: 3,
                                                           0x01165E00: 3, 0x01164500: 3, 0x01165560: 3}),
     'query': dict(entry=0x00DEA870, length=0xCC, stubs={0x0115F650: 5}),
+    'segcast': dict(entry=0x0115F650, length=0x790, stubs={0x011C3280: 5, 0x01166B10: 2, 0x00DE46F0: 1, 0x00DE6010: 1,
+                                                           0x007C6F90: 0, 0x00DEF0C0: 2, 0x011C3A30: 0}),
 }
-REAL = {0x00FB38E0: 8, 0x00BFC7D0: 8, 0x012EFE20: 0x80, 0x011631F0: 0xB8}
-FLOATS = [0x0162ADB0]
+REAL = {0x00FB38E0: 8, 0x00BFC7D0: 8, 0x012EFE20: 0x80, 0x011631F0: 0xB8, 0x00B16AF0: 3}
+FLOATS = [0x0162ADB0, 0x01406CE0, 0x01621124, 0x0162112C, 0x01629510, 0x01629514, 0x01629518, 0x0161C280]
 THIS, BLOB, STACK, SP = 0x20000000, 0x21000000, 0x0F000000, 0x0F008000
 VTABLE = 0x23000000
 REGS = [getattr(x, 'UC_X86_REG_' + n) for n in ('EAX', 'ECX', 'EDX', 'EBX', 'ESP', 'EBP', 'ESI', 'EDI')]
@@ -45,7 +47,7 @@ class Oracle:
         pages = {self.entry & ~0xFFF} | {a & ~0xFFF for a in list(self.stubs) + list(REAL) + FLOATS}
         for p in sorted(pages):
             uc.mem_map(p, 0x1000)
-        for a, s in ((THIS, 0x2000), (BLOB, 0x2000), (VTABLE, 0x1000), (STACK, 0x10000), (h.RET, 0x1000)):
+        for a, s in ((THIS, 0x20000), (BLOB, 0x4000), (VTABLE, 0x1000), (STACK, 0x10000), (h.RET, 0x1000)):
             uc.mem_map(a, s)
         uc.mem_write(self.entry, h.code(self.entry, self.length))
         for a, n in REAL.items():
@@ -92,14 +94,22 @@ class Oracle:
         word = lambda a: struct.unpack('<I', uc.mem_read(a, 4))[0]
         window = [(esp + i, b) for i, b in enumerate(uc.mem_read(esp, 4 * (1 + nargs)))]
         before = dict(regs=self.regs(), memory=window)
-        if self.mode == 'query':
-            frame = self.frame
-            before['objects'] = [(a, uc.mem_read(a, 1)[0]) for a in range(frame + 0xc, frame + 0x100) if a in self.written]
+        if self.mode in ('query', 'segcast'):
+            frame, top = self.frame, (0x100 if self.mode == 'query' else 0x2d0)
+            before['objects'] = [(a, uc.mem_read(a, 1)[0]) for a in range(frame + 0xc, frame + top) if a in self.written]
         effects = []
         if address == 0x00DED390:   # the shape's bounds method: writes into query + 0x70
             for k in range(rng.randrange(0, 6)):
                 effects += self.stub_write(word(esp + 4) + k, [rng.randrange(256)])
+        if address == 0x01166B10:   # the cast routine: fills the result buffer behind query + 0x94
+            buffer = word(esp + 8) and word(word(esp + 8) + 0x94)
+            effects += self.stub_write(buffer + 0xCC, [rng.choice((0, 1, 1, 2))])
+            effects += self.stub_write(buffer + 0xD0, struct.pack('<I', BLOB + 0x2000 + 16 * rng.randrange(4)))
+            for k in range(0x180, 0x1B8, 4):
+                effects += self.stub_write(buffer + k, struct.pack('<f', rng.uniform(-3, 3)))
         eax = rng.choice((0, 1, 2, 4, 8, rng.randrange(1 << 10), rng.randrange(1 << 32)))
+        if address == 0x01166B10:
+            eax = rng.choice((0, 1, 1))
         back = word(esp)
         uc.reg_write(x.UC_X86_REG_EAX, eax)
         uc.reg_write(x.UC_X86_REG_ESP, esp + 4 + 4 * nargs)
@@ -109,9 +119,11 @@ class Oracle:
     def case(self, seed):
         rng = self.rng = random.Random(seed)
         uc = self.uc
-        for a, n in ((THIS, 0x2000), (BLOB, 0x2000), (VTABLE, 0x1000)):
+        for a, n in ((THIS, 0x20000), (BLOB, 0x4000), (VTABLE, 0x1000)):
             uc.mem_write(a, b'\0' * n)
         uc.mem_write(0x0162ADB0, struct.pack('<I', rng.randrange(1 << 32)))
+        for a in (0x01621124, 0x0162112C):
+            uc.mem_write(a, struct.pack('<I', rng.randrange(1 << 32)))
         for off in range(0, 0x200, 4):
             uc.mem_write(THIS + off, struct.pack('<I', rng.randrange(1 << 32)))
         self.initial, self.written, self.events, self.insns = {}, set(), [], 0
@@ -124,6 +136,29 @@ class Oracle:
             uc.mem_write(esp, struct.pack('<IIIII', h.RET, a0, a1, a2, a3))
             self.frame = ((esp - 4) & ~15) - 0xF4 - 0xC
             nbytes = 20
+        elif self.mode == 'segcast':
+            seg, out, query, block = BLOB, BLOB + 0xC00, BLOB + 0x400, BLOB + 0x800
+            for k in range(8):
+                uc.mem_write(seg + 4 * k, struct.pack('<f', rng.uniform(-30, 30)))
+            if rng.random() < 0.3:
+                uc.mem_write(seg + 0x10, bytes(uc.mem_read(seg, 12)))   # a point
+            thr = rng.choice((0.0, 1e9, rng.uniform(0, 3000)))
+            uc.mem_write(THIS + 0x115F8, struct.pack('<f', thr))
+            for off in (0x44, 0x48, 0x4C):
+                uc.mem_write(THIS + off, struct.pack('<I', rng.choice((0, 1, 2, 4, 8))))
+            for a in FLOATS:
+                uc.mem_write(a, struct.pack('<f', rng.uniform(-3, 3)))
+            uc.mem_write(0x01406CE0, struct.pack('<f', 1.0))
+            uc.mem_write(0x0161C280, struct.pack('<IIII', *([0x80000000] * 4)))
+            for k in range(0, 0x40 * 4, 4):
+                uc.mem_write(BLOB + 0x2000 + k, struct.pack('<f', rng.uniform(-2, 2)))
+            uc.mem_write(query + 0x94, struct.pack('<I', rng.randrange(1 << 32)))
+            uc.mem_write(query + 0x98, struct.pack('<I', block))
+            flag = rng.choice((0, 1, rng.randrange(1 << 32)))
+            out = out if rng.random() < 0.7 else 0
+            uc.mem_write(esp, struct.pack('<IIIIII', h.RET, seg, flag, out, query, 0x01166B10))
+            self.frame = ((esp - 4) & ~15) - 0x2C4 - 0xC
+            nbytes = 24
         else:
             query, block, buffer = BLOB, BLOB + 0x400, BLOB + 0x800
             uc.mem_write(query + 0x94, struct.pack('<I', buffer))
