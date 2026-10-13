@@ -1367,13 +1367,15 @@ fn compare_replays(
             .stack_size(64 << 20)
             .spawn(move || -> Result<mtcore::shadow_lanes::StreamSnapshot, String> {
                 let capacity = input.u32(context + 0x4c).saturating_mul(8).max(1);
-                let (input, scheduler_range) = input.private_arena(0x1c150).map_err(|e| format!("{e:?}"))?;
-                let (input, manager_range) = input.private_arena(0xd40 + 8 * LANE_BYTES).map_err(|e| format!("{e:?}"))?;
+                let live_scheduler = input.u32(SCHEDULER_GLOBAL);
+                let (input, scheduler_range) = input.private_copy(live_scheduler, 0x1c150).map_err(|e| format!("{e:?}"))?;
+                let (input, manager_range) = input.private_copy(cpu.ecx, 0xd40 + 8 * LANE_BYTES).map_err(|e| format!("{e:?}"))?;
                 let (input, secondary_range) = input.private_arena(capacity).map_err(|e| format!("{e:?}"))?;
                 let storage = publish::Storage {
                     scheduler: scheduler_range.start,
                     manager: manager_range.start,
                     secondary: (secondary_range.start, capacity),
+                    prefilled: true,
                 };
                 let private = vec![scheduler_range, manager_range, secondary_range];
                 let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(Arc::new(input), ACCESS_LIMIT))));
