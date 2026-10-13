@@ -1,5 +1,17 @@
 # Milestones
 
+### L178 semantic job bounds traversal (2026-10-13)
+
+- Opt-in `DDRUNTIME_SEMANTIC=1` replaces 010A35D0 with a semantic
+  four-way bounds traversal preserving guest work records and callbacks.
+- **192 original returns**, **369/369 body instructions**; ABI and
+  serial/atomic Pages replay pass. Four isolated tests include an opt2
+  lifted baseline and deliberate heap-corruption rejection.
+- Synthetic paired median **1.243x**, 63/77 improving pairs; individual
+  regressions remain. No gameplay/FPS or shard-build claim.
+- Next: head accumulated train; complete D7CF70/C24640 gates. Evidence,
+  private corpus hash and light-suite results: `docs/tasks/L178-semantic-jobs.md`.
+
 ### L169 exact shadow traversal and setup (2026-10-13)
 
 - Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and

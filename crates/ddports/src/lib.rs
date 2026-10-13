@@ -53,6 +53,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00fed190, mtcore::semantic_draw_c::begin_material),
             (0x00e0f3c0, mtcore::semantic_draw_c::package_key),
             (0x01008200, mtcore::semantic_draw_c::single_key),
+            (0x010a35d0, mtcore::semantic_jobs::query_bounds_tree),
         ] {
             ports.retain(|p| p.0 != a);
             ports.push((a, f));
@@ -134,6 +135,7 @@ mod tests {
             (0x00fed190, mtcore::semantic_draw_c::begin_material),
             (0x00e0f3c0, mtcore::semantic_draw_c::package_key),
             (0x01008200, mtcore::semantic_draw_c::single_key),
+            (0x010a35d0, mtcore::semantic_jobs::query_bounds_tree),
         ] {
             assert_eq!(p.iter().any(|&(a, f)| a == address && std::ptr::fn_addr_eq(f, body)), semantic_enabled);
         }
