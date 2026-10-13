@@ -26,6 +26,22 @@
   next real stage capture. Details: docs/tasks/L156-inflate-fast.md.
 - Next: head FAST=1/TABLE=0 vs FAST=2/TABLE=1 with PORT=0, then repeat
   logging-off with image/control acceptance; retain separate table-only A/B.
+### L158 critical scheduler jobs (2026-10-13)
+
+- Exact E0E5E0 hash candidate: **528 original returns** match port and
+  isolated lift; **672 paired fault/access cases** pass. All **105 paired
+  CPU samples improve**, median **1.63–2.01x**. Opt-in JOB_HASH=1;
+  combined native gate and head per-job A/B remain pending.
+- Late c26s1 main-only callback leaders: DB7620 **10.679 ms/Present**,
+  4B9FF0 **5.179**, 1090F70 **3.933**. These dispatch virtual methods;
+  old worker coverage/tail duplication prevents per-join critical ranking.
+- Opt-in private-file trace correlates frame/batch, callback completion,
+  residual join, and worker signal/wait boundaries. Complete-batch parser
+  separates last job from longest job and rejects loss/truncation.
+- Four focused runtime and four parser tests pass. Light **226 pass /
+  inherited gamma failure / six ignored**. No game or speedup claim.
+- Next: head corrected census/trace capture, then exact hot-inner A/B.
+  Source map, hashes and limits: `docs/tasks/L158-critical-jobs.md`.
 
 ### L153 game-thread synchronization (2026-10-13)
 

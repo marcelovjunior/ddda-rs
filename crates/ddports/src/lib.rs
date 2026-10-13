@@ -11,9 +11,15 @@ use ddnative_base::x86::{self, LiftFn};
 
 /// Every verified readable port: (address, adapter).
 pub fn ports() -> Vec<(u32, LiftFn)> {
-    mtmath::abi::PORTS.iter().chain(mtcore::abi::PORTS).chain(mtcore::hot::PORTS).chain(mtframe::abi::PORTS).chain(mtdraw::abi::PORTS)
+    let mut ports: Vec<(u32, LiftFn)> = mtmath::abi::PORTS.iter().chain(mtcore::abi::PORTS).chain(mtcore::hot::PORTS).chain(mtframe::abi::PORTS).chain(mtdraw::abi::PORTS)
         .map(|&(a, f, _)| (a, f))
-        .collect()
+        .collect();
+    // L158: exact inner dependency hash. Keep opt-in until the combined
+    // native gate and head's matched per-job capture have accepted it.
+    if std::env::var("DDRUNTIME_JOB_HASH").as_deref() == Ok("1") {
+        ports.push((0x00e0e5e0, mtcore::job_hash::dependency_hash));
+    }
+    ports
 }
 
 /// The ports with `mods` over them: a mod at a ported address replaces the
