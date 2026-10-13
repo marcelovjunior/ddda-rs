@@ -255,3 +255,12 @@ fn semantic_crt_asinf_matches_original() {
     }
     eprintln!("{} asinf cases passed", cases.len());
 }
+
+// verifies 0x00d1b840 (segment versus box; cdecl, bool in AL)
+#[test]
+fn semantic_segment_vs_box_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S7_BOX_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/segment_vs_box.json".into());
+    let n = abi_cases_with_calls_ret(&path, mtcore::semantic_s7_collision::segment_vs_box, true);
+    eprintln!("{n} ABI-level segment_vs_box cases passed");
+}
