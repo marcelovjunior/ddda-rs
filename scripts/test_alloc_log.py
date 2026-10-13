@@ -17,8 +17,8 @@ class AllocLogTests(unittest.TestCase):
                        str(root / 'crates/ddplay/src/alloc_log.rs'), '-o', str(binary)]
             result = subprocess.run(command, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            for switch in ('0', '1'):
-                env = dict(os.environ, DDPLAY_ALLOC_LOG=switch)
+            for switch, stacks in (('0', '0'), ('1', '0'), ('1', '1')):
+                env = dict(os.environ, DDPLAY_ALLOC_LOG=switch, DDPLAY_ALLOC_STACKS=stacks)
                 result = subprocess.run([str(binary), '--test-threads=1'], env=env,
                                         capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -41,14 +41,25 @@ fn main() {
 }
 ''')
             executable = Path(temporary) / 'global.exe'
-            result = subprocess.run([os.environ.get('RUSTC', 'rustc'), '--edition=2024',
+            result = subprocess.run([os.environ.get('RUSTC', 'rustc'), '--edition=2024', '-g',
                                      str(source), '-o', str(executable)],
                                     capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            for switch in ('0', '1'):
-                result = subprocess.run([str(executable)], env=dict(os.environ, DDPLAY_ALLOC_LOG=switch),
+            for switch, stacks in (('0', '0'), ('1', '0'), ('1', '1')):
+                result = subprocess.run([str(executable)], env=dict(os.environ, DDPLAY_ALLOC_LOG=switch, DDPLAY_ALLOC_STACKS=stacks),
                                         capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                if stacks == '1':
+                    self.assertIn('alloc-site id=', result.stderr)
+                    self.assertIn('pcs=', result.stderr)
+                    log = Path(temporary) / 'sites.log'
+                    log.write_text(result.stderr)
+                    ranked = subprocess.run([os.environ.get('PYTHON', 'python'), str(root / 'scripts/alloc_sites.py'),
+                                             str(log), '--exe', str(executable)],
+                                            capture_output=True, text=True, timeout=30)
+                    self.assertEqual(ranked.returncode, 0, ranked.stdout + ranked.stderr)
+                    self.assertIn('requested_bytes=', ranked.stdout)
+                    self.assertIn('global::', ranked.stdout)
 
 
 if __name__ == '__main__':

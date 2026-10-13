@@ -1,5 +1,19 @@
 # Milestones
 
+### L140 loading costs (2026-10-13)
+
+- Exact opt-in Adler helper: 45 original-instruction cases pass, including
+  eight installed ARC payloads; 128 KiB microbenchmark 495 -> 44 us/call.
+  Outer zlib state machine remains original; caller/helper census added.
+- Opt-in CRT scratch removes repeated host allocation for bounded copies
+  and all memset sizes. Identity, overlap and allocation-count checks pass.
+  Opt-in allocator stack census supports offline top-ten attribution.
+- Existing Vulkan persistence/warmup audited; cache follows runtime sandbox,
+  native-device cache hookup opt-in. Two cold/warm GPU image tests pass.
+- Next: head's separate allocation census and unskipped loading A/B; whole
+  loading gains and top-ten game sites remain unmeasured. Details and final
+  suite status: `docs/tasks/L140-loading.md`.
+
 ### L109d memory ownership diagnostics (2026-10-13)
 
 - Head's c18 run reaches 17.05 GiB private memory with only ~0.64 GiB live

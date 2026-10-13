@@ -165,3 +165,13 @@ iteration loop remains **81.3 / 161.1 ms** old/final: a remaining upgrade
 regression, reported to head, not hidden by the memory result. No game FPS
 or optimized-build speedup is claimed. Private logs:
 `L109d-emu-paired.log`, `L109d-emu-stack-paired.log` in the task target parent.
+
+### Head's combo21 memory result (2026-10-13)
+
+Head reports FPS-line `335318fc` (including L109d) peaked at approximately
+**3.25 GB private bytes** through save loading and gameplay, watchdog samples
+07:12–07:16, with no spike. Combo20 peaked at **16.5–18.3 GB**. This is a
+head-run game memory result, distinct from the standalone emulator probe.
+Full allocation/loading log: `E:/ddda-re/notes/runs/run_c21draw.log` after
+the head copies the batch. Remaining loading costs move to L140; no claim
+that lower private bytes alone improved loading time or FPS.

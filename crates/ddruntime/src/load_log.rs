@@ -22,6 +22,38 @@ static ZLIB_NS: AtomicU64 = AtomicU64::new(0);
 static ZLIB_CALLS: AtomicU64 = AtomicU64::new(0);
 static ZLIB_ENTRY_CALLS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 static ZLIB_ENTRY_NS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+struct ZlibCaller {
+    address: AtomicU64,
+    calls: AtomicU64,
+    ns: AtomicU64,
+    input: AtomicU64,
+    output: AtomicU64,
+}
+impl ZlibCaller {
+    const fn new() -> Self { Self { address: AtomicU64::new(0), calls: AtomicU64::new(0), ns: AtomicU64::new(0), input: AtomicU64::new(0), output: AtomicU64::new(0) } }
+}
+static ZLIB_CALLERS: [ZlibCaller; 32] = [const { ZlibCaller::new() }; 32];
+static ZLIB_CALLER_OVERFLOW: AtomicU64 = AtomicU64::new(0);
+static ZLIB_HELPER_CALLS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+static ZLIB_HELPER_NS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+const ZLIB_HELPERS: [u32; 4] = [0x00cf2cb0, 0x00cf34d0, 0x00cf38d0, 0x00cf01e0];
+
+#[cfg(any(feature = "game", test))]
+fn zlib_caller(address: u32, elapsed: u64, input: u32, output: u32) {
+    // Store address+1 so even a synthetic null return address has a bucket.
+    let key = u64::from(address) + 1;
+    for slot in &ZLIB_CALLERS {
+        let found = slot.address.compare_exchange(0, key, Relaxed, Relaxed).unwrap_or_else(|v| v);
+        if found == 0 || found == key {
+            slot.calls.fetch_add(1, Relaxed);
+            slot.ns.fetch_add(elapsed, Relaxed);
+            slot.input.fetch_add(u64::from(input), Relaxed);
+            slot.output.fetch_add(u64::from(output), Relaxed);
+            return;
+        }
+    }
+    ZLIB_CALLER_OVERFLOW.fetch_add(1, Relaxed);
+}
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 static CACHE_HOST_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -149,6 +181,20 @@ pub fn totals() {
     if !enabled() {
         return;
     }
+    for slot in &ZLIB_CALLERS {
+        let key = slot.address.load(Relaxed);
+        if key != 0 {
+            event("zlib_caller", format_args!("return_pc={:#010x} calls={} ns={} input_bytes={} output_bytes={}", key - 1,
+                slot.calls.load(Relaxed), slot.ns.load(Relaxed), slot.input.load(Relaxed), slot.output.load(Relaxed)));
+        }
+    }
+    if ZLIB_CALLER_OVERFLOW.load(Relaxed) != 0 {
+        event("zlib_caller_overflow", format_args!("calls={}", ZLIB_CALLER_OVERFLOW.load(Relaxed)));
+    }
+    for (i, address) in ZLIB_HELPERS.iter().enumerate() {
+        event("zlib_helper", format_args!("address={address:#010x} calls={} ns={}",
+            ZLIB_HELPER_CALLS[i].load(Relaxed), ZLIB_HELPER_NS[i].load(Relaxed)));
+    }
     event("boot_cpu_totals", format_args!(
         "geometry_calls={} geometry_ns={} vorbis_calls={} vorbis_ns={}",
         GEOMETRY_CALLS.load(Relaxed), GEOMETRY_NS.load(Relaxed),
@@ -206,6 +252,13 @@ mod guest {
     const INFLATE: u32 = 0x00cf02e0;
     static ORIGINAL_READ: OnceLock<LiftFn> = OnceLock::new();
     static ORIGINAL_INFLATE: OnceLock<LiftFn> = OnceLock::new();
+    static ORIGINAL_HELPERS: [OnceLock<LiftFn>; 4] = [const { OnceLock::new() }; 4];
+    fn helper<const I: usize>(m: &mut dyn Mem, cpu: &mut Cpu) {
+        let start = Instant::now();
+        ORIGINAL_HELPERS[I].get().expect("zlib helper timing body")(m, cpu);
+        ZLIB_HELPER_NS[I].fetch_add(start.elapsed().as_nanos() as u64, Relaxed);
+        ZLIB_HELPER_CALLS[I].fetch_add(1, Relaxed);
+    }
     // Read-only exe/Ghidra: procedural mesh construction and vorbisfile's
     // packet-processing entry. Exact dispatch boundaries disambiguate PDB
     // nearest-public-symbol attribution of private split helpers.
@@ -235,13 +288,19 @@ mod guest {
     }
     fn inflate(m: &mut dyn Mem, cpu: &mut Cpu) {
         let archive = ARCHIVE_DEPTH.with(|d| d.get() != 0);
+        let caller = m.u32(cpu.esp);
         let stream = m.u32(cpu.esp.wrapping_add(4));
+        let (input, output) = if stream == 0 { (0, 0) } else { (m.u32(stream + 4), m.u32(stream + 16)) };
         let bucket = if stream == 0 { 4 } else {
             zlib_entry_bucket(m.u32(stream.wrapping_add(4)), m.u32(stream.wrapping_add(16)))
         };
         let start = Instant::now();
         ORIGINAL_INFLATE.get().expect("inflate timing body")(m, cpu);
         let elapsed = start.elapsed().as_nanos() as u64;
+        let (used, produced) = if stream == 0 { (0, 0) } else {
+            (input.wrapping_sub(m.u32(stream + 4)), output.wrapping_sub(m.u32(stream + 16)))
+        };
+        zlib_caller(caller, elapsed, used, produced);
         ZLIB_NS.fetch_add(elapsed, Relaxed);
         ZLIB_CALLS.fetch_add(1, Relaxed);
         ZLIB_ENTRY_CALLS[bucket].fetch_add(1, Relaxed);
@@ -285,6 +344,10 @@ mod guest {
             (INFLATE, inflate as LiftFn, &ORIGINAL_INFLATE),
             (GEOMETRY, geometry as LiftFn, &ORIGINAL_GEOMETRY),
             (VORBIS, vorbis as LiftFn, &ORIGINAL_VORBIS),
+            (ZLIB_HELPERS[0], helper::<0> as LiftFn, &ORIGINAL_HELPERS[0]),
+            (ZLIB_HELPERS[1], helper::<1> as LiftFn, &ORIGINAL_HELPERS[1]),
+            (ZLIB_HELPERS[2], helper::<2> as LiftFn, &ORIGINAL_HELPERS[2]),
+            (ZLIB_HELPERS[3], helper::<3> as LiftFn, &ORIGINAL_HELPERS[3]),
         ] {
             let body = ports.iter().chain(bodies).find(|e| e.0 == address).map(|e| e.1);
             if let Some(body) = body {
@@ -322,6 +385,7 @@ mod guest {
             wrap_archive(&mut ports, &[(ARCHIVE_READ, replaced), (INFLATE, body), (GEOMETRY, body), (VORBIS, body)]);
             for (address, f) in ports {
                 let mut m = ddnative_base::mem::Sparse::default();
+                m.set_u32(100, 0x12345678); // guest return PC for caller census
                 m.set_u32(104, 4); // geometry's subdivision argument
                 if address == INFLATE {
                     m.set_u32(104, 0x2000);

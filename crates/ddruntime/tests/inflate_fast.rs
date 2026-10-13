@@ -10,16 +10,24 @@ fn inflate_registration_defaults_on_and_respects_explicit_override() {
     let mut ports = Vec::new();
     ddruntime::archive_inflate::install(&mut ports);
     let disabled = std::env::var("DDRUNTIME_ARCHIVE_INFLATE").as_deref() == Ok("0");
-    assert_eq!(ports.len(), usize::from(!disabled));
-    if !disabled {
-        assert_eq!(ports[0].0, 0x00cf2cb0);
-    }
+    let adler = std::env::var("DDRUNTIME_ZLIB_ADLER").as_deref() == Ok("1");
+    let mut addresses: Vec<_> = ports.iter().map(|p| p.0).collect();
+    addresses.sort_unstable();
+    let mut expected = Vec::new();
+    if !disabled { expected.push(0x00cf2cb0); }
+    if adler { expected.push(0x00cf34d0); }
+    assert_eq!(addresses, expected);
     fn explicit(_: &mut dyn Mem, c: &mut Cpu) { c.eax = 42; }
     let mut ports = vec![(0x00cf2cb0, explicit as ddnative_base::x86::LiftFn)];
     ddruntime::archive_inflate::install(&mut ports);
-    assert_eq!(ports.len(), 1);
+    assert_eq!(ports.len(), 1 + usize::from(adler));
     let mut c = Cpu::default();
     ports[0].1(&mut Sparse::default(), &mut c);
+    assert_eq!(c.eax, 42);
+    // A user-supplied Adler port has the same precedence as the fast decoder.
+    let mut explicit_ports = vec![(0x00cf34d0, explicit as ddnative_base::x86::LiftFn)];
+    ddruntime::archive_inflate::install(&mut explicit_ports);
+    explicit_ports.iter().find(|p| p.0 == 0x00cf34d0).unwrap().1(&mut Sparse::default(), &mut c);
     assert_eq!(c.eax, 42);
 }
 

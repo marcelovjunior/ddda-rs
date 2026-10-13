@@ -1,5 +1,22 @@
 # Phase 1 runtime proposal (R01)
 
+## L140 opt-in loading diagnostics and acceleration
+
+`DDRUNTIME_ZLIB_ADLER=1` substitutes the exact native `0x00cf34d0`
+checksum helper; `DDRUNTIME_CRT_SCRATCH=1` reuses bounded whole-source
+memcpy scratch and avoids heap allocation in memset. Both default off.
+`DDRUNTIME_LOAD_LOG=1` now includes zlib return-PC and helper totals.
+`DDPLAY_ALLOC_STACKS=1` with `DDPLAY_ALLOC_LOG=1` adds bounded host-stack
+allocation attribution; resolve the log with `scripts/alloc_sites.py` and
+the exact binary/PDB. Stack census runs are unsuitable for speed claims.
+
+The GPU cache default follows `DDRUNTIME_HOME/pipelines` (otherwise
+`%TEMP%/ddruntime/pipelines`); explicit `DDPLAY_PIPELINE_CACHE` overrides
+remain supported. `DDGPU_NATIVE_PIPELINE_CACHE=1` shares this existing
+driver cache with native-device pipelines. Original drawcall cache/warmup
+behavior remains. Validation and pending head-run measures are in
+`docs/tasks/L140-loading.md`.
+
 ## L130 main/job dependency traversal
 
 `ddports` registers `mtcore::hot::expand_dependencies` at `0x00E0EC50`.
