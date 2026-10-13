@@ -9,10 +9,9 @@ use std::{
 };
 use wgpu::hal::{self, api::Vulkan, CommandEncoder};
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub(crate) struct Initialized {
     buffers: FxSet<wgpu::Buffer>,
-    views: FxSet<wgpu::TextureView>,
 }
 
 pub(crate) struct Bindings {
@@ -62,7 +61,8 @@ impl Ready {
             if let Some((buffers, _)) = pass.resources() {
                 let mut old = pass.initialized.lock().unwrap();
                 old.buffers.extend(buffers.into_keys());
-                old.views.extend(pass.views().cloned());
+                drop(old);
+                for view in pass.views() { view.initialized.store(true, Ordering::Release); }
             }
         }
         if !self.keepalive.is_empty() {
@@ -73,17 +73,23 @@ impl Ready {
 
 impl Pass {
     pub fn finish_batch(device: &wgpu::Device, passes: Vec<Self>) -> Vec<Ready> {
-        let Some(first) = passes.first() else {
-            return vec![];
-        };
-        let mut initialized = first.initialized.lock().unwrap().clone();
+        // Only additions made by earlier passes in this ordered chunk are
+        // local. Never clone the global resource history under its mutex
+        // (c24vk: 62-64% of both workers' sampled CPU, plus serialized waits).
+        let mut initialized = Initialized::default();
+        let mut views_initialized = FxSet::default();
         let mut ready = vec![];
         let mut run = vec![];
         for mut pass in passes {
             let resources = pass.resources();
             let usable = resources.as_ref().is_some_and(|(buffers, _)| {
-                buffers.keys().all(|b| initialized.buffers.contains(b))
-                    && pass.views().all(|v| initialized.views.contains(v))
+                let published = pass.initialized.lock().unwrap();
+                let buffers_ready = buffers.keys().all(|b|
+                    initialized.buffers.contains(b) || published.buffers.contains(b));
+                drop(published);
+                buffers_ready && pass.views().all(|v|
+                    v.initialized.load(Ordering::Acquire)
+                        || views_initialized.contains(&(Arc::as_ptr(v) as usize)))
             });
             if usable {
                 run.push((pass, resources.unwrap()));
@@ -95,7 +101,9 @@ impl Pass {
             if let Some((buffers, _)) = resources {
                 INITIALIZE.fetch_add(1, Ordering::Relaxed);
                 initialized.buffers.extend(buffers.into_keys());
-                initialized.views.extend(pass.views().cloned());
+                // All these views remain owned by run/ready until this chunk
+                // finishes, so local pointer identities cannot be reused.
+                views_initialized.extend(pass.views().map(|v| Arc::as_ptr(v) as usize));
                 pass.initialize = true;
             }
             ready.push(Ready {
@@ -138,17 +146,11 @@ impl Pass {
         }
     }
 
-    fn views(&self) -> impl Iterator<Item = &wgpu::TextureView> {
-        self.colors
-            .iter()
-            .flatten()
-            .chain(self.depth.iter().map(|(v, _)| v))
-            .chain(
-                self.draws
-                    .iter()
-                    .filter_map(|d| d.bindings.native.as_ref())
-                    .flat_map(|(_, groups)| groups.iter().flat_map(|g| g.textures.iter())),
-            )
+    fn views(&self) -> impl Iterator<Item = &Arc<View>> {
+        self.native_colors.iter().flatten()
+            .chain(self.native_depth.iter())
+            .chain(self.draws.iter().filter_map(|d| d.bindings.native.as_ref())
+                .flat_map(|(_, groups)| groups.iter().flat_map(|g| g.views.iter())))
     }
 
     fn resources(&self) -> Option<Resources> {
