@@ -16,7 +16,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicU64, Ordering::Relaxed},
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
     },
 };
 
@@ -344,6 +344,32 @@ struct Replay {
     stack: Range<u32>,
     lane_count: usize,
     depth: usize,
+    command_counter: Option<Arc<CommandCounter>>,
+}
+
+struct CommandCounter {
+    address: u32,
+    value: Mutex<u32>,
+}
+
+fn private_exchange_add(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let replay = current();
+    let address = crate::services::arg(m, cpu, 0);
+    if let Some(counter) = &replay.command_counter {
+        if address == counter.address {
+            // DA7D80 (DDDA.exe 2017-12-13 Steam) atomically claims bytes
+            // from sRender+33DC8. This mutex is confined to one replay batch;
+            // no live memory/OS service participates. Preserve fetch-add wrap
+            // and return-old semantics, including failed capacity requests.
+            let delta = crate::services::arg(m, cpu, 1);
+            let mut value = counter.value.lock().unwrap();
+            cpu.eax = *value;
+            *value = value.wrapping_add(delta);
+            crate::services::ret(m, cpu, 8);
+            return;
+        }
+    }
+    crate::win32::interlocked_exchange_add(m, cpu);
 }
 fn current() -> Rc<Replay> {
     REPLAY.with(|v| v.borrow().as_ref().expect("private replay scope").clone())
@@ -367,7 +393,7 @@ fn resolve(target: u32) -> LiftFn {
             for (slot, service) in [
                 (0x0139d160, private_enter as LiftFn),
                 (0x0139d164, private_leave),
-                (0x0139d0a8, crate::win32::interlocked_exchange_add),
+                (0x0139d0a8, private_exchange_add),
             ] {
                 if replay.memory.probe(slot, 4, false).is_ok()
                     && replay.memory.u32(slot) == target
@@ -519,6 +545,15 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
     }
     memory.set_u32(scheduler + 0x90, 0);
     memory.set_u32(scheduler + 0x94, mode);
+    let command_counter = if memory.probe(0x018d08f4, 4, false).is_ok() && memory.u32(0x018d08f4) != 0 {
+        let address = memory.u32(0x018d08f4).wrapping_add(0x33dc8);
+        Some(Arc::new(CommandCounter {
+            address,
+            value: Mutex::new(memory.u32(address)),
+        }))
+    } else {
+        None
+    };
     let input = Arc::new(replay.memory.0.borrow().frozen());
     let mut incoming = cpu.clone();
     incoming.mxcsr.0 = x86::stmxcsr();
@@ -545,6 +580,7 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
                     stack: scratch.clone(),
                     lane_count: 1,
                     depth: 1,
+                    command_counter: command_counter.clone(),
                 },
                 |m| {
                     let context = m.u32(scheduler + 0x1bdd0 + lane as u32 * 0x20);
@@ -595,8 +631,20 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
         },
     )
     .unwrap_or_else(|error| std::panic::panic_any(error));
+    if let Some(counter) = &command_counter {
+        let end = counter
+            .address
+            .checked_add(4)
+            .unwrap_or_else(|| std::panic::panic_any(Reject::AtomicConflict(counter.address)));
+        if results.iter().any(|lane| lane.touches(counter.address..end)) {
+            std::panic::panic_any(Reject::AtomicConflict(counter.address));
+        }
+    }
     lanes::merge(&input, &results, &[scratch.clone()]).unwrap_or_else(|error| std::panic::panic_any(error));
     replay.memory.0.borrow_mut().absorb(&results, scratch);
+    if let Some(counter) = &command_counter {
+        memory.set_u32(counter.address, *counter.value.lock().unwrap());
+    }
     if multiple {
         memory.set_u8(NESTING, nesting[0]);
         memory.set_u8(NESTING_OTHER, nesting[1]);
@@ -933,6 +981,7 @@ fn compare_replays(
                         stack,
                         lane_count: if parallel { 2 } else { 1 },
                         depth: 0,
+                        command_counter: None,
                     },
                     |m| {
                         let nesting = [m.u8(NESTING), m.u8(NESTING_OTHER)];
@@ -1207,6 +1256,7 @@ mod tests {
             stack: 0x1000..0x2000,
             lane_count: 1,
             depth: 0,
+            command_counter: None,
         };
         with_replay(replay, |m| {
             for (target, recursion) in [(0x7ff01230, 1), (0x7ff01230, 2), (0x7ff04560, 1), (0x7ff04560, 0)] {
@@ -1666,6 +1716,7 @@ mod tests {
                 stack: 0x80000..0x82000,
                 lane_count: 2,
                 depth: 0,
+                command_counter: None,
             };
             let mut cpu = Cpu {
                 ecx: 0x40000,
@@ -1691,6 +1742,71 @@ mod tests {
     }
 
     #[test]
+    fn shared_command_counter_claims_disjoint_bytes_and_rejects_ordinary_access() {
+        fn allocate(m: &mut dyn Mem, cpu: &mut Cpu) {
+            let job = (cpu.ecx - 0x3000) / 0x10;
+            let address = m.u32(0x018d08f4) + 0x33dc8;
+            if m.u32(0x1010) != 0 {
+                let _ = m.u32(address);
+            }
+            push(m, cpu, 16);
+            push(m, cpu, address);
+            push(m, cpu, 0xda7d86);
+            private_exchange_add(m, cpu);
+            m.set_u32(0x1400 + job * 4, cpu.eax);
+            cpu.esp += 8;
+        }
+        for (direct_access, initial) in [(false, 0x100u32), (true, 0x100), (false, u32::MAX - 31)] {
+            let fixture = synthetic_fixture(0);
+            let (input, render) = fixture.input.private_arena(0x34000).unwrap();
+            let address = render.start + 0x33dc8;
+            let mut setup = LaneMemory::new(Arc::new(input), ACCESS_LIMIT);
+            setup.set_u32(0x018d08f4, render.start);
+            setup.set_u32(address, initial);
+            setup.set_u32(0x1010, u32::from(direct_access));
+            setup.set_u32(0x81004, 1);
+            let input = Arc::new(setup.frozen());
+            let private = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(
+                input.clone(),
+                ACCESS_LIMIT,
+            ))));
+            let replay = Replay {
+                raw: Arc::new(BTreeMap::from([(0x400010, allocate as LiftFn)])),
+                memory: private.clone(),
+                stack: fixture.stack,
+                lane_count: 2,
+                depth: 0,
+                command_counter: None,
+            };
+            let mut cpu = Cpu {
+                ecx: 0x40000,
+                esp: 0x81000,
+                ..Cpu::default()
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_replay(replay, |m| private_schedule(m, &mut cpu));
+            }));
+            if direct_access {
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<Reject>(),
+                    Some(&Reject::AtomicConflict(address))
+                );
+                assert_eq!(private.u32(address), initial);
+                assert_eq!(private.u32(0x1400), 0);
+            } else {
+                result.unwrap();
+                let mut allocations: Vec<_> = (0..4).map(|job| private.u32(0x1400 + job * 4)).collect();
+                allocations.sort();
+                let mut expected: Vec<_> = (0..4).map(|job| initial.wrapping_add(job * 16)).collect();
+                expected.sort();
+                assert_eq!(allocations, expected);
+                assert_eq!(private.u32(address), initial.wrapping_add(64));
+            }
+            assert_eq!(input.u32(address), initial);
+        }
+    }
+
+    #[test]
     fn unknown_external_call_is_rejected_before_host_dispatch() {
         let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(
             Arc::new(Snapshot::default()),
@@ -1702,6 +1818,7 @@ mod tests {
             stack: 0..0,
             lane_count: 1,
             depth: 0,
+            command_counter: None,
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             with_replay(replay, |m| {
