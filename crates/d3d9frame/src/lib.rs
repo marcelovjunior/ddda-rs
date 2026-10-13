@@ -475,15 +475,88 @@ impl Enc {
 
 // --- reading -------------------------------------------------------------------
 
-/// Streams a capture file's commands; blobs are kept as they arrive.
+/// Streams a capture file's commands. Blobs are kept as they arrive
+/// ([`Reader::open`]), or, from [`Reader::open_indexed`], as their place in
+/// the file, inflated when a command uses them (memory bounded by a cache).
 pub struct Reader<R: Read = BufReader<std::fs::File>> {
     input: R,
-    blobs: Vec<Vec<u8>>,
+    blobs: Blobs,
+    /// the input's position (bytes from the start of the file)
+    pos: u64,
+}
+
+/// A capture's blobs: in memory, or where they are in the file.
+struct Blobs {
+    blobs: Vec<Blob>,
+    lazy: Option<Lazy>,
+}
+
+enum Blob {
+    Bytes(std::sync::Arc<[u8]>),
+    /// the deflated bytes' offset and length in the file, the inflated length
+    At { offset: u64, len: u32, raw: u32 },
+}
+
+/// Blobs read on demand from the file, the latest kept up to `cap` bytes.
+struct Lazy {
+    file: std::fs::File,
+    cache: HashMap<usize, std::sync::Arc<[u8]>>,
+    order: std::collections::VecDeque<usize>,
+    bytes: usize,
+    cap: usize,
+}
+
+impl Blobs {
+    fn get(&mut self, id: usize) -> io::Result<std::sync::Arc<[u8]>> {
+        let (offset, len, raw) = match self.blobs.get(id) {
+            Some(Blob::Bytes(b)) => return Ok(b.clone()),
+            Some(Blob::At { offset, len, raw }) => (*offset, *len, *raw),
+            None => return Err(bad(format!("blob {id} used before it was written"))),
+        };
+        let lazy = self.lazy.as_mut().ok_or_else(|| bad("blob without a file"))?;
+        if let Some(b) = lazy.cache.get(&id) {
+            return Ok(b.clone());
+        }
+        use std::io::Seek;
+        lazy.file.seek(io::SeekFrom::Start(offset))?;
+        let mut deflated = vec![0u8; len as usize];
+        lazy.file.read_exact(&mut deflated)?;
+        let bytes = miniz_oxide::inflate::decompress_to_vec_with_limit(&deflated, raw as usize).map_err(|e| bad(format!("blob {id}: {e:?}")))?;
+        if bytes.len() != raw as usize {
+            return Err(bad(format!("blob {id}: {} bytes, expected {raw}", bytes.len())));
+        }
+        let b: std::sync::Arc<[u8]> = bytes.into();
+        lazy.bytes += b.len();
+        lazy.cache.insert(id, b.clone());
+        lazy.order.push_back(id);
+        while lazy.bytes > lazy.cap {
+            let Some(old) = lazy.order.pop_front() else { break };
+            if let Some(x) = lazy.cache.remove(&old) {
+                lazy.bytes -= x.len();
+            }
+        }
+        Ok(b)
+    }
 }
 
 impl Reader {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Reader> {
         Reader::new(BufReader::with_capacity(1 << 20, std::fs::File::open(path)?))
+    }
+
+    /// As [`open`](Self::open), with the blobs left in the file and read
+    /// when a command uses them, the latest `cache_bytes` of them kept:
+    /// memory stays bounded whatever the capture's length (L113).
+    pub fn open_indexed(path: impl AsRef<Path>, cache_bytes: usize) -> io::Result<Reader> {
+        let mut r = Reader::open(&path)?;
+        r.blobs.lazy = Some(Lazy {
+            file: std::fs::File::open(path)?,
+            cache: HashMap::new(),
+            order: Default::default(),
+            bytes: 0,
+            cap: cache_bytes,
+        });
+        Ok(r)
     }
 }
 
@@ -502,7 +575,7 @@ impl<R: Read> Reader<R> {
         if version != VERSION {
             return Err(bad(format!("capture version {version}, this reader reads {VERSION}")));
         }
-        Ok(Reader { input, blobs: Vec::new() })
+        Ok(Reader { input, blobs: Blobs { blobs: Vec::new(), lazy: None }, pos: 12 })
     }
 
     /// The next command; None at the end (a record cut short at the end, as
@@ -522,6 +595,8 @@ impl<R: Read> Reader<R> {
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
                 Err(e) => return Err(e),
             }
+            let payload_at = self.pos + 5;
+            self.pos += 5 + len as u64;
             match head[0] {
                 TAG_BLOB => {
                     if len < 8 {
@@ -529,17 +604,21 @@ impl<R: Read> Reader<R> {
                     }
                     let id = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
                     let raw = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
-                    if id != self.blobs.len() {
+                    if id != self.blobs.blobs.len() {
                         return Err(bad(format!("blob {id} out of order")));
+                    }
+                    if self.blobs.lazy.is_some() {
+                        self.blobs.blobs.push(Blob::At { offset: payload_at + 8, len: (len - 8) as u32, raw: raw as u32 });
+                        continue;
                     }
                     let bytes = miniz_oxide::inflate::decompress_to_vec_with_limit(&payload[8..], raw).map_err(|e| bad(format!("blob {id}: {e:?}")))?;
                     if bytes.len() != raw {
                         return Err(bad(format!("blob {id}: {} bytes, expected {raw}", bytes.len())));
                     }
-                    self.blobs.push(bytes);
+                    self.blobs.blobs.push(Blob::Bytes(bytes.into()));
                 }
                 TAG_COMMAND => {
-                    let mut d = Dec { b: &payload, at: 0, blobs: &self.blobs };
+                    let mut d = Dec { b: &payload, at: 0, blobs: &mut self.blobs };
                     return d.command().map(Some);
                 }
                 t => return Err(bad(format!("record tag {t}"))),
@@ -558,7 +637,7 @@ impl<R: Read> Iterator for Reader<R> {
 struct Dec<'a> {
     b: &'a [u8],
     at: usize,
-    blobs: &'a [Vec<u8>],
+    blobs: &'a mut Blobs,
 }
 
 impl Dec<'_> {
@@ -575,16 +654,16 @@ impl Dec<'_> {
     fn rect(&mut self) -> io::Result<[i32; 4]> {
         Ok([self.u32()? as i32, self.u32()? as i32, self.u32()? as i32, self.u32()? as i32])
     }
-    fn blob(&mut self) -> io::Result<&[u8]> {
+    fn blob(&mut self) -> io::Result<std::sync::Arc<[u8]>> {
         let id = self.u32()? as usize;
-        self.blobs.get(id).map(|b| b.as_slice()).ok_or_else(|| bad(format!("blob {id} used before it was written")))
+        self.blobs.get(id)
     }
-    fn opt_blob(&mut self) -> io::Result<Option<&[u8]>> {
+    fn opt_blob(&mut self) -> io::Result<Option<std::sync::Arc<[u8]>>> {
         let id = self.u32()?;
         if id == NONE {
             return Ok(None);
         }
-        self.blobs.get(id as usize).map(|b| Some(b.as_slice())).ok_or_else(|| bad(format!("blob {id} used before it was written")))
+        self.blobs.get(id as usize).map(Some)
     }
     fn kind(&mut self) -> io::Result<TexKind> {
         Ok(match self.u32()? {
@@ -683,12 +762,12 @@ impl Dec<'_> {
             k => return Err(bad(format!("indices kind {k}"))),
         };
         let tokens = |b: &[u8]| b.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect::<Vec<u32>>();
-        let vertex_shader = self.opt_blob()?.map(|b| tokens(b).into());
-        let pixel_shader = self.opt_blob()?.map(|b| tokens(b).into());
+        let vertex_shader = self.opt_blob()?.map(|b| tokens(&b).into());
+        let pixel_shader = self.opt_blob()?.map(|b| tokens(&b).into());
         let declaration = self.blob()?.chunks_exact(8).map(|e| e.try_into().unwrap()).collect();
         let fvf = self.u32()?;
-        let vs_constants = constants_from(self.blob()?)?;
-        let ps_constants = constants_from(self.blob()?)?;
+        let vs_constants = constants_from(&self.blob()?)?;
+        let ps_constants = constants_from(&self.blob()?)?;
         let n = self.u32()?;
         let mut textures = Vec::with_capacity(n as usize);
         for _ in 0..n {
@@ -700,7 +779,7 @@ impl Dec<'_> {
             }
             textures.push(TextureBinding { sampler, resource, kind, format, width, height, depth, levels, usage, states });
         }
-        let words = tokens(self.blob()?);
+        let words = tokens(&self.blob()?);
         let render_states = words.chunks_exact(2).map(|p| (p[0], p[1])).collect::<Vec<_>>().into();
         let mut viewport = [0u32; 6];
         for v in &mut viewport {
@@ -922,6 +1001,25 @@ mod tests {
         // the repeated draw, the same 16 bytes in an image and a buffer
         // and the empty constant blocks are written once
         assert!(blobs <= 12, "{blobs} blobs");
+    }
+
+    /// L113: blobs read from the file when used, through a cache too small
+    /// to keep any, give the same commands.
+    #[test]
+    fn an_indexed_reader_reads_the_same_commands() {
+        let cs = commands();
+        let path = std::env::temp_dir().join(format!("d3d9frame-indexed-{}.ddframe", std::process::id()));
+        let mut w = Writer::create(&path).unwrap();
+        for c in &cs {
+            w.write(c.as_cmd()).unwrap();
+        }
+        w.flush().unwrap();
+        drop(w);
+        for cache in [0, 1 << 20] {
+            let read: Vec<Command> = Reader::open_indexed(&path, cache).unwrap().collect::<io::Result<_>>().unwrap();
+            assert_eq!(read, cs, "cache {cache}");
+        }
+        std::fs::remove_file(&path).unwrap();
     }
 
     struct Null(u32);
