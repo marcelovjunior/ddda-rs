@@ -15,6 +15,7 @@ fn quiet(x: f32) -> f32 {
 }
 
 const K_1406CE0: f32 = f32::from_bits(0x3f800000);
+const K_1406CEC: f32 = f32::from_bits(0x40000000);
 const K_1407124: f32 = f32::from_bits(0x34000000);
 const K_14F0E9C: f32 = f32::from_bits(0x3f000000);
 const K_14F9E04: f32 = f32::from_bits(0x40000000);
@@ -462,6 +463,35 @@ pub(super) fn kernel_m7_scale_translate(l: &[f32; 20], trig: &mut dyn FnMut(bool
     [v2, v3, v4, v5, l[5], l[6], l[7], l[8], l[9], l[10], l[11], l[12], (l[13] + l[14]), (l[15] + l[16]), (l[17] + l[18]), quiet(l[19])]
 }
 
+/// Inputs of `kernel_quaternion_matrix`.
+pub(super) fn load_quaternion_matrix(m: &dyn Mem, pg: Pages, b: &Bases, s: &Matrix) -> [f32; 4] {
+    let _ = (m, pg, b, s);
+    [
+        rd(m, pg, b.this + 88),
+        rd(m, pg, b.this + 84),
+        rd(m, pg, b.this + 92),
+        rd(m, pg, b.this + 80),
+    ]
+}
+
+/// Kernel of 0x00DEB960: the rotation matrix of the quaternion at this+0x50 (x, y, z, w).
+#[allow(clippy::all, unused_parens)]
+pub(super) fn kernel_quaternion_matrix(l: &[f32; 4], trig: &mut dyn FnMut(bool, f32) -> f32) -> [f32; 16] {
+    let v1: f32 = (l[0] * K_1406CEC);
+    let v2: f32 = (l[0] * v1);
+    let v3: f32 = (l[1] * K_1406CEC);
+    let v4: f32 = (l[1] * v3);
+    let v5: f32 = (v1 * l[2]);
+    let v6: f32 = (l[3] * v3);
+    let v7: f32 = (l[3] * v1);
+    let v8: f32 = (v3 * l[2]);
+    let v9: f32 = (l[3] * K_1406CEC);
+    let v10: f32 = (l[3] * v9);
+    let v11: f32 = (v9 * l[2]);
+    let v12: f32 = (l[1] * v1);
+    [(K_1406CE0 - (v2 + v4)), (v5 + v6), (v7 - v8), 0.0_f32, (v6 - v5), (K_1406CE0 - (v2 + v10)), (v11 + v12), 0.0_f32, (v7 + v8), (v12 - v11), (K_1406CE0 - (v10 + v4)), 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, K_1406CE0]
+}
+
 /// Inputs of `kernel_m9`, in order.
 pub(super) fn load_m9(m: &dyn Mem, pg: Pages, b: &Bases, s: &Matrix) -> [f32; 19] {
     let _ = (m, pg, b, s);
@@ -853,65 +883,65 @@ pub(super) fn kernel_m12(l: &[f32; 42], trig: &mut dyn FnMut(bool, f32) -> f32) 
     let v46: f32 = (if c17 { l[34] } else { v45 });
     let v47: f32 = (if c16 { v45 } else { v46 });
     let v48: f32 = (if c4 { v45 } else { v47 });
-    let v49: f32 = (0.0_f32 * l[19]);
-    let v50: f32 = (v32 + v31);
-    let v51: f32 = (l[27] * v30);
-    let v52: f32 = (1.0_f32 - (v27 + v51));
-    let v53: f32 = (l[24] * v26);
-    let v54: f32 = (v30 * l[28]);
-    let v55: f32 = (v53 - v54);
-    let v56: f32 = (v49 + (((v7 * v50) + (v9 * v52)) + (v13 * v55)));
-    let v57: f32 = (if c17 { l[2] } else { v56 });
-    let v58: f32 = (if c16 { v56 } else { v57 });
-    let v59: f32 = (if c4 { v56 } else { v58 });
-    let v60: f32 = (0.0_f32 * l[35]);
-    let v61: f32 = (v6 * l[36]);
-    let v62: f32 = (v36 - v35);
-    let v63: f32 = (v3 * l[37]);
-    let v64: f32 = (v54 + v53);
-    let v65: f32 = (v12 * l[38]);
-    let v66: f32 = (1.0_f32 - (v25 + v51));
-    let v67: f32 = (v60 + (((v61 * v62) + (v63 * v64)) + (v65 * v66)));
-    let v68: f32 = (if c17 { l[15] } else { v67 });
+    let v49: f32 = (0.0_f32 * l[35]);
+    let v50: f32 = (v6 * l[36]);
+    let v51: f32 = (v36 - v35);
+    let v52: f32 = (v3 * l[37]);
+    let v53: f32 = (v30 * l[28]);
+    let v54: f32 = (l[24] * v26);
+    let v55: f32 = (v53 + v54);
+    let v56: f32 = (v12 * l[38]);
+    let v57: f32 = (l[27] * v30);
+    let v58: f32 = (1.0_f32 - (v25 + v57));
+    let v59: f32 = (v49 + (((v50 * v51) + (v52 * v55)) + (v56 * v58)));
+    let v60: f32 = (if c17 { l[15] } else { v59 });
+    let v61: f32 = (if c16 { v59 } else { v60 });
+    let v62: f32 = (if c4 { v59 } else { v61 });
+    let v63: f32 = (0.0_f32 * l[19]);
+    let v64: f32 = (v32 + v31);
+    let v65: f32 = (1.0_f32 - (v27 + v57));
+    let v66: f32 = (v54 - v53);
+    let v67: f32 = (v63 + (((v7 * v64) + (v9 * v65)) + (v13 * v66)));
+    let v68: f32 = (if c17 { l[2] } else { v67 });
     let v69: f32 = (if c16 { v67 } else { v68 });
     let v70: f32 = (if c4 { v67 } else { v69 });
-    let v71: f32 = ((((v61 * v50) + (v63 * v52)) + (v65 * v55)) + v60);
+    let v71: f32 = ((((v50 * v64) + (v52 * v65)) + (v56 * v66)) + v49);
     let v72: f32 = (if c17 { l[3] } else { v71 });
     let v73: f32 = (if c16 { v71 } else { v72 });
     let v74: f32 = (if c4 { v71 } else { v73 });
     let v75: f32 = (0.0_f32 * l[30]);
-    let v76: f32 = (v75 + (((v42 * v62) + (v43 * v64)) + (v44 * v66)));
+    let v76: f32 = (v75 + (((v42 * v51) + (v43 * v55)) + (v44 * v58)));
     let v77: f32 = (if c17 { l[16] } else { v76 });
     let v78: f32 = (if c16 { v76 } else { v77 });
     let v79: f32 = (if c4 { v76 } else { v78 });
     let v80: f32 = (v74 * v79);
-    let v81: f32 = ((((v61 * v8) + (v63 * v10)) + (v65 * v14)) + (1.0_f32 * l[35]));
+    let v81: f32 = ((((v50 * v8) + (v52 * v10)) + (v56 * v14)) + (1.0_f32 * l[35]));
     let v82: f32 = (if c17 { l[39] } else { v81 });
     let v83: f32 = (if c16 { v81 } else { v82 });
     let v84: f32 = (if c4 { v81 } else { v83 });
-    let v85: f32 = ((((v43 * v52) + (v42 * v50)) + (v44 * v55)) + v75);
+    let v85: f32 = ((((v43 * v65) + (v42 * v64)) + (v44 * v66)) + v75);
     let v86: f32 = (if c17 { l[4] } else { v85 });
     let v87: f32 = (if c16 { v85 } else { v86 });
     let v88: f32 = (if c4 { v85 } else { v87 });
-    let v89: f32 = (v49 + (((v7 * v62) + (v9 * v64)) + (v13 * v66)));
+    let v89: f32 = (v63 + (((v7 * v51) + (v9 * v55)) + (v13 * v58)));
     let v90: f32 = (if c17 { l[14] } else { v89 });
     let v91: f32 = (if c16 { v89 } else { v90 });
     let v92: f32 = (if c4 { v89 } else { v91 });
     let v93: f32 = (v88 * v92);
-    let v94: f32 = (v88 * v70);
+    let v94: f32 = (v88 * v62);
     let v95: f32 = (v84 * v79);
     let v96: f32 = (v74 * v48);
-    let v97: f32 = (-((((((v48 * (v59 * v70)) + (v20 * v80)) + (v84 * v93)) - (v20 * v94)) - (v59 * v95)) - (v92 * v96)));
-    let v98: f32 = ((((v23 * v50) + (v29 * v52)) + (v34 * v55)) + v22);
+    let v97: f32 = (-((((((v48 * (v62 * v70)) + (v20 * v80)) + (v84 * v93)) - (v20 * v94)) - (v70 * v95)) - (v92 * v96)));
+    let v98: f32 = ((((v23 * v64) + (v29 * v65)) + (v34 * v66)) + v22);
     let v99: f32 = (if c17 { l[1] } else { v98 });
     let v100: f32 = (if c16 { v98 } else { v99 });
     let v101: f32 = (if c4 { v98 } else { v100 });
-    let v102: f32 = (v60 + (((v61 * v28) + (v63 * v33)) + (v65 * v37)));
+    let v102: f32 = (v49 + (((v50 * v28) + (v52 * v33)) + (v56 * v37)));
     let v103: f32 = (if c17 { l[7] } else { v102 });
     let v104: f32 = (if c16 { v102 } else { v103 });
     let v105: f32 = (if c4 { v102 } else { v104 });
     let v106: f32 = (v105 * v79);
-    let v107: f32 = (v49 + (((v7 * v28) + (v9 * v33)) + (v13 * v37)));
+    let v107: f32 = (v63 + (((v7 * v28) + (v9 * v33)) + (v13 * v37)));
     let v108: f32 = (if c17 { l[6] } else { v107 });
     let v109: f32 = (if c16 { v107 } else { v108 });
     let v110: f32 = (if c4 { v107 } else { v109 });
@@ -920,28 +950,28 @@ pub(super) fn kernel_m12(l: &[f32; 42], trig: &mut dyn FnMut(bool, f32) -> f32) 
     let v113: f32 = (if c16 { v111 } else { v112 });
     let v114: f32 = (if c4 { v111 } else { v113 });
     let v115: f32 = (v114 * v92);
-    let v116: f32 = (v114 * v70);
+    let v116: f32 = (v114 * v62);
     let v117: f32 = (v105 * v48);
-    let v118: f32 = ((((((v20 * v106) + (v48 * (v70 * v110))) + (v84 * v115)) - (v20 * v116)) - (v110 * v95)) - (v92 * v117));
-    let v119: f32 = (v22 + (((v23 * v62) + (v29 * v64)) + (v34 * v66)));
+    let v118: f32 = ((((((v20 * v106) + (v48 * (v62 * v110))) + (v84 * v115)) - (v20 * v116)) - (v110 * v95)) - (v92 * v117));
+    let v119: f32 = (v22 + (((v23 * v51) + (v29 * v55)) + (v34 * v58)));
     let v120: f32 = (if c17 { l[13] } else { v119 });
     let v121: f32 = (if c16 { v119 } else { v120 });
     let v122: f32 = (if c4 { v119 } else { v121 });
     let v123: f32 = (v88 * v110);
-    let v124: f32 = (v59 * v105);
+    let v124: f32 = (v105 * v70);
     let v125: f32 = (v114 * v74);
     let v126: f32 = (v88 * v105);
     let v127: f32 = (v114 * v84);
-    let v128: f32 = (((((v84 * v123) + ((v48 * v124) + (v20 * v125))) - (v20 * v126)) - (v59 * v127)) - (v110 * v96));
+    let v128: f32 = (((((v84 * v123) + ((v48 * v124) + (v20 * v125))) - (v20 * v126)) - (v70 * v127)) - (v110 * v96));
     let v129: f32 = ((((v23 * v8) + (v29 * v10)) + (v34 * v14)) + (1.0_f32 * l[22]));
     let v130: f32 = (if c17 { l[40] } else { v129 });
     let v131: f32 = (if c16 { v129 } else { v130 });
     let v132: f32 = (if c4 { v129 } else { v131 });
-    let v133: f32 = ((((v41 * v97) + (v101 * v118)) + (v122 * v128)) + (v132 * (-((((((v92 * v125) + (v79 * v124)) + (v70 * v123)) - (v92 * v126)) - (v59 * v116)) - (v110 * v80)))));
+    let v133: f32 = ((((v41 * v97) + (v101 * v118)) + (v122 * v128)) + (v132 * (-((((((v92 * v125) + (v79 * v124)) + (v62 * v123)) - (v92 * v126)) - (v70 * v116)) - (v110 * v80)))));
     let c134: bool = (!(v133 == K_1521690));
     let v135: f32 = (1.0_f32 / v133);
     let v136: f32 = (v114 * v122);
-    let v137: f32 = (if c134 { (-(v135 * ((((((v48 * (v41 * v70)) + (v132 * v106)) + (v84 * v136)) - (v132 * v116)) - (v41 * v95)) - (v122 * v117)))) } else { K_16295D0 });
+    let v137: f32 = (if c134 { (-(v135 * ((((((v48 * (v41 * v62)) + (v132 * v106)) + (v84 * v136)) - (v132 * v116)) - (v41 * v95)) - (v122 * v117)))) } else { K_16295D0 });
     let v138: f32 = ((v132 - l[22]) * (l[0] - 1.0_f32));
     let v139: f32 = (if c134 { (v118 * v135) } else { K_16295C0 });
     let v140: f32 = ((v84 - l[35]) * (l[41] - 1.0_f32));
@@ -954,10 +984,10 @@ pub(super) fn kernel_m12(l: &[f32; 42], trig: &mut dyn FnMut(bool, f32) -> f32) 
     let v147: f32 = (if c144 { v143 } else { v146 });
     let v148: f32 = (if c1 { v143 } else { v147 });
     let v149: f32 = (v88 * v122);
-    let v150: f32 = (if c134 { (v135 * ((((((v48 * (v70 * v101)) + (v132 * v80)) + (v84 * v149)) - (v132 * v94)) - (v101 * v95)) - (v122 * v96))) } else { K_16295D4 });
+    let v150: f32 = (if c134 { (v135 * ((((((v48 * (v62 * v101)) + (v132 * v80)) + (v84 * v149)) - (v132 * v94)) - (v101 * v95)) - (v122 * v96))) } else { K_16295D4 });
     let v151: f32 = (if c134 { (v97 * v135) } else { K_16295C4 });
-    let v152: f32 = (v59 * v48);
-    let v153: f32 = (if c134 { (-(v135 * (((((v20 * v149) + ((v132 * (v59 * v79)) + (v48 * (v92 * v101)))) - (v132 * v93)) - (v101 * v141)) - (v122 * v152)))) } else { K_16295E4 });
+    let v152: f32 = (v48 * v70);
+    let v153: f32 = (if c134 { (-(v135 * (((((v20 * v149) + ((v132 * (v79 * v70)) + (v48 * (v92 * v101)))) - (v132 * v93)) - (v101 * v141)) - (v122 * v152)))) } else { K_16295E4 });
     let v154: f32 = (K_16295F4 + (((v21 * v150) + (v138 * v151)) + (v140 * v153)));
     let v155: f32 = (if c145 { K_16295F4 } else { v154 });
     let v156: f32 = (if c144 { v154 } else { v155 });
@@ -965,7 +995,7 @@ pub(super) fn kernel_m12(l: &[f32; 42], trig: &mut dyn FnMut(bool, f32) -> f32) 
     let v158: f32 = (v88 * v41);
     let v159: f32 = (if c134 { (-(v135 * ((((((v132 * v125) + (v48 * (v101 * v105))) + (v84 * v158)) - (v132 * v126)) - (v101 * v127)) - (v41 * v96)))) } else { K_16295D8 });
     let v160: f32 = (if c134 { (v128 * v135) } else { K_16295C8 });
-    let v161: f32 = (if c134 { (v135 * ((((((v132 * (v59 * v114)) + (v48 * (v101 * v110))) + (v20 * v158)) - (v132 * v123)) - (v101 * (v114 * v20))) - (v41 * v152))) } else { K_16295E8 });
+    let v161: f32 = (if c134 { (v135 * ((((((v132 * (v114 * v70)) + (v48 * (v101 * v110))) + (v20 * v158)) - (v132 * v123)) - (v101 * (v114 * v20))) - (v41 * v152))) } else { K_16295E8 });
     let v162: f32 = (K_16295F8 + (((v21 * v159) + (v138 * v160)) + (v140 * v161)));
     let v163: f32 = (if c145 { K_16295F8 } else { v162 });
     let v164: f32 = (if c144 { v162 } else { v163 });
@@ -974,7 +1004,7 @@ pub(super) fn kernel_m12(l: &[f32; 42], trig: &mut dyn FnMut(bool, f32) -> f32) 
     let v167: f32 = (if c145 { K_16295FC } else { v166 });
     let v168: f32 = (if c144 { v166 } else { v167 });
     let v169: f32 = (if c1 { v166 } else { v168 });
-    [K_16295C0, K_16295C4, K_16295C8, K_16295CC, K_16295D0, K_16295D4, K_16295D8, K_16295DC, K_16295E0, K_16295E4, K_16295E8, K_16295EC, v148, v157, v165, v169, v101, v59, v74, v88, v41, v110, v105, v114, v122, v92, v70, v79, v132, v20, v84, v48]
+    [K_16295C0, K_16295C4, K_16295C8, K_16295CC, K_16295D0, K_16295D4, K_16295D8, K_16295DC, K_16295E0, K_16295E4, K_16295E8, K_16295EC, v148, v157, v165, v169, v101, v70, v74, v88, v41, v110, v105, v114, v122, v92, v62, v79, v132, v20, v84, v48]
 }
 
 /// Inputs of `kernel_m13_euler`.

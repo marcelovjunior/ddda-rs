@@ -303,3 +303,11 @@ fn semantic_copy_input_bindings_matches_original() {
     let count = cases("E:/ddda-re/notes/native-L184/input_bindings.json", mtcore::semantic_s5_render::copy_input_bindings, input_registers, false);
     eprintln!("{count} ABI-level 0x0076f570 cases passed");
 }
+
+// verifies 0x00deb960 (ABI level; EAX = out)
+#[test]
+fn semantic_joint_euler_angles_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/joint_euler.json", mtcore::semantic_s5::joint_euler_angles, input_registers, true);
+    eprintln!("{count} ABI-level 0x00deb960 cases passed");
+}

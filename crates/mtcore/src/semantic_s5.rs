@@ -1074,3 +1074,150 @@ pub fn blend_toward_provider(m: &mut dyn Mem, c: &mut Cpu) {
     write_matrix(m, pg, c.ecx, &result);
     c.esp = entry.wrapping_add(4 + 12);
 }
+
+// ---------------------------------------------------------------------
+// 0x00DEB960: a joint quaternion as Euler angles of the joint's rotation order
+
+use crate::semantic_s6_crt::{asinf, atan2, Tables};
+
+/// Euler angles of the rotation `matrix` (only elements 0, 1, 2, 4, 5, 6, 8,
+/// 9 and 10 are read) for rotation `order` 0..=5 (XYZ, XZY, YXZ, YZX, ZXY,
+/// ZYX): the six routines 0x00CFC9E0, 0x00CFCB00, 0x00CFCC20, 0x00CFCD40,
+/// 0x00CFCF80 (order 4) and 0x00CFCE60 (order 5), which differ in the matrix elements they use.
+/// Each takes the sine of the middle angle from one element (`pivot`),
+/// recovers the other two with atan2 (double precision) and the middle one
+/// with asinf, and handles the gimbal-lock poles (pivot <= -1 or >= 1/NaN)
+/// with a fixed +-pi/2.
+///
+/// Returns `[a0, a1, a2, 0.0]`, as the routines store them.
+pub fn euler_angles_of_order(t: &Tables, order: u32, e: &Matrix) -> Option<[f32; 4]> {
+    // CVTPS2PD of the arguments, CVTSD2SS of the result
+    let at = |y: f32, x: f32| -> f32 { atan2(t, y as f64, x as f64) as f32 };
+    let half_pi = f32::from_bits(0x3fc9_0fdb);
+    let neg_half_pi = f32::from_bits(0xbfc9_0fdb);
+    let mut out = [0.0f32; 4];
+    match order {
+        0 => {
+            let m = e[2];
+            if 1.0 > m {
+                if m > -1.0 {
+                    out[0] = -at(-e[6], e[10]);
+                    out[1] = -asinf(t, m);
+                    out[2] = -at(-e[1], e[0]);
+                } else {
+                    out[0] = at(e[4], e[5]);
+                    out[1] = half_pi;
+                }
+            } else {
+                out[0] = -at(e[4], e[5]);
+                out[1] = -half_pi;
+            }
+        }
+        1 => {
+            let m = e[1];
+            if 1.0 > m {
+                if m > -1.0 {
+                    out[0] = -at(e[9], e[5]);
+                    out[2] = -asinf(t, -m);
+                    out[1] = -at(e[2], e[0]);
+                } else {
+                    out[0] = -at(e[8], e[10]);
+                    out[2] = neg_half_pi;
+                }
+            } else {
+                out[0] = -at(-e[8], e[10]);
+                out[2] = half_pi;
+            }
+        }
+        2 => {
+            let m = e[6];
+            if 1.0 > m {
+                if m > -1.0 {
+                    out[1] = -at(e[2], e[10]);
+                    out[0] = -asinf(t, -m);
+                    out[2] = -at(e[4], e[5]);
+                } else {
+                    out[1] = -at(e[1], e[0]);
+                    out[0] = neg_half_pi;
+                }
+            } else {
+                out[1] = -at(-e[1], e[0]);
+                out[0] = half_pi;
+            }
+        }
+        3 => {
+            let m = e[4];
+            if 1.0 > m {
+                if m > -1.0 {
+                    out[1] = -at(-e[8], e[0]);
+                    out[2] = -asinf(t, m);
+                    out[0] = -at(-e[6], e[5]);
+                } else {
+                    out[1] = at(e[9], e[10]);
+                    out[2] = half_pi;
+                }
+            } else {
+                out[1] = -at(e[9], e[10]);
+                out[2] = neg_half_pi;
+            }
+        }
+        5 => {
+            let m = e[8];
+            if 1.0 > m {
+                if m > -1.0 {
+                    out[2] = -at(e[4], e[0]);
+                    out[1] = -asinf(t, -m);
+                    out[0] = -at(e[9], e[10]);
+                } else {
+                    out[2] = at(e[1], e[2]);
+                    out[1] = neg_half_pi;
+                }
+            } else {
+                out[2] = -at(-e[1], -e[2]);
+                out[1] = half_pi;
+            }
+        }
+        4 => {
+            let m = e[9];
+            if 1.0 > m {
+                if m > -1.0 {
+                    out[2] = -at(-e[1], e[5]);
+                    out[0] = -asinf(t, m);
+                    out[1] = -at(-e[8], e[10]);
+                } else {
+                    out[2] = at(e[8], e[0]);
+                    out[0] = half_pi;
+                }
+            } else {
+                out[2] = -at(e[2], e[0]);
+                out[0] = neg_half_pi;
+            }
+        }
+        _ => return None,
+    }
+    Some(out)
+}
+
+/// 0x00DEB960 `joint->euler_angles(out)` (thiscall, stack argument `out`, `ret 4`):
+/// the rotation matrix of the quaternion at `this + 0x50` (x, y, z, w) turned
+/// into the three Euler angles of the rotation order in the word at `this +
+/// 0x38`; an order above 5 yields the four floats at 0x018CFE80. Writes the
+/// four floats to `out` and returns `out`.
+// Translated from 0x00DEB960 (DDDA.exe 2017-12-13 Steam)
+pub fn joint_euler_angles(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let out = pg.u32(m, entry.wrapping_add(4));
+    let bases = Bases { this, ..Default::default() };
+    let inputs = kernels::load_quaternion_matrix(m, pg, &bases, &IDENTITY);
+    let matrix = kernels::kernel_quaternion_matrix(&inputs, &mut |_, x| x);
+    let order = pg.u32(m, this + 0x38) & 0xffff;
+    let angles = euler_angles_of_order(&Tables { memory: &*m, pages: pg }, order, &matrix)
+        .unwrap_or_else(|| std::array::from_fn(|k| read_f32(m, pg, 0x018c_fe80 + 4 * k as u32)));
+    for (k, v) in angles.iter().enumerate() {
+        pg.set_u32(m, out + 4 * k as u32, v.to_bits());
+    }
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 4);
+}
