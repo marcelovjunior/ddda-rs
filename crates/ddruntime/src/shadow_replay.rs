@@ -1084,7 +1084,22 @@ fn compare_replays(
         results.push(result);
     }
     if let Some(diff) = results[0].1.first_difference(&results[1].1) {
-        return Err(format!("serial/parallel stream mismatch: {diff:?}"));
+        fn header(stream: &mtcore::shadow_lanes::StreamSnapshot, path: &[usize]) -> Option<(u32, u32)> {
+            let mut entries = &stream.entries;
+            for (depth, &index) in path.iter().enumerate() {
+                let entry = entries.get(index)?;
+                if depth + 1 == path.len() {
+                    return Some((entry.key, entry.record.header));
+                }
+                entries = &entry.record.children;
+            }
+            None
+        }
+        return Err(format!(
+            "serial/parallel stream mismatch: {diff:?}; key/header serial={:#x?} parallel={:#x?}; entries={}/{}",
+            header(&results[0].1, &diff.path), header(&results[1].1, &diff.path),
+            results[0].1.entries.len(), results[1].1.entries.len(),
+        ));
     }
     // Conservative proof gate: no differing memory accepted yet. Private
     // scheduler/context relocation classification needs separate evidence.

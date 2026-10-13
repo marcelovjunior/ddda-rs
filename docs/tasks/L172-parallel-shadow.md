@@ -349,3 +349,9 @@ all flags/register effects still come from the original body. Byte reads,
 ordinary writes, and other callers remain refused. Regression proves the
 helper sees updates and permission ends on return;35 focused pass.
 Next: offline rebuild/replay48124; no recapture required.
+
+2026-10-13 pinned b8f57fb6/8750e8bf replay48124: serial/live66 PASS,
+175 jobs, lane dependency merge PASSES. Full stream comparison now rejects
+root entry2 record header. Added bounded key/header/count diagnostics;
+no header masks or comparator relaxation.35 focused tests pass. Next:
+offline rebuild/replay to identify exact bits and trace original consumer.
