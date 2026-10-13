@@ -30,6 +30,11 @@ state/call tests pass before and after. Whole-game memory and image A/B
 remain with head. `emu_engine_created` reports cumulative engine creation
 under the load-log switch.
 
+`zlib_entry_totals` buckets inclusive inflate time by entry input/output
+sizes around the original fast-decoder guard (6/258 bytes). These are
+entry-size categories, not observed fast-path executions. They help target
+remaining resource-stream loading after the archive fast decoder port.
+
 ReadFileEx optionally caches immutable install archives with
 `DDRUNTIME_FILE_READ_AHEAD=1`: 256 KiB forward windows, 8 MiB retained
 buffer capacity per runtime, overlay/writable files excluded. It remains

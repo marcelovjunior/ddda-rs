@@ -14,7 +14,10 @@
   Six fallback state/call tests pass before/after; light suite 194 pass,
   one inherited fullscreen-gamma failure, four ignored. No game A/B yet.
 - Next: head integrates and repeats memory/image/save-load timing run;
-  profile remaining load time afterward. `docs/tasks/L109d-memory.md`.
+  profile remaining load time afterward. c18's 32..45 s contains 7.147 s
+  inclusive zlib time vs 0.478 s reads; opt-in entry-buffer counters now
+  distinguish small reads around the fast-decoder guard.
+  `docs/tasks/L109d-memory.md`.
 
 ### L129 combined integer/float flag fusion gate (2026-10-13)
 

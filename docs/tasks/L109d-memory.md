@@ -122,3 +122,22 @@ with `DDPLAY_ALLOC_LOG=1 DDRUNTIME_LOAD_LOG=1` and the external private-byte
 sampler, then compares image, process memory and visible phase timings.
 Codex-10's separate `2a5ad811` removes six hot fallback duration readers;
 remaining save-load CPU work should be profiled after both changes land.
+
+### Remaining save-load measurement
+
+In c18's process-relative 32..45 s interval (not an inferred UI label),
+13,741 zlib calls take 7.147 s inclusive; archive-scoped inflates take only
+0.137 s, file reads 0.478 s for 278.5 MB, with no new pipelines. Ghidra's
+three callers of `0x00cf02e0` are archive `0x00e0d320`, save `0x00410180`,
+and resource-stream `0x00db92c0`. The latter polls `Sleep(1)` outside zlib
+while waiting for producer data, so that wait is outside zlib's timer.
+
+Under the existing load-log switch, `zlib_entry_totals` now separates calls
+and inclusive time by entry input/output sizes: input below six bytes,
+output below 258 bytes, both, neither, and null stream. These thresholds
+come from `0x00cf0e6f`'s guard before the already-ported fast decoder.
+They describe entry buffers, **not actual fast-leaf execution**: the outer
+state machine can consume bytes or return before reaching the guard.
+The wrapper preserves CPU/guest results; focused wrapper/threshold tests
+and nine parser tests cover this diagnostic. Next head run should pair
+these counters with the requested save-load CPU profile.

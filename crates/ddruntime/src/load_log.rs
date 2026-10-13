@@ -20,6 +20,8 @@ static INFLATE_NS: AtomicU64 = AtomicU64::new(0);
 static INFLATES: AtomicU64 = AtomicU64::new(0);
 static ZLIB_NS: AtomicU64 = AtomicU64::new(0);
 static ZLIB_CALLS: AtomicU64 = AtomicU64::new(0);
+static ZLIB_ENTRY_CALLS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+static ZLIB_ENTRY_NS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 static CACHE_HOST_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -178,6 +180,13 @@ pub fn totals() {
             ZLIB_NS.load(Relaxed)
         ),
     );
+    event("zlib_entry_totals", format_args!(
+        "large_calls={} large_ns={} short_input_calls={} short_input_ns={} short_output_calls={} short_output_ns={} both_short_calls={} both_short_ns={} null_calls={} null_ns={}",
+        ZLIB_ENTRY_CALLS[0].load(Relaxed), ZLIB_ENTRY_NS[0].load(Relaxed),
+        ZLIB_ENTRY_CALLS[1].load(Relaxed), ZLIB_ENTRY_NS[1].load(Relaxed),
+        ZLIB_ENTRY_CALLS[2].load(Relaxed), ZLIB_ENTRY_NS[2].load(Relaxed),
+        ZLIB_ENTRY_CALLS[3].load(Relaxed), ZLIB_ENTRY_NS[3].load(Relaxed),
+        ZLIB_ENTRY_CALLS[4].load(Relaxed), ZLIB_ENTRY_NS[4].load(Relaxed)));
 }
 
 #[cfg(any(feature = "game", test))]
@@ -226,15 +235,29 @@ mod guest {
     }
     fn inflate(m: &mut dyn Mem, cpu: &mut Cpu) {
         let archive = ARCHIVE_DEPTH.with(|d| d.get() != 0);
+        let stream = m.u32(cpu.esp.wrapping_add(4));
+        let bucket = if stream == 0 { 4 } else {
+            zlib_entry_bucket(m.u32(stream.wrapping_add(4)), m.u32(stream.wrapping_add(16)))
+        };
         let start = Instant::now();
         ORIGINAL_INFLATE.get().expect("inflate timing body")(m, cpu);
         let elapsed = start.elapsed().as_nanos() as u64;
         ZLIB_NS.fetch_add(elapsed, Relaxed);
         ZLIB_CALLS.fetch_add(1, Relaxed);
+        ZLIB_ENTRY_CALLS[bucket].fetch_add(1, Relaxed);
+        ZLIB_ENTRY_NS[bucket].fetch_add(elapsed, Relaxed);
         if archive {
             INFLATE_NS.fetch_add(elapsed, Relaxed);
             INFLATES.fetch_add(1, Relaxed);
         }
+    }
+
+    // Entry buffer sizes only, NOT proof that the fast leaf was executed.
+    // 0x00cf0e6f (DDDA.exe 2017-12-13 Steam) requires input >= 6 and output
+    // >= 258 before calling 0x00cf2cb0; the state machine may consume bytes
+    // or return before reaching that branch. z_stream fields are +4/+16.
+    fn zlib_entry_bucket(input: u32, output: u32) -> usize {
+        usize::from(input < 6) | (usize::from(output < 258) << 1)
     }
 
     fn geometry(m: &mut dyn Mem, cpu: &mut Cpu) {
@@ -278,6 +301,14 @@ mod guest {
     mod tests {
         use super::*;
         #[test]
+        fn zlib_entry_thresholds_match_fast_leaf_guard() {
+            assert_eq!(zlib_entry_bucket(6, 258), 0);
+            assert_eq!(zlib_entry_bucket(5, 258), 1);
+            assert_eq!(zlib_entry_bucket(6, 257), 2);
+            assert_eq!(zlib_entry_bucket(0, 0), 3);
+            assert_eq!(zlib_entry_bucket(u32::MAX, u32::MAX), 0);
+        }
+        #[test]
         fn wrappers_preserve_guest_effects_and_existing_override() {
             fn body(m: &mut dyn Mem, cpu: &mut Cpu) {
                 cpu.eax = cpu.ecx.wrapping_add(7);
@@ -289,9 +320,14 @@ mod guest {
             }
             let mut ports = vec![(ARCHIVE_READ, body as LiftFn)];
             wrap_archive(&mut ports, &[(ARCHIVE_READ, replaced), (INFLATE, body), (GEOMETRY, body), (VORBIS, body)]);
-            for (_, f) in ports {
+            for (address, f) in ports {
                 let mut m = ddnative_base::mem::Sparse::default();
                 m.set_u32(104, 4); // geometry's subdivision argument
+                if address == INFLATE {
+                    m.set_u32(104, 0x2000);
+                    m.set_u32(0x2004, 5);
+                    m.set_u32(0x2010, 257);
+                }
                 let mut cpu = Cpu {
                     ecx: 35,
                     esp: 100,
@@ -299,6 +335,10 @@ mod guest {
                 };
                 f(&mut m, &mut cpu);
                 assert_eq!((cpu.eax, cpu.esp, m.u32(0x1000)), (42, 112, 42));
+                if address == INFLATE {
+                    assert_eq!((m.u32(0x2004), m.u32(0x2010)), (5, 257));
+                    assert_eq!(ZLIB_ENTRY_CALLS[3].load(Relaxed), 1);
+                }
             }
             assert_eq!(ARCHIVE_DEPTH.with(|d| d.get()), 0);
         }
