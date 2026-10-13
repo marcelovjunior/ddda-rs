@@ -8,7 +8,7 @@
 use crate::d3d9::{D3DERR_INVALIDCALL, D3DERR_NOTAVAILABLE, D3D_OK};
 use crate::d3d9dev::{new_object, objects, Kind};
 use crate::d3d9draw::{backend, flush, target, CopyCall, FillCall};
-use crate::d3d9dev::QueryState;
+use crate::d3d9dev::{QueryCell, QueryState};
 use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -166,32 +166,33 @@ pub fn create_query(m: &mut dyn Mem, cpu: &mut Cpu) {
     } else if out == 0 {
         D3D_OK
     } else {
-        let q = new_object(m, "IDirect3DQuery9", Kind::Query { device: dev, ty, state: QueryState::Created, value: 0 });
+        let cell = std::sync::Arc::new(QueryCell::new(ty));
+        let q = new_object(m, "IDirect3DQuery9", Kind::Query { device: dev, cell: cell.clone() });
+        crate::runtime::with(|rt| rt.queries.lock().unwrap_or_else(|e| e.into_inner()).insert(q, cell));
         m.set_u32(out, q);
         D3D_OK
     };
     ret(m, cpu, 12);
 }
 
-fn query<R>(q: u32, f: impl FnOnce(&mut u32, &mut QueryState, &mut u64) -> R) -> R {
-    objects(|o| match o.live.get_mut(&q).map(|x| &mut x.kind) {
-        Some(Kind::Query { ty, state, value, .. }) => f(ty, state, value),
-        _ => panic!("{q:#x} is not a live IDirect3DQuery9"),
-    })
+/// A live query's state, from the runtime's map (no D3D lock).
+fn query(q: u32) -> std::sync::Arc<QueryCell> {
+    crate::runtime::with(|rt| rt.queries.lock().unwrap_or_else(|e| e.into_inner()).get(&q).cloned())
+        .unwrap_or_else(|| panic!("{q:#x} is not a live IDirect3DQuery9"))
 }
 
 /// GetType(this).
 pub fn query_get_type(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = query(arg(m, cpu, 0), |ty, _, _| *ty);
+    cpu.eax = query(arg(m, cpu, 0)).ty;
     ret(m, cpu, 4);
 }
 /// GetDataSize(this): BOOL for events, DWORD for occlusion, UINT64 for
 /// timestamps, BOOL for disjoint.
 pub fn query_get_data_size(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = query(arg(m, cpu, 0), |ty, _, _| match *ty {
+    cpu.eax = match query(arg(m, cpu, 0)).ty {
         QUERY_TIMESTAMP | QUERY_TIMESTAMPFREQ => 8,
         _ => 4,
-    });
+    };
     ret(m, cpu, 4);
 }
 const ISSUE_END: u32 = 1;
@@ -205,32 +206,30 @@ const ISSUE_BEGIN: u32 = 2;
 /// driver, and the game always pairs them).
 pub fn query_issue(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (q, flags) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    let ty = query(q, |ty, _, _| *ty);
+    let cell = query(q);
+    let ty = cell.ty;
     if ty == QUERY_OCCLUSION {
-        let state = query(q, |_, state, _| *state);
+        let state = cell.state();
         if flags & ISSUE_BEGIN != 0 {
             backend(|b| b.query_begin(q));
-            query(q, |_, state, _| *state = QueryState::Building);
+            cell.set_state(QueryState::Building);
         }
         if flags & ISSUE_END != 0 {
             if state == QueryState::Created && flags & ISSUE_BEGIN == 0 {
                 backend(|b| b.query_begin(q));
             }
             backend(|b| b.query_end(q));
-            query(q, |_, state, _| *state = QueryState::Ended);
+            cell.set_state(QueryState::Ended);
         }
     } else if flags & ISSUE_END != 0 {
         // an event completes when the commands recorded before it have run
         // (L102: a mark of the deferred backend; immediate ones pass at once)
-        let mark = if ty == QUERY_EVENT { backend(|b| b.mark()) } else { 0 };
-        query(q, |ty, state, value| {
-            *state = QueryState::Ended;
-            if *ty == QUERY_TIMESTAMP {
-                *value = crate::services::runtime_clock().as_nanos() as u64;
-            } else if *ty == QUERY_EVENT {
-                *value = mark;
-            }
-        });
+        if ty == QUERY_TIMESTAMP {
+            cell.set_value(crate::services::runtime_clock().as_nanos() as u64);
+        } else if ty == QUERY_EVENT {
+            cell.set_value(backend(|b| b.mark()));
+        }
+        cell.set_state(QueryState::Ended);
     }
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
@@ -243,7 +242,10 @@ pub fn query_issue(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// no count).
 pub fn query_get_data(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (q, data, size) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    let (ty, state, value) = query(q, |ty, state, value| (*ty, *state, *value));
+    // (L144: without the D3D lock; the state before the value it publishes)
+    let cell = query(q);
+    let (ty, state) = (cell.ty, cell.state());
+    let value = cell.value();
     // Host-side answers wait for the recorded commands, except the two the
     // game polls (L102: a wait here held the D3D lock while the backend
     // drained, and the render thread queued behind it): an event answers
