@@ -26,6 +26,7 @@ constant blocks from them again. That re-derivation is the cost:
 | combo5 (+L112 executor port, L118 step 1) | 12.3 / 12.7-13.7 | ~5,500 draws |
 | combo6b (+L120 async occlusion, L116 warm pipelines, L109 inflate port) | 12.8 / 13.7-14.0 | gameplay reached at 86 s (was 105-112) |
 | combo8 (+L118 step 2, L124 finisher thread) | 10.9 / 13.0-13.7 | backend worker 47% + finisher 47%: the bound is the game's render thread again |
+| combo9 (+L101 cheaper D3D9 calls) | 13.7 / 13.7-14.7 | render thread 88%: snapshot 26%, draw calls 20%, flush_reads 16% |
 
 (average / end of the run; L114, inlining the memory and flag helpers into
 the shards, gave no gain for 2.5x the compile time and was dropped.)
