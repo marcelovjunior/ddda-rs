@@ -1603,6 +1603,46 @@ them, e.g. function-pointer tables) go to discovery, the rest to the
 recorder or the lifter. The fallback is diagnostic only: a train never
 counts emulated code, and shipped builds have the feature off.
 
+## Lean emission (L73)
+
+`gen` rewrites every whole-function arm after lowering (`cpu_arm`) with
+`research/native/lean_emission.py`; the cached arms in
+`patterns/lift.json` keep the literal templates, and step functions are
+not touched. `LIFT_LEAN=0` emits the literal templates (gen then
+reproduces the pre-L73 shards byte for byte, apart from the
+`use ddnative_base::emit;` header line). The passes, all exact:
+
+- **Dead flags.** Within one arm (a basic block), an ALU flag write that
+  an unconditional flag write replaces before anything can read the flags
+  emits plain arithmetic (`cpu.eax = cpu.eax.wrapping_add(1)` instead of
+  `cpu.fl.alu_add(..)`). Readers: any other `cpu.fl` use (cond, lahf,
+  adc/sbb, rotate-through-carry, INC/DEC's carried CF), any bare `cpu`
+  (calls, call_ext, string and platform helpers, pushfd), every arm exit.
+  Writes inside a conditional block never kill; a loop counts as a reader.
+  Flags stay live across calls and block ends. A guest fault inside a
+  whole function is a host failure (only restartable instructions are
+  resumed, executor.rs), so the state between two writes is never seen.
+- **Constant-count shifts.** SHL/SHR/SAR by a nonzero immediate run their
+  body unconditionally, so their flag write kills (and dies) normally.
+- **Idioms.** push/pop/return-address pushes call `ddnative_base::emit`
+  (`#[inline]`); closure wrappers around call_lifted/call_ext become direct
+  calls; `0u32.wrapping_add(N)` becomes `N`.
+- **Packed SSE.** 16/8-byte loads and stores are one helper call each
+  (same accesses, same order); the lane loops of ADDPS/SUBPS/MULPS xmm,xmm
+  use the existing `x86::*ps` (the original packed instruction: same
+  per-lane IEEE results and sticky MXCSR flags); bitwise lane loops use
+  `emit::xorps` etc. The `for k in 0..4` loops were the costliest
+  construct per byte in the shards.
+- **Split functions.** A dispatcher whose arms exceed `SPLIT_BYTES`
+  (16 KiB) becomes a dispatcher over contiguous address ranges plus part
+  functions with their own `loop { match pc }`, returning `Some(pc)` when
+  control leaves their range and `None` where the function returned.
+
+`test_lean_emission.py` checks the text rules and runs a rustc
+differential test (literal, lean and split forms of the same arms: same
+Cpu, memory and memory-event order). Measurements: [L73
+results](tasks/L73-lean-emission.md#results).
+
 ## What to do next
 
 Current state: docs/MILESTONES.md (the latest batch), docs/INVENTORY.md
