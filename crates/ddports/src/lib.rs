@@ -1,4 +1,4 @@
-//! The readable ports (crates/mtmath, mtcore, mtframe) and mods, registered
+//! The readable ports (crates/mtmath, mtcore, mtframe, mtdraw) and mods, registered
 //! by address over their lifted bodies (L60, docs/NATIVE_PIPELINE.md,
 //! "Overrides").
 //!
@@ -11,7 +11,7 @@ use ddnative_base::x86::{self, LiftFn};
 
 /// Every verified readable port: (address, adapter).
 pub fn ports() -> Vec<(u32, LiftFn)> {
-    mtmath::abi::PORTS.iter().chain(mtcore::abi::PORTS).chain(mtframe::abi::PORTS)
+    mtmath::abi::PORTS.iter().chain(mtcore::abi::PORTS).chain(mtframe::abi::PORTS).chain(mtdraw::abi::PORTS)
         .map(|&(a, f, _)| (a, f))
         .collect()
 }
