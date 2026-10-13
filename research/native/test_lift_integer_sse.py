@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 import harness as h
 import lift
+import rust_base
 
 
 class IntegerSseTests(unittest.TestCase):
@@ -87,7 +88,7 @@ class IntegerSseTests(unittest.TestCase):
                    '0f140510104000','660f760510104000','660ffe0510104000','0f2b0500300000'):
             programs.append(load+op+store)
         root=Path(__file__).resolve().parents[2]
-        source='#![allow(warnings)]\n'+''.join(f'#[path="{(root/f"crates/ddnative-base/src/{m}.rs").as_posix()}"] mod {m};\n' for m in ('mem','x86','x87'))
+        source='#![allow(warnings)]\n'+rust_base.modules(root)
         source+='use mem::Mem; use x86::{Cpu,Flags};\n'
         for k,hexcode in enumerate(programs):
             code=bytes.fromhex(hexcode)
@@ -99,7 +100,7 @@ class IntegerSseTests(unittest.TestCase):
                     raise AssertionError(f"fixture {k}: {hexcode}: {error}") from error
                 arms=lift.lift(0x400000,len(code))
             source+=lift.rust_fn(0x400000,'synthetic integer/SSE',arms).replace('f_00400000',f'fixture_{k}')
-            source+=f'#[test] fn case_{k}() {{ let mut m=mem::Sparse::default(); let mut c=Cpu::default();\n'
+            source+=f'#[test] fn case_{k}() {{ ddnative_host::install(); let mut m=mem::Sparse::default(); let mut c=Cpu::default();\n'
             source+=f'c.fs_base={h.TEB_BASE};\n'
             for reg,value in case['regs_in'].items():source+=f'c.{reg}={value};\n'
             for addr,raw in case['reads']:

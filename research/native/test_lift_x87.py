@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import harness
 import lift
+import rust_base
 
 
 class X87Tests(unittest.TestCase):
@@ -144,9 +145,7 @@ class X87Tests(unittest.TestCase):
                      # L46: fstp m64; wait; fnsave [0x3000]; frstor [0x3000]; fstp m64
                      load + integer + store + "9b" + "dd3500300000" + "dd2500300000" + "dd1d08200000" + "c3"]
         root = Path(__file__).resolve().parents[2]
-        source = "#![allow(warnings)]\n" + "".join(
-            f'#[path="{(root / f"crates/ddnative-base/src/{m}.rs").as_posix()}"] mod {m};\n'
-            for m in ("mem", "x86", "x87"))
+        source = "#![allow(warnings)]\n" + rust_base.modules(root)
         source += "use mem::Mem; use x86::{Cpu, Flags};\n"
         for k, hexcode in enumerate(programs):
             code = bytes.fromhex(hexcode)
@@ -156,7 +155,7 @@ class X87Tests(unittest.TestCase):
                 arms = lift.lift(0x400000, len(code))
             body = lift.rust_fn(0x400000, 'synthetic x87', arms).replace('f_00400000', f'fixture_{k}')
             source += body
-            source += f'#[test] fn case_{k}() {{ let mut m=mem::Sparse::default(); let mut c=Cpu::default();\n'
+            source += f'#[test] fn case_{k}() {{ ddnative_host::install(); let mut m=mem::Sparse::default(); let mut c=Cpu::default();\n'
             for reg, value in case['regs_in'].items():
                 source += f'c.{reg}={value};\n'
             for addr, raw in case['reads']:

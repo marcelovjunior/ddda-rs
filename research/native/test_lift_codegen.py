@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 import lift
+import rust_base
 
 
 class CodegenTests(unittest.TestCase):
@@ -115,9 +116,7 @@ class CodegenTests(unittest.TestCase):
         generated = lift.rust_fn(0x1000, 'synthetic', arms)
         root = Path(__file__).resolve().parents[2]
         source = f'''#![allow(warnings)]
-            #[path = "{(root / 'crates/ddnative-base/src/mem.rs').as_posix()}"] mod mem;
-            #[path = "{(root / 'crates/ddnative-base/src/x86.rs').as_posix()}"] mod x86;
-            #[path = "{(root / 'crates/ddnative-base/src/x87.rs').as_posix()}"] mod x87;
+{rust_base.modules(root)}
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod reference {{ use super::*; pub(super) fn run(m: &mut dyn Mem, c: &mut Cpu) {{ f_00001000(m,c); }} {reference} }}
             mod generated {{ use super::*; {generated} }}
@@ -144,6 +143,7 @@ class CodegenTests(unittest.TestCase):
                 c.fs_base = c.fs_base.wrapping_add(0x1000);
             }
             #[test] fn same_state_and_ordered_memory_events() {
+                ddnative_host::install();
                 for value in [0u32, 1, 0x7fffffff, 0x80000000, 0xffffffff] {
                     let mut initial = Cpu::default();
                     initial.eax = value; initial.edx = value; initial.esp = 64;
@@ -198,9 +198,7 @@ class CodegenTests(unittest.TestCase):
         self.assertNotIn('m.u32(', generated)
         root = Path(__file__).resolve().parents[2]
         source = f'''#![allow(warnings)]
-            #[path = "{(root / 'crates/ddnative-base/src/mem.rs').as_posix()}"] mod mem;
-            #[path = "{(root / 'crates/ddnative-base/src/x86.rs').as_posix()}"] mod x86;
-            #[path = "{(root / 'crates/ddnative-base/src/x87.rs').as_posix()}"] mod x87;
+{rust_base.modules(root)}
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod generated {{ use super::*; {generated} }}
         ''' + r'''
@@ -235,6 +233,7 @@ class CodegenTests(unittest.TestCase):
                 }
             }
             #[test] fn fast_and_trait_paths_agree() {
+                ddnative_host::install();
                 for value in [0u32, 1, 0x7fffffff, 0x80000000, 0xffffffff] {
                     let mut results = Vec::new();
                     let mut calls = Vec::new();

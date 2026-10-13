@@ -21,6 +21,8 @@ class ShardTests(unittest.TestCase):
             repo = Path(tmp)
             (repo / "Cargo.toml").write_text('[workspace]\nresolver="2"\nmembers=["crates/*", "crates/ddlift/lift_*"]\nexclude=["crates/ddlift"]\n[workspace.package]\nedition="2021"\nlicense="MIT"\npublish=false\n')
             shutil.copytree(root / "crates/ddnative-base", repo / "crates/ddnative-base")
+            # L74: the slow paths' policy (lifted code needs it installed)
+            shutil.copytree(root / "crates/ddnative-host", repo / "crates/ddnative-host")
             # The facade (ddnative) still names mtmath; the shards depend on
             # no port crate (L60: ports are registered overrides).
             for crate in ("mtmath", "mtcore", "mtframe"):
@@ -73,6 +75,7 @@ class ShardTests(unittest.TestCase):
             (native / 'tests/shards.rs').write_text(r'''
 use ddnative::{generated::lifted, mem::Sparse, x86::{self, Cpu}};
 #[test] fn nested_direct_calls_and_external_boundary() {
+    ddnative_host::install();
     let mut m = Sparse::default(); let mut c = Cpu::default();
     x86::set_ext_calls(Some(Box::new(|_, c, t| { assert_eq!(t, 0x900000); c.eax *= 7; })));
     // Public entry initializes itself, without requiring all() first.
@@ -100,6 +103,7 @@ use ddnative::{generated::lifted, mem::Sparse, x86::{self, Cpu}};
 use ddnative::{generated::lifted, mem::{Mem, Sparse}, x86::{self, Cpu, LiftFn}};
 fn hundred(_: &mut dyn Mem, c: &mut Cpu) { c.eax += 100; }
 #[test] fn an_override_replaces_the_body_for_every_caller() {
+    ddnative_host::install();
     x86::set_overrides(&[(0x500010, hundred as LiftFn)]);
     x86::set_ext_calls(Some(Box::new(|_, c, t| { assert_eq!(t, 0x900000); c.eax *= 7; })));
     let mut m = Sparse::default(); let mut c = Cpu::default();
