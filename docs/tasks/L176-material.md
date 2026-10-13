@@ -89,4 +89,38 @@ stubbed: at the call the test checks ECX, ESP, the pushed argument and
 return address and every byte written so far outside the stack scratch.
 Every conditional branch is covered.
 
-Not yet measured in game. Next: 0x01066C60 nDraw::Material::vf12.
+### 0x00FEFB90, the render-target setter
+
+The third hottest nearest-lifted function on the job threads in
+profile_c34base/inl (2-5% per job thread, after 0x00E12A20 and
+0x00FEE320), unowned in #13852. `context->set_target(target, depth,
+flags, unused)` (thiscall, `ret 0x10`): unless the context already has
+them, binds the target and depth surface, stamps them with the frame
+serial, records the target's format, copies a new target's state slots
+(the constant slot table at 0x01447B7C, through its source index when the
+target's bit 31 is set), then allocates the next viewport constant block
+from the context's arena (0x00DA7D70 when it runs out, a guest call) and
+fills it: the previous block and the size terms for an unchanged size,
+the pass's template, the viewport's offset and scale and the size terms
+for a new one. EAX: `flags` on the early return, the block size when a
+new size finds no arena, otherwise memcpy's.
+
+- `crates/mtdraw/src/target.rs`: `set_render_target`; memcpy is called
+  as the lifted code calls it (`call_local` to the platform model, so the
+  runtime's redirection applies), the allocation through `call_ext`, both
+  from the original's frame and with its return addresses.
+- Vectors: `record_material.py --target`, 1200 cases (the context already
+  set, a new size, an unchanged size; arena with room, exhausted, absent,
+  failing; targets with and without bit 31; depth surfaces with and
+  without an owner; rectangles small, empty and wide). Every conditional
+  branch is covered except the two copy loops' empty-table exits: the
+  slot table is a constant whose first word is not zero.
+- `tests/material.rs`: 1200 ABI-level cases pass, the allocation checked
+  at its call (ECX, ESP, the pushed size and return address, the memory
+  so far); mutation check 7/7 caught.
+- Microbenchmark: 462-478 -> 246-254 ns per call (1.9x).
+- Opt-in `DDRUNTIME_SET_TARGET=1` (separate from the material ports, for
+  a separate A/B).
+
+Not yet measured in game. Skipped: 0x01066C60 nDraw::Material::vf12 (11
+self samples, ~0x600 bytes, six guest calls: little to gain).

@@ -302,6 +302,181 @@ class StateOracle(Oracle):
                     events=self.events, after=self.snapshot(), edges=sorted(self.edges))
 
 
+SET_TARGET, SET_TARGET_END = 0xFEFB90, 0xFF009E
+ALLOCATE, MEMCPY, ALLOCATOR = 0xDA7D70, 0x12EFEA0, 0x18D08F4
+SLOT_TABLE, ONE_SCALE_PAGE, SIGN_PAGE = 0x1447B7C, 0x1406000, 0x161C000
+LENGTHS[SET_TARGET] = SET_TARGET_END - SET_TARGET
+TARGET, DEPTH, CHAIN, OWNER2, PASS_OWNER, PASS = (BASE + v for v in (0x100, 0x200, 0x300, 0x400, 0x500, 0x600))
+TEMPLATE, STATE_TABLE, PREVIOUS, ARENA, FRESH = (BASE + v for v in (0x2000, 0x3000, 0x30000, 0x40000, 0x60000))
+
+
+class TargetOracle(Oracle):
+    """0x00FEFB90 `context->set_target(target, depth, flags, unused)`
+    (thiscall, `ret 0x10`). 0x00DA7D70 (the arena allocation) is stubbed
+    as a recorded guest call; memcpy (0x012EFEA0, a platform model in the
+    runtime) is done by the stub itself, not recorded as a call."""
+
+    def __init__(self):
+        uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
+        uc.ctl_set_tcg_buffer_size(16 * 1024 * 1024)
+        image_pages = (ONE_SCALE_PAGE, SIGN_PAGE, SLOT_TABLE & ~0xFFF)
+        for address, size in ((0xFEF000, 0x2000), (ALLOCATE & ~0xFFF, 0x1000), (MEMCPY & ~0xFFF, 0x1000),
+                              (SERIAL & ~0xFFF, 0x1000), (ALLOCATOR & ~0xFFF, 0x1000),
+                              *((p, 0x1000) for p in image_pages),
+                              (BASE, SIZE), (STACK, STACK_SIZE), (h.RET, 0x1000)):
+            uc.mem_map(address, size)
+        uc.mem_write(SET_TARGET, h.code(SET_TARGET, SET_TARGET_END - SET_TARGET))
+        uc.mem_write(ALLOCATE, bytes.fromhex('c20400'))  # ret 4 (the stub's own effect)
+        uc.mem_write(MEMCPY, bytes.fromhex('c3'))
+        for page in image_pages:  # constants and the slot table, as the image has them
+            uc.mem_write(page, h.code(page, 0x1000))
+        self.active = False
+        uc.hook_add(UC_HOOK_MEM_READ, self.read)
+        uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
+        uc.hook_add(UC_HOOK_CODE, self.code)
+
+    def code(self, uc, address, size, data):
+        if address == h.RET:
+            uc.emu_stop()
+            return
+        sp = uc.reg_read(x.UC_X86_REG_ESP)
+        if address == ALLOCATE:
+            self.remember(sp, 8)
+            self.events.append(dict(kind='call', target=address, **self.snapshot()))
+            resume = struct.unpack('<I', uc.mem_read(sp, 4))[0]
+            uc.reg_write(x.UC_X86_REG_EAX, self.arena)
+            for reg in REGS[1:3]:
+                uc.reg_write(reg, self.rng.getrandbits(32))
+            uc.reg_write(x.UC_X86_REG_ESP, sp + 8)
+            self.events.append(dict(kind='return', **self.snapshot()))
+            uc.reg_write(x.UC_X86_REG_EIP, resume)
+            return
+        if address == MEMCPY:
+            self.remember(sp, 16)
+            resume, dst, src, n = struct.unpack('<4I', uc.mem_read(sp, 16))
+            self.remember(src, n)
+            data = bytes(uc.mem_read(src, n))
+            uc.mem_write(dst, data)
+            self.written.update(range(dst, dst + n))
+            uc.reg_write(x.UC_X86_REG_EAX, dst)
+            uc.reg_write(x.UC_X86_REG_ESP, sp + 4)
+            uc.reg_write(x.UC_X86_REG_EIP, resume)
+            return
+        assert SET_TARGET <= address < SET_TARGET_END, hex(address)
+        if self.last is not None:
+            self.edges.add((self.last, address))
+        self.last = address
+
+    def run(self, seed, kind):
+        """kind: 'same' (the context already has them), 'resize', 'keep'
+        (the size unchanged), with arena and target variations by seed."""
+        uc = self.uc
+        rng = self.rng = random.Random(seed)
+        uc.mem_write(BASE, rng.randbytes(SIZE))
+        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
+        uc.mem_write(SERIAL & ~0xFFF, rng.randbytes(0x1000))
+        uc.mem_write(ALLOCATOR & ~0xFFF, rng.randbytes(0x1000))
+        ctx = CONTEXT
+
+        def word(a, v):
+            uc.mem_write(a, struct.pack('<I', v & 0xFFFFFFFF))
+
+        def half(a, v):
+            uc.mem_write(a, struct.pack('<H', v & 0xFFFF))
+
+        target = rng.choice([0, TARGET, TARGET, TARGET])
+        depth = rng.choice([0, DEPTH, DEPTH])
+        flags = rng.choice([rng.getrandbits(12), rng.getrandbits(32), 1, 0x40, 0x43, 0])
+        tw, th = rng.choice([(rng.randrange(1, 4096), rng.randrange(1, 4096)), (0, 0), (rng.getrandbits(16), rng.getrandbits(15))])
+        word(TARGET + 0x18, tw | th << 16 | (rng.getrandbits(1) << 31))
+        word(TARGET + 0x20, rng.getrandbits(32))
+        word(DEPTH + 0x18, rng.getrandbits(32))
+        word(DEPTH + 0x10, CHAIN)
+        word(CHAIN + 0x44, CHAIN + 0x10)
+        word(CHAIN + 0x10, rng.choice([0, OWNER2]))
+        word(ctx + 0x18, PASS_OWNER)
+        word(PASS_OWNER + 0x54C, PASS)
+        arena = rng.randrange(4)
+        # a null block (no arena, or a failed allocation) only with nothing
+        # to copy: the original's memcpy to address 0 would fault
+        n = rng.choice([0, 1, 4, 16, 64]) if arena < 2 else 0
+        half(PASS + 0x18, n)
+        word(PASS + 0x24, TEMPLATE)
+        word(ctx + 0x20, STATE_TABLE)
+        word(ctx + 0xC90, PREVIOUS)
+        size = (n * 4 + 0xF) & ~0xF
+        if arena == 0:  # room left
+            word(ctx + 0x24, ARENA)
+            word(ctx + 0x28, ARENA + 0x10000)
+        elif arena == 1:  # exhausted: a new arena
+            word(ctx + 0x24, ARENA)
+            word(ctx + 0x28, ARENA + size - 4 if size else ARENA - 1)
+        elif arena == 2:  # no arena at all: the block is null
+            word(ctx + 0x24, 0)
+            word(ctx + 0x28, 0x10000)
+        else:  # exhausted (even for an empty block), and the allocation fails
+            word(ctx + 0x24, ARENA)
+            word(ctx + 0x28, ARENA - 1)
+        self.arena = FRESH if arena == 1 else 0
+        for k in range(8):  # the two rectangles: small, zero-sized or wide
+            word(ctx + 0xCC + 4 * k, rng.choice([rng.randrange(-64, 2048), 0, rng.getrandbits(32)]))
+        if kind == 'keep':
+            half(ctx + 0x10C, tw if target else (rng.getrandbits(16) if depth else 1))
+            half(ctx + 0x10E, th if target else (rng.getrandbits(16) if depth else 1))
+            if seed % 7 == 0:  # the same width, another height
+                half(ctx + 0x10E, rng.getrandbits(16))
+            if not target and depth:  # the depth surface's size
+                word(DEPTH + 0x18, rng.getrandbits(16) << 16 | struct.unpack('<H', uc.mem_read(ctx + 0x10C, 2))[0])
+                uc.mem_write(DEPTH + 0x1A, bytes(uc.mem_read(ctx + 0x10E, 2)))
+        if kind == 'same':
+            word(ctx + 0xB4, target)
+            word(ctx + 0xC4, depth)
+            state = rng.getrandbits(32)
+            word(ctx + 0xC8, (state & ~0xFFF7) | ((flags & 0xFFF) << 4) | rng.choice([1, 1, 1, 9, 3]))
+            if seed % 5 == 0:
+                flags |= 0x1000  # bits above the twelve compared: no longer the same
+        elif seed % 3 == 0:
+            word(ctx + 0xB4, target)
+        if seed % 4 == 0:
+            word(ctx + 0x170, (struct.unpack('<I', uc.mem_read(TARGET + 0x20, 4))[0] >> 20) & 0xF if target else 0xD)
+        for i, v in enumerate((h.RET, target, depth, flags, rng.getrandbits(32))):
+            word(SP + 4 * i, v)
+        regs = [rng.getrandbits(32), ctx, rng.getrandbits(32), rng.getrandbits(32), SP,
+                rng.getrandbits(32), rng.getrandbits(32), rng.getrandbits(32)]
+        for reg, v in zip(REGS, regs):
+            uc.reg_write(reg, v)
+        for i in range(8):
+            uc.reg_write(x.UC_X86_REG_XMM0 + i, rng.getrandbits(128))
+        uc.reg_write(x.UC_X86_REG_MXCSR, 0x1F80)
+        uc.reg_write(x.UC_X86_REG_EFLAGS, 0x202 | (rng.getrandbits(12) & 0xCD5))
+        self.initial, self.written, self.events, self.edges, self.last = {}, set(), [], set(), None
+        before = self.snapshot(False)
+        self.active = True
+        uc.emu_start(SET_TARGET, h.RET, count=200000)
+        self.active = False
+        assert uc.reg_read(x.UC_X86_REG_EIP) == h.RET
+        return dict(entry=SET_TARGET, seed=seed, kind=kind, before=before, initial=sorted(self.initial.items()),
+                    events=self.events, after=self.snapshot(), edges=sorted(self.edges))
+
+
+def record_target(out):
+    oracle = TargetOracle()
+    cases = [oracle.run(i + 1, kind) for i, kind in enumerate(
+        kind for kind in ('same', 'resize', 'keep') for _ in range(400))]
+    edges = {tuple(e) for c in cases for e in c['edges']}
+    missing = [(hex(i.address), hex(t)) for i in branches(SET_TARGET)
+               for t in (i.address + i.size, int(i.op_str, 16)) if (i.address, t) not in edges]
+    # The slot table (constant, from the image) never starts with a zero
+    # word, so neither copy loop is ever skipped.
+    assert missing == [('0xfefcac', '0xfefd18'), ('0xfefce3', '0xfefd18')], missing
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(dict(
+        source='DDDA.exe 2017-12-13 Steam',
+        exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+        cases=cases), separators=(',', ':')))
+    print(f'{len(cases)} target cases, {sum(len(c["events"]) for c in cases)} call boundaries -> {out}')
+
+
 def branches(entry):
     return [i for i in Cs(CS_ARCH_X86, CS_MODE_32).disasm(h.code(entry, LENGTHS[entry]), entry)
             if i.mnemonic.startswith('j') and i.mnemonic != 'jmp']
@@ -330,9 +505,13 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out', default='E:/ddda-re/notes/native-L176/material_lookup.json')
     p.add_argument('--state', action='store_true', help='record 0x010655A0 (material_state.json beside --out)')
+    p.add_argument('--target', action='store_true', help='record 0x00FEFB90 (set_target.json beside --out)')
     a = p.parse_args()
     if a.state:
         record_state(Path(a.out).with_name('material_state.json'))
+        return
+    if a.target:
+        record_target(Path(a.out).with_name('set_target.json'))
         return
     oracle = Oracle()
     cases, skipped, seed = [], 0, 0

@@ -40,6 +40,11 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         ports.push((0x0106_6b10, mtdraw::material::bind_parameter));
         ports.push((0x0106_55a0, mtdraw::material::apply_material_state));
     }
+    // L176: the draw context's render-target setter (semantic port,
+    // crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_SET_TARGET").as_deref() == Ok("1") {
+        ports.push((0x00fe_fb90, mtdraw::target::set_render_target));
+    }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
     if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {

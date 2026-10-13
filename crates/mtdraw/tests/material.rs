@@ -176,3 +176,19 @@ fn apply_material_state_matches_original() {
     assert!(n > 500, "{n} cases");
     eprintln!("0x010655A0: {n} ABI-level cases passed");
 }
+
+// verifies 0x00FEFB90 (ABI level; its arena allocation 0x00DA7D70 is a
+// checked guest call, its memcpy the platform model)
+#[test]
+fn set_render_target_matches_original() {
+    let path = std::env::var("L176_TARGET_VECTORS")
+        .unwrap_or_else(|_| "E:/ddda-re/notes/native-L176/set_target.json".into());
+    let data: Value = match std::fs::read_to_string(&path) {
+        Ok(t) => serde_json::from_str(&t).unwrap(),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let n = abi_cases_with_call(&data, 0x00FE_FB90, mtdraw::target::set_render_target);
+    assert!(n > 1000, "{n} cases");
+    eprintln!("0x00FEFB90: {n} ABI-level cases passed");
+}
