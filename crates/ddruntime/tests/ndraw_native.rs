@@ -293,6 +293,8 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     assert!(!std::sync::Arc::ptr_eq(&changed.vs_constants, &native.vs_constants));
     assert_eq!(changed.vs_constants.f[0][0], 99f32.to_bits());
     assert_eq!(changed.ps_constants, native.ps_constants);
+    // the unchanged stage keeps its bank (not copied again)
+    assert!(std::sync::Arc::ptr_eq(&changed.ps_constants, &native.ps_constants));
 
     // NDRAW_BENCH=1 (release): what a taken draw costs, by part
     if std::env::var_os("NDRAW_BENCH").is_some() {

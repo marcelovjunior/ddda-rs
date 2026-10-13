@@ -708,14 +708,19 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             return Err(refusal);
         }
     }
-    // the same as the binding's part of an earlier frame: that part
+    // the same as the binding's part of an earlier frame: that part; else
+    // a new part, keeping an unchanged stage's bank (one bank copied when
+    // only the other stage's registers changed)
     let part = match previous {
         Some(p) if Arc::ptr_eq(&p.meta, &meta) && p.alpha == alpha && p.written == written
             && *p.constants[0] == banks[0] && *p.constants[1] == banks[1] => p.clone(),
         _ => Arc::new(BindingPart {
             meta,
             alpha,
-            constants: [Arc::new(banks[0].clone()), Arc::new(banks[1].clone())],
+            constants: std::array::from_fn(|stage| match previous {
+                Some(p) if *p.constants[stage] == banks[stage] => p.constants[stage].clone(),
+                _ => Arc::new(banks[stage].clone()),
+            }),
             written,
             native: Default::default(),
             uncovered,
@@ -963,10 +968,11 @@ fn shadow_samplers(g: &G, ctx: u32, binding: u32, meta: &MetaPart, info: &FrameI
             let old = sh.read(g, cache);
             if sampler != old {
                 if old == 0 || g.u32(old.wrapping_add(12)) != g.u32(sampler.wrapping_add(12)) {
-                    let words = |o: u32| -> Vec<u32> { (0..3).map(|k| g.u32(o.wrapping_add(0x30 + 4 * k))).collect() };
+                    // the sampler objects' three packed words (no Vec each)
+                    let words = |o: u32| -> [u32; 3] { std::array::from_fn(|k| g.u32(o.wrapping_add(0x30 + 4 * k as u32))) };
                     let new = words(sampler);
                     let old_words = (old != 0).then(|| words(old));
-                    for c in mtstate::packed(mtstate::SAMPLER, &new, old_words.as_deref(), Some(slot.stage), info.filtering) {
+                    for c in mtstate::packed(mtstate::SAMPLER, &new, old_words.as_ref().map(|w| &w[..]), Some(slot.stage), info.filtering) {
                         sh.sampler_states.push((c.args[0], c.args[1], c.args[2]));
                     }
                 }
@@ -1554,7 +1560,8 @@ pub fn flush_uploads(device: u32, uploads: &mut Uploads) {
     if uploads.is_empty() {
         return;
     }
-    let u = std::mem::take(uploads);
+    // (the list keeps its capacity for the next taken draws)
+    let u = &*uploads;
     objects(|o| {
         if let Some(Kind::Device(d)) = o.live.get_mut(&device).map(|x| &mut x.kind) {
             let s = &mut d.state;
@@ -1575,6 +1582,7 @@ pub fn flush_uploads(device: u32, uploads: &mut Uploads) {
             s.constant_snapshots[1].dirty = true;
         }
     });
+    uploads.bindings.clear();
 }
 
 /// Flush what `d` reads (the D3D9 path's flush_reads; the benchmark).
