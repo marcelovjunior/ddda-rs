@@ -1,5 +1,13 @@
 # Milestones
 
+### L155 ddgpu example build repair (2026-10-13)
+
+- `module_cost` now declares the existing pipeline logger required by its
+  example-local shader cache module. `cargo build -p ddgpu --examples`
+  **passes**, 3m14s in a fresh L155 target, four jobs, no incremental build.
+- No GPU/game execution or renderer behavior change. Next: save-load source
+  map and head's combo25 interval ranking; L151 preparation merged on L155.
+
 ### L151 parallel pipeline preparation (2026-10-13)
 
 - Opt-in 2-4 creator threads precompile L116 exact recipes with L140 driver

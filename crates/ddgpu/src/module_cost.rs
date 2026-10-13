@@ -1,6 +1,7 @@
 //! L83 phase benchmark. module_cost <skip> <count> <cache-dir> [cpu]
 //! Distinct vertex AND pixel shaders, sorted package order, from the install.
 //! Run bounded batches; no pipelines, draws, or window are created.
+mod pipeline_log;
 mod shader_cache;
 use std::{
     borrow::Cow,
