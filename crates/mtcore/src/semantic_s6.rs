@@ -105,7 +105,7 @@ pub fn motion_filter_apply(m: &mut dyn Mem, c: &mut Cpu) {
     // 2. weaker than full weight: pull the pose toward the rest pose
     let weight = f32_at(m, filter.wrapping_add(0x44));
     if weight < 1.0 {
-        pose = blend_toward_rest(m, c, pg, frame, filter, &pose, weight);
+        pose = blend_toward_rest(m, c, pg, frame, &pose, weight);
     }
 
     // 3. into the joint's local matrix
@@ -162,9 +162,10 @@ const IDENTITY: Mat4 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0
 /// `weight` (< 1) and rebuild a pure rotation matrix: the translation row
 /// and the last column are dropped. Rotations closer than [`SLERP_LIMIT`]
 /// are blended linearly; farther ones use the CRT's acosf (0x012F161F) and
-/// sinf (0x012F0906), called as guest code because their last bits are
-/// the game's.
-fn blend_toward_rest(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, filter: u32, pose: &Mat4, weight: f32) -> Mat4 {
+/// sinf (0x012F0906), all native and bit-exact (acosf from
+/// [`crate::semantic_s7_math`], sinf from [`crate::semantic_s7_trig`]; the
+/// guest function only runs for large finite arguments of sinf).
+fn blend_toward_rest(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, pose: &Mat4, weight: f32) -> Mat4 {
     let [qx, qy, qz, qw] = rotation_to_quaternion(pose);
     let [rx, ry, rz, rw] = REST_ROTATION;
     // cosine between the rest rotation and the pose's; the shorter arc
@@ -176,7 +177,7 @@ fn blend_toward_rest(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, filter
     }
     let (rest_weight, pose_weight) = if SLERP_LIMIT > cosine {
         let call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, back: u32, x: f32| crt_f32_at(m, c, pg, frame, target, back, x);
-        let angle = call(m, c, 0x012f_161f, 0x0087_2839, cosine);
+        let angle = crate::semantic_s7_math::acosf(m, pg, cosine);
         let sin_angle = call(m, c, 0x012f_0906, 0x0087_2844, angle);
         let scale = 1.0 / sin_angle;
         let rest = call(m, c, 0x012f_0906, 0x0087_286d, (1.0 - weight) * angle) * scale;

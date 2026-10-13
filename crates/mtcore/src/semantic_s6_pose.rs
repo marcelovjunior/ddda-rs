@@ -66,7 +66,7 @@ pub fn build_pose(m: &mut dyn Mem, c: &mut Cpu, call: &PoseCall, kind: u32) -> M
             if swing == 0.0 && twist == 0.0 {
                 IDENTITY
             } else {
-                let euler = joint_euler_degrees(m, c, call, base);
+                let euler = joint_euler_degrees(m, call);
                 let (swing, twist) = (angle(m, 0x538), angle(m, 0x53c));
                 let angles = match kind {
                     1 | 2 => {
@@ -194,11 +194,11 @@ fn crt_f32(m: &mut dyn Mem, c: &mut Cpu, call: &PoseCall, base: u32, target: u32
 /// The joint's rotation as the Euler angles (radians converted to degrees
 /// by the caller) of 0x00CFC9E0 applied to the quaternion's matrix
 /// (0x007E4B60).
-fn joint_euler_degrees(m: &mut dyn Mem, c: &mut Cpu, call: &PoseCall, base: u32) -> [f32; 3] {
+fn joint_euler_degrees(m: &mut dyn Mem, call: &PoseCall) -> [f32; 3] {
     let f32_at = |m: &dyn Mem, offset: u32| f32::from_bits(call.pages.u32(m, call.joint.wrapping_add(offset)));
     let (x, y, z, w) = (f32_at(m, 0x60), f32_at(m, 0x64), f32_at(m, 0x68), f32_at(m, 0x6c));
     let matrix = quaternion_matrix_3x3(x, y, z, w);
-    euler_from_matrix(m, c, call, base.wrapping_sub(16), &matrix)
+    euler_from_matrix(&matrix)
 }
 
 /// The elements 0, 1, 2, 4, 5, 6 and 10 of the rotation matrix of the
@@ -218,30 +218,21 @@ pub fn quaternion_matrix_3x3(x: f32, y: f32, z: f32, w: f32) -> [f32; 11] {
 }
 
 /// Euler angles (x, y, z) of a rotation matrix (0x00CFC9E0): the usual
-/// extraction with atan2 in double precision and asinf, and the gimbal
-/// cases when `m[2]` reaches +-1. `frame` is the ESP of the original at
-/// its CRT calls.
-pub fn euler_from_matrix(m: &mut dyn Mem, c: &mut Cpu, call: &PoseCall, frame: u32, matrix: &[f32; 11]) -> [f32; 3] {
-    let atan2 = |m: &mut dyn Mem, c: &mut Cpu, back: u32, y: f32, x: f32| -> f32 {
-        c.xmm[0] = [(y as f64).to_bits() as u32, ((y as f64).to_bits() >> 32) as u32, 0, 0];
-        c.xmm[1] = [(x as f64).to_bits() as u32, ((x as f64).to_bits() >> 32) as u32, 0, 0];
-        call_from(m, c, call.pages, frame, call.joint, &[], back, |m, c| ddnative_base::x86::call_ext(m, c, 0x012f_1109));
-        let bits = c.xmm[0][0] as u64 | ((c.xmm[0][1] as u64) << 32);
-        f64::from_bits(bits) as f32
-    };
+/// extraction with atan2 in double precision and asinf (both native, bit
+/// exact: [`crate::semantic_s6_crt`]), and the gimbal cases when `m[2]`
+/// reaches +-1.
+pub fn euler_from_matrix(matrix: &[f32; 11]) -> [f32; 3] {
+    use crate::semantic_s6_crt::{asinf, atan2};
+    // CVTPS2PD of the arguments, CVTSD2SS of the result
+    let atan2 = |y: f32, x: f32| -> f32 { atan2(y as f64, x as f64) as f32 };
     let m2 = matrix[2];
     if 1.0 > m2 {
         if m2 > -1.0 {
-            let x = -atan2(m, c, 0x00cf_ca31, -matrix[6], matrix[10]);
-            c.xmm[0][0] = m2.to_bits();
-            call_from(m, c, call.pages, frame, call.joint, &[], 0x00cf_ca4b, |m, c| ddnative_base::x86::call_ext(m, c, 0x012f_0d4c));
-            let y = -f32::from_bits(c.xmm[0][0]);
-            let z = -atan2(m, c, 0x00cf_ca75, -matrix[1], matrix[0]);
-            [x, y, z]
+            [-atan2(-matrix[6], matrix[10]), -asinf(m2), -atan2(-matrix[1], matrix[0])]
         } else {
-            [atan2(m, c, 0x00cf_caa1, matrix[4], matrix[5]), std::f32::consts::FRAC_PI_2, 0.0]
+            [atan2(matrix[4], matrix[5]), std::f32::consts::FRAC_PI_2, 0.0]
         }
     } else {
-        [-atan2(m, c, 0x00cf_cac8, matrix[4], matrix[5]), -std::f32::consts::FRAC_PI_2, 0.0]
+        [-atan2(matrix[4], matrix[5]), -std::f32::consts::FRAC_PI_2, 0.0]
     }
 }
