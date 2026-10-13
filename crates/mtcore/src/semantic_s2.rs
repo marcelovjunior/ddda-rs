@@ -8,7 +8,7 @@ use ddnative_base::mem::{Mem, Pages};
 use ddnative_base::x86::Cpu;
 
 fn guest(target: u32) -> impl FnOnce(&mut dyn Mem, &mut Cpu) {
-    move |m, c| ddnative_base::x86::call_ext(m, c, target)
+    move |m, c| crate::semantic::call_guest(m, c, target)
 }
 
 fn f(bits: u32) -> f32 {
@@ -328,7 +328,7 @@ pub fn sweep_step(m: &mut dyn Mem, c: &mut Cpu) {
     let t = |off: u32| this.wrapping_add(off);
     let rd = |m: &dyn Mem, a: u32| f32::from_bits(pg.u32(m, a));
     let wr = |m: &mut dyn Mem, a: u32, v: f32| pg.set_u32(m, a, v.to_bits());
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
 
     let param = CollisionParam(at(0x60));
     pg.set_u32(m, at(0x1c), 0);
@@ -626,7 +626,7 @@ fn cast_shape(m: &mut dyn Mem, c: &mut Cpu, v: &CastVariant, native_walks: bool)
     let saved = (c.ebx, c.ebp, c.esi, c.edi);
     (c.ebx, c.esi, c.edi) = (this, query, shape);
     let frame = entry.wrapping_sub(0x18);
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     let buffer = pg.u32(m, query.wrapping_add(0x94));
     let block = pg.u32(m, query.wrapping_add(0x98));
     pg.set_u32(m, buffer.wrapping_add(0xe4), block);
@@ -646,7 +646,7 @@ fn cast_shape(m: &mut dyn Mem, c: &mut Cpu, v: &CastVariant, native_walks: bool)
             if native_walks {
                 (v.native[i])(m, c)
             } else {
-                ddnative_base::x86::call_ext(m, c, target)
+                crate::semantic::call_guest(m, c, target)
             }
         };
         hits = call_from(m, c, pg, frame, this, &[shape, query], v.back[2], walk(0, v.walk_a));
@@ -706,7 +706,7 @@ pub fn world_query(m: &mut dyn Mem, c: &mut Cpu) {
         pg.set_u32(m, q + off, v);
     }
     let hits = call_from(m, c, pg, s, this, &[a0, a1, a2, q, 0x0116_6b10], 0x00de_a92f, |m, c| {
-        ddnative_base::x86::call_ext(m, c, 0x0115_f650)
+        crate::semantic::call_guest(m, c, 0x0115_f650)
     });
     c.eax = hits;
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
@@ -745,7 +745,7 @@ pub fn segment_cast(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = (out, entry.wrapping_sub(4), seg, this);
     let rd = |m: &dyn Mem, a: u32| f32::from_bits(pg.u32(m, a));
     let wr = |m: &mut dyn Mem, a: u32, v: f32| pg.set_u32(m, a, v.to_bits());
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     let buffer = at(0x100);
     let segment_at = |m: &dyn Mem, k: u32| pg.u32(m, seg.wrapping_add(4 * k));
 
@@ -1044,7 +1044,7 @@ fn layer_walk(m: &mut dyn Mem, c: &mut Cpu, walk: &LayerWalk, node: Option<ddnat
             }
             call_from(m, c, pg, frame, grid, &[target, world, walk.callback, node_arg, u32::from(walk.mode), slot], back, |m, c| match node {
                 Some(native) => native(m, c),
-                None => ddnative_base::x86::call_ext(m, c, 0x0117_87c0),
+                None => crate::semantic::call_guest(m, c, 0x0117_87c0),
             })
         };
         match walk.grids {
@@ -1127,7 +1127,7 @@ pub fn node_dispatch(m: &mut dyn Mem, c: &mut Cpu) {
     // the original's frame: 16-aligned, 0x40 bytes of locals
     let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x40);
     let at = |off: u32| frame.wrapping_add(off);
-    let guest = move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, leaf);
+    let guest = move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, leaf);
     let eax = if class == 4 {
         let epsilon = pg.u32(m, 0x0162_adb0);
         pg.set_u32(m, at(0x18), epsilon);

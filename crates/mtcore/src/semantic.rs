@@ -260,7 +260,7 @@ pub fn guest_expand(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, values: 
         pg.set_u32(m, c.esp, v);
     }
     c.ecx = this;
-    ddnative_base::x86::call_ext(m, c, 0x00e0_ec50);
+    crate::semantic::call_guest(m, c, 0x00e0_ec50);
     c.eax
 }
 
@@ -321,7 +321,7 @@ pub fn intern_dependency_keys_with(m: &mut dyn Mem, c: &mut Cpu, expander: Expan
         pg.set_u32(m, c.esp, v);
     }
     c.ecx = this;
-    ddnative_base::x86::call_ext(m, c, 0x00e0_e5e0);
+    crate::semantic::call_guest(m, c, 0x00e0_e5e0);
     // EAX = the interned sequence; `ret 0x14` from the entry frame
     c.esp = entry.wrapping_add(4 + 0x14);
 }
@@ -336,12 +336,21 @@ pub static E12A20_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = st
 /// `call_ext` (replayed seams in tests, the lifted program in the game).
 #[inline(always)]
 pub(crate) fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
+    // one bit test per 16 bytes of code: no override, no further cost
     if ddnative_base::x86::may_be_overridden(target) {
-        if let Some(f) = ddnative_base::x86::override_of(target) {
-            return f(m, c);
-        }
+        return call_overridden(m, c, target);
     }
     ddnative_base::x86::call_ext(m, c, target)
+}
+
+/// The rare half of [`call_guest`], kept out of line so that recursive ports
+/// (a deep recursion in a debug build) keep small frames.
+#[inline(never)]
+fn call_overridden(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
+    match ddnative_base::x86::override_of(target) {
+        Some(f) => f(m, c),
+        None => ddnative_base::x86::call_ext(m, c, target),
+    }
 }
 
 /// The CRT `memcpy` 0x012EFEA0 done natively: it behaves like memmove (the
@@ -424,7 +433,7 @@ pub fn shader_lookup(m: &mut dyn Mem, c: &mut Cpu) {
     // its CRC local is at frame + 0x10.
     let frame = entry.wrapping_sub(0x9c);
     let crc = frame.wrapping_add(0x10);
-    let ext = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let ext = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     let finish = |c: &mut Cpu, r: u32| {
         c.eax = r;
         c.esp = entry.wrapping_add(4 + 0x1c);
@@ -468,7 +477,7 @@ pub fn update_joints(m: &mut dyn Mem, c: &mut Cpu) {
     let flags = pg.u8(m, entry.wrapping_add(0xc)); // the original reads the byte only
     let notify = if flags & 2 != 0 { false } else { pg.u8(m, model + 0x37b) & 1 != 0 };
     let visible_only = flags & 1 != 0;
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     // The original's frames: four pushes, then ESI pushed for the loop.
     let frame = entry.wrapping_sub(16);
     let loop_frame = entry.wrapping_sub(20);
@@ -667,7 +676,7 @@ pub fn set_pass(m: &mut dyn Mem, c: &mut Cpu) {
     if pg.u8(m, table + 0x2e0) != 0 && pass == 0x12 {
         flags |= 0x20;
     }
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     if colours < 2 {
         let first = pg.u32(m, colours_at);
         call_from(m, c, pg, frame, ctx, &[first, depth, flags, 0], 0x00ff_1187, guest(0x00fe_fb90));
@@ -763,7 +772,7 @@ pub fn dispatch_event(m: &mut dyn Mem, c: &mut Cpu) {
                 if matches {
                     (c.ebx, c.ebp, c.esi, c.edi) = (i, id, listener.wrapping_add(8), event);
                     call_from(m, c, pg, frame, this, &[listener, event], 0x00dd_4377, |m, c| {
-                        ddnative_base::x86::call_ext(m, c, 0x00dc_c3e0)
+                        crate::semantic::call_guest(m, c, 0x00dc_c3e0)
                     });
                 }
             }
@@ -774,7 +783,7 @@ pub fn dispatch_event(m: &mut dyn Mem, c: &mut Cpu) {
         if owner != 0 {
             (c.ebx, c.ebp, c.esi, c.edi) = (i, id, this.wrapping_add(0x38).wrapping_add(i.wrapping_mul(0x6e0)), event);
             let found = call_from(m, c, pg, frame, owner, &[id], 0x00dd_439b, |m, c| {
-                ddnative_base::x86::call_ext(m, c, 0x00f7_3b90)
+                crate::semantic::call_guest(m, c, 0x00f7_3b90)
             });
             if found != 0 {
                 let up = pg.u16(m, found.wrapping_add(0x1c)) as i16 as i32 as u32;
@@ -822,7 +831,7 @@ pub fn find_sorted(m: &mut dyn Mem, c: &mut Cpu) {
         u32::from(pg.u16(m, pg.u32(m, table.wrapping_add(0x60)).wrapping_add(6)))
     } else {
         (c.ebx, c.ebp) = (table, 0);
-        call_from(m, c, pg, frame, table, &[], 0x005b_31b3, |m, c| ddnative_base::x86::call_ext(m, c, count_method))
+        call_from(m, c, pg, frame, table, &[], 0x005b_31b3, |m, c| crate::semantic::call_guest(m, c, count_method))
     };
     let (mut low, mut high) = (0i32, count.wrapping_sub(1) as i32);
     let mut found = u32::MAX;
@@ -833,7 +842,7 @@ pub fn find_sorted(m: &mut dyn Mem, c: &mut Cpu) {
             pg.u32(m, table.wrapping_add(0x60)).wrapping_add(8).wrapping_add((middle as u32).wrapping_mul(0xec))
         } else {
             (c.ebx, c.ebp, c.esi, c.edi) = (table, low as u32, middle as u32, high as u32);
-            call_from(m, c, pg, frame, table, &[middle as u32], 0x005b_31cc, |m, c| ddnative_base::x86::call_ext(m, c, entry_method))
+            call_from(m, c, pg, frame, table, &[middle as u32], 0x005b_31cc, |m, c| crate::semantic::call_guest(m, c, entry_method))
         };
         let value = pg.u32(m, row) as i32;
         let key = pg.u32(m, entry.wrapping_add(4)) as i32;

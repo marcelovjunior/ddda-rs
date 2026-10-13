@@ -383,5 +383,5 @@ fn pop(m: &mut dyn Mem, pg: Pages, c: &mut Cpu) -> u32 {
 /// `return_to` does (its arguments pushed by the caller).
 fn call_guest(m: &mut dyn Mem, pg: Pages, c: &mut Cpu, target: u32, return_to: u32) {
     push(m, pg, c, return_to);
-    ddnative_base::x86::call_ext(m, c, target);
+    crate::semantic::call_guest(m, c, target);
 }

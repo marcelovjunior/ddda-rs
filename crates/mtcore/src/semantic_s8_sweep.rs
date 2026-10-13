@@ -486,7 +486,7 @@ fn sweep(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, owner: u32, shape:
                             s,
                             &[s.wrapping_add(0x150), s.wrapping_add(16), s.wrapping_add(32), s.wrapping_add(48), s.wrapping_add(64)],
                             0x00d7_df2d,
-                            |m, c| x86::call_ext(m, c, 0x00d8_e400),
+                            |m, c| crate::semantic::call_guest(m, c, 0x00d8_e400),
                         );
                         if ok as u8 == 0 {
                             for i in 0..3 {
