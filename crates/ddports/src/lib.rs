@@ -171,6 +171,8 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00ff_04c0, mtcore::semantic_s9::set_viewport_rect),
             (0x0049_e920, mtcore::semantic_s10::find_nearest_object),
             (0x00fe_66a0, mtcore::semantic_s10::gather_ambient_probe),
+            (0x00ea_3130, mtcore::semantic_p2c::base_model_draw_unit),
+            (0x00ea_1fd0, mtcore::semantic_p2c::select_shadow_state_abi),
             (0x00fe_db80, mtcore::semantic_s1::save_recording_state),
             (0x00fe_dc00, mtcore::semantic_s1::restore_recording_state),
             (0x00cf_eec0, mtcore::semantic_s7_stream::stream_skip),
