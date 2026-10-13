@@ -26,10 +26,11 @@ static REUSED: AtomicU64 = AtomicU64::new(0);
 /// draws that found their pipeline built already.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PipelineStats {
-    /// shaders translated (d3d9wgsl) and created as modules (naga)
+    /// draw shader modules created, including background precreation
     pub modules: u64,
     pub module_time: Duration,
-    /// of `module_time`: parsing and translating the bytecode to WGSL
+    /// Parsing/translating current bytecode to WGSL, including reflection
+    /// for precreated modules; not necessarily a subset of `module_time`.
     pub translate_time: Duration,
     /// render pipelines created (the driver compiles the shaders)
     pub pipelines: u64,
@@ -40,7 +41,7 @@ pub struct PipelineStats {
 impl std::fmt::Display for PipelineStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mean = |t: Duration, n: u64| t.as_secs_f64() * 1e3 / n.max(1) as f64;
-        write!(f, "shader modules {} ({:.0} ms, {:.2} ms each, {:.2} ms of it translating), pipelines {} ({:.0} ms, {:.2} ms each), draws reusing a pipeline {}",
+        write!(f, "shader modules {} ({:.0} ms, {:.2} ms each, {:.2} ms translating per module), pipelines {} ({:.0} ms, {:.2} ms each), draws reusing a pipeline {}",
                self.modules, self.module_time.as_secs_f64() * 1e3, mean(self.module_time, self.modules), mean(self.translate_time, self.modules),
                self.pipelines, self.pipeline_time.as_secs_f64() * 1e3, mean(self.pipeline_time, self.pipelines), self.reused)
     }
@@ -177,6 +178,7 @@ impl Persistent {
 /// Save every open pipeline cache that has new pipelines now (a host
 /// closing its window: the backend may never be dropped).
 pub fn save_pipeline_caches() {
+    crate::warmup::flush();
     let open: Vec<Arc<Persistent>> = OPEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
     for p in open {
         if p.unsaved.load(Ordering::Relaxed) > 0 {

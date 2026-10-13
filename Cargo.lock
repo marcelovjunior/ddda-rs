@@ -2479,7 +2479,9 @@ dependencies = [
  "d3d9wgsl",
  "mtarc",
  "naga",
+ "serde",
  "wgpu",
+ "wgpu-types",
 ]
 
 [[package]]

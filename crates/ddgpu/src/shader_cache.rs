@@ -19,7 +19,10 @@ fn source_at(wgsl: String, dir: Option<&Path>) -> Result<wgpu::ShaderSource<'sta
     let Some(dir) = dir else {
         return Ok(wgpu::ShaderSource::Wgsl(wgsl.into()));
     };
-    let module = match load(dir, &wgsl) {
+    let started = std::time::Instant::now();
+    let cached = load(dir, &wgsl);
+    let hit = cached.is_some();
+    let module = match cached {
         Some(module) => module,
         None => {
             let module = naga::front::wgsl::parse_str(&wgsl).map_err(|e| e.emit_to_string(&wgsl))?;
@@ -27,6 +30,7 @@ fn source_at(wgsl: String, dir: Option<&Path>) -> Result<wgpu::ShaderSource<'sta
             module
         }
     };
+    crate::pipeline_log::event("ir", if hit { "hit" } else { "miss" }, started);
     Ok(wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)))
 }
 
