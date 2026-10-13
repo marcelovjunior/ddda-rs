@@ -1,8 +1,31 @@
 import unittest
-from load_timeline import add_mark, movie_spans, parse, phases, render, render_legacy, interval
+from load_timeline import add_mark, movie_spans, parse, phases, render, render_legacy, interval, ranked_intervals
 
 
 class TimelineTests(unittest.TestCase):
+    def test_rank_uses_transition_deltas_and_retains_availability(self):
+        events = parse("load-log t=2 event=interval from=boot to=title wall_ns=2000000000 zlib_ns=3000000000 gpu_available=false state=0x00532110\n"
+                       "load-log t=3 event=io_totals read_ns=99999999999\n"
+                       "load-log t=7 event=interval from=title to=area_request wall_ns=5000000000 dti=0x0198cdf0 pipeline_ns=unavailable")
+        rows = ranked_intervals(events)
+        self.assertEqual([r["wall_ns"] for r in rows], [5000000000, 2000000000])
+        self.assertEqual(rows[0]["fields"]["pipeline_ns"], "unavailable")
+        self.assertEqual(rows[0]["fields"]["dti"], "0x0198cdf0")
+        self.assertEqual(rows[1]["fields"]["gpu_available"], "false")
+        self.assertEqual(rows[1]["fields"]["zlib_ns"], "3000000000")
+        self.assertNotIn("read_ns", rows[0]["fields"])
+
+    def test_rank_does_not_invent_missing_transitions(self):
+        self.assertEqual(ranked_intervals(parse("load-log t=1 event=io_totals read_ns=1")), [])
+        rows = ranked_intervals(parse("load-log t=3 event=interval wall_ns=1000000000\nload-log t=2 event=interval wall_ns=1000000000"))
+        self.assertEqual([r["end_s"] for r in rows], [2, 3])
+
+    def test_rank_rejects_invalid_durations_but_allows_timestamp_rounding(self):
+        for value in ["-1", "nan", "", "2000000001"]:
+            with self.assertRaises(ValueError):
+                ranked_intervals(parse(f"load-log t=1 event=interval wall_ns={value}"))
+        self.assertEqual(len(ranked_intervals(parse("load-log t=1 event=interval wall_ns=1000000400"))), 1)
+
     def test_independent_snapshots_exclude_future_samples(self):
         events = parse("load-log t=1 event=io_totals bytes=40\nload-log t=1.1 event=archive_totals zlib_ns=20\nload-log t=2 event=io_totals bytes=100\nload-log t=3 event=archive_totals zlib_ns=999")
         result = interval(events, 1.5, 2.5)

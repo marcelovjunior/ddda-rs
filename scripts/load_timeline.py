@@ -191,12 +191,38 @@ def interval(events, start, end):
             "delta": delta}
 
 
+def ranked_intervals(events):
+    """Rank explicit transition deltas; never substitute periodic samples.
+
+    Retain every field, including raw state/DTI and availability flags. Cost
+    sums overlap across threads and helpers, so this ranks wall intervals,
+    not predicted savings or exclusive function costs.
+    """
+    result = []
+    for event in events:
+        if event.name != "interval":
+            continue
+        raw_wall = event.fields.get("wall_ns", "")
+        if not raw_wall.isascii() or not raw_wall.isdigit():
+            raise ValueError(f"invalid interval wall_ns at {event.time}")
+        wall = int(raw_wall)
+        # The logger prints timestamps to six decimals and durations as ns.
+        if wall / 1e9 > event.time + 0.000001:
+            raise ValueError(f"interval starts before process origin at {event.time}")
+        result.append({"end_s": event.time, "wall_ns": wall,
+                       "fields": dict(event.fields)})
+    return sorted(result, key=lambda row: (-row["wall_ns"], row["end_s"]))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log", type=Path)
     parser.add_argument("--mark", action="append", default=[])
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--at", help="Comma-separated process-clock boundaries; emit JSON counter deltas")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--at", help="Comma-separated process-clock boundaries; emit JSON counter deltas")
+    mode.add_argument("--rank-intervals", action="store_true",
+                      help="Rank recorded transition wall durations as JSON; retain all raw cost/state fields")
     args = parser.parse_args()
     text = args.log.read_text(encoding="utf-8-sig", errors="replace")
     events = parse(text)
@@ -209,7 +235,15 @@ def main():
             add_mark(events, mark)
         except ValueError as error:
             parser.error(str(error))
-    if args.at:
+    if args.rank_intervals:
+        try:
+            rows = ranked_intervals(events)
+        except ValueError as error:
+            parser.error(str(error))
+        report = json.dumps({"sha256": hashlib.sha256(args.log.read_bytes()).hexdigest(),
+            "warning": "code-state intervals, not observed UI; inclusive overlapping costs are not additive savings",
+            "intervals": rows}, indent=2) + "\n"
+    elif args.at:
         try:
             times = [float(t) for t in args.at.split(",")]
             if len(times) < 2 or any(not math.isfinite(t) or t < 0 for t in times) or any(b <= a for a, b in zip(times, times[1:])):

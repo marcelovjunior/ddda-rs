@@ -4,6 +4,12 @@ use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 use ddnative_base::emit;
 
+// Translated from 0x01392A00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392a00.
+pub fn f_01392a00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x199A288u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x01392A10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392a10.
 pub fn f_01392a10(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -2428,10 +2434,4 @@ pub fn f_01394320(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn f_01394330(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     m.fast_set_u32(pt, 0x199E0B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394340 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394340.
-pub fn f_01394340(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E1D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

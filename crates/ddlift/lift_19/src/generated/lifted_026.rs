@@ -4,6 +4,440 @@ use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 use ddnative_base::emit;
 
+// Translated from 0x009C1740 (DDDA.exe 2017-12-13 Steam), uEm5301::getDTI.
+pub fn f_009c1740(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199D068u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1750 (DDDA.exe 2017-12-13 Steam), cEm5300Action::vf16.
+pub fn f_009c1750(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1750;
+    loop {
+        match pc {
+            0x9C1750 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C17B3 } else { 0x9C175A }; continue; }
+            0x9C175A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C845Cu32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C17B3 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C17C0 (DDDA.exe 2017-12-13 Steam), cEm5300Action::getDTI.
+pub fn f_009c17c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199D0C8u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C17D0 (DDDA.exe 2017-12-13 Steam), cEm5300Action::dtor_deleting.
+pub fn f_009c17d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C17D0;
+    loop {
+        match pc {
+            0x9C17D0 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C17F7 } else { 0x9C17E0 }; continue; }
+            0x9C17E0 => { emit::push(0x199D0C8u32, m, pt, cpu); emit::push(0x9C17EA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C17F7, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C17F7; continue; }
+            0x9C17F7 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1800 (DDDA.exe 2017-12-13 Steam), cEm5300ActWait::vf16.
+pub fn f_009c1800(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1800;
+    loop {
+        match pc {
+            0x9C1800 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1863 } else { 0x9C180A }; continue; }
+            0x9C180A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C84A4u32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1863 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1870 (DDDA.exe 2017-12-13 Steam), cEm5300ActWait::getDTI.
+pub fn f_009c1870(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199D008u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1880 (DDDA.exe 2017-12-13 Steam), cEm5300ActWait::dtor_deleting.
+pub fn f_009c1880(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1880;
+    loop {
+        match pc {
+            0x9C1880 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C18A7 } else { 0x9C1890 }; continue; }
+            0x9C1890 => { emit::push(0x199D008u32, m, pt, cpu); emit::push(0x9C189A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C18A7, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C18A7; continue; }
+            0x9C18A7 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C18B0 (DDDA.exe 2017-12-13 Steam), cEm5300ActWaitTarget::vf16.
+pub fn f_009c18b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C18B0;
+    loop {
+        match pc {
+            0x9C18B0 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1913 } else { 0x9C18BA }; continue; }
+            0x9C18BA => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C84ECu32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1913 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1920 (DDDA.exe 2017-12-13 Steam), cEm5300ActWaitTarget::getDTI.
+pub fn f_009c1920(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199CF00u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1930 (DDDA.exe 2017-12-13 Steam), cEm5300ActWaitTarget::dtor_deleting.
+pub fn f_009c1930(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1930;
+    loop {
+        match pc {
+            0x9C1930 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1957 } else { 0x9C1940 }; continue; }
+            0x9C1940 => { emit::push(0x199CF00u32, m, pt, cpu); emit::push(0x9C194A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1957, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1957; continue; }
+            0x9C1957 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1960 (DDDA.exe 2017-12-13 Steam), cEm5300ActWalk::vf16.
+pub fn f_009c1960(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1960;
+    loop {
+        match pc {
+            0x9C1960 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C19C3 } else { 0x9C196A }; continue; }
+            0x9C196A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C8534u32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C19C3 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C19D0 (DDDA.exe 2017-12-13 Steam), cEm5300ActWalk::getDTI.
+pub fn f_009c19d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199D088u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C19E0 (DDDA.exe 2017-12-13 Steam), cEm5300ActWalk::dtor_deleting.
+pub fn f_009c19e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C19E0;
+    loop {
+        match pc {
+            0x9C19E0 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1A07 } else { 0x9C19F0 }; continue; }
+            0x9C19F0 => { emit::push(0x199D088u32, m, pt, cpu); emit::push(0x9C19FA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1A07, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1A07; continue; }
+            0x9C1A07 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1A10 (DDDA.exe 2017-12-13 Steam), cEm5300ActionActWalkTrace::vf16.
+pub fn f_009c1a10(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1A10;
+    loop {
+        match pc {
+            0x9C1A10 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1A73 } else { 0x9C1A1A }; continue; }
+            0x9C1A1A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C857Cu32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1A73 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1A80 (DDDA.exe 2017-12-13 Steam), cEm5300ActionActWalkTrace::getDTI.
+pub fn f_009c1a80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199D028u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1A90 (DDDA.exe 2017-12-13 Steam), cEm5300ActionActWalkTrace::dtor_deleting.
+pub fn f_009c1a90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1A90;
+    loop {
+        match pc {
+            0x9C1A90 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1AB7 } else { 0x9C1AA0 }; continue; }
+            0x9C1AA0 => { emit::push(0x199D028u32, m, pt, cpu); emit::push(0x9C1AAA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1AB7, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1AB7; continue; }
+            0x9C1AB7 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1AC0 (DDDA.exe 2017-12-13 Steam), cEm5300ActTargetWalk::vf16.
+pub fn f_009c1ac0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1AC0;
+    loop {
+        match pc {
+            0x9C1AC0 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1B23 } else { 0x9C1ACA }; continue; }
+            0x9C1ACA => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C85C4u32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1B23 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1B30 (DDDA.exe 2017-12-13 Steam), cEm5300ActTargetWalk::getDTI.
+pub fn f_009c1b30(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199CFE8u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1B40 (DDDA.exe 2017-12-13 Steam), cEm5300ActTargetWalk::dtor_deleting.
+pub fn f_009c1b40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1B40;
+    loop {
+        match pc {
+            0x9C1B40 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1B67 } else { 0x9C1B50 }; continue; }
+            0x9C1B50 => { emit::push(0x199CFE8u32, m, pt, cpu); emit::push(0x9C1B5A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1B67, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1B67; continue; }
+            0x9C1B67 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1B70 (DDDA.exe 2017-12-13 Steam), cEm5300ActBack::vf16.
+pub fn f_009c1b70(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1B70;
+    loop {
+        match pc {
+            0x9C1B70 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1BD3 } else { 0x9C1B7A }; continue; }
+            0x9C1B7A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C860Cu32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1BD3 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1BE0 (DDDA.exe 2017-12-13 Steam), cEm5300ActBack::getDTI.
+pub fn f_009c1be0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199CF88u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1BF0 (DDDA.exe 2017-12-13 Steam), cEm5300ActBack::dtor_deleting.
+pub fn f_009c1bf0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1BF0;
+    loop {
+        match pc {
+            0x9C1BF0 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1C17 } else { 0x9C1C00 }; continue; }
+            0x9C1C00 => { emit::push(0x199CF88u32, m, pt, cpu); emit::push(0x9C1C0A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1C17, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1C17; continue; }
+            0x9C1C17 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1C20 (DDDA.exe 2017-12-13 Steam), cEm5300Act1MotAction::vf16.
+pub fn f_009c1c20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1C20;
+    loop {
+        match pc {
+            0x9C1C20 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1C83 } else { 0x9C1C2A }; continue; }
+            0x9C1C2A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C8654u32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1C83 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1C90 (DDDA.exe 2017-12-13 Steam), cEm5300Act1MotAction::getDTI.
+pub fn f_009c1c90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199CF28u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1CA0 (DDDA.exe 2017-12-13 Steam), cEm5300Act1MotAction::dtor_deleting.
+pub fn f_009c1ca0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1CA0;
+    loop {
+        match pc {
+            0x9C1CA0 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1CC7 } else { 0x9C1CB0 }; continue; }
+            0x9C1CB0 => { emit::push(0x199CF28u32, m, pt, cpu); emit::push(0x9C1CBA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1CC7, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1CC7; continue; }
+            0x9C1CC7 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1CD0 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurn90::vf16.
+pub fn f_009c1cd0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1CD0;
+    loop {
+        match pc {
+            0x9C1CD0 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1D33 } else { 0x9C1CDA }; continue; }
+            0x9C1CDA => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C869Cu32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1D33 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1D40 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurn90::getDTI.
+pub fn f_009c1d40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199D048u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1D50 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurn90::dtor_deleting.
+pub fn f_009c1d50(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1D50;
+    loop {
+        match pc {
+            0x9C1D50 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1D77 } else { 0x9C1D60 }; continue; }
+            0x9C1D60 => { emit::push(0x199D048u32, m, pt, cpu); emit::push(0x9C1D6A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1D77, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1D77; continue; }
+            0x9C1D77 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1D80 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurn180::vf16.
+pub fn f_009c1d80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1D80;
+    loop {
+        match pc {
+            0x9C1D80 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1DE3 } else { 0x9C1D8A }; continue; }
+            0x9C1D8A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C86E4u32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1DE3 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1DF0 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurn180::getDTI.
+pub fn f_009c1df0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199CEE0u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1E00 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurn180::dtor_deleting.
+pub fn f_009c1e00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1E00;
+    loop {
+        match pc {
+            0x9C1E00 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1E27 } else { 0x9C1E10 }; continue; }
+            0x9C1E10 => { emit::push(0x199CEE0u32, m, pt, cpu); emit::push(0x9C1E1A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1E27, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1E27; continue; }
+            0x9C1E27 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1E30 (DDDA.exe 2017-12-13 Steam), cEm5300ActDie::vf16.
+pub fn f_009c1e30(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1E30;
+    loop {
+        match pc {
+            0x9C1E30 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1E93 } else { 0x9C1E3A }; continue; }
+            0x9C1E3A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C872Cu32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1E93 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1EA0 (DDDA.exe 2017-12-13 Steam), cEm5300ActDie::getDTI.
+pub fn f_009c1ea0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199CF48u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1EB0 (DDDA.exe 2017-12-13 Steam), cEm5300ActDie::dtor_deleting.
+pub fn f_009c1eb0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1EB0;
+    loop {
+        match pc {
+            0x9C1EB0 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1ED7 } else { 0x9C1EC0 }; continue; }
+            0x9C1EC0 => { emit::push(0x199CF48u32, m, pt, cpu); emit::push(0x9C1ECA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1ED7, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1ED7; continue; }
+            0x9C1ED7 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1EE0 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurretBreak::vf16.
+pub fn f_009c1ee0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1EE0;
+    loop {
+        match pc {
+            0x9C1EE0 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1F4B } else { 0x9C1EEA }; continue; }
+            0x9C1EEA => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C8774u32); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x8C), cpu.xmm[0][0]); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1F4B => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1F50 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurretBreak::getDTI.
+pub fn f_009c1f50(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199CFC8u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x009C1F60 (DDDA.exe 2017-12-13 Steam), cEm5300ActTurretBreak::dtor_deleting.
+pub fn f_009c1f60(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1F60;
+    loop {
+        match pc {
+            0x9C1F60 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x4)) as u32), 0x1u32, 8); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; m.fast_set_u32(pt, cpu.esi, 0x1558134u32); pc = if cpu.fl.zf() { 0x9C1F87 } else { 0x9C1F70 }; continue; }
+            0x9C1F70 => { emit::push(0x199CFC8u32, m, pt, cpu); emit::push(0x9C1F7A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C1F87, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C1F87; continue; }
+            0x9C1F87 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C1F90 (DDDA.exe 2017-12-13 Steam), cEm5300ActS210Turn::vf16.
+pub fn f_009c1f90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x9C1F90;
+    loop {
+        match pc {
+            0x9C1F90 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C1FFB } else { 0x9C1F9A }; continue; }
+            0x9C1F9A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C87BCu32); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x8C), cpu.xmm[0][0]); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C1FFB => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            _ => unreachable!(),
+        }
+    }
+}
+
+// Translated from 0x009C2000 (DDDA.exe 2017-12-13 Steam), cEm5300ActS210Turn::getDTI.
+pub fn f_009c2000(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.eax = 0x199D0A8u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
 // Translated from 0x009C2010 (DDDA.exe 2017-12-13 Steam), cEm5300ActS210Turn::dtor_deleting.
 pub fn f_009c2010(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -24,7 +458,7 @@ pub fn f_009c2040(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C2040;
     loop {
         match pc {
-            0x9C2040 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if cpu.fl.zf() { 0x9C20A3 } else { 0x9C204A }; continue; }
+            0x9C2040 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C20A3 } else { 0x9C204A }; continue; }
             0x9C204A => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x44), cpu.ecx); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x48), cpu.ecx); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x50), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x4)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0xC)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x14)); emit::store64(cpu.xmm[0], m, pt, cpu.eax.wrapping_add(0x1C)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.eax.wrapping_add(0x24), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x28), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x2C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x30), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x34), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x38), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x3C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x40), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, 0x15C8804u32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
             0x9C20A3 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
             _ => unreachable!(),
@@ -58,7 +492,7 @@ pub fn f_009c20f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C20F0;
     loop {
         match pc {
-            0x9C20F0 => { emit::push(0x199CEA0u32, m, pt, cpu); emit::push(0x9C20FA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.ecx = m.fast_u32(pt, 0x199CEBCu32); cpu.edx = m.fast_u32(pt, cpu.eax); cpu.edx = m.fast_u32(pt, cpu.edx.wrapping_add(0x1C)); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); emit::push(cpu.ecx, m, pt, cpu); emit::push(0x10u32, m, pt, cpu); emit::push(0x7480u32, m, pt, cpu); cpu.ecx = cpu.eax; { let t = cpu.edx; emit::push(0x9C2114, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if cpu.fl.zf() { 0x9C211D } else { 0x9C2118 }; continue; }
+            0x9C20F0 => { emit::push(0x199CEA0u32, m, pt, cpu); emit::push(0x9C20FA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.ecx = m.fast_u32(pt, 0x199CEBCu32); cpu.edx = m.fast_u32(pt, cpu.eax); cpu.edx = m.fast_u32(pt, cpu.edx.wrapping_add(0x1C)); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); emit::push(cpu.ecx, m, pt, cpu); emit::push(0x10u32, m, pt, cpu); emit::push(0x7480u32, m, pt, cpu); cpu.ecx = cpu.eax; { let t = cpu.edx; emit::push(0x9C2114, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C211D } else { 0x9C2118 }; continue; }
             0x9C2118 => {  x86::call_ext(m, cpu, 0x9C2190); return; }
             0x9C211D => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
@@ -72,7 +506,7 @@ pub fn f_009c2120(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C2120;
     loop {
         match pc {
-            0x9C2120 => { emit::push(cpu.esi, m, pt, cpu); emit::push(0x199D068u32, m, pt, cpu); emit::push(0x9C212B, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.ecx = m.fast_u32(pt, 0x199D084u32); cpu.edx = m.fast_u32(pt, cpu.eax); cpu.edx = m.fast_u32(pt, cpu.edx.wrapping_add(0x1C)); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); emit::push(cpu.ecx, m, pt, cpu); emit::push(0x10u32, m, pt, cpu); emit::push(0x7480u32, m, pt, cpu); cpu.ecx = cpu.eax; { let t = cpu.edx; emit::push(0x9C2145, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = cpu.eax; cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C2185 } else { 0x9C214B }; continue; }
+            0x9C2120 => { emit::push(cpu.esi, m, pt, cpu); emit::push(0x199D068u32, m, pt, cpu); emit::push(0x9C212B, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.ecx = m.fast_u32(pt, 0x199D084u32); cpu.edx = m.fast_u32(pt, cpu.eax); cpu.edx = m.fast_u32(pt, cpu.edx.wrapping_add(0x1C)); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); emit::push(cpu.ecx, m, pt, cpu); emit::push(0x10u32, m, pt, cpu); emit::push(0x7480u32, m, pt, cpu); cpu.ecx = cpu.eax; { let t = cpu.edx; emit::push(0x9C2145, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = cpu.eax; cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2185 } else { 0x9C214B }; continue; }
             0x9C214B => { emit::push(0x9C2150, m, pt, cpu); x86::call_ext(m, cpu, 0x9C2190u32); cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x2C)); cpu.eax = cpu.eax & 0xFFFF52FFu32; cpu.eax = cpu.eax | 0x5200u32; m.fast_set_u32(pt, cpu.esi.wrapping_add(0x2C), cpu.eax); cpu.eax = cpu.fl.alu_or(cpu.eax, 0xFFFFFFFFu32, 32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x5B6C), cpu.eax); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x5B64), cpu.eax); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x5B74), cpu.eax); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x5B58), cpu.eax); m.fast_set_u32(pt, cpu.esi, 0x15C8140u32); cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             0x9C2185 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
@@ -92,7 +526,7 @@ pub fn f_009c2530(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C2530;
     loop {
         match pc {
-            0x9C2530 => { emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; emit::push(0x9C2538, m, pt, cpu); x86::call_ext(m, cpu, 0x9C2560u32); cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x8)) as u32), 0x1u32, 8); pc = if cpu.fl.zf() { 0x9C2556 } else { 0x9C253F }; continue; }
+            0x9C2530 => { emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; emit::push(0x9C2538, m, pt, cpu); x86::call_ext(m, cpu, 0x9C2560u32); cpu.fl.alu_and((m.fast_u8(pt, cpu.esp.wrapping_add(0x8)) as u32), 0x1u32, 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) == 0) { 0x9C2556 } else { 0x9C253F }; continue; }
             0x9C253F => { emit::push(0x199CEA0u32, m, pt, cpu); emit::push(0x9C2549, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5E20))(m, cpu);  cpu.edx = m.fast_u32(pt, cpu.eax); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.ecx = cpu.eax; cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C2556, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C2556; continue; }
             0x9C2556 => { cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
             _ => unreachable!(),
@@ -106,11 +540,11 @@ pub fn f_009c2560(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C2560;
     loop {
         match pc {
-            0x9C2560 => { emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x7470)); emit::push(cpu.edi, m, pt, cpu); cpu.edi = cpu.edi ^ cpu.edi; m.fast_set_u32(pt, cpu.esi, 0x15C7DE8u32); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C2595 } else { 0x9C2576 }; continue; }
-            0x9C2576 => { cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x68)); { let t = cpu.edx; emit::push(0x9C257D, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x7470)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C2595 } else { 0x9C2587 }; continue; }
+            0x9C2560 => { emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x7470)); emit::push(cpu.edi, m, pt, cpu); cpu.edi = cpu.edi ^ cpu.edi; m.fast_set_u32(pt, cpu.esi, 0x15C7DE8u32); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2595 } else { 0x9C2576 }; continue; }
+            0x9C2576 => { cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x68)); { let t = cpu.edx; emit::push(0x9C257D, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x7470)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2595 } else { 0x9C2587 }; continue; }
             0x9C2587 => { cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax); emit::push(0x1u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C258F, m, pt, cpu);  x86::call_ext(m, cpu, t);  } m.fast_set_u32(pt, cpu.esi.wrapping_add(0x7470), cpu.edi); pc = 0x9C2595; continue; }
-            0x9C2595 => { cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x7474)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C25BE } else { 0x9C259F }; continue; }
-            0x9C259F => { cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x68)); { let t = cpu.edx; emit::push(0x9C25A6, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x7474)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C25BE } else { 0x9C25B0 }; continue; }
+            0x9C2595 => { cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x7474)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C25BE } else { 0x9C259F }; continue; }
+            0x9C259F => { cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x68)); { let t = cpu.edx; emit::push(0x9C25A6, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x7474)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C25BE } else { 0x9C25B0 }; continue; }
             0x9C25B0 => { cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax); emit::push(0x1u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C25B8, m, pt, cpu);  x86::call_ext(m, cpu, t);  } m.fast_set_u32(pt, cpu.esi.wrapping_add(0x7474), cpu.edi); pc = 0x9C25BE; continue; }
             0x9C25BE => { cpu.ecx = cpu.esi.wrapping_add(0x6210); emit::push(0x9C25C9, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x004CA510))(m, cpu);  cpu.ecx = cpu.esi.wrapping_add(0x6120); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6120), 0x159ECB0u32); emit::push(0x9C25DE, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x0112EC50))(m, cpu);  cpu.ecx = cpu.esi.wrapping_add(0x6120); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6120), 0x159E6A8u32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6150), 0x1558134u32); emit::push(0x9C25FD, m, pt, cpu); x86::call_ext(m, cpu, 0xDB8CB0u32); cpu.ecx = cpu.esi.wrapping_add(0x60F8); emit::push(0x9C2608, m, pt, cpu); x86::call_ext(m, cpu, 0x402530u32); cpu.ecx = cpu.esi.wrapping_add(0x60E4); emit::push(0x9C2613, m, pt, cpu); x86::call_ext(m, cpu, 0x402530u32); cpu.eax = cpu.esi.wrapping_add(0x60E0); cpu.ecx = 0x3u32; cpu.edi = cpu.edi; pc = 0x9C2620; continue; }
             0x9C2620 => { cpu.eax = cpu.fl.alu_sub(cpu.eax, 0x14u32, 32); { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if (!cpu.fl.sf()) { 0x9C2620 } else { 0x9C262C }; continue; }
@@ -138,9 +572,9 @@ pub fn f_009c2640(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C269F => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; let l129_condition = (cpu.eax) == (0x2u32); pc = if l129_condition { 0x9C26B5 } else { 0x9C26AA }; continue; }
             0x9C26AA => { let l129_condition = (cpu.eax) == (0x1u32); pc = if l129_condition { 0x9C26B5 } else { 0x9C26AF }; continue; }
             0x9C26AF => { m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6048), cpu.ecx); pc = 0x9C26B5; continue; }
-            0x9C26B5 => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x604C)); cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if cpu.fl.zf() { 0x9C26D5 } else { 0x9C26BF }; continue; }
-            0x9C26BF => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); pc = if cpu.fl.zf() { 0x9C26D5 } else { 0x9C26CA }; continue; }
-            0x9C26CA => { cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); pc = if cpu.fl.zf() { 0x9C26D5 } else { 0x9C26CF }; continue; }
+            0x9C26B5 => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x604C)); cpu.fl.alu_sub(cpu.eax, cpu.ecx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C26D5 } else { 0x9C26BF }; continue; }
+            0x9C26BF => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C26D5 } else { 0x9C26CA }; continue; }
+            0x9C26CA => { cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C26D5 } else { 0x9C26CF }; continue; }
             0x9C26CF => { m.fast_set_u32(pt, cpu.esi.wrapping_add(0x604C), cpu.ecx); pc = 0x9C26D5; continue; }
             0x9C26D5 => { cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
@@ -159,12 +593,12 @@ pub fn f_009c26e0(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C270C => { emit::push(0x9C2711, m, pt, cpu); x86::call_ext(m, cpu, 0x9C4D40u32); cpu.edx = m.fast_u32(pt, cpu.edi.wrapping_add(0x6120)); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x68)); cpu.ecx = cpu.edi.wrapping_add(0x6120); { let t = cpu.eax; emit::push(0x9C2722, m, pt, cpu);  x86::call_ext(m, cpu, t);  } emit::push(cpu.edi, m, pt, cpu); emit::push(0x9C2728, m, pt, cpu); x86::call_ext(m, cpu, 0x9C2F50u32); cpu.eax = m.fast_u32(pt, 0x18D2818u32); cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0x1C)) as u32), 0x0u32, 8); cpu.ebx = cpu.eax.wrapping_add(0x1C); cpu.esi = cpu.eax; pc = if (!cpu.fl.zf()) { 0x9C2741 } else { 0x9C2738 }; continue; }
             0x9C2738 => { let l129_condition = (((m.fast_u8(pt, 0x18D0BB0u32) as u32)) & 0xFF) == ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C274B } else { 0x9C2741 }; continue; }
             0x9C2741 => { cpu.eax = cpu.fl.alu_add(cpu.eax, 0x4u32, 32); emit::push(cpu.eax, m, pt, cpu); { let t = m.fast_u32(pt, 0x139D160u32); emit::push(0x9C274B, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C274B; continue; }
-            0x9C274B => { cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x368)); cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); pc = if cpu.fl.zf() { 0x9C2773 } else { 0x9C2755 }; continue; }
+            0x9C274B => { cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x368)); cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2773 } else { 0x9C2755 }; continue; }
             0x9C2755 => { { let a = m.fast_u32(pt, cpu.esi.wrapping_add(0x38C)) & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x38C), r); } pc = if (!cpu.fl.zf()) { 0x9C276E } else { 0x9C275D }; continue; }
             0x9C275D => { emit::push(0x9C2762, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  m.fast_set_u32(pt, cpu.esi.wrapping_add(0x368), 0x0u32); pc = 0x9C2773; continue; }
             0x9C276E => { emit::push(0x9C2773, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  pc = 0x9C2773; continue; }
             0x9C2773 => { let l129_condition = (((m.fast_u8(pt, cpu.ebx) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C2781 } else { 0x9C2778 }; continue; }
-            0x9C2778 => { cpu.fl.alu_sub((m.fast_u8(pt, 0x18D0BB0u32) as u32), 0x0u32, 8); pc = if cpu.fl.zf() { 0x9C278B } else { 0x9C2781 }; continue; }
+            0x9C2778 => { cpu.fl.alu_sub((m.fast_u8(pt, 0x18D0BB0u32) as u32), 0x0u32, 8); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C278B } else { 0x9C2781 }; continue; }
             0x9C2781 => { cpu.esi = cpu.fl.alu_add(cpu.esi, 0x4u32, 32); emit::push(cpu.esi, m, pt, cpu); { let t = m.fast_u32(pt, 0x139D164u32); emit::push(0x9C278B, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C278B; continue; }
             0x9C278B => { cpu.ecx = cpu.edi; cpu.edi = emit::pop(m, pt, cpu); cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu);  x86::call_ext(m, cpu, 0xAAA020); return; }
             _ => unreachable!(),
@@ -184,9 +618,9 @@ pub fn f_009c27d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C27D0;
     loop {
         match pc {
-            0x9C27D0 => { emit::push(cpu.ebx, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); emit::push(0x33u32, m, pt, cpu); cpu.edi = cpu.ecx; emit::push(0x18528B8u32, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); emit::push(0x9C27E1, m, pt, cpu); x86::call_ext(m, cpu, 0x8892B0u32); emit::push(cpu.edi, m, pt, cpu); cpu.edx = 0x15C7AA4u32; emit::push(0x9C27EC, m, pt, cpu); x86::call_ext(m, cpu, 0xAAFDB0u32); cpu.ebx = cpu.edi.wrapping_add(0x6000); cpu.fl.alu_and(cpu.ebx, cpu.ebx, 32); pc = if cpu.fl.zf() { 0x9C2832 } else { 0x9C27F6 }; continue; }
-            0x9C27F6 => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x30)); emit::push(cpu.esi, m, pt, cpu); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A90u32, m, pt, cpu); emit::push(0x18D2C40u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2810, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = cpu.eax; cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C2831 } else { 0x9C2816 }; continue; }
-            0x9C2816 => { cpu.ecx = cpu.esi; emit::push(0x9C281D, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00FD3F20))(m, cpu);  cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if cpu.fl.zf() { 0x9C282A } else { 0x9C2821 }; continue; }
+            0x9C27D0 => { emit::push(cpu.ebx, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); emit::push(0x33u32, m, pt, cpu); cpu.edi = cpu.ecx; emit::push(0x18528B8u32, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); emit::push(0x9C27E1, m, pt, cpu); x86::call_ext(m, cpu, 0x8892B0u32); emit::push(cpu.edi, m, pt, cpu); cpu.edx = 0x15C7AA4u32; emit::push(0x9C27EC, m, pt, cpu); x86::call_ext(m, cpu, 0xAAFDB0u32); cpu.ebx = cpu.edi.wrapping_add(0x6000); cpu.fl.alu_and(cpu.ebx, cpu.ebx, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2832 } else { 0x9C27F6 }; continue; }
+            0x9C27F6 => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x30)); emit::push(cpu.esi, m, pt, cpu); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A90u32, m, pt, cpu); emit::push(0x18D2C40u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2810, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = cpu.eax; cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2831 } else { 0x9C2816 }; continue; }
+            0x9C2816 => { cpu.ecx = cpu.esi; emit::push(0x9C281D, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00FD3F20))(m, cpu);  cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C282A } else { 0x9C2821 }; continue; }
             0x9C2821 => { cpu.ecx = cpu.eax; cpu.eax = cpu.ebx; emit::push(0x9C282A, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00756A20))(m, cpu);  pc = 0x9C282A; continue; }
             0x9C282A => { cpu.ecx = cpu.esi; emit::push(0x9C2831, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  pc = 0x9C2831; continue; }
             0x9C2831 => { cpu.esi = emit::pop(m, pt, cpu); pc = 0x9C2832; continue; }
@@ -217,31 +651,31 @@ fn f_009c2840_p0(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<cr
             0x9C2885 => { emit::push(0x9C288A, m, pt, cpu); x86::call_ext(m, cpu, 0x76D9A0u32); emit::push(cpu.ebx, m, pt, cpu); cpu.esi = cpu.ebx.wrapping_add(0x10E0); emit::push(cpu.esi, m, pt, cpu); cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x1E79), (0x1u32) as u8); emit::push(0x9C28A0, m, pt, cpu); x86::call_ext(m, cpu, 0x770910u32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xCF4), 0x14FD97Cu32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xD78), 0x7u32); cpu.ecx = cpu.ebx.wrapping_add(0x59E8); emit::push(cpu.esi, m, pt, cpu); cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xD34), 0x14FD998u32); m.fast_set_u32(pt, cpu.esi.wrapping_add(0xD38), 0x8u32); emit::push(0x9C28D6, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00770FD0))(m, cpu);  cpu.ecx = m.fast_u32(pt, 0x18FA4BCu32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1E10), 0x3Au32); let l129_condition = (m.fast_u32(pt, cpu.ecx.wrapping_add(0x34))) != (0x1BBu32); pc = if l129_condition { 0x9C28F9 } else { 0x9C28EF }; continue; }
             0x9C28EF => { m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1B58), 0x400A8670u32); pc = 0x9C28F9; continue; }
             0x9C28F9 => { cpu.edi = m.fast_u32(pt, cpu.ebx.wrapping_add(0x2DC0)); cpu.esi = cpu.esi ^ cpu.esi; let l129_condition = (m.fast_u32(pt, cpu.edi.wrapping_add(0x20))) <= (cpu.esi); pc = if l129_condition { 0x9C291E } else { 0x9C2906 }; continue; }
-            0x9C2906 => { cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x1C)); cpu.fl.alu_sub(cpu.eax, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C291E } else { 0x9C290D }; continue; }
+            0x9C2906 => { cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x1C)); cpu.fl.alu_sub(cpu.eax, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C291E } else { 0x9C290D }; continue; }
             0x9C290D => { cpu.ecx = m.fast_u32(pt, 0x187662Cu32); cpu.edx = m.fast_u32(pt, cpu.ecx); emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x24)); { let t = cpu.eax; emit::push(0x9C291B, m, pt, cpu);  x86::call_ext(m, cpu, t);  } m.fast_set_u32(pt, cpu.edi.wrapping_add(0x1C), cpu.esi); pc = 0x9C291E; continue; }
-            0x9C291E => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x2DC0)); cpu.fl.alu_sub(cpu.eax, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C293B } else { 0x9C2928 }; continue; }
+            0x9C291E => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x2DC0)); cpu.fl.alu_sub(cpu.eax, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C293B } else { 0x9C2928 }; continue; }
             0x9C2928 => { emit::push(0x1852100u32, m, pt, cpu); cpu.edi = 0x1Du32; cpu.esi = cpu.eax; emit::push(0x9C2939, m, pt, cpu); x86::call_ext(m, cpu, 0x7F19C0u32); cpu.esi = cpu.fl.alu_xor(cpu.esi, cpu.esi, 32); pc = 0x9C293B; continue; }
-            0x9C293B => { cpu.edx = m.fast_u32(pt, cpu.ebx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x210)); emit::push(cpu.esi, m, pt, cpu); cpu.ecx = cpu.ebx; { let t = cpu.eax; emit::push(0x9C2948, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x30)); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A3Cu32, m, pt, cpu); emit::push(0x19A932Cu32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C2961, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = cpu.eax; cpu.fl.alu_sub(cpu.edi, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C299D } else { 0x9C2967 }; continue; }
-            0x9C2967 => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x1028)); cpu.fl.alu_sub(cpu.ecx, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C297C } else { 0x9C2971 }; continue; }
+            0x9C293B => { cpu.edx = m.fast_u32(pt, cpu.ebx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x210)); emit::push(cpu.esi, m, pt, cpu); cpu.ecx = cpu.ebx; { let t = cpu.eax; emit::push(0x9C2948, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x30)); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A3Cu32, m, pt, cpu); emit::push(0x19A932Cu32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C2961, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = cpu.eax; cpu.fl.alu_sub(cpu.edi, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C299D } else { 0x9C2967 }; continue; }
+            0x9C2967 => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x1028)); cpu.fl.alu_sub(cpu.ecx, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C297C } else { 0x9C2971 }; continue; }
             0x9C2971 => { emit::push(0x9C2976, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1028), cpu.esi); pc = 0x9C297C; continue; }
             0x9C297C => { cpu.ecx = cpu.edi; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1028), cpu.edi); emit::push(0x9C2989, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B80, crate::platform::mt_alloc);  cpu.ecx = cpu.edi; emit::push(0x9C2990, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1024), cpu.ebx); m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x1074), (0x1u32) as u8); pc = 0x9C299D; continue; }
-            0x9C299D => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x30)); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A3Cu32, m, pt, cpu); emit::push(0x18D234Cu32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C29B6, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = cpu.eax; cpu.fl.alu_sub(cpu.edi, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C2A16 } else { 0x9C29BC }; continue; }
+            0x9C299D => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x30)); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A3Cu32, m, pt, cpu); emit::push(0x18D234Cu32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C29B6, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = cpu.eax; cpu.fl.alu_sub(cpu.edi, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2A16 } else { 0x9C29BC }; continue; }
             0x9C29BC => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x1070)); let l129_condition = (cpu.edi) == (cpu.ecx); pc = if l129_condition { 0x9C29E9 } else { 0x9C29C6 }; continue; }
-            0x9C29C6 => { cpu.fl.alu_sub(cpu.ecx, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C29D5 } else { 0x9C29CA }; continue; }
+            0x9C29C6 => { cpu.fl.alu_sub(cpu.ecx, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C29D5 } else { 0x9C29CA }; continue; }
             0x9C29CA => { emit::push(0x9C29CF, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1070), cpu.esi); pc = 0x9C29D5; continue; }
             0x9C29D5 => { cpu.ecx = cpu.edi; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1070), cpu.edi); emit::push(0x9C29E2, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B80, crate::platform::mt_alloc);  m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x1064), (0x1u32) as u8); pc = 0x9C29E9; continue; }
-            0x9C29E9 => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x2114)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C2A0F } else { 0x9C29F3 }; continue; }
-            0x9C29F3 => { cpu.fl.alu_sub(cpu.ecx, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C2A02 } else { 0x9C29F7 }; continue; }
+            0x9C29E9 => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x2114)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2A0F } else { 0x9C29F3 }; continue; }
+            0x9C29F3 => { cpu.fl.alu_sub(cpu.ecx, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2A02 } else { 0x9C29F7 }; continue; }
             0x9C29F7 => { emit::push(0x9C29FC, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x2114), cpu.esi); pc = 0x9C2A02; continue; }
             0x9C2A02 => { cpu.ecx = cpu.edi; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x2114), cpu.edi); emit::push(0x9C2A0F, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B80, crate::platform::mt_alloc);  pc = 0x9C2A0F; continue; }
             0x9C2A0F => { cpu.ecx = cpu.edi; emit::push(0x9C2A16, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  pc = 0x9C2A16; continue; }
-            0x9C2A16 => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x30)); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A14u32, m, pt, cpu); emit::push(0x18D234Cu32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C2A2F, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = cpu.eax; cpu.fl.alu_sub(cpu.edi, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C2A69 } else { 0x9C2A35 }; continue; }
-            0x9C2A35 => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x1030)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C2A62 } else { 0x9C2A3F }; continue; }
-            0x9C2A3F => { cpu.fl.alu_sub(cpu.ecx, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C2A4E } else { 0x9C2A43 }; continue; }
+            0x9C2A16 => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x30)); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A14u32, m, pt, cpu); emit::push(0x18D234Cu32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C2A2F, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = cpu.eax; cpu.fl.alu_sub(cpu.edi, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2A69 } else { 0x9C2A35 }; continue; }
+            0x9C2A35 => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x1030)); cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2A62 } else { 0x9C2A3F }; continue; }
+            0x9C2A3F => { cpu.fl.alu_sub(cpu.ecx, cpu.esi, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2A4E } else { 0x9C2A43 }; continue; }
             0x9C2A43 => { emit::push(0x9C2A48, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1030), cpu.esi); pc = 0x9C2A4E; continue; }
             0x9C2A4E => { cpu.ecx = cpu.edi; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1030), cpu.edi); emit::push(0x9C2A5B, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B80, crate::platform::mt_alloc);  m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x1065), (0x1u32) as u8); pc = 0x9C2A62; continue; }
             0x9C2A62 => { cpu.ecx = cpu.edi; emit::push(0x9C2A69, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  pc = 0x9C2A69; continue; }
-            0x9C2A69 => { cpu.ecx = m.fast_u32(pt, 0x18FA4BCu32); emit::push(cpu.ecx, m, pt, cpu); cpu.eax = cpu.ebx; emit::push(0x9C2A77, m, pt, cpu); x86::call_ext(m, cpu, 0x4414A0u32); cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x30)); cpu.esi = m.fast_u32(pt, 0x18D2818u32); emit::push(0x1u32, m, pt, cpu); emit::push(0x155B720u32, m, pt, cpu); emit::push(0x18D186Cu32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C2A96, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = cpu.eax; cpu.fl.alu_and(cpu.edi, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C2AAA } else { 0x9C2A9C }; continue; }
+            0x9C2A69 => { cpu.ecx = m.fast_u32(pt, 0x18FA4BCu32); emit::push(cpu.ecx, m, pt, cpu); cpu.eax = cpu.ebx; emit::push(0x9C2A77, m, pt, cpu); x86::call_ext(m, cpu, 0x4414A0u32); cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x30)); cpu.esi = m.fast_u32(pt, 0x18D2818u32); emit::push(0x1u32, m, pt, cpu); emit::push(0x155B720u32, m, pt, cpu); emit::push(0x18D186Cu32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C2A96, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = cpu.eax; cpu.fl.alu_and(cpu.edi, cpu.edi, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2AAA } else { 0x9C2A9C }; continue; }
             0x9C2A9C => { cpu.eax = cpu.esi; emit::push(0x9C2AA3, m, pt, cpu); x86::call_ext(m, cpu, 0x4287C0u32); cpu.ecx = cpu.edi; emit::push(0x9C2AAA, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  pc = 0x9C2AAA; continue; }
             0x9C2AAA => { cpu.ecx = cpu.ebx.wrapping_add(0x6210); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x744C), cpu.ebx); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x625C), 0x9C41F0u32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x6260), 0x9C4360u32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x626C), 0xAADA50u32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x6268), 0xAADB50u32); let l129_condition = (((cpu.ecx) & (cpu.ecx)) as i32) == 0; pc = if l129_condition { 0x9C2B18 } else { 0x9C2AE2 }; continue; }
             0x9C2AE2 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x5AE4)), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[0][0], m.fast_u32(pt, 0x1521690u32)); cpu.xmm[1] = [m.fast_u32(pt, 0x15319B8u32), 0, 0, 0]; pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x9C2B0F } else { 0x9C2AFB }; continue; }
@@ -249,19 +683,19 @@ fn f_009c2840_p0(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<cr
             0x9C2B04 => { m.fast_set_u8(pt, cpu.ecx.wrapping_add(0x48), (0x1u32) as u8); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x44), cpu.xmm[0][0]); pc = 0x9C2B18; continue; }
             0x9C2B0F => { m.fast_set_u8(pt, cpu.ecx.wrapping_add(0x48), (0x0u32) as u8); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x44), cpu.xmm[1][0]); pc = 0x9C2B18; continue; }
             0x9C2B18 => { let l129_condition = (((m.fast_u8(pt, cpu.ebx.wrapping_add(0x5C14)) as u32)) & 0xFF) == ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C2B57 } else { 0x9C2B21 }; continue; }
-            0x9C2B21 => { cpu.edx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5C18)); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_mul(4).wrapping_add(0x16F3B20)); cpu.fl.alu_sub(cpu.eax, m.fast_u32(pt, cpu.ecx.wrapping_add(0xE98)), 32); pc = if cpu.fl.zf() { 0x9C2B42 } else { 0x9C2B36 }; continue; }
+            0x9C2B21 => { cpu.edx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5C18)); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_mul(4).wrapping_add(0x16F3B20)); cpu.fl.alu_sub(cpu.eax, m.fast_u32(pt, cpu.ecx.wrapping_add(0xE98)), 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2B42 } else { 0x9C2B36 }; continue; }
             0x9C2B36 => { m.fast_set_u32(pt, cpu.ecx.wrapping_add(0xE98), cpu.eax); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x121C), cpu.eax); pc = 0x9C2B42; continue; }
             0x9C2B42 => { m.fast_set_u32(pt, cpu.ecx.wrapping_add(0xEA0), cpu.eax); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0xE9C), cpu.eax); m.fast_set_u8(pt, cpu.ecx.wrapping_add(0xEA4), (0x1u32) as u8); pc = 0x9C2B76; continue; }
-            0x9C2B57 => { cpu.eax = 0x16F1F00u32; cpu.fl.alu_sub(m.fast_u32(pt, cpu.ecx.wrapping_add(0xE98)), cpu.eax, 32); pc = if cpu.fl.zf() { 0x9C2B70 } else { 0x9C2B64 }; continue; }
+            0x9C2B57 => { cpu.eax = 0x16F1F00u32; cpu.fl.alu_sub(m.fast_u32(pt, cpu.ecx.wrapping_add(0xE98)), cpu.eax, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2B70 } else { 0x9C2B64 }; continue; }
             0x9C2B64 => { m.fast_set_u32(pt, cpu.ecx.wrapping_add(0xE98), cpu.eax); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x121C), cpu.eax); pc = 0x9C2B70; continue; }
             0x9C2B70 => { m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x70B0), cpu.eax); pc = 0x9C2B76; continue; }
             0x9C2B76 => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.esi = 0x1u32; emit::push(cpu.esi, m, pt, cpu); m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x5F34), (0x1u32) as u8); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x30)); emit::push(0x15C7ABCu32, m, pt, cpu); emit::push(0x19A7A6Cu32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2B9A, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.edi = cpu.eax; let l129_condition = (cpu.ecx) == (cpu.edi); pc = if l129_condition { 0x9C2BCA } else { 0x9C2BA6 }; continue; }
-            0x9C2BA6 => { cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); pc = if cpu.fl.zf() { 0x9C2BB9 } else { 0x9C2BAA }; continue; }
+            0x9C2BA6 => { cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2BB9 } else { 0x9C2BAA }; continue; }
             0x9C2BAA => { emit::push(0x9C2BAF, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5B50), 0x0u32); pc = 0x9C2BB9; continue; }
-            0x9C2BB9 => { cpu.fl.alu_and(cpu.edi, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C2BC4 } else { 0x9C2BBD }; continue; }
+            0x9C2BB9 => { cpu.fl.alu_and(cpu.edi, cpu.edi, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2BC4 } else { 0x9C2BBD }; continue; }
             0x9C2BBD => { cpu.ecx = cpu.edi; emit::push(0x9C2BC4, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B80, crate::platform::mt_alloc);  pc = 0x9C2BC4; continue; }
             0x9C2BC4 => { m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5B50), cpu.edi); pc = 0x9C2BCA; continue; }
-            0x9C2BCA => { cpu.fl.alu_and(cpu.edi, cpu.edi, 32); pc = if cpu.fl.zf() { 0x9C2BD5 } else { 0x9C2BCE }; continue; }
+            0x9C2BCA => { cpu.fl.alu_and(cpu.edi, cpu.edi, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2BD5 } else { 0x9C2BCE }; continue; }
             0x9C2BCE => { cpu.ecx = cpu.edi; emit::push(0x9C2BD5, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  pc = 0x9C2BD5; continue; }
             _ if !(0x9C2840..=0x9C2BCE).contains(&pc) => return Some(pc),
             _ => unreachable!(),
@@ -271,7 +705,7 @@ fn f_009c2840_p0(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<cr
 fn f_009c2840_p1(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<crate::mem::PageTable>>, mut pc: u32) -> Option<u32> {
     loop {
         match pc {
-            0x9C2BD5 => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x4u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2BE4, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.memory::<0x18d9, 4, true>(m, cpu.esp.wrapping_add(0x14)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x3u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2BF7, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.memory::<0x18d9, 4, true>(m, cpu.esp.wrapping_add(0xC)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x2u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2C0A, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.memory::<0x18d9, 4, true>(m, cpu.esp.wrapping_add(0x10)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2C1C, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5EFC)); cpu.st.memory::<0x00d9, 4, false>(m, cpu.esp.wrapping_add(0x10)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.st.memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F00)); cpu.st.memory::<0x00d9, 4, false>(m, cpu.esp.wrapping_add(0xC)); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); cpu.st.memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F04)); emit::push(0x5u32, m, pt, cpu); cpu.st.memory::<0x00d9, 4, false>(m, cpu.esp.wrapping_add(0x18)); cpu.st.memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F08)); { let t = cpu.edx; emit::push(0x9C2C4F, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.register::<0xe1d9>(); emit::push(0x6u32, m, pt, cpu); cpu.st.memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F20)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); { let t = cpu.edx; emit::push(0x9C2C66, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.register::<0xe1d9>(); cpu.st.memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F24)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x7u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2C7D, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.register::<0xe1d9>(); cpu.st.memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F28)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x0u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2C94, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F2C)); m.fast_set_u16(pt, cpu.ebx.wrapping_add(0x1FD4), (0x101u32) as u16); emit::push(cpu.ebx, m, pt, cpu); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1FE8), 0x0u32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1FEC), cpu.esi); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1FF0), cpu.esi); emit::push(0x9C2CBF, m, pt, cpu); x86::call_ext(m, cpu, 0x9C4AE0u32); emit::push(cpu.ebx, m, pt, cpu); emit::push(0x9C2CC5, m, pt, cpu); x86::call_ext(m, cpu, 0x9C3090u32); cpu.esi = cpu.ebx; emit::push(0x9C2CCC, m, pt, cpu); x86::call_ext(m, cpu, 0x9759D0u32); cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5EF0)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C2CF9 } else { 0x9C2CD6 }; continue; }
+            0x9C2BD5 => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x4u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2BE4, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.esp.wrapping_add(0x14)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x3u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2BF7, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.esp.wrapping_add(0xC)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x2u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2C0A, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.esp.wrapping_add(0x10)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(cpu.esi, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2C1C, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5EFC)); cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.esp.wrapping_add(0x10)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F00)); cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.esp.wrapping_add(0xC)); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F04)); emit::push(0x5u32, m, pt, cpu); cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.esp.wrapping_add(0x18)); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F08)); { let t = cpu.edx; emit::push(0x9C2C4F, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.register::<0xe1d9>(); emit::push(0x6u32, m, pt, cpu); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F20)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); { let t = cpu.edx; emit::push(0x9C2C66, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.register::<0xe1d9>(); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F24)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x7u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2C7D, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.register::<0xe1d9>(); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F28)); cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B50)); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x3C)); emit::push(0x0u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2C94, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ebx.wrapping_add(0x5F2C)); m.fast_set_u16(pt, cpu.ebx.wrapping_add(0x1FD4), (0x101u32) as u16); emit::push(cpu.ebx, m, pt, cpu); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1FE8), 0x0u32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1FEC), cpu.esi); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x1FF0), cpu.esi); emit::push(0x9C2CBF, m, pt, cpu); x86::call_ext(m, cpu, 0x9C4AE0u32); emit::push(cpu.ebx, m, pt, cpu); emit::push(0x9C2CC5, m, pt, cpu); x86::call_ext(m, cpu, 0x9C3090u32); cpu.esi = cpu.ebx; emit::push(0x9C2CCC, m, pt, cpu); x86::call_ext(m, cpu, 0x9759D0u32); cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5EF0)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C2CF9 } else { 0x9C2CD6 }; continue; }
             0x9C2CD6 => { cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.edx = cpu.eax.wrapping_add(0x4); pc = 0x9C2CE0; continue; }
             0x9C2CE0 => { cpu.esi = m.fast_u32(pt, cpu.edx); let l129_condition = (((cpu.esi) & (cpu.esi)) as i32) == 0; pc = if l129_condition { 0x9C2CF5 } else { 0x9C2CE6 }; continue; }
             0x9C2CE6 => { let l129_condition = (cpu.esi) == (cpu.ebx); pc = if l129_condition { 0x9C2CF9 } else { 0x9C2CEA }; continue; }
@@ -288,19 +722,19 @@ fn f_009c2840_p1(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<cr
             0x9C2D3C => { pc = 0x9C2D42; continue; }
             0x9C2D3E => { m.fast_set_u32(pt, cpu.esi.wrapping_add(cpu.eax.wrapping_mul(4)).wrapping_add(0x4), cpu.edi); pc = 0x9C2D42; continue; }
             0x9C2D42 => { { let r = cpu.fl.alu_add(m.fast_u32(pt, cpu.esp.wrapping_add(0xC)), 0x4u32, 32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0xC), r); } { let a = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)) & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), r); } pc = if (!cpu.fl.zf()) { 0x9C2D10 } else { 0x9C2D4D }; continue; }
-            0x9C2D4D => { cpu.edx = m.fast_u32(pt, 0x18FA4BCu32); m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x2576), (0x0u32) as u8); cpu.fl.alu_sub(m.fast_u32(pt, cpu.edx.wrapping_add(0x34)), 0xD2u32, 32); pc = if (!cpu.fl.zf()) { 0x9C2DA2 } else { 0x9C2D63 }; continue; }
-            0x9C2D63 => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x30)); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A58u32, m, pt, cpu); emit::push(0x19A7DC4u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2D7C, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = cpu.eax; cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C2DA2 } else { 0x9C2D82 }; continue; }
-            0x9C2D82 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esi.wrapping_add(0x50)) as u32), 0x1u32, 8); pc = if cpu.fl.zf() { 0x9C2D9B } else { 0x9C2D88 }; continue; }
-            0x9C2D88 => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x50)); cpu.eax = cpu.eax >> 0x4u32; cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), 0x1u32, 8); pc = if (!cpu.fl.zf()) { 0x9C2D9B } else { 0x9C2D92 }; continue; }
+            0x9C2D4D => { cpu.edx = m.fast_u32(pt, 0x18FA4BCu32); m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x2576), (0x0u32) as u8); cpu.fl.alu_sub(m.fast_u32(pt, cpu.edx.wrapping_add(0x34)), 0xD2u32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C2DA2 } else { 0x9C2D63 }; continue; }
+            0x9C2D63 => { cpu.ecx = m.fast_u32(pt, 0x18D0AA0u32); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x30)); emit::push(0x1u32, m, pt, cpu); emit::push(0x15C7A58u32, m, pt, cpu); emit::push(0x19A7DC4u32, m, pt, cpu); { let t = cpu.edx; emit::push(0x9C2D7C, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = cpu.eax; cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2DA2 } else { 0x9C2D82 }; continue; }
+            0x9C2D82 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.esi.wrapping_add(0x50)) as u32), 0x1u32, 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) == 0) { 0x9C2D9B } else { 0x9C2D88 }; continue; }
+            0x9C2D88 => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x50)); cpu.eax = cpu.eax >> 0x4u32; cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), 0x1u32, 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) != 0) { 0x9C2D9B } else { 0x9C2D92 }; continue; }
             0x9C2D92 => { cpu.eax = cpu.esi; cpu.edi = cpu.ebx; emit::push(0x9C2D9B, m, pt, cpu); x86::call_ext(m, cpu, 0x9C2EA0u32); pc = 0x9C2D9B; continue; }
             0x9C2D9B => { cpu.ecx = cpu.esi; emit::push(0x9C2DA2, m, pt, cpu);  x86::call_local(m, cpu, 0x00DE0B90, crate::platform::mt_free);  pc = 0x9C2DA2; continue; }
             0x9C2DA2 => { emit::push(0x14FDA68u32, m, pt, cpu); emit::push(cpu.ebx, m, pt, cpu); cpu.eax = 0x1u32; emit::push(0x9C2DB2, m, pt, cpu); x86::call_ext(m, cpu, 0xAB2FC0u32); cpu.eax = cpu.ebx; emit::push(0x9C2DB9, m, pt, cpu); x86::call_ext(m, cpu, 0x889040u32); emit::push(cpu.ebx, m, pt, cpu); cpu.edi = 0x2u32; emit::push(0x9C2DC4, m, pt, cpu); x86::call_ext(m, cpu, 0x886990u32); emit::push(0x1u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(cpu.ebx, m, pt, cpu); cpu.eax = 0x14FD9B8u32; emit::push(0x9C2DD3, m, pt, cpu); x86::call_ext(m, cpu, 0xAB1B50u32); let l129_condition = (m.fast_u32(pt, cpu.ebx.wrapping_add(0x5EA0))) <= (0x0u32); pc = if l129_condition { 0x9C2E03 } else { 0x9C2DDC }; continue; }
             0x9C2DDC => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5EAC)); cpu.ecx = m.fast_u32(pt, cpu.ecx); let l129_condition = (((cpu.ecx) & (cpu.ecx)) as i32) == 0; pc = if l129_condition { 0x9C2E03 } else { 0x9C2DE8 }; continue; }
             0x9C2DE8 => { let l129_condition = (m.fast_u32(pt, cpu.ebx.wrapping_add(0x1D0C))) <= (0x0u32); pc = if l129_condition { 0x9C2E03 } else { 0x9C2DF1 }; continue; }
             0x9C2DF1 => { cpu.edx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x1D18)); cpu.eax = m.fast_u32(pt, cpu.edx); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C2E03 } else { 0x9C2DFD }; continue; }
-            0x9C2DFD => { cpu.st.memory::<0x00d9, 4, false>(m, cpu.eax.wrapping_add(0xC)); cpu.st.memory::<0x18d9, 4, true>(m, cpu.ecx.wrapping_add(0x18)); pc = 0x9C2E03; continue; }
-            0x9C2E03 => { cpu.eax = m.fast_u32(pt, 0x18FA4BCu32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x2D70), cpu.edi); cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x34)), 0xD2u32, 32); pc = if (!cpu.fl.zf()) { 0x9C2E8D } else { 0x9C2E17 }; continue; }
-            0x9C2E17 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x6030)), 0, 0, 0]; cpu.ecx = m.fast_u32(pt, 0x18FA4F8u32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x59BC), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x587C), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x6034)), 0, 0, 0]; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x59C0), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5880), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x6038)), 0, 0, 0]; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x59C4), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5884), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x603C)), 0, 0, 0]; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x59C8), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5888), cpu.xmm[0][0]); cpu.fl.alu_sub((m.fast_u8(pt, cpu.ecx.wrapping_add(0x20E718)) as u32), 0x0u32, 8); pc = if (!cpu.fl.zf()) { 0x9C2E8D } else { 0x9C2E86 }; continue; }
+            0x9C2DFD => { cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.eax.wrapping_add(0xC)); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.ecx.wrapping_add(0x18)); pc = 0x9C2E03; continue; }
+            0x9C2E03 => { cpu.eax = m.fast_u32(pt, 0x18FA4BCu32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x2D70), cpu.edi); cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x34)), 0xD2u32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C2E8D } else { 0x9C2E17 }; continue; }
+            0x9C2E17 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x6030)), 0, 0, 0]; cpu.ecx = m.fast_u32(pt, 0x18FA4F8u32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x59BC), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x587C), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x6034)), 0, 0, 0]; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x59C0), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5880), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x6038)), 0, 0, 0]; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x59C4), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5884), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.ebx.wrapping_add(0x603C)), 0, 0, 0]; m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x59C8), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5888), cpu.xmm[0][0]); cpu.fl.alu_sub((m.fast_u8(pt, cpu.ecx.wrapping_add(0x20E718)) as u32), 0x0u32, 8); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C2E8D } else { 0x9C2E86 }; continue; }
             0x9C2E86 => { m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x6083), (0x1u32) as u8); pc = 0x9C2E8D; continue; }
             0x9C2E8D => { cpu.edi = emit::pop(m, pt, cpu); cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return None; }
             _ if !(0x9C2BD5..=0x9C2E8D).contains(&pc) => return Some(pc),
@@ -317,16 +751,16 @@ pub fn f_009c2ea0(m: &mut dyn Mem, cpu: &mut Cpu) {
         match pc {
             0x9C2EA0 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = cpu.esp; cpu.esp = cpu.esp & 0xFFFFFFF8u32; cpu.esp = cpu.esp.wrapping_sub(0x8u32); cpu.fl.alu_sub(m.fast_u32(pt, cpu.edi.wrapping_add(0x61C0)), 0x0u32, 32); emit::push(cpu.ebx, m, pt, cpu); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.eax; pc = if cpu.fl.zf() { 0x9C2EBC } else { 0x9C2EB6 }; continue; }
             0x9C2EB6 => { emit::push(cpu.edi, m, pt, cpu); emit::push(0x9C2EBC, m, pt, cpu); x86::call_ext(m, cpu, 0x9C2F50u32); pc = 0x9C2EBC; continue; }
-            0x9C2EBC => { cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C2F47 } else { 0x9C2EC4 }; continue; }
-            0x9C2EC4 => { m.fast_set_u32(pt, cpu.edi.wrapping_add(0x61C0), cpu.esi); cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x64)); cpu.ebx = cpu.ebx ^ cpu.ebx; m.fast_set_u32(pt, cpu.edi.wrapping_add(0x6204), cpu.eax); cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if (cpu.fl.zf() || cpu.fl.sf() != cpu.fl.of()) { 0x9C2F47 } else { 0x9C2ED9 }; continue; }
+            0x9C2EBC => { cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C2F47 } else { 0x9C2EC4 }; continue; }
+            0x9C2EC4 => { m.fast_set_u32(pt, cpu.edi.wrapping_add(0x61C0), cpu.esi); cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x64)); cpu.ebx = cpu.ebx ^ cpu.ebx; m.fast_set_u32(pt, cpu.edi.wrapping_add(0x6204), cpu.eax); cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) <= 0) { 0x9C2F47 } else { 0x9C2ED9 }; continue; }
             0x9C2ED9 => { cpu.eax = 0xFFFF9E3Cu32; cpu.eax = cpu.fl.alu_sub(cpu.eax, cpu.edi, 32); cpu.esi = cpu.edi.wrapping_add(0x61C4); m.fast_set_u32(pt, cpu.esp.wrapping_add(0xC), cpu.eax); cpu.ebx = cpu.ebx; pc = 0x9C2EF0; continue; }
             0x9C2EF0 => { cpu.eax = m.fast_u32(pt, 0x18D9284u32); emit::push(0x0u32, m, pt, cpu); emit::push(0x9C2EFC, m, pt, cpu); x86::call_ext(m, cpu, 0x41A3E0u32); m.fast_set_u32(pt, cpu.esi, cpu.eax); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C2F3B } else { 0x9C2F02 }; continue; }
             0x9C2F02 => { cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x61C0)); let l129_condition = (cpu.ebx) >= (m.fast_u32(pt, cpu.eax.wrapping_add(0x64))); pc = if l129_condition { 0x9C2F29 } else { 0x9C2F0D }; continue; }
-            0x9C2F0D => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x70)); cpu.eax = cpu.eax.wrapping_add(m.fast_u32(pt, cpu.esp.wrapping_add(0xC))); cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(cpu.esi.wrapping_mul(1))), 0x0u32, 32); pc = if cpu.fl.zf() { 0x9C2F29 } else { 0x9C2F1A }; continue; }
+            0x9C2F0D => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x70)); cpu.eax = cpu.eax.wrapping_add(m.fast_u32(pt, cpu.esp.wrapping_add(0xC))); cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(cpu.esi.wrapping_mul(1))), 0x0u32, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2F29 } else { 0x9C2F1A }; continue; }
             0x9C2F1A => { cpu.ecx = m.fast_u32(pt, cpu.eax.wrapping_add(cpu.esi.wrapping_mul(1))); emit::push(0x1992578u32, m, pt, cpu); emit::push(0x9C2F27, m, pt, cpu); x86::call_ext(m, cpu, 0x419210u32); pc = 0x9C2F2B; continue; }
             0x9C2F29 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); pc = 0x9C2F2B; continue; }
             0x9C2F2B => { cpu.ecx = m.fast_u32(pt, cpu.esi); emit::push(0x9C2F32, m, pt, cpu); x86::call_ext(m, cpu, 0x742D30u32); cpu.ecx = m.fast_u32(pt, cpu.esi); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x18), 0x1u32); pc = 0x9C2F3B; continue; }
-            0x9C2F3B => { cpu.ebx = cpu.ebx.wrapping_add(1); cpu.esi = cpu.esi.wrapping_add(0x4u32); cpu.fl.alu_sub(cpu.ebx, m.fast_u32(pt, cpu.edi.wrapping_add(0x6204)), 32); pc = if (cpu.fl.sf() != cpu.fl.of()) { 0x9C2EF0 } else { 0x9C2F47 }; continue; }
+            0x9C2F3B => { cpu.ebx = cpu.ebx.wrapping_add(1); cpu.esi = cpu.esi.wrapping_add(0x4u32); cpu.fl.alu_sub(cpu.ebx, m.fast_u32(pt, cpu.edi.wrapping_add(0x6204)), 32); pc = if ((cpu.fl.a as i32) < (cpu.fl.b as i32)) { 0x9C2EF0 } else { 0x9C2F47 }; continue; }
             0x9C2F47 => { cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }
@@ -339,11 +773,11 @@ pub fn f_009c2f50(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C2F50;
     loop {
         match pc {
-            0x9C2F50 => { cpu.esp = cpu.esp.wrapping_sub(0x8u32); cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0xC)); emit::push(cpu.edi, m, pt, cpu); cpu.edi = cpu.edi ^ cpu.edi; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x61C0), cpu.edi); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x4), cpu.edi); cpu.fl.alu_sub(m.fast_u32(pt, cpu.ecx.wrapping_add(0x6204)), cpu.edi, 32); pc = if (cpu.fl.zf() || cpu.fl.sf() != cpu.fl.of()) { 0x9C3030 } else { 0x9C2F70 }; continue; }
+            0x9C2F50 => { cpu.esp = cpu.esp.wrapping_sub(0x8u32); cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0xC)); emit::push(cpu.edi, m, pt, cpu); cpu.edi = cpu.edi ^ cpu.edi; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x61C0), cpu.edi); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x4), cpu.edi); cpu.fl.alu_sub(m.fast_u32(pt, cpu.ecx.wrapping_add(0x6204)), cpu.edi, 32); pc = if ((cpu.fl.a as i32) <= (cpu.fl.b as i32)) { 0x9C3030 } else { 0x9C2F70 }; continue; }
             0x9C2F70 => { emit::push(cpu.ebx, m, pt, cpu); cpu.eax = cpu.ecx.wrapping_add(0x61C4); emit::push(cpu.ebp, m, pt, cpu); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), cpu.eax); emit::push(cpu.esi, m, pt, cpu); cpu.ecx = cpu.ecx; pc = 0x9C2F80; continue; }
             0x9C2F80 => { cpu.esi = m.fast_u32(pt, cpu.eax); let l129_condition = (cpu.esi) == (cpu.edi); pc = if l129_condition { 0x9C3011 } else { 0x9C2F8A }; continue; }
-            0x9C2F8A => { cpu.ebp = m.fast_u32(pt, 0x18D9284u32); cpu.fl.alu_sub((m.fast_u8(pt, cpu.ebp.wrapping_add(0x1C)) as u32), 0x0u32, 8); pc = if (!cpu.fl.zf()) { 0x9C2F9F } else { 0x9C2F96 }; continue; }
-            0x9C2F96 => { cpu.fl.alu_sub((m.fast_u8(pt, 0x18D0BB0u32) as u32), 0x0u32, 8); pc = if cpu.fl.zf() { 0x9C2FA9 } else { 0x9C2F9F }; continue; }
+            0x9C2F8A => { cpu.ebp = m.fast_u32(pt, 0x18D9284u32); cpu.fl.alu_sub((m.fast_u8(pt, cpu.ebp.wrapping_add(0x1C)) as u32), 0x0u32, 8); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C2F9F } else { 0x9C2F96 }; continue; }
+            0x9C2F96 => { cpu.fl.alu_sub((m.fast_u8(pt, 0x18D0BB0u32) as u32), 0x0u32, 8); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C2FA9 } else { 0x9C2F9F }; continue; }
             0x9C2F9F => { cpu.eax = cpu.ebp.wrapping_add(0x4); emit::push(cpu.eax, m, pt, cpu); { let t = m.fast_u32(pt, 0x139D160u32); emit::push(0x9C2FA9, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C2FA9; continue; }
             0x9C2FA9 => { cpu.edx = m.fast_u32(pt, cpu.ebp.wrapping_add(0x28)); cpu.ecx = cpu.ebp.wrapping_add(0x24); cpu.eax = cpu.eax ^ cpu.eax; let l129_condition = (cpu.edx) <= (cpu.edi); pc = if l129_condition { 0x9C2FEC } else { 0x9C2FB5 }; continue; }
             0x9C2FB5 => { cpu.edi = m.fast_u32(pt, cpu.ecx.wrapping_add(0x10)); pc = 0x9C2FB8; continue; }
@@ -351,13 +785,13 @@ pub fn f_009c2f50(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C2FBC => { cpu.eax = cpu.eax.wrapping_add(1); cpu.edi = cpu.edi.wrapping_add(0x4u32); let l129_condition = (cpu.eax) < (cpu.edx); pc = if l129_condition { 0x9C2FB8 } else { 0x9C2FC4 }; continue; }
             0x9C2FC4 => { pc = 0x9C2FEC; continue; }
             0x9C2FC6 => { let l129_condition = (cpu.eax) == (0xFFFFFFFFu32); pc = if l129_condition { 0x9C2FEC } else { 0x9C2FCB }; continue; }
-            0x9C2FCB => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.esi.wrapping_add(0xD)) as u32), 0x0u32, 8); pc = if (!cpu.fl.zf()) { 0x9C2FEC } else { 0x9C2FD1 }; continue; }
+            0x9C2FCB => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.esi.wrapping_add(0xD)) as u32), 0x0u32, 8); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C2FEC } else { 0x9C2FD1 }; continue; }
             0x9C2FD1 => { emit::push(cpu.esi, m, pt, cpu); m.fast_set_u8(pt, cpu.esi.wrapping_add(0xC), (0x0u32) as u8); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x10), 0x0u32); emit::push(0x9C2FE2, m, pt, cpu); x86::call_ext(m, cpu, 0x414FE0u32); cpu.edx = m.fast_u32(pt, cpu.esi); cpu.eax = m.fast_u32(pt, cpu.edx); emit::push(0x1u32, m, pt, cpu); cpu.ecx = cpu.esi; { let t = cpu.eax; emit::push(0x9C2FEC, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C2FEC; continue; }
             0x9C2FEC => { let l129_condition = (((m.fast_u8(pt, cpu.ebp.wrapping_add(0x1C)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C2FFB } else { 0x9C2FF2 }; continue; }
             0x9C2FF2 => { let l129_condition = (((m.fast_u8(pt, 0x18D0BB0u32) as u32)) & 0xFF) == ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C3005 } else { 0x9C2FFB }; continue; }
             0x9C2FFB => { cpu.ebp = cpu.fl.alu_add(cpu.ebp, 0x4u32, 32); emit::push(cpu.ebp, m, pt, cpu); { let t = m.fast_u32(pt, 0x139D164u32); emit::push(0x9C3005, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C3005; continue; }
             0x9C3005 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x14)); cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x1C)); cpu.edi = cpu.edi ^ cpu.edi; m.fast_set_u32(pt, cpu.eax, cpu.edi); pc = 0x9C3011; continue; }
-            0x9C3011 => { cpu.edx = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); cpu.edx = cpu.edx.wrapping_add(1); cpu.eax = cpu.eax.wrapping_add(0x4u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), cpu.edx); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x14), cpu.eax); cpu.fl.alu_sub(cpu.edx, m.fast_u32(pt, cpu.ecx.wrapping_add(0x6204)), 32); pc = if (cpu.fl.sf() != cpu.fl.of()) { 0x9C2F80 } else { 0x9C302D }; continue; }
+            0x9C3011 => { cpu.edx = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); cpu.edx = cpu.edx.wrapping_add(1); cpu.eax = cpu.eax.wrapping_add(0x4u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), cpu.edx); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x14), cpu.eax); cpu.fl.alu_sub(cpu.edx, m.fast_u32(pt, cpu.ecx.wrapping_add(0x6204)), 32); pc = if ((cpu.fl.a as i32) < (cpu.fl.b as i32)) { 0x9C2F80 } else { 0x9C302D }; continue; }
             0x9C302D => { cpu.esi = emit::pop(m, pt, cpu); cpu.ebp = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); pc = 0x9C3030; continue; }
             0x9C3030 => { m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x6204), cpu.edi); cpu.edi = emit::pop(m, pt, cpu); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x8u32, 32); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
             _ => unreachable!(),
@@ -371,11 +805,11 @@ pub fn f_009c3040(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C3040;
     loop {
         match pc {
-            0x9C3040 => { { let a = cpu.eax & u32::MAX; let r = 0u32.wrapping_sub(a) & u32::MAX; cpu.fl = Flags::new(x86::SUB, 0, a, r, 32); cpu.eax = r; } { let (a, b) = (cpu.eax, cpu.eax); let r = cpu.fl.alu_carry(a, b, 32, true); cpu.eax = r; } cpu.eax = cpu.eax & 0x2u32; cpu.ecx = cpu.eax; emit::push(cpu.edi, m, pt, cpu); cpu.edi = cpu.ecx.wrapping_add(0x2); { let r = (((cpu.eax >> 0) & 0xFF) ^ ((cpu.eax >> 0) & 0xFF)) & 0xFF; cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if (cpu.fl.sf() == cpu.fl.of()) { 0x9C3083 } else { 0x9C3053 }; continue; }
+            0x9C3040 => { { let a = cpu.eax & u32::MAX; let r = 0u32.wrapping_sub(a) & u32::MAX; cpu.fl = Flags::new(x86::SUB, 0, a, r, 32); cpu.eax = r; } { let (a, b) = (cpu.eax, cpu.eax); let r = cpu.fl.alu_carry(a, b, 32, true); cpu.eax = r; } cpu.eax = cpu.eax & 0x2u32; cpu.ecx = cpu.eax; emit::push(cpu.edi, m, pt, cpu); cpu.edi = cpu.ecx.wrapping_add(0x2); { let r = (((cpu.eax >> 0) & 0xFF) ^ ((cpu.eax >> 0) & 0xFF)) & 0xFF; cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.fl.alu_sub(cpu.ecx, cpu.edi, 32); pc = if ((cpu.fl.a as i32) >= (cpu.fl.b as i32)) { 0x9C3083 } else { 0x9C3053 }; continue; }
             0x9C3053 => { emit::push(cpu.ebx, m, pt, cpu); cpu.ebx = m.fast_u32(pt, cpu.edx.wrapping_add(0x6204)); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.edx.wrapping_add(cpu.ecx.wrapping_mul(4)).wrapping_add(0x61C4); cpu.eax = 0x1u32; pc = 0x9C3067; continue; }
             0x9C3067 => { let l129_condition = ((cpu.ecx) as i32) >= ((cpu.ebx) as i32); pc = if l129_condition { 0x9C307F } else { 0x9C306B }; continue; }
             0x9C306B => { cpu.edx = m.fast_u32(pt, cpu.esi); let l129_condition = (((cpu.edx) & (cpu.edx)) as i32) == 0; pc = if l129_condition { 0x9C3076 } else { 0x9C3071 }; continue; }
-            0x9C3071 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.edx.wrapping_add(0x10)) as u32), ((cpu.eax >> 0) & 0xFF), 8); pc = if (!cpu.fl.zf()) { 0x9C3081 } else { 0x9C3076 }; continue; }
+            0x9C3071 => { cpu.fl.alu_and((m.fast_u8(pt, cpu.edx.wrapping_add(0x10)) as u32), ((cpu.eax >> 0) & 0xFF), 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) != 0) { 0x9C3081 } else { 0x9C3076 }; continue; }
             0x9C3076 => { cpu.ecx = cpu.ecx.wrapping_add(cpu.eax); cpu.esi = cpu.esi.wrapping_add(0x4u32); let l129_condition = ((cpu.ecx) as i32) < ((cpu.edi) as i32); pc = if l129_condition { 0x9C3067 } else { 0x9C307F }; continue; }
             0x9C307F => { { let r = cpu.fl.alu_xor(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } pc = 0x9C3081; continue; }
             0x9C3081 => { cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); pc = 0x9C3083; continue; }
@@ -392,15 +826,15 @@ pub fn f_009c3090(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x9C3090 => { emit::push(cpu.ecx, m, pt, cpu); emit::push(cpu.ebx, m, pt, cpu); emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.esi ^ cpu.esi; cpu.ebp = cpu.fl.alu_add(cpu.ebp, 0x6040u32, 32); emit::push(cpu.edi, m, pt, cpu); cpu.ebx = cpu.ebp; pc = 0x9C30A3; continue; }
-            0x9C30A3 => { cpu.edi = m.fast_u32(pt, cpu.esp.wrapping_add(0x18)); emit::push(0x0u32, m, pt, cpu); emit::push(cpu.esi, m, pt, cpu); emit::push(0x9C30AF, m, pt, cpu); x86::call_ext(m, cpu, 0x9C3130u32); m.fast_set_u32(pt, cpu.ebx, cpu.eax); cpu.esi = cpu.esi.wrapping_add(1); cpu.ebx = cpu.ebx.wrapping_add(0x4u32); cpu.fl.alu_sub(cpu.esi, 0x4u32, 32); pc = if cpu.fl.cf() { 0x9C30A3 } else { 0x9C30BA }; continue; }
+            0x9C30A3 => { cpu.edi = m.fast_u32(pt, cpu.esp.wrapping_add(0x18)); emit::push(0x0u32, m, pt, cpu); emit::push(cpu.esi, m, pt, cpu); emit::push(0x9C30AF, m, pt, cpu); x86::call_ext(m, cpu, 0x9C3130u32); m.fast_set_u32(pt, cpu.ebx, cpu.eax); cpu.esi = cpu.esi.wrapping_add(1); cpu.ebx = cpu.ebx.wrapping_add(0x4u32); cpu.fl.alu_sub(cpu.esi, 0x4u32, 32); pc = if (cpu.fl.a < cpu.fl.b) { 0x9C30A3 } else { 0x9C30BA }; continue; }
             0x9C30BA => { cpu.edi = 0x1u32; m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), 0x4u32); pc = 0x9C30C7; continue; }
             0x9C30C7 => { cpu.eax = m.fast_u32(pt, cpu.ebp); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C3113 } else { 0x9C30CE }; continue; }
-            0x9C30CE => { cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x18)); cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); pc = if cpu.fl.zf() { 0x9C30E3 } else { 0x9C30D6 }; continue; }
+            0x9C30CE => { cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x18)); cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C30E3 } else { 0x9C30D6 }; continue; }
             0x9C30D6 => { emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, 0x18FA4E4u32); emit::push(cpu.ecx, m, pt, cpu); emit::push(cpu.eax, m, pt, cpu); emit::push(0x9C30E3, m, pt, cpu); x86::call_ext(m, cpu, 0x478D80u32); pc = 0x9C30E3; continue; }
             0x9C30E3 => { let l129_condition = (cpu.edi) >= (0x4u32); pc = if l129_condition { 0x9C3113 } else { 0x9C30E8 }; continue; }
             0x9C30E8 => { cpu.esi = 0x4u32; cpu.ebx = cpu.ebp.wrapping_add(0x4); cpu.esi = cpu.esi.wrapping_sub(cpu.edi); pc = 0x9C30F2; continue; }
             0x9C30F2 => { cpu.ecx = m.fast_u32(pt, cpu.ebx); let l129_condition = (((cpu.ecx) & (cpu.ecx)) as i32) == 0; pc = if l129_condition { 0x9C310D } else { 0x9C30F8 }; continue; }
-            0x9C30F8 => { cpu.eax = m.fast_u32(pt, cpu.ebp); cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if cpu.fl.zf() { 0x9C310D } else { 0x9C30FF }; continue; }
+            0x9C30F8 => { cpu.eax = m.fast_u32(pt, cpu.ebp); cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C310D } else { 0x9C30FF }; continue; }
             0x9C30FF => { emit::push(cpu.ecx, m, pt, cpu); cpu.ecx = m.fast_u32(pt, 0x18FA4E4u32); emit::push(cpu.eax, m, pt, cpu); emit::push(cpu.ecx, m, pt, cpu); emit::push(0x9C310D, m, pt, cpu); x86::call_ext(m, cpu, 0x478D80u32); pc = 0x9C310D; continue; }
             0x9C310D => { cpu.ebx = cpu.fl.alu_add(cpu.ebx, 0x4u32, 32); { let a = cpu.esi & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.esi = r; } pc = if (!cpu.fl.zf()) { 0x9C30F2 } else { 0x9C3113 }; continue; }
             0x9C3113 => { cpu.ebp = cpu.fl.alu_add(cpu.ebp, 0x4u32, 32); { let a = cpu.edi & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.fl.inc_dec(x86::INC, a, r, 32); cpu.edi = r; } { let a = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)) & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), r); } pc = if (!cpu.fl.zf()) { 0x9C30C7 } else { 0x9C311D }; continue; }
@@ -416,9 +850,9 @@ pub fn f_009c3130(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x9C3130;
     loop {
         match pc {
-            0x9C3130 => { cpu.esp = cpu.esp.wrapping_sub(0x10u32); cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x4)); cpu.edx = m.fast_u32(pt, cpu.edi); cpu.eax = cpu.eax >> 0x3u32; emit::push(cpu.ebx, m, pt, cpu); cpu.ebx = m.fast_u32(pt, cpu.esp.wrapping_add(0x18)); cpu.eax = cpu.fl.alu_and(cpu.eax, 0x7Fu32, 32); { let a = cpu.eax & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.fl.inc_dec(x86::INC, a, r, 32); cpu.eax = r; } emit::push(cpu.esi, m, pt, cpu); emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x310)); cpu.ecx = cpu.edi; m.fast_set_u32(pt, cpu.esp.wrapping_add(0xC), 0x3u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), 0x4u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x14), 0x5u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x18), 0x6u32); { let t = cpu.eax; emit::push(0x9C3170, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = cpu.eax; cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if (!cpu.fl.zf()) { 0x9C317E } else { 0x9C3176 }; continue; }
+            0x9C3130 => { cpu.esp = cpu.esp.wrapping_sub(0x10u32); cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x4)); cpu.edx = m.fast_u32(pt, cpu.edi); cpu.eax = cpu.eax >> 0x3u32; emit::push(cpu.ebx, m, pt, cpu); cpu.ebx = m.fast_u32(pt, cpu.esp.wrapping_add(0x18)); cpu.eax = cpu.fl.alu_and(cpu.eax, 0x7Fu32, 32); { let a = cpu.eax & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.fl.inc_dec(x86::INC, a, r, 32); cpu.eax = r; } emit::push(cpu.esi, m, pt, cpu); emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x310)); cpu.ecx = cpu.edi; m.fast_set_u32(pt, cpu.esp.wrapping_add(0xC), 0x3u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), 0x4u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x14), 0x5u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x18), 0x6u32); { let t = cpu.eax; emit::push(0x9C3170, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = cpu.eax; cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) != 0) { 0x9C317E } else { 0x9C3176 }; continue; }
             0x9C3176 => { cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x10u32, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
-            0x9C317E => { cpu.edx = m.fast_u32(pt, cpu.esi); cpu.edx = m.fast_u32(pt, cpu.edx.wrapping_add(0x4C)); cpu.ebx = cpu.fl.alu_and(cpu.ebx, 0x3u32, 32); cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(cpu.ebx.wrapping_mul(4)).wrapping_add(0x8)); emit::push(cpu.eax, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); cpu.ecx = cpu.esi; { let t = cpu.edx; emit::push(0x9C3190, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x20)); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6204), cpu.ebx); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6200), cpu.edi); cpu.st.memory::<0x00d9, 4, false>(m, cpu.edi.wrapping_add(0x60)); cpu.st.memory::<0x18d9, 4, true>(m, cpu.esi.wrapping_add(0x60)); emit::push(cpu.esi, m, pt, cpu); cpu.st.memory::<0x00d9, 4, false>(m, cpu.edi.wrapping_add(0x64)); cpu.ecx = cpu.edi; cpu.st.memory::<0x18d9, 4, true>(m, cpu.esi.wrapping_add(0x64)); cpu.st.memory::<0x00d9, 4, false>(m, cpu.edi.wrapping_add(0x68)); cpu.st.memory::<0x18d9, 4, true>(m, cpu.esi.wrapping_add(0x68)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6208), cpu.eax); cpu.edx = m.fast_u32(pt, cpu.edi); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x150)); { let t = cpu.eax; emit::push(0x9C31CD, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x10u32, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
+            0x9C317E => { cpu.edx = m.fast_u32(pt, cpu.esi); cpu.edx = m.fast_u32(pt, cpu.edx.wrapping_add(0x4C)); cpu.ebx = cpu.fl.alu_and(cpu.ebx, 0x3u32, 32); cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(cpu.ebx.wrapping_mul(4)).wrapping_add(0x8)); emit::push(cpu.eax, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); cpu.ecx = cpu.esi; { let t = cpu.edx; emit::push(0x9C3190, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x20)); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6204), cpu.ebx); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6200), cpu.edi); cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.edi.wrapping_add(0x60)); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.esi.wrapping_add(0x60)); emit::push(cpu.esi, m, pt, cpu); cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.edi.wrapping_add(0x64)); cpu.ecx = cpu.edi; cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.esi.wrapping_add(0x64)); cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.edi.wrapping_add(0x68)); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.esi.wrapping_add(0x68)); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6C), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6208), cpu.eax); cpu.edx = m.fast_u32(pt, cpu.edi); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x150)); { let t = cpu.eax; emit::push(0x9C31CD, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.eax = cpu.esi; cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x10u32, 32); cpu.esp = cpu.esp.wrapping_add(4 + 8);  return; }
             _ => unreachable!(),
         }
     }
@@ -448,8 +882,8 @@ pub fn f_009c3250(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C327D => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x1D18)); cpu.eax = m.fast_u32(pt, cpu.eax); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C3343 } else { 0x9C328D }; continue; }
             0x9C328D => { cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0xC)), 0, 0, 0]; cpu.xmm[0][0] = x86::mulss(cpu.xmm[0][0], m.fast_u32(pt, 0x14F0E9Cu32)); cpu.xmm[1] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x8)), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esp.wrapping_add(0xC), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esp, cpu.xmm[1][0]); pc = if cpu.fl.cf() { 0x9C32C2 } else { 0x9C32AF }; continue; }
             0x9C32AF => { m.fast_set_u32(pt, cpu.edx.wrapping_add(0x8), 0x0u32); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.edx.wrapping_add(0x14), cpu.xmm[0][0]); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x14u32, 32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            0x9C32C2 => { cpu.st.memory::<0x00d9, 4, false>(m, cpu.esp); cpu.st.memory::<0x08d8, 4, false>(m, 0x1519268u32); cpu.st.memory::<0x38d9, 2, true>(m, cpu.esp); cpu.eax = (m.fast_u16(pt, cpu.esp) as u32); cpu.eax = cpu.eax | 0xC00u32; m.fast_set_u32(pt, cpu.esp.wrapping_add(0x4), cpu.eax); cpu.st.memory::<0x28d9, 2, false>(m, cpu.esp.wrapping_add(0x4)); cpu.st.memory::<0x38df, 8, true>(m, cpu.esp.wrapping_add(0x4)); cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.st.memory::<0x28d9, 2, false>(m, cpu.esp); cpu.st.memory::<0x00db, 4, false>(m, cpu.esp.wrapping_add(0x4)); let l129_condition = (((cpu.ecx) & (cpu.ecx)) as i32) >= 0; pc = if l129_condition { 0x9C32F8 } else { 0x9C32F2 }; continue; }
-            0x9C32F2 => { cpu.st.memory::<0x00d8, 4, false>(m, 0x161C220u32); pc = 0x9C32F8; continue; }
+            0x9C32C2 => { cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.esp); cpu.st.real_memory::<0x08d8, 4, false>(m, 0x1519268u32); cpu.st.memory::<0x38d9, 2, true>(m, cpu.esp); cpu.eax = (m.fast_u16(pt, cpu.esp) as u32); cpu.eax = cpu.eax | 0xC00u32; m.fast_set_u32(pt, cpu.esp.wrapping_add(0x4), cpu.eax); cpu.st.memory::<0x28d9, 2, false>(m, cpu.esp.wrapping_add(0x4)); cpu.st.memory::<0x38df, 8, true>(m, cpu.esp.wrapping_add(0x4)); cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.st.memory::<0x28d9, 2, false>(m, cpu.esp); cpu.st.memory::<0x00db, 4, false>(m, cpu.esp.wrapping_add(0x4)); let l129_condition = (((cpu.ecx) & (cpu.ecx)) as i32) >= 0; pc = if l129_condition { 0x9C32F8 } else { 0x9C32F2 }; continue; }
+            0x9C32F2 => { cpu.st.real_memory::<0x00d8, 4, false>(m, 0x161C220u32); pc = 0x9C32F8; continue; }
             0x9C32F8 => { cpu.st.memory::<0x30d8, 4, false>(m, cpu.esp.wrapping_add(0xC)); cpu.st.memory::<0x38d9, 2, true>(m, cpu.esp); cpu.eax = (m.fast_u16(pt, cpu.esp) as u32); cpu.eax = cpu.eax | 0xC00u32; m.fast_set_u32(pt, cpu.esp.wrapping_add(0xC), cpu.eax); cpu.st.memory::<0x28d9, 2, false>(m, cpu.esp.wrapping_add(0xC)); cpu.st.memory::<0x38df, 8, true>(m, cpu.esp.wrapping_add(0xC)); cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0xC)); cpu.st.memory::<0x28d9, 2, false>(m, cpu.esp); let l129_condition = (cpu.ecx) <= (0x6u32); pc = if l129_condition { 0x9C3331 } else { 0x9C3320 }; continue; }
             0x9C3320 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); m.fast_set_u32(pt, cpu.edx.wrapping_add(0x8), cpu.eax); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.edx.wrapping_add(0x14), cpu.xmm[0][0]); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x14u32, 32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             0x9C3331 => { cpu.eax = 0x6u32; cpu.eax = cpu.eax.wrapping_sub(cpu.ecx); m.fast_set_u32(pt, cpu.edx.wrapping_add(0x8), cpu.eax); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.edx.wrapping_add(0x14), cpu.xmm[0][0]); pc = 0x9C3343; continue; }
@@ -466,7 +900,7 @@ pub fn f_009c3350(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x9C3350 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = cpu.esp; cpu.esp = cpu.fl.alu_and(cpu.esp, 0xFFFFFFF8u32, 32); emit::push(cpu.ecx, m, pt, cpu); emit::push(cpu.ebp, m, pt, cpu); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; emit::push(cpu.edi, m, pt, cpu); cpu.edi = cpu.esi; emit::push(0x9C3363, m, pt, cpu); x86::call_ext(m, cpu, 0x9C4E00u32); cpu.eax = m.fast_u32(pt, 0x18FA4BCu32); cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x34)), 0xD2u32, 32); { cpu.xmm[1] = emit::xorps(cpu.xmm[1], cpu.xmm[1]); } pc = if (!cpu.fl.zf()) { 0x9C3392 } else { 0x9C3374 }; continue; }
-            0x9C3374 => { cpu.fl.alu_and(m.fast_u32(pt, cpu.eax.wrapping_add(0xAC710)), 0x100u32, 32); pc = if cpu.fl.zf() { 0x9C3392 } else { 0x9C3380 }; continue; }
+            0x9C3374 => { cpu.fl.alu_and(m.fast_u32(pt, cpu.eax.wrapping_add(0xAC710)), 0x100u32, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0x9C3392 } else { 0x9C3380 }; continue; }
             0x9C3380 => { cpu.xmm[0] = [m.fast_u32(pt, 0x15319B8u32), 0, 0, 0]; m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6064), cpu.xmm[0][0]); pc = 0x9C33B4; continue; }
             0x9C3392 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x6064)), 0, 0, 0]; cpu.xmm[0][0] = x86::subss(cpu.xmm[0][0], m.fast_u32(pt, cpu.esi.wrapping_add(0x14))); cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6064), cpu.xmm[0][0]); pc = if cpu.fl.cf() { 0x9C33B4 } else { 0x9C33AC }; continue; }
             0x9C33AC => { m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6064), cpu.xmm[1][0]); pc = 0x9C33B4; continue; }
@@ -489,15 +923,15 @@ pub fn f_009c3350(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C3485 => { let l129_condition = (((cpu.eax) & (0x400u32)) as i32) == 0; pc = if l129_condition { 0x9C3526 } else { 0x9C3490 }; continue; }
             0x9C3490 => { cpu.ebp = cpu.ebp ^ cpu.ebp; cpu.edi = cpu.esi.wrapping_add(0x6040); pc = 0x9C3498; continue; }
             0x9C3498 => { cpu.eax = m.fast_u32(pt, cpu.edi); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C34DB } else { 0x9C349E }; continue; }
-            0x9C349E => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); pc = if cpu.fl.zf() { 0x9C34AE } else { 0x9C34A9 }; continue; }
-            0x9C34A9 => { cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); pc = if (!cpu.fl.zf()) { 0x9C34DB } else { 0x9C34AE }; continue; }
+            0x9C349E => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C34AE } else { 0x9C34A9 }; continue; }
+            0x9C34A9 => { cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C34DB } else { 0x9C34AE }; continue; }
             0x9C34AE => { cpu.ecx = m.fast_u32(pt, cpu.edi); cpu.eax = m.fast_u32(pt, cpu.ecx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x94)); { let t = cpu.edx; emit::push(0x9C34BA, m, pt, cpu);  x86::call_ext(m, cpu, t);  } let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) != 0; pc = if l129_condition { 0x9C3526 } else { 0x9C34BE }; continue; }
             0x9C34BE => { cpu.eax = m.fast_u32(pt, cpu.edi); let l129_condition = (((m.fast_u8(pt, cpu.eax.wrapping_add(0x6285)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C3526 } else { 0x9C34C9 }; continue; }
             0x9C34C9 => { let l129_condition = (((m.fast_u8(pt, cpu.eax.wrapping_add(0x620C)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C3526 } else { 0x9C34D2 }; continue; }
             0x9C34D2 => { let l129_condition = (m.fast_u32(pt, cpu.eax.wrapping_add(0x2DD4))) == (0x21u32); pc = if l129_condition { 0x9C3526 } else { 0x9C34DB }; continue; }
             0x9C34DB => { cpu.ebp = cpu.ebp.wrapping_add(1); cpu.edi = cpu.edi.wrapping_add(0x4u32); let l129_condition = (cpu.ebp) < (0x4u32); pc = if l129_condition { 0x9C3498 } else { 0x9C34E4 }; continue; }
-            0x9C34E4 => { cpu.edi = m.fast_u32(pt, 0x18FA4BCu32); cpu.fl.alu_sub((m.fast_u8(pt, cpu.edi.wrapping_add(0x1C)) as u32), 0x0u32, 8); pc = if (!cpu.fl.zf()) { 0x9C34F9 } else { 0x9C34F0 }; continue; }
-            0x9C34F0 => { cpu.fl.alu_sub((m.fast_u8(pt, 0x18D0BB0u32) as u32), 0x0u32, 8); pc = if cpu.fl.zf() { 0x9C3503 } else { 0x9C34F9 }; continue; }
+            0x9C34E4 => { cpu.edi = m.fast_u32(pt, 0x18FA4BCu32); cpu.fl.alu_sub((m.fast_u8(pt, cpu.edi.wrapping_add(0x1C)) as u32), 0x0u32, 8); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C34F9 } else { 0x9C34F0 }; continue; }
+            0x9C34F0 => { cpu.fl.alu_sub((m.fast_u8(pt, 0x18D0BB0u32) as u32), 0x0u32, 8); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C3503 } else { 0x9C34F9 }; continue; }
             0x9C34F9 => { cpu.eax = cpu.edi.wrapping_add(0x4); emit::push(cpu.eax, m, pt, cpu); { let t = m.fast_u32(pt, 0x139D160u32); emit::push(0x9C3503, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C3503; continue; }
             0x9C3503 => { { let r = m.fast_u32(pt, cpu.edi.wrapping_add(0xAC710)) | 0x200u32; m.fast_set_u32(pt, cpu.edi.wrapping_add(0xAC710), r); } let l129_condition = (((m.fast_u8(pt, cpu.edi.wrapping_add(0x1C)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C351C } else { 0x9C3513 }; continue; }
             0x9C3513 => { let l129_condition = (((m.fast_u8(pt, 0x18D0BB0u32) as u32)) & 0xFF) == ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C3526 } else { 0x9C351C }; continue; }
@@ -506,8 +940,8 @@ pub fn f_009c3350(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C3533 => { cpu.ecx = m.fast_u32(pt, 0x18FA4BCu32); let l129_condition = (((m.fast_u32(pt, cpu.ecx.wrapping_add(0xAC710))) & (0x100u32)) as i32) == 0; pc = if l129_condition { 0x9C35DC } else { 0x9C3549 }; continue; }
             0x9C3549 => { cpu.edi = cpu.esi.wrapping_add(0x6040); cpu.ebp = 0x4u32; pc = 0x9C3554; continue; }
             0x9C3554 => { cpu.eax = m.fast_u32(pt, cpu.edi); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C358A } else { 0x9C355A }; continue; }
-            0x9C355A => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); pc = if cpu.fl.zf() { 0x9C356A } else { 0x9C3565 }; continue; }
-            0x9C3565 => { cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); pc = if (!cpu.fl.zf()) { 0x9C358A } else { 0x9C356A }; continue; }
+            0x9C355A => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; cpu.fl.alu_sub(cpu.eax, 0x2u32, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C356A } else { 0x9C3565 }; continue; }
+            0x9C3565 => { cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C358A } else { 0x9C356A }; continue; }
             0x9C356A => { cpu.eax = m.fast_u32(pt, cpu.edi); m.fast_set_u16(pt, cpu.eax.wrapping_add(0x6284), (0x0u32) as u16); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x6286), (0x0u32) as u8); cpu.ecx = m.fast_u32(pt, cpu.edi); cpu.edx = m.fast_u32(pt, cpu.ecx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x98)); emit::push(0x0u32, m, pt, cpu); { let t = cpu.eax; emit::push(0x9C358A, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C358A; continue; }
             0x9C358A => { cpu.edi = cpu.fl.alu_add(cpu.edi, 0x4u32, 32); { let a = cpu.ebp & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ebp = r; } pc = if (!cpu.fl.zf()) { 0x9C3554 } else { 0x9C3590 }; continue; }
             0x9C3590 => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x604C)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C35DC } else { 0x9C359A }; continue; }
@@ -523,7 +957,7 @@ pub fn f_009c3350(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C364E => { m.fast_set_u8(pt, cpu.esi.wrapping_add(0x6070), (0x0u32) as u8); pc = 0x9C3655; continue; }
             0x9C3655 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x6078)), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[0][0], m.fast_u32(pt, cpu.esi.wrapping_add(0x601C))); pc = if cpu.fl.cf() { 0x9C366D } else { 0x9C3666 }; continue; }
             0x9C3666 => { m.fast_set_u8(pt, cpu.esi.wrapping_add(0x6070), (0x0u32) as u8); pc = 0x9C366D; continue; }
-            0x9C366D => { cpu.xmm[0] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x5880)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x5888)), 0, 0, 0]; cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if cpu.fl.zf() { 0x9C3691 } else { 0x9C3681 }; continue; }
+            0x9C366D => { cpu.xmm[0] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x5880)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x5888)), 0, 0, 0]; cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) == 0) { 0x9C3691 } else { 0x9C3681 }; continue; }
             0x9C3681 => { cpu.xmm[0][0] = x86::mulss(cpu.xmm[0][0], m.fast_u32(pt, cpu.esi.wrapping_add(0x6024))); cpu.xmm[1][0] = x86::mulss(cpu.xmm[1][0], m.fast_u32(pt, cpu.esi.wrapping_add(0x6028))); pc = 0x9C3691; continue; }
             0x9C3691 => { m.fast_set_u32(pt, cpu.esi.wrapping_add(0x59C0), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x59C8), cpu.xmm[1][0]); emit::push(0x9C36A6, m, pt, cpu); x86::call_ext(m, cpu, 0xAB4BE0u32); cpu.edi = emit::pop(m, pt, cpu); cpu.esi = emit::pop(m, pt, cpu); cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
@@ -538,7 +972,7 @@ pub fn f_009c36b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x9C36B0 => { emit::push(cpu.ebx, m, pt, cpu); emit::push(cpu.esi, m, pt, cpu); cpu.ebx = cpu.ecx; emit::push(cpu.edi, m, pt, cpu); cpu.esi = cpu.ebx; emit::push(0x9C36BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_local(m, cpu, 0x009C48C0, super::lifted::f_009c48c0))(m, cpu);  m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x606C), cpu.eax); cpu.edi = 0xD2u32; let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) != 0; pc = if l129_condition { 0x9C3713 } else { 0x9C36CB }; continue; }
-            0x9C36CB => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.ebx.wrapping_add(0x6068)) as u32), ((cpu.eax >> 0) & 0xFF), 8); pc = if (!cpu.fl.zf()) { 0x9C370A } else { 0x9C36D3 }; continue; }
+            0x9C36CB => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.ebx.wrapping_add(0x6068)) as u32), ((cpu.eax >> 0) & 0xFF), 8); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C370A } else { 0x9C36D3 }; continue; }
             0x9C36D3 => { cpu.eax = 0x48u32; cpu.ecx = cpu.ebx; emit::push(0x9C36DF, m, pt, cpu); x86::call_ext(m, cpu, 0x5A0070u32); cpu.eax = m.fast_u32(pt, 0x18FA4BCu32); let l129_condition = (m.fast_u32(pt, cpu.eax.wrapping_add(0x34))) == (cpu.edi); pc = if l129_condition { 0x9C370A } else { 0x9C36E9 }; continue; }
             0x9C36E9 => { let l129_condition = (((m.fast_u8(pt, cpu.ebx.wrapping_add(0x2D6D)) as u32)) & 0xFF) == ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C370A } else { 0x9C36F2 }; continue; }
             0x9C36F2 => { let l129_condition = (cpu.ebx) != (m.fast_u32(pt, cpu.eax.wrapping_add(0xBE2BC))); pc = if l129_condition { 0x9C370A } else { 0x9C36FA }; continue; }
@@ -546,7 +980,7 @@ pub fn f_009c36b0(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C3703 => { m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x2D6E), (0x1u32) as u8); pc = 0x9C370A; continue; }
             0x9C370A => { m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x6068), (0x1u32) as u8); pc = 0x9C371A; continue; }
             0x9C3713 => { m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x6068), (0x0u32) as u8); pc = 0x9C371A; continue; }
-            0x9C371A => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.ebx.wrapping_add(0x6068)) as u32), 0x0u32, 8); pc = if cpu.fl.zf() { 0x9C3769 } else { 0x9C3723 }; continue; }
+            0x9C371A => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.ebx.wrapping_add(0x6068)) as u32), 0x0u32, 8); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C3769 } else { 0x9C3723 }; continue; }
             0x9C3723 => { cpu.eax = m.fast_u32(pt, cpu.ebx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x1D4)); cpu.ecx = cpu.ebx; { let t = cpu.edx; emit::push(0x9C372F, m, pt, cpu);  x86::call_ext(m, cpu, t);  } let l129_condition = ((((((cpu.eax >> 0) & 0xFF)) & 0xFF) & ((((cpu.eax >> 0) & 0xFF)) & 0xFF)) as i8) != 0; pc = if l129_condition { 0x9C3769 } else { 0x9C3733 }; continue; }
             0x9C3733 => { let l129_condition = (m.fast_u32(pt, cpu.ebx.wrapping_add(0x1D0C))) <= (0x0u32); pc = if l129_condition { 0x9C3769 } else { 0x9C373C }; continue; }
             0x9C373C => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x1D18)); cpu.eax = m.fast_u32(pt, cpu.eax); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C3769 } else { 0x9C3748 }; continue; }
@@ -566,7 +1000,7 @@ pub fn f_009c36b0(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C37C6 => { let l129_condition = (((m.fast_u8(pt, cpu.eax.wrapping_add(0x620C)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C37E8 } else { 0x9C37CF }; continue; }
             0x9C37CF => { let l129_condition = (m.fast_u32(pt, cpu.eax.wrapping_add(0x2DD4))) == (cpu.esi); pc = if l129_condition { 0x9C37E8 } else { 0x9C37D7 }; continue; }
             0x9C37D7 => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x2DC8)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C37E8 } else { 0x9C37E1 }; continue; }
-            0x9C37E1 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0x50)) as u32), 0x0u32, 8); pc = if cpu.fl.zf() { 0x9C37E8 } else { 0x9C37E7 }; continue; }
+            0x9C37E1 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0x50)) as u32), 0x0u32, 8); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C37E8 } else { 0x9C37E7 }; continue; }
             0x9C37E7 => { { let a = cpu.edx & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.edx = r; } pc = 0x9C37E8; continue; }
             0x9C37E8 => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x6048)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C3824 } else { 0x9C37F2 }; continue; }
             0x9C37F2 => { cpu.ecx = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.ecx = cpu.ecx & 0x7u32; let l129_condition = (cpu.ecx) == (0x2u32); pc = if l129_condition { 0x9C3802 } else { 0x9C37FD }; continue; }
@@ -574,7 +1008,7 @@ pub fn f_009c36b0(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C3802 => { let l129_condition = (((m.fast_u8(pt, cpu.eax.wrapping_add(0x620C)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C3824 } else { 0x9C380B }; continue; }
             0x9C380B => { let l129_condition = (m.fast_u32(pt, cpu.eax.wrapping_add(0x2DD4))) == (cpu.esi); pc = if l129_condition { 0x9C3824 } else { 0x9C3813 }; continue; }
             0x9C3813 => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x2DC8)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C3824 } else { 0x9C381D }; continue; }
-            0x9C381D => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0x50)) as u32), 0x0u32, 8); pc = if cpu.fl.zf() { 0x9C3824 } else { 0x9C3823 }; continue; }
+            0x9C381D => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0x50)) as u32), 0x0u32, 8); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C3824 } else { 0x9C3823 }; continue; }
             0x9C3823 => { { let a = cpu.edx & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.edx = r; } pc = 0x9C3824; continue; }
             0x9C3824 => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x604C)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C3860 } else { 0x9C382E }; continue; }
             0x9C382E => { cpu.ecx = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.ecx = cpu.ecx & 0x7u32; let l129_condition = (cpu.ecx) == (0x2u32); pc = if l129_condition { 0x9C383E } else { 0x9C3839 }; continue; }
@@ -582,9 +1016,9 @@ pub fn f_009c36b0(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C383E => { let l129_condition = (((m.fast_u8(pt, cpu.eax.wrapping_add(0x620C)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C3860 } else { 0x9C3847 }; continue; }
             0x9C3847 => { let l129_condition = (m.fast_u32(pt, cpu.eax.wrapping_add(0x2DD4))) == (cpu.esi); pc = if l129_condition { 0x9C3860 } else { 0x9C384F }; continue; }
             0x9C384F => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x2DC8)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C3860 } else { 0x9C3859 }; continue; }
-            0x9C3859 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0x50)) as u32), 0x0u32, 8); pc = if cpu.fl.zf() { 0x9C3860 } else { 0x9C385F }; continue; }
+            0x9C3859 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0x50)) as u32), 0x0u32, 8); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C3860 } else { 0x9C385F }; continue; }
             0x9C385F => { { let a = cpu.edx & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.edx = r; } pc = 0x9C3860; continue; }
-            0x9C3860 => { cpu.ecx = m.fast_u32(pt, 0x18FA4BCu32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x608C), cpu.edx); cpu.fl.alu_sub(m.fast_u32(pt, cpu.ecx.wrapping_add(0x34)), cpu.edi, 32); pc = if (!cpu.fl.zf()) { 0x9C38F0 } else { 0x9C3871 }; continue; }
+            0x9C3860 => { cpu.ecx = m.fast_u32(pt, 0x18FA4BCu32); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x608C), cpu.edx); cpu.fl.alu_sub(m.fast_u32(pt, cpu.ecx.wrapping_add(0x34)), cpu.edi, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C38F0 } else { 0x9C3871 }; continue; }
             0x9C3871 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = 0x1B1u32; pc = 0x9C3880; continue; }
             0x9C3880 => { cpu.esi = m.fast_u32(pt, 0x18FA4BCu32); let l129_condition = (((m.fast_u8(pt, cpu.esi.wrapping_add(0x1C)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C3895 } else { 0x9C388C }; continue; }
             0x9C388C => { let l129_condition = (((m.fast_u8(pt, 0x18D0BB0u32) as u32)) & 0xFF) == ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C38A5 } else { 0x9C3895 }; continue; }
@@ -595,7 +1029,7 @@ pub fn f_009c36b0(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C38BD => { cpu.ecx = cpu.ebp; cpu.ecx = cpu.ecx & 0x1Fu32; cpu.edx = 0x80000000u32; { let a = cpu.edx & u32::MAX; let n = ((cpu.ecx >> 0) & 0xFF) & 31; if n != 0 { let r = (a >> n) & u32::MAX; cpu.edx = r; } } cpu.edx = (!cpu.edx) & u32::MAX; { let r = m.fast_u32(pt, cpu.eax) & cpu.edx; m.fast_set_u32(pt, cpu.eax, r); } let l129_condition = (((m.fast_u8(pt, cpu.esi.wrapping_add(0x1C)) as u32)) & 0xFF) != ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C38DC } else { 0x9C38D3 }; continue; }
             0x9C38D3 => { let l129_condition = (((m.fast_u8(pt, 0x18D0BB0u32) as u32)) & 0xFF) == ((0x0u32) & 0xFF); pc = if l129_condition { 0x9C38E6 } else { 0x9C38DC }; continue; }
             0x9C38DC => { cpu.esi = cpu.fl.alu_add(cpu.esi, 0x4u32, 32); emit::push(cpu.esi, m, pt, cpu); { let t = m.fast_u32(pt, 0x139D164u32); emit::push(0x9C38E6, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C38E6; continue; }
-            0x9C38E6 => { cpu.ebp = cpu.ebp.wrapping_add(1); cpu.fl.alu_sub(cpu.ebp, 0x1BAu32, 32); pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x9C3880 } else { 0x9C38EF }; continue; }
+            0x9C38E6 => { cpu.ebp = cpu.ebp.wrapping_add(1); cpu.fl.alu_sub(cpu.ebp, 0x1BAu32, 32); pc = if (cpu.fl.a <= cpu.fl.b) { 0x9C3880 } else { 0x9C38EF }; continue; }
             0x9C38EF => { cpu.ebp = emit::pop(m, pt, cpu); pc = 0x9C38F0; continue; }
             0x9C38F0 => { cpu.ecx = cpu.ebx; emit::push(0x9C38F7, m, pt, cpu); x86::call_ext(m, cpu, 0xAA96E0u32); cpu.edi = emit::pop(m, pt, cpu); cpu.esi = emit::pop(m, pt, cpu); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x2ECC), 0x0u32); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
@@ -627,18 +1061,18 @@ pub fn f_009c3980(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C399F => { cpu.eax = m.fast_u32(pt, 0x18FA4BCu32); let l129_condition = (m.fast_u32(pt, cpu.eax.wrapping_add(0x34))) == (0xD2u32); pc = if l129_condition { 0x9C39E1 } else { 0x9C39AD }; continue; }
             0x9C39AD => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x1D1C)); cpu.ecx = cpu.esi.wrapping_add(0x10E0); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) != 0; pc = if l129_condition { 0x9C39C1 } else { 0x9C39BD }; continue; }
             0x9C39BD => { cpu.edi = cpu.fl.alu_xor(cpu.edi, cpu.edi, 32); pc = 0x9C39D3; continue; }
-            0x9C39C1 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x78)), 0x0u32, 32); pc = if (!cpu.fl.cf() && !cpu.fl.zf()) { 0x9C39CB } else { 0x9C39C7 }; continue; }
+            0x9C39C1 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x78)), 0x0u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x9C39CB } else { 0x9C39C7 }; continue; }
             0x9C39C7 => { cpu.edi = cpu.fl.alu_xor(cpu.edi, cpu.edi, 32); pc = 0x9C39D3; continue; }
             0x9C39CB => { cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x84)); cpu.edi = m.fast_u32(pt, cpu.edx); pc = 0x9C39D3; continue; }
             0x9C39D3 => { emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(cpu.ecx, m, pt, cpu); emit::push(0x9C39E1, m, pt, cpu); x86::call_ext(m, cpu, 0x76F740u32); pc = 0x9C39E1; continue; }
             0x9C39E1 => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x1D1C)); cpu.ebx = cpu.esi.wrapping_add(0x10E0); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) != 0; pc = if l129_condition { 0x9C39F5 } else { 0x9C39F1 }; continue; }
             0x9C39F1 => { cpu.edi = cpu.fl.alu_xor(cpu.edi, cpu.edi, 32); pc = 0x9C3A08; continue; }
-            0x9C39F5 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x78)), 0x1u32, 32); pc = if (!cpu.fl.cf() && !cpu.fl.zf()) { 0x9C39FF } else { 0x9C39FB }; continue; }
+            0x9C39F5 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x78)), 0x1u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x9C39FF } else { 0x9C39FB }; continue; }
             0x9C39FB => { cpu.edi = cpu.fl.alu_xor(cpu.edi, cpu.edi, 32); pc = 0x9C3A08; continue; }
             0x9C39FF => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x84)); cpu.edi = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); pc = 0x9C3A08; continue; }
             0x9C3A08 => { emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(cpu.ebx, m, pt, cpu); emit::push(0x9C3A16, m, pt, cpu); x86::call_ext(m, cpu, 0x76F740u32); cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0xC3C)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) != 0; pc = if l129_condition { 0x9C3A24 } else { 0x9C3A20 }; continue; }
             0x9C3A20 => { cpu.edi = cpu.fl.alu_xor(cpu.edi, cpu.edi, 32); pc = 0x9C3A37; continue; }
-            0x9C3A24 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x78)), 0x2u32, 32); pc = if (!cpu.fl.cf() && !cpu.fl.zf()) { 0x9C3A2E } else { 0x9C3A2A }; continue; }
+            0x9C3A24 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x78)), 0x2u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x9C3A2E } else { 0x9C3A2A }; continue; }
             0x9C3A2A => { cpu.edi = cpu.fl.alu_xor(cpu.edi, cpu.edi, 32); pc = 0x9C3A37; continue; }
             0x9C3A2E => { cpu.ecx = m.fast_u32(pt, cpu.eax.wrapping_add(0x84)); cpu.edi = m.fast_u32(pt, cpu.ecx.wrapping_add(0x8)); pc = 0x9C3A37; continue; }
             0x9C3A37 => { emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(cpu.ebx, m, pt, cpu); emit::push(0x9C3A45, m, pt, cpu); x86::call_ext(m, cpu, 0x76F740u32); pc = 0x9C3A45; continue; }
@@ -669,263 +1103,11 @@ pub fn f_009c3a90(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x9C3B52 => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; let l129_condition = (cpu.eax) == (0x2u32); pc = if l129_condition { 0x9C3B62 } else { 0x9C3B5D }; continue; }
             0x9C3B5D => { let l129_condition = (cpu.eax) != (0x1u32); pc = if l129_condition { 0x9C3B9D } else { 0x9C3B62 }; continue; }
             0x9C3B62 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x6048)); cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x2364)); { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2360)) | cpu.edx; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2360), r); } { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2370)) | cpu.edx; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2370), r); } cpu.eax = cpu.eax & 0xC0u32; { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2364)) | cpu.eax; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2364), r); } { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2374)) | cpu.eax; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2374), r); } cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x6048)); cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x2ECC)); { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2ECC)) | cpu.eax; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2ECC), r); } pc = 0x9C3B9D; continue; }
-            0x9C3B9D => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x604C)); cpu.fl.alu_sub(cpu.eax, cpu.edx, 32); pc = if cpu.fl.zf() { 0x9C3BF2 } else { 0x9C3BA7 }; continue; }
+            0x9C3B9D => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x604C)); cpu.fl.alu_sub(cpu.eax, cpu.edx, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x9C3BF2 } else { 0x9C3BA7 }; continue; }
             0x9C3BA7 => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.eax = cpu.eax & 0x7u32; let l129_condition = (cpu.eax) == (0x2u32); pc = if l129_condition { 0x9C3BB7 } else { 0x9C3BB2 }; continue; }
-            0x9C3BB2 => { cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); pc = if (!cpu.fl.zf()) { 0x9C3BF2 } else { 0x9C3BB7 }; continue; }
+            0x9C3BB2 => { cpu.fl.alu_sub(cpu.eax, 0x1u32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0x9C3BF2 } else { 0x9C3BB7 }; continue; }
             0x9C3BB7 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x604C)); cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x2364)); { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2360)) | cpu.edx; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2360), r); } { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2370)) | cpu.edx; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2370), r); } cpu.eax = cpu.eax & 0xC0u32; { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2364)) | cpu.eax; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2364), r); } { let r = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2374)) | cpu.eax; m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2374), r); } cpu.edx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x604C)); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x2ECC)); { let r = cpu.fl.alu_or(m.fast_u32(pt, cpu.ecx.wrapping_add(0x2ECC)), cpu.eax, 32); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x2ECC), r); } pc = 0x9C3BF2; continue; }
             0x9C3BF2 => { emit::push(0x9C3BF7, m, pt, cpu); x86::call_ext(m, cpu, 0xAA9FA0u32); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C3C00 (DDDA.exe 2017-12-13 Steam), uEm5300::vf96.
-pub fn f_009c3c00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C3C00;
-    loop {
-        match pc {
-            0x9C3C00 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = cpu.esp; cpu.esp = cpu.esp & 0xFFFFFFF0u32; cpu.esp = cpu.esp.wrapping_sub(0x1Cu32); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; cpu.eax = cpu.eax ^ cpu.eax; let l129_condition = (m.fast_u32(pt, cpu.esi.wrapping_add(0x60E8))) <= (cpu.eax); pc = if l129_condition { 0x9C3C3F } else { 0x9C3C16 }; continue; }
-            0x9C3C16 => { pc = 0x9C3C20; continue; }
-            0x9C3C20 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.esi.wrapping_add(0x60E1)) as u32), 0x0u32, 8); cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x60F4)); cpu.ecx = m.fast_u32(pt, cpu.ecx.wrapping_add(cpu.eax.wrapping_mul(4))); cpu.edx = (cpu.edx & !(0xFF << 0)) | ((((!cpu.fl.zf()) as u32) & 0xFF) << 0); cpu.eax = cpu.eax.wrapping_add(1); m.fast_set_u8(pt, cpu.ecx.wrapping_add(0x61), (((cpu.edx >> 0) & 0xFF)) as u8); let l129_condition = (cpu.eax) < (m.fast_u32(pt, cpu.esi.wrapping_add(0x60E8))); pc = if l129_condition { 0x9C3C20 } else { 0x9C3C3F }; continue; }
-            0x9C3C3F => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.esi.wrapping_add(0x60E2)) as u32), 0x0u32, 8); cpu.edx = m.fast_u32(pt, cpu.esi); cpu.eax = (cpu.eax & !(0xFF << 0)) | ((((!cpu.fl.zf()) as u32) & 0xFF) << 0); m.fast_set_u8(pt, cpu.esi.wrapping_add(0x6181), (((cpu.eax >> 0) & 0xFF)) as u8); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x50)); cpu.ecx = cpu.esi; { let t = cpu.eax; emit::push(0x9C3C58, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edx = m.fast_u32(pt, cpu.esi); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x54)); cpu.ecx = cpu.esi; { let t = cpu.eax; emit::push(0x9C3C61, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edx = m.fast_u32(pt, cpu.esi.wrapping_add(0x368)); cpu.eax = (m.fast_u8(pt, cpu.edx) as u32); cpu.ecx = m.fast_u32(pt, cpu.esi.wrapping_add(0x6108)); cpu.ecx = m.fast_u32(pt, cpu.ecx); let l129_condition = (cpu.eax) != (0xFFu32); pc = if l129_condition { 0x9C3C7D } else { 0x9C3C79 }; continue; }
-            0x9C3C79 => { cpu.eax = cpu.eax ^ cpu.eax; pc = 0x9C3C89; continue; }
-            0x9C3C7D => { cpu.eax = cpu.eax.wrapping_add(cpu.eax.wrapping_mul(4)); cpu.eax = cpu.eax << 0x5u32; cpu.eax = cpu.eax.wrapping_add(m.fast_u32(pt, cpu.esi.wrapping_add(0x364))); pc = 0x9C3C89; continue; }
-            0x9C3C89 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x40)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x44)), 0, 0, 0]; cpu.xmm[2] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x48)), 0, 0, 0]; { cpu.xmm[3] = emit::xorps(cpu.xmm[3], cpu.xmm[3]); } m.fast_set_u32(pt, cpu.esp.wrapping_add(0x14), cpu.xmm[1][0]); cpu.xmm[1][0] = x86::subss(cpu.xmm[1][0], m.fast_u32(pt, cpu.ecx.wrapping_add(0x14))); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), cpu.xmm[0][0]); cpu.xmm[0][0] = x86::subss(cpu.xmm[0][0], m.fast_u32(pt, cpu.ecx.wrapping_add(0x10))); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x18), cpu.xmm[2][0]); cpu.xmm[2][0] = x86::subss(cpu.xmm[2][0], m.fast_u32(pt, cpu.ecx.wrapping_add(0x18))); cpu.xmm[1][0] = x86::mulss(cpu.xmm[1][0], cpu.xmm[1][0]); cpu.xmm[0][0] = x86::mulss(cpu.xmm[0][0], cpu.xmm[0][0]); cpu.xmm[1][0] = x86::addss(cpu.xmm[1][0], cpu.xmm[0][0]); cpu.xmm[2][0] = x86::mulss(cpu.xmm[2][0], cpu.xmm[2][0]); cpu.xmm[1][0] = x86::addss(cpu.xmm[1][0], cpu.xmm[2][0]); cpu.xmm[0][0] = x86::sqrtss(cpu.xmm[1][0]); cpu.fl = x86::comiss_hw::<true>(cpu.xmm[0][0], m.fast_u32(pt, 0x152CF24u32)); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x1C), cpu.xmm[3][0]); pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x9C3CED } else { 0x9C3CE3 }; continue; }
-            0x9C3CE3 => { emit::push(cpu.esi, m, pt, cpu); cpu.eax = cpu.esp.wrapping_add(0x14); emit::push(0x9C3CED, m, pt, cpu); x86::call_ext(m, cpu, 0x9C5340u32); pc = 0x9C3CED; continue; }
-            0x9C3CED => { cpu.xmm[0] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x40)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x44)), 0, 0, 0]; cpu.xmm[2] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x48)), 0, 0, 0]; m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6190), cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6194), cpu.xmm[1][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x6198), cpu.xmm[2][0]); { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } m.fast_set_u32(pt, cpu.esi.wrapping_add(0x619C), cpu.xmm[0][0]); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C3D30 (DDDA.exe 2017-12-13 Steam), uEm5500::vf23.
-pub fn f_009c3d30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-     x86::call_ext(m, cpu, 0xFFDDB0); return;
-}
-
-// Translated from 0x009C3D40 (DDDA.exe 2017-12-13 Steam), uEm5300::vf136.
-pub fn f_009c3d40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C3D40;
-    loop {
-        match pc {
-            0x9C3D40 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = cpu.esp; cpu.esp = cpu.esp & 0xFFFFFFF8u32; emit::push(cpu.ecx, m, pt, cpu); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx; cpu.fl.alu_and((m.fast_u8(pt, cpu.esi.wrapping_add(0x2748)) as u32), 0x4u32, 8); pc = if (!cpu.fl.zf()) { 0x9C3D6C } else { 0x9C3D53 }; continue; }
-            0x9C3D53 => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x2E64)); cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0xC)) as u32), 0x0u32, 8); pc = if cpu.fl.zf() { 0x9C3D65 } else { 0x9C3D5F }; continue; }
-            0x9C3D5F => { emit::push(cpu.esi, m, pt, cpu); emit::push(0x9C3D65, m, pt, cpu); x86::call_ext(m, cpu, 0x9C3D80u32); pc = 0x9C3D65; continue; }
-            0x9C3D65 => { cpu.ecx = cpu.esi; emit::push(0x9C3D6C, m, pt, cpu); x86::call_ext(m, cpu, 0xAB3620u32); pc = 0x9C3D6C; continue; }
-            0x9C3D6C => { cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C3D80 (DDDA.exe 2017-12-13 Steam), Global::FUN_009c3d80.
-pub fn f_009c3d80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C3D80;
-    loop {
-        match pc {
-            0x9C3D80 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = cpu.esp; cpu.esp = cpu.esp & 0xFFFFFFF0u32; cpu.esp = cpu.fl.alu_sub(cpu.esp, 0x94u32, 32); emit::push(cpu.ebx, m, pt, cpu); cpu.ebx = m.fast_u32(pt, cpu.ebp.wrapping_add(0x8)); cpu.eax = m.fast_u32(pt, cpu.ebx); cpu.edx = m.fast_u32(pt, cpu.eax.wrapping_add(0x1D4)); emit::push(cpu.esi, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); cpu.ecx = cpu.ebx; { let t = cpu.edx; emit::push(0x9C3D9E, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B58)); pc = if cpu.fl.zf() { 0x9C3DC7 } else { 0x9C3DA8 }; continue; }
-            0x9C3DA8 => { cpu.fl.alu_sub(cpu.eax, 0xFFFFFFFFu32, 32); pc = if cpu.fl.zf() { 0x9C4057 } else { 0x9C3DB1 }; continue; }
-            0x9C3DB1 => { cpu.edx = m.fast_u32(pt, cpu.ebx); emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x210)); cpu.ecx = cpu.ebx; { let t = cpu.eax; emit::push(0x9C3DBE, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edi = emit::pop(m, pt, cpu); cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C3DC7 => { cpu.esi = cpu.esi | 0xFFFFFFFFu32; cpu.fl.alu_sub(cpu.eax, cpu.esi, 32); pc = if (!cpu.fl.zf()) { 0x9C3DEC } else { 0x9C3DCE }; continue; }
-            0x9C3DCE => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B64)); cpu.fl.alu_sub(cpu.eax, cpu.esi, 32); pc = if (!cpu.fl.zf()) { 0x9C3DEC } else { 0x9C3DD8 }; continue; }
-            0x9C3DD8 => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B6C)); cpu.fl.alu_sub(cpu.eax, cpu.esi, 32); pc = if (!cpu.fl.zf()) { 0x9C3DEC } else { 0x9C3DE2 }; continue; }
-            0x9C3DE2 => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x5B74)); cpu.fl.alu_sub(cpu.eax, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C3DFE } else { 0x9C3DEC }; continue; }
-            0x9C3DEC => { cpu.edx = m.fast_u32(pt, cpu.ebx); emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x210)); cpu.ecx = cpu.ebx; { let t = cpu.eax; emit::push(0x9C3DF9, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C403F; continue; }
-            0x9C3DFE => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.ebx.wrapping_add(0x2DD4)), cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C403F } else { 0x9C3E0A }; continue; }
-            0x9C3E0A => { cpu.edx = m.fast_u32(pt, cpu.ebx); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x1D4)); cpu.ecx = cpu.ebx; { let t = cpu.eax; emit::push(0x9C3E16, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if (!cpu.fl.zf()) { 0x9C403F } else { 0x9C3E1E }; continue; }
-            0x9C3E1E => { cpu.ecx = m.fast_u32(pt, cpu.ebx.wrapping_add(0x2DD4)); emit::push(cpu.ecx, m, pt, cpu); cpu.edx = cpu.ebx.wrapping_add(0x2DB8); emit::push(cpu.edx, m, pt, cpu); emit::push(0x9C3E31, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x007F2270))(m, cpu);  cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if cpu.fl.zf() { 0x9C403F } else { 0x9C3E39 }; continue; }
-            0x9C3E39 => { cpu.eax = (cpu.eax & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.eax.wrapping_add(0x50)) as u32)) & 0xFF) << 0); cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if (!cpu.fl.zf()) { 0x9C3E4C } else { 0x9C3E40 }; continue; }
-            0x9C3E40 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.ebx.wrapping_add(0x7420)) as u32), ((cpu.eax >> 0) & 0xFF), 8); pc = if cpu.fl.zf() { 0x9C403F } else { 0x9C3E4C }; continue; }
-            0x9C3E4C => { emit::push(cpu.ebx, m, pt, cpu); m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x7421), (((cpu.eax >> 0) & 0xFF)) as u8); emit::push(0x9C3E58, m, pt, cpu); x86::call_ext(m, cpu, 0x9C4080u32); cpu.eax = (cpu.eax & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.ebx.wrapping_add(0x1ED1)) as u32)) & 0xFF) << 0); m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x6214), (((cpu.eax >> 0) & 0xFF)) as u8); cpu.eax = cpu.ebx; emit::push(0x9C3E6B, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x008EC740))(m, cpu);  { let a = cpu.eax & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.eax = r; } pc = if cpu.fl.zf() { 0x9C3E87 } else { 0x9C3E6E }; continue; }
-            0x9C3E6E => { { let a = cpu.eax & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.eax = r; } pc = if cpu.fl.zf() { 0x9C3E7C } else { 0x9C3E71 }; continue; }
-            0x9C3E71 => { m.fast_set_u16(pt, cpu.ebx.wrapping_add(0x6215), (0x0u32) as u16); pc = 0x9C3E90; continue; }
-            0x9C3E7C => { m.fast_set_u16(pt, cpu.ebx.wrapping_add(0x6215), (0x100u32) as u16); pc = 0x9C3E90; continue; }
-            0x9C3E87 => { m.fast_set_u16(pt, cpu.ebx.wrapping_add(0x6215), (0x1u32) as u16); pc = 0x9C3E90; continue; }
-            0x9C3E90 => { cpu.ecx = (cpu.ecx & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.ebx.wrapping_add(0x6068)) as u32)) & 0xFF) << 0); cpu.edi = m.fast_u32(pt, 0x18FA4ECu32); m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x6225), (((cpu.ecx >> 0) & 0xFF)) as u8); { cpu.xmm[2] = emit::xorps(cpu.xmm[2], cpu.xmm[2]); } cpu.esi = cpu.esi ^ cpu.esi; pc = 0x9C3EA7; continue; }
-            0x9C3EA7 => { cpu.fl.alu_sub(cpu.esi, 0x6u32, 32); pc = if (!cpu.fl.cf() && !cpu.fl.zf()) { 0x9C3F36 } else { 0x9C3EB0 }; continue; }
-            0x9C3EB0 => { { let t = m.fast_u32(pt, cpu.esi.wrapping_mul(4).wrapping_add(0x9C4060)); if matches!(t, 0x9C3EB7 | 0x9C3EBF | 0x9C3EC7 | 0x9C3ECF | 0x9C3ED7 | 0x9C3F36) { pc = t; continue; }  x86::call_ext(m, cpu, t); return; } }
-            0x9C3EB7 => { cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x99C)); pc = 0x9C3EE5; continue; }
-            0x9C3EBF => { cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x9A0)); pc = 0x9C3EE5; continue; }
-            0x9C3EC7 => { cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x9A4)); pc = 0x9C3EE5; continue; }
-            0x9C3ECF => { cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x9A8)); pc = 0x9C3EE5; continue; }
-            0x9C3ED7 => { emit::push(0x0u32, m, pt, cpu); cpu.edx = cpu.ebx.wrapping_add(0x2F94); emit::push(cpu.edx, m, pt, cpu); emit::push(0x9C3EE5, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00AB52E0))(m, cpu);  pc = 0x9C3EE5; continue; }
-            0x9C3EE5 => { cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if cpu.fl.zf() { 0x9C3F36 } else { 0x9C3EE9 }; continue; }
-            0x9C3EE9 => { cpu.edi = cpu.eax; cpu.eax = cpu.esp.wrapping_add(0x10); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), 0x15689E4u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x2C), cpu.xmm[2][0]); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x3C), cpu.xmm[2][0]); emit::push(0x9C3F08, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x008B6D30))(m, cpu);  emit::push(cpu.esi, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); cpu.eax = cpu.ebx.wrapping_add(0x6210); emit::push(cpu.eax, m, pt, cpu); emit::push(cpu.ebx, m, pt, cpu); cpu.eax = cpu.fl.alu_or(cpu.eax, 0xFFFFFFFFu32, 32); cpu.ecx = cpu.esp.wrapping_add(0x20); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x9C), 0x4u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0xA0), 0x0u32); emit::push(0x9C3F34, m, pt, cpu); x86::call_ext(m, cpu, 0xAADC80u32); pc = 0x9C3F66; continue; }
-            0x9C3F36 => { cpu.eax = cpu.esp.wrapping_add(0x10); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), 0x15689E4u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x2C), cpu.xmm[2][0]); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x3C), cpu.xmm[2][0]); emit::push(0x9C3F53, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x008B6D30))(m, cpu);  cpu.fl.alu_sub(cpu.esi, 0x17u32, 32); pc = if (!cpu.fl.cf()) { 0x9C3F6F } else { 0x9C3F58 }; continue; }
-            0x9C3F58 => { cpu.ecx = cpu.eax; emit::push(cpu.ecx, m, pt, cpu); cpu.edi = cpu.ebx.wrapping_add(0x6210); emit::push(0x9C3F66, m, pt, cpu); x86::call_ext(m, cpu, 0x8B8170u32); pc = 0x9C3F66; continue; }
-            0x9C3F66 => { { cpu.xmm[2] = emit::xorps(cpu.xmm[2], cpu.xmm[2]); } cpu.edi = m.fast_u32(pt, 0x18FA4ECu32); pc = 0x9C3F6F; continue; }
-            0x9C3F6F => { cpu.esi = cpu.esi.wrapping_add(1); let l129_condition = (cpu.esi) < (0x7u32); pc = if l129_condition { 0x9C3EA7 } else { 0x9C3F79 }; continue; }
-            0x9C3F79 => { cpu.esi = m.fast_u32(pt, cpu.ebx.wrapping_add(0x2B98)); cpu.fl.alu_and(cpu.esi, cpu.esi, 32); pc = if cpu.fl.zf() { 0x9C4007 } else { 0x9C3F87 }; continue; }
-            0x9C3F87 => { cpu.ecx = cpu.esi; emit::push(0x9C3F8E, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00403830))(m, cpu);  cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if cpu.fl.zf() { 0x9C4007 } else { 0x9C3F92 }; continue; }
-            0x9C3F92 => { { let r = (((cpu.ecx >> 0) & 0xFF) ^ ((cpu.ecx >> 0) & 0xFF)) & 0xFF; cpu.ecx = (cpu.ecx & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.fl.alu_and((m.fast_u8(pt, cpu.esi.wrapping_add(0x206C)) as u32), 0x2u32, 8); cpu.edx = (cpu.edx & !(0xFF << 0)) | (((0x80u32) & 0xFF) << 0); pc = if cpu.fl.zf() { 0x9C3FC1 } else { 0x9C3F9F }; continue; }
-            0x9C3F9F => { cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x2104)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C3FC1 } else { 0x9C3FA9 }; continue; }
-            0x9C3FA9 => { let l129_condition = (((((m.fast_u8(pt, cpu.eax.wrapping_add(0x206C)) as u32)) & 0xFF) & ((((cpu.edx >> 0) & 0xFF)) & 0xFF)) as i8) == 0; pc = if l129_condition { 0x9C3FC1 } else { 0x9C3FB1 }; continue; }
-            0x9C3FB1 => { cpu.eax = (m.fast_u8(pt, cpu.eax.wrapping_add(0x2D)) as u32); let l129_condition = (cpu.eax) == (0x51u32); pc = if l129_condition { 0x9C3FBF } else { 0x9C3FBA }; continue; }
-            0x9C3FBA => { let l129_condition = (cpu.eax) != (0x53u32); pc = if l129_condition { 0x9C3FC1 } else { 0x9C3FBF }; continue; }
-            0x9C3FBF => { cpu.ecx = (cpu.ecx & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); pc = 0x9C3FC1; continue; }
-            0x9C3FC1 => { m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x6224), (((cpu.ecx >> 0) & 0xFF)) as u8); { let r = (((cpu.ecx >> 0) & 0xFF) ^ ((cpu.ecx >> 0) & 0xFF)) & 0xFF; cpu.ecx = (cpu.ecx & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.fl.alu_and((m.fast_u8(pt, cpu.esi.wrapping_add(0x206D)) as u32), 0x1u32, 8); pc = if cpu.fl.zf() { 0x9C4001 } else { 0x9C3FD2 }; continue; }
-            0x9C3FD2 => { cpu.esi = m.fast_u32(pt, cpu.esi.wrapping_add(0x3C20)); cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x60)); cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if cpu.fl.zf() { 0x9C4001 } else { 0x9C3FDF }; continue; }
-            0x9C3FDF => { cpu.fl.alu_and((m.fast_u8(pt, cpu.eax.wrapping_add(0x206C)) as u32), ((cpu.edx >> 0) & 0xFF), 8); pc = if cpu.fl.zf() { 0x9C4001 } else { 0x9C3FE7 }; continue; }
-            0x9C3FE7 => { cpu.eax = (m.fast_u8(pt, cpu.eax.wrapping_add(0x2D)) as u32); cpu.fl.alu_sub(cpu.eax, 0x50u32, 32); pc = if cpu.fl.zf() { 0x9C3FFF } else { 0x9C3FF0 }; continue; }
-            0x9C3FF0 => { cpu.fl.alu_sub(cpu.eax, 0x52u32, 32); pc = if cpu.fl.zf() { 0x9C3FFF } else { 0x9C3FF5 }; continue; }
-            0x9C3FF5 => { cpu.fl.alu_sub(cpu.eax, 0x51u32, 32); pc = if cpu.fl.zf() { 0x9C3FFF } else { 0x9C3FFA }; continue; }
-            0x9C3FFA => { cpu.fl.alu_sub(cpu.eax, 0x53u32, 32); pc = if (!cpu.fl.zf()) { 0x9C4001 } else { 0x9C3FFF }; continue; }
-            0x9C3FFF => { cpu.ecx = (cpu.ecx & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); pc = 0x9C4001; continue; }
-            0x9C4001 => { m.fast_set_u8(pt, cpu.ebx.wrapping_add(0x6223), (((cpu.ecx >> 0) & 0xFF)) as u8); pc = 0x9C4007; continue; }
-            0x9C4007 => { cpu.eax = cpu.ebx.wrapping_add(0x6210); emit::push(0x9C4012, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x008B80A0))(m, cpu);  cpu.esi = cpu.eax; emit::push(0x9C4019, m, pt, cpu); x86::call_ext(m, cpu, 0x8B81A0u32); let l129_condition = (cpu.eax) == (0xFFFFFFFFu32); pc = if l129_condition { 0x9C403C } else { 0x9C401E }; continue; }
-            0x9C401E => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.ebx.wrapping_add(0x2DD4)), cpu.eax, 32); pc = if (!cpu.fl.zf()) { 0x9C402F } else { 0x9C4026 }; continue; }
-            0x9C4026 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.ebx.wrapping_add(0x70B5)) as u32), 0x1u32, 8); pc = if (!cpu.fl.zf()) { 0x9C403C } else { 0x9C402F }; continue; }
-            0x9C402F => { cpu.edx = m.fast_u32(pt, cpu.ebx); emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(0x210)); cpu.ecx = cpu.ebx; { let t = cpu.eax; emit::push(0x9C403C, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x9C403C; continue; }
-            0x9C403C => { cpu.esi = cpu.fl.alu_or(cpu.esi, 0xFFFFFFFFu32, 32); pc = 0x9C403F; continue; }
-            0x9C403F => { m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5B6C), cpu.esi); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5B64), cpu.esi); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5B74), cpu.esi); m.fast_set_u32(pt, cpu.ebx.wrapping_add(0x5B58), cpu.esi); pc = 0x9C4057; continue; }
-            0x9C4057 => { cpu.edi = emit::pop(m, pt, cpu); cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C4080 (DDDA.exe 2017-12-13 Steam), Global::FUN_009c4080.
-pub fn f_009c4080(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C4080;
-    loop {
-        match pc {
-            0x9C4080 => { emit::push(cpu.ebp, m, pt, cpu); cpu.ebp = cpu.esp; cpu.esp = cpu.esp & 0xFFFFFFF0u32; cpu.eax = m.fast_u32(pt, cpu.ebp.wrapping_add(0x8)); cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x2E64)); cpu.esp = cpu.esp.wrapping_sub(0x64u32); emit::push(cpu.ebx, m, pt, cpu); cpu.ebx = cpu.ebx ^ cpu.ebx; emit::push(cpu.esi, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); cpu.fl.alu_sub(cpu.eax, cpu.ebx, 32); pc = if cpu.fl.zf() { 0x9C41D0 } else { 0x9C409F }; continue; }
-            0x9C409F => { cpu.ecx = m.fast_u32(pt, 0x18FA4BCu32); cpu.fl.alu_and(m.fast_u32(pt, cpu.ecx.wrapping_add(0xB883C)), 0x100000u32, 32); pc = if (!cpu.fl.zf()) { 0x9C41D0 } else { 0x9C40B5 }; continue; }
-            0x9C40B5 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.eax.wrapping_add(0x8)) as u32), ((cpu.ebx >> 0) & 0xFF), 8); pc = if cpu.fl.zf() { 0x9C41D0 } else { 0x9C40BE }; continue; }
-            0x9C40BE => { cpu.edi = m.fast_u32(pt, cpu.eax.wrapping_add(0x38)); cpu.fl.alu_sub(cpu.edi, cpu.ebx, 32); pc = if cpu.fl.zf() { 0x9C41D0 } else { 0x9C40C9 }; continue; }
-            0x9C40C9 => { cpu.esi = cpu.esp.wrapping_add(0x40); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x2C), 0x1558298u32); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x30), cpu.ebx); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x34), cpu.ebx); m.fast_set_u8(pt, cpu.esp.wrapping_add(0x38), (((cpu.ebx >> 0) & 0xFF)) as u8); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x3C), cpu.ebx); emit::push(0x9C40EA, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x004C9D20))(m, cpu);  m.fast_set_u8(pt, cpu.esp.wrapping_add(0x5C), (0x1u32) as u8); cpu.eax = m.fast_u32(pt, cpu.edi.wrapping_add(0x1C)); let l129_condition = ((cpu.eax) as i32) < ((cpu.ebx) as i32); pc = if l129_condition { 0x9C4113 } else { 0x9C40F6 }; continue; }
-            0x9C40F6 => { let l129_condition = ((cpu.eax) as i32) >= ((m.fast_u32(pt, cpu.edi.wrapping_add(0xC))) as i32); pc = if l129_condition { 0x9C4113 } else { 0x9C40FB }; continue; }
-            0x9C40FB => { cpu.edx = m.fast_u32(pt, cpu.edi.wrapping_add(0x18)); cpu.eax = m.fast_u32(pt, cpu.edx.wrapping_add(cpu.eax.wrapping_mul(4))); cpu.fl.alu_sub(cpu.eax, cpu.ebx, 32); pc = if cpu.fl.zf() { 0x9C4113 } else { 0x9C4105 }; continue; }
-            0x9C4105 => { cpu.ecx = cpu.esi; emit::push(cpu.ecx, m, pt, cpu); cpu.edx = cpu.esp.wrapping_add(0x30); emit::push(cpu.edx, m, pt, cpu); emit::push(cpu.eax, m, pt, cpu); emit::push(0x9C4113, m, pt, cpu); x86::call_ext(m, cpu, 0x5AFC50u32); pc = 0x9C4113; continue; }
-            0x9C4113 => { cpu.esi = cpu.esi ^ cpu.esi; cpu.fl.alu_sub(m.fast_u32(pt, cpu.esp.wrapping_add(0x30)), cpu.ebx, 32); pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x9C4154 } else { 0x9C411B }; continue; }
-            0x9C411B => { pc = 0x9C4120; continue; }
-            0x9C4120 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x3C)); cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(cpu.esi.wrapping_mul(4))); let l129_condition = (cpu.eax) == (cpu.ebx); pc = if l129_condition { 0x9C414D } else { 0x9C412B }; continue; }
-            0x9C412B => { let l129_condition = (((((m.fast_u8(pt, cpu.eax.wrapping_add(0x206C)) as u32)) & 0xFF) & ((0x80u32) & 0xFF)) as i8) == 0; pc = if l129_condition { 0x9C414D } else { 0x9C4134 }; continue; }
-            0x9C4134 => { cpu.ecx = (m.fast_u8(pt, cpu.eax.wrapping_add(0x2D)) as u32); cpu.fl.alu_sub(cpu.ecx, 0x51u32, 32); pc = if cpu.fl.zf() { 0x9C4142 } else { 0x9C413D }; continue; }
-            0x9C413D => { cpu.fl.alu_sub(cpu.ecx, 0x53u32, 32); pc = if (!cpu.fl.zf()) { 0x9C414D } else { 0x9C4142 }; continue; }
-            0x9C4142 => { emit::push(cpu.eax, m, pt, cpu); cpu.ecx = cpu.esp.wrapping_add(0x30); emit::push(0x9C414C, m, pt, cpu); x86::call_ext(m, cpu, 0x414FE0u32); { let a = cpu.esi & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.esi = r; } pc = 0x9C414D; continue; }
-            0x9C414D => { cpu.esi = cpu.esi.wrapping_add(1); cpu.fl.alu_sub(cpu.esi, m.fast_u32(pt, cpu.esp.wrapping_add(0x30)), 32); pc = if cpu.fl.cf() { 0x9C4120 } else { 0x9C4154 }; continue; }
-            0x9C4154 => { cpu.eax = m.fast_u32(pt, cpu.ebp.wrapping_add(0x8)); cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0xE0)), 0, 0, 0]; m.fast_set_u32(pt, cpu.esp.wrapping_add(0x10), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0xE4)), 0, 0, 0]; m.fast_set_u32(pt, cpu.esp.wrapping_add(0x14), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0xE8)), 0, 0, 0]; emit::push(cpu.ebx, m, pt, cpu); emit::push(cpu.ecx, m, pt, cpu); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x20), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0xEC)), 0, 0, 0]; m.fast_set_u32(pt, cpu.esp.wrapping_add(0x24), cpu.xmm[0][0]); cpu.xmm[0] = [m.fast_u32(pt, 0x161C21Cu32), 0, 0, 0]; m.fast_set_u32(pt, cpu.esp, cpu.xmm[0][0]); cpu.ecx = cpu.esp.wrapping_add(0x34); emit::push(cpu.ecx, m, pt, cpu); cpu.edx = cpu.esp.wrapping_add(0x1C); emit::push(cpu.edx, m, pt, cpu); cpu.eax = cpu.fl.alu_add(cpu.eax, 0x2F94u32, 32); emit::push(cpu.eax, m, pt, cpu); emit::push(0x9C41B3, m, pt, cpu); x86::call_ext(m, cpu, 0xAB5A50u32); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x14u32, 32); cpu.ecx = cpu.esp.wrapping_add(0x40); m.fast_set_u32(pt, cpu.esp.wrapping_add(0x40), 0x1568980u32); emit::push(0x9C41C7, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x004038F0))(m, cpu);  cpu.ecx = cpu.esp.wrapping_add(0x2C); emit::push(0x9C41D0, m, pt, cpu); x86::call_ext(m, cpu, 0x402530u32); pc = 0x9C41D0; continue; }
-            0x9C41D0 => { cpu.edi = emit::pop(m, pt, cpu); cpu.esi = emit::pop(m, pt, cpu); cpu.ebx = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C41E0 (DDDA.exe 2017-12-13 Steam), uEm5300::vf190.
-pub fn f_009c41e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_mul(4).wrapping_add(0x16F3B20)); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return;
-}
-
-// Translated from 0x009C41F0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_009C41F0.
-pub fn f_009c41f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C41F0;
-    loop {
-        match pc {
-            0x9C41F0 => { cpu.edx = m.fast_u32(pt, cpu.esp.wrapping_add(0x14)); let l129_condition = (((cpu.edx) & (cpu.edx)) as i32) == 0; pc = if l129_condition { 0x9C4221 } else { 0x9C41F8 }; continue; }
-            0x9C41F8 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0xC)); cpu.fl.alu_sub(cpu.eax, 0x3E8u32, 32); pc = if cpu.fl.cf() { 0x9C4211 } else { 0x9C4203 }; continue; }
-            0x9C4203 => { cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); emit::push(cpu.edx, m, pt, cpu); emit::push(0x9C420D, m, pt, cpu); x86::call_ext(m, cpu, 0x8AB100u32); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x4u32, 32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            0x9C4211 => { cpu.fl.alu_sub(cpu.eax, 0x8u32, 32); pc = if (!cpu.fl.cf() && !cpu.fl.zf()) { 0x9C4221 } else { 0x9C4216 }; continue; }
-            0x9C4216 => { emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x14)); emit::push(0x9C4220, m, pt, cpu); x86::call_ext(m, cpu, 0x9C4230u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            0x9C4221 => { { let r = cpu.fl.alu_xor(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C4230 (DDDA.exe 2017-12-13 Steam), Global::FUN_009c4230.
-pub fn f_009c4230(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C4230;
-    loop {
-        match pc {
-            0x9C4230 => { cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); { let t = m.fast_u32(pt, cpu.ecx.wrapping_mul(4).wrapping_add(0x9C430C)); if matches!(t, 0x9C423B | 0x9C424A | 0x9C4262 | 0x9C429F | 0x9C42AC | 0x9C42B2 | 0x9C42C0 | 0x9C42CE | 0x9C42DB | 0x9C42E8 | 0x9C42FE) { pc = t; continue; }  x86::call_ext(m, cpu, t); return; } }
-            0x9C423B => { cpu.edx = m.fast_u32(pt, 0x18FA4BCu32); cpu.fl.alu_sub(m.fast_u32(pt, cpu.edx.wrapping_add(0x34)), cpu.eax, 32); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((cpu.fl.zf() as u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C424A => { cpu.ecx = cpu.ecx ^ cpu.ecx; let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) != 0; cpu.ecx = (cpu.ecx & !(0xFF << 0)) | (((l129_condition as u32) & 0xFF) << 0); cpu.fl.alu_sub(m.fast_u32(pt, cpu.edx.wrapping_add(0x6060)), cpu.ecx, 32); pc = if (!cpu.fl.zf()) { 0x9C4304 } else { 0x9C425D }; continue; }
-            0x9C425D => { cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C4262 => { { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } cpu.fl = x86::comiss_hw::<true>(cpu.xmm[0][0], m.fast_u32(pt, cpu.edx.wrapping_add(0x6064))); pc = if cpu.fl.cf() { 0x9C4304 } else { 0x9C4272 }; continue; }
-            0x9C4272 => { emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.esi ^ cpu.esi; cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.edx = cpu.edx.wrapping_add(0x6040u32); cpu.ecx = cpu.ecx; pc = 0x9C4280; continue; }
-            0x9C4280 => { cpu.ecx = m.fast_u32(pt, cpu.edx); let l129_condition = (((cpu.ecx) & (cpu.ecx)) as i32) == 0; pc = if l129_condition { 0x9C429F } else { 0x9C4286 }; continue; }
-            0x9C4286 => { cpu.ecx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x2DD4)); cpu.fl.alu_sub(cpu.ecx, 0x20u32, 32); pc = if (!cpu.fl.cf() && !cpu.fl.zf()) { 0x9C42AC } else { 0x9C4291 }; continue; }
-            0x9C4291 => { cpu.ecx = (m.fast_u8(pt, cpu.ecx.wrapping_add(0x9C4338)) as u32); { let t = m.fast_u32(pt, cpu.ecx.wrapping_mul(4).wrapping_add(0x9C4330)); if matches!(t, 0x9C429F | 0x9C42AC) { pc = t; continue; }  x86::call_ext(m, cpu, t); return; } }
-            0x9C429F => { cpu.esi = cpu.esi.wrapping_add(1); cpu.edx = cpu.edx.wrapping_add(0x4u32); cpu.fl.alu_sub(cpu.esi, 0x4u32, 32); pc = if cpu.fl.cf() { 0x9C4280 } else { 0x9C42A8 }; continue; }
-            0x9C42A8 => { cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C42AC => { { let r = cpu.fl.alu_xor(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C42B2 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.edx.wrapping_add(0x6060)), 0x1u32, 32); pc = if (!cpu.fl.zf()) { 0x9C4304 } else { 0x9C42BB }; continue; }
-            0x9C42BB => { cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C42C0 => { emit::push(0x9C42C5, m, pt, cpu); x86::call_ext(m, cpu, 0x9C3040u32); cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if cpu.fl.zf() { 0x9C4304 } else { 0x9C42C9 }; continue; }
-            0x9C42C9 => { cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C42CE => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.edx.wrapping_add(0x6088)), cpu.eax, 32); pc = if (!cpu.fl.zf()) { 0x9C4304 } else { 0x9C42D6 }; continue; }
-            0x9C42D6 => { cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C42DB => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.edx.wrapping_add(0x608C)), cpu.eax, 32); pc = if (!cpu.fl.zf()) { 0x9C4304 } else { 0x9C42E3 }; continue; }
-            0x9C42E3 => { cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C42E8 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.edx.wrapping_add(0x607C)), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[0][0], m.fast_u32(pt, 0x1521690u32)); pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x9C4304 } else { 0x9C42F9 }; continue; }
-            0x9C42F9 => { cpu.eax = (cpu.eax & !(0xFF << 0)) | (((0x1u32) & 0xFF) << 0); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C42FE => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.edx.wrapping_add(0x2D)) as u32), 0x52u32, 8); pc = if cpu.fl.zf() { 0x9C42C9 } else { 0x9C4304 }; continue; }
-            0x9C4304 => { { let r = cpu.fl.alu_xor(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C4360 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_009C4360.
-pub fn f_009c4360(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C4360;
-    loop {
-        match pc {
-            0x9C4360 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x14)); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) == 0; pc = if l129_condition { 0x9C4397 } else { 0x9C4368 }; continue; }
-            0x9C4368 => { cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0xC)); cpu.fl.alu_sub(cpu.ecx, 0x3E8u32, 32); pc = if cpu.fl.cf() { 0x9C4387 } else { 0x9C4374 }; continue; }
-            0x9C4374 => { emit::push(cpu.ecx, m, pt, cpu); cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x8)); emit::push(cpu.eax, m, pt, cpu); cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x18)); emit::push(0x9C4383, m, pt, cpu); x86::call_ext(m, cpu, 0x8ABFA0u32); cpu.esp = cpu.fl.alu_add(cpu.esp, 0x8u32, 32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            0x9C4387 => { cpu.fl.alu_sub(cpu.ecx, 0x4u32, 32); pc = if (!cpu.fl.cf() && !cpu.fl.zf()) { 0x9C4397 } else { 0x9C438C }; continue; }
-            0x9C438C => { cpu.edx = m.fast_u32(pt, cpu.esp.wrapping_add(0x10)); emit::push(cpu.edx, m, pt, cpu); emit::push(0x9C4396, m, pt, cpu); x86::call_ext(m, cpu, 0x9C43A0u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            0x9C4397 => { cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C43A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_009c43a0.
-pub fn f_009c43a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C43A0;
-    loop {
-        match pc {
-            0x9C43A0 => { emit::push(cpu.esi, m, pt, cpu); cpu.esi = m.fast_u32(pt, cpu.esp.wrapping_add(0x8)); { let t = m.fast_u32(pt, cpu.ecx.wrapping_mul(4).wrapping_add(0x9C4438)); if matches!(t, 0x9C43AC | 0x9C43D4 | 0x9C43E4 | 0x9C4415 | 0x9C4427) { pc = t; continue; }  x86::call_ext(m, cpu, t); return; } }
-            0x9C43AC => { m.fast_set_u32(pt, cpu.esp.wrapping_add(0x8), cpu.esi); cpu.st.memory::<0x00db, 4, false>(m, cpu.esp.wrapping_add(0x8)); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x6060), 0x1u32); let l129_condition = (((cpu.esi) & (cpu.esi)) as i32) >= 0; pc = if l129_condition { 0x9C43C8 } else { 0x9C43C2 }; continue; }
-            0x9C43C2 => { cpu.st.memory::<0x00d8, 4, false>(m, 0x161C220u32); pc = 0x9C43C8; continue; }
-            0x9C43C8 => { cpu.st.memory::<0x18d9, 4, true>(m, cpu.eax.wrapping_add(0x6064)); cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C43D4 => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x6060), 0x0u32); cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C43E4 => { emit::push(cpu.edi, m, pt, cpu); cpu.edi = 0x1B1u32; cpu.ebx = cpu.ebx; pc = 0x9C43F0; continue; }
-            0x9C43F0 => { cpu.eax = m.fast_u32(pt, 0x18FA4BCu32); cpu.fl.alu_sub(cpu.edi, cpu.esi, 32); pc = if (!cpu.fl.zf()) { 0x9C4400 } else { 0x9C43F9 }; continue; }
-            0x9C43F9 => { emit::push(0x9C43FE, m, pt, cpu); x86::call_ext(m, cpu, 0x401280u32); pc = 0x9C4405; continue; }
-            0x9C4400 => { emit::push(0x9C4405, m, pt, cpu); x86::call_ext(m, cpu, 0x4012E0u32); pc = 0x9C4405; continue; }
-            0x9C4405 => { cpu.edi = cpu.edi.wrapping_add(1); cpu.fl.alu_sub(cpu.edi, 0x1BAu32, 32); pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x9C43F0 } else { 0x9C440E }; continue; }
-            0x9C440E => { cpu.edi = emit::pop(m, pt, cpu); cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C4415 => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x6084), cpu.esi); m.fast_set_u32(pt, cpu.eax.wrapping_add(0x6088), cpu.esi); cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C4427 => { m.fast_set_u32(pt, cpu.eax.wrapping_add(0x6088), 0x0u32); cpu.eax = cpu.fl.alu_xor(cpu.eax, cpu.eax, 32); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x009C4450 (DDDA.exe 2017-12-13 Steam), uEm5300::vf64.
-pub fn f_009c4450(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x9C4450;
-    loop {
-        match pc {
-            0x9C4450 => { cpu.eax = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax.wrapping_add(0x160)), 0x0u32, 32); pc = if (!cpu.fl.zf()) { 0x9C4471 } else { 0x9C445D }; continue; }
-            0x9C445D => { cpu.edx = m.fast_u32(pt, 0x18FA4BCu32); cpu.fl.alu_sub(m.fast_u32(pt, cpu.edx.wrapping_add(0x34)), 0xD2u32, 32); pc = if (!cpu.fl.zf()) { 0x9C4471 } else { 0x9C446C }; continue; }
-            0x9C446C => { { let r = cpu.fl.alu_xor(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
-            0x9C4471 => { m.fast_set_u32(pt, cpu.esp.wrapping_add(0x4), cpu.eax);  x86::call_ext(m, cpu, 0xAAA3D0); return; }
             _ => unreachable!(),
         }
     }
