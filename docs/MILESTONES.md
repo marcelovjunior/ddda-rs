@@ -115,42 +115,22 @@
   limits: `docs/tasks/L169-shadow.md`.
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
-- Complete real capture:1,633 pages/13,226 write bytes. Original serial/live
-  proof passes for6 entries. Private manager copy removes the event detour.
-  Confirmed DA7D80 InterlockedExchangeAdd dependency now uses tracked private
-  memory;33 focused tests pass. Offline-example rebuild/replay next.
-  Existing sample has one job at t23s; AFTER_MS=60000 selects later work.
-- Gameplay capture serial/live66 PASS,175 jobs complete both private lanes.
-  Merge finds shared command cursor dependency; transaction-local atomic
-  counter now preserves original allocation semantics and rejects ordinary
-  cursor accesses.35 focused pass. Next: offline rebuild/replay48124.
-- Rebuilt original replay passes serial/live6, then refuses fresh command
-  page0x64d31820. DA7D70 current arena now preseeded from runtime pointer
-  and capacity;34 focused tests pass. Next: delayed head recapture with
-  AFTER_MS=60000 FIRST=0 COUNT=1, then resume real replay closure.
-- Private scheduler now preserves outer queue storage; scope balance and
-  output-pointer escape checks cover its temporary arena.33 focused pass;
-  latest complete default light288 pass/0 fail/7 ignored.
-- Earlier capture identified null nested secondary sort storage.
-  FED200 gives child contexts a null secondary sort arena. Replay now
-  provides bounded private storage; FED3B0 output must not retain any
-  reference into it. All shared memory/resource/ABI gates remain strict.
-- Old-capture serial execution completes; parallel refuses an uncaptured
-  FED200 renderer header. Source-backed preseed added; head recapture next.
-  Serial/live proof is reported before trying parallel. Capture v3 retains
-  rejected diagnostic fixtures but can never accept them as proof.
-- Proof requires appended commands, not a pre-existing nonempty prefix;
-  actual capture adds4 roots to2. Final replay15 tests pass (prior full
-  focused shadow31 pass before this extra guard). Earlier complete default light with one
-  test thread:281 passed/0 failed/7 ignored; inherited concurrent timing
-  failures passed the full serial-test rerun, with no skipped checks.
-  Private recursive lock model is differential-tested against runtime;
-  allocator dependencies and output references remain checked.
-- Prior lane oracle:8 original FED3B0 returns and227shader fixtures/1,704
-  uploads (29 conservative refusals). Feature-off call routing unchanged.
-- Live output remains serial. Real parallel equality, production publication
-  and FPS/job-time acceptance are OPEN. No production TRAIN READY. Next:
-  close real replay refusals, then obtain representative multi-job capture.
+- Gameplay capture48124: original serial/live66 entries PASS;175 queued
+  jobs complete both private lanes. Real serial/parallel equality OPEN.
+- Missing imports/pages and parent aliasing closed so far: captured IAT
+  lock/XADD services, private manager/scheduler/secondary storage, runtime
+  command-arena preseed. Consumed output must not reference private storage.
+- Shared command cursor dependency modeled with a transaction-local atomic
+  counter. Actual replay now rejects ordinary cursor access64306CB8:
+  ownership is NOT assumed. Refusal moved to access site for caller evidence.
+  All other dependencies, stream/resource/ABI/FP checks remain strict.
+- Latest focused shadow:35 passed/0 failed. Latest full default light at
+  661bdb1a:288 passed/0 failed/7 ignored. Synthetic tests are not original
+  acceptance. Prior oracle:8 original FED3B0 returns and227 shader fixtures,
+  1704 uploads (29 conservative refusals).
+- Live output remains serial; publication and FPS/job-time acceptance are
+  OPEN. No TRAIN READY. One next action: head offline-example rebuild and
+  replay48124 to identify ordinary command-counter access.
   Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)

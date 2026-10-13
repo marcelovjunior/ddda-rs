@@ -299,14 +299,26 @@ impl Mem for Journal<'_> {
 
 #[derive(Clone)]
 struct PrivateMemory(Rc<RefCell<LaneMemory>>);
+fn reject_unsynchronized_counter_access(address: u32) {
+    let counter = REPLAY.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|replay| replay.command_counter.as_ref().map(|counter| counter.address))
+    });
+    if counter.is_some_and(|base| address.wrapping_sub(base) < 4) {
+        std::panic::panic_any(Reject::AtomicConflict(counter.unwrap()));
+    }
+}
 impl Mem for PrivateMemory {
     fn probe(&self, a: u32, n: u32, w: bool) -> Result<(), u32> {
         self.0.borrow().probe(a, n, w)
     }
     fn u8(&self, a: u32) -> u8 {
+        reject_unsynchronized_counter_access(a);
         self.0.borrow().u8(a)
     }
     fn set_u8(&mut self, a: u32, v: u8) {
+        reject_unsynchronized_counter_access(a);
         self.0.borrow_mut().set_u8(a, v);
     }
 }
