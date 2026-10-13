@@ -422,21 +422,26 @@ pub fn reads(tokens: &[u32]) -> Result<Reads, Refusal> {
 #[derive(Clone, Copy)]
 struct G<'a> {
     m: &'a dyn Mem,
-    pt: Option<std::ptr::NonNull<ddnative_base::mem::PageTable>>,
+    /// the page table taken once; each read inline (L144: `fast_u32` is an
+    /// out-of-line call per word, 7.6% of the render worker in c26vk)
+    pages: ddnative_base::mem::Pages,
 }
 
 impl<'a> G<'a> {
     fn new(m: &'a dyn Mem) -> Self {
-        G { m, pt: m.page_table() }
+        G { m, pages: ddnative_base::mem::Pages::of(m) }
     }
+    #[inline]
     fn u32(&self, a: u32) -> u32 {
-        self.m.fast_u32(self.pt, a)
+        self.pages.u32(self.m, a)
     }
+    #[inline]
     fn u16(&self, a: u32) -> u32 {
-        self.m.fast_u16(self.pt, a) as u32
+        self.pages.u16(self.m, a) as u32
     }
+    #[inline]
     fn u8(&self, a: u32) -> u32 {
-        self.m.fast_u8(self.pt, a) as u32
+        self.pages.u8(self.m, a) as u32
     }
 }
 
