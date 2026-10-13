@@ -33,6 +33,7 @@ pub(crate) struct Draw {
     pub count: u32,
     pub base: i32,
     pub instances: u32,
+    pub first_instance: u32,
 }
 
 pub(crate) struct Pass {
@@ -44,6 +45,9 @@ pub(crate) struct Pass {
     pub draws: Vec<Draw>,
     pub initialized: Arc<Mutex<Initialized>>,
     pub initialize: bool,
+    pub clear_colour: Option<wgpu::Color>,
+    pub clear_depth: Option<f32>,
+    pub clear_stencil: Option<u32>,
 }
 
 /// A submission payload. The caller must retain `keepalive` through the queue's
@@ -53,8 +57,8 @@ pub(crate) struct Ready {
     pub keepalive: Vec<Pass>,
 }
 impl Ready {
-    pub fn submit(self, queue: &wgpu::Queue) {
-        queue.submit(self.commands);
+    pub fn submit(self, queue: &wgpu::Queue) -> wgpu::SubmissionIndex {
+        let submitted = queue.submit(self.commands);
         // Publish initialization only after ordered submission, never from an
         // encoding worker: a later chunk may finish before an earlier chunk.
         for pass in self.keepalive.iter().filter(|p| p.initialize) {
@@ -68,6 +72,7 @@ impl Ready {
         if !self.keepalive.is_empty() {
             queue.on_submitted_work_done(move || drop(self.keepalive));
         }
+        submitted
     }
 }
 
@@ -204,7 +209,7 @@ impl Pass {
             for (i, (stride, step, last_attribute)) in pipeline.vertex_layouts.iter().enumerate() {
                 let (_, start, end) = &draw.vertex[i];
                 let count = if *step == wgpu::VertexStepMode::Instance {
-                    draw.instances as u64
+                    draw.first_instance as u64 + draw.instances as u64
                 } else if draw.index.is_some() {
                     1
                 } else {
@@ -291,7 +296,7 @@ impl Pass {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: self.clear_colour.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
                         store: wgpu::StoreOp::Store,
                     },
                 })
@@ -305,11 +310,11 @@ impl Pass {
                     wgpu::RenderPassDepthStencilAttachment {
                         view,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
+                            load: self.clear_depth.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: format.has_stencil_aspect().then_some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
+                            load: self.clear_stencil.map_or(wgpu::LoadOp::Load, wgpu::LoadOp::Clear),
                             store: wgpu::StoreOp::Store,
                         }),
                     }
@@ -334,9 +339,9 @@ impl Pass {
                 }
                 if let Some((b, start, end, format)) = &d.index {
                     pass.set_index_buffer(b.slice(*start..*end), *format);
-                    pass.draw_indexed(d.first..d.first + d.count, d.base, 0..d.instances);
+                    pass.draw_indexed(d.first..d.first + d.count, d.base, d.first_instance..d.first_instance + d.instances);
                 } else {
-                    pass.draw(d.first..d.first + d.count, 0..d.instances);
+                    pass.draw(d.first..d.first + d.count, d.first_instance..d.first_instance + d.instances);
                 }
             }
         }
@@ -423,8 +428,8 @@ impl Pass {
                         },
                         depth_slice: None,
                         resolve_target: None,
-                        ops: hal::AttachmentOps::LOAD | hal::AttachmentOps::STORE,
-                        clear_value: wgpu::Color::TRANSPARENT,
+                        ops: if self.clear_colour.is_some() { hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE } else { hal::AttachmentOps::LOAD | hal::AttachmentOps::STORE },
+                        clear_value: self.clear_colour.unwrap_or(wgpu::Color::TRANSPARENT),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -438,13 +443,13 @@ impl Pass {
                         view: &*v.raw,
                         usage: wgpu::TextureUses::DEPTH_STENCIL_WRITE,
                     },
-                    depth_ops: hal::AttachmentOps::LOAD | hal::AttachmentOps::STORE,
+                    depth_ops: if self.clear_depth.is_some() { hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE } else { hal::AttachmentOps::LOAD | hal::AttachmentOps::STORE },
                     stencil_ops: if self.depth.as_ref().unwrap().1.has_stencil_aspect() {
-                        hal::AttachmentOps::LOAD | hal::AttachmentOps::STORE
+                        if self.clear_stencil.is_some() { hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE } else { hal::AttachmentOps::LOAD | hal::AttachmentOps::STORE }
                     } else {
                         hal::AttachmentOps::empty()
                     },
-                    clear_value: (0.0, 0),
+                    clear_value: (self.clear_depth.unwrap_or(0.0), self.clear_stencil.unwrap_or(0)),
                 }),
                 multiview_mask: None,
                 timestamp_writes: None,
@@ -508,9 +513,9 @@ impl Pass {
                             *format,
                         );
                     }
-                    h.draw_indexed(d.first, d.count, d.base, 0, d.instances);
+                    h.draw_indexed(d.first, d.count, d.base, d.first_instance, d.instances);
                 } else {
-                    h.draw(d.first, d.count, 0, d.instances);
+                    h.draw(d.first, d.count, d.first_instance, d.instances);
                 }
                 last = Some(d);
             }

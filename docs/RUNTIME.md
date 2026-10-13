@@ -1185,7 +1185,6 @@ ownership and wgpu/driver work can still allocate. Tests, synthetic release
 measurements and the unresolved `_NLG_Return2` attribution are recorded in
 [L143 results](tasks/L143-backend-thread.md); gameplay image/FPS validation
 remains with head.
-<<<<<<< HEAD
 ## L147 upload preparation ownership (2026-10-13)
 
 The wgpu backend pads an already-owned buffer upload in place, and borrows
@@ -1258,7 +1257,6 @@ pipeline creation. The adopted exact optimization is the independently
 opt-in L145 `DDRUNTIME_ZLIB_FAST=1`; outer `DDRUNTIME_ZLIB_PORT` stays off
 for the requested A/B. Full definitions, caveats, source evidence and head
 run environment: `docs/tasks/L149-load-timeline.md`.
-=======
 
 
 ### L148 Vulkan frontend (checkpoint, opt-in)
@@ -1275,4 +1273,28 @@ be written while older disjoint ranges are executing. Ring reuse waits for
 ordered submission and GPU completion. Other devices retain staged uploads.
 This remains opt-in: host-memory GPU cost and ring-wrap stalls need head's
 game acceptance. Final validation status: `docs/tasks/L148-vk-frontend.md`.
->>>>>>> 93d55d1f (Reduce Vulkan frontend bindings and map cached coherent constants)
+
+## L152 native-job Vulkan bridge (2026-10-13)
+
+`DDGPU_VK=1` also selects the raw encoder for accepted `NativeJob`s.
+Native validation and compact constant snapshots feed the same `vk::Pass`
+and `Draw` representation as the D3D9 raw path. Device-owned raw pipeline
+templates survive guest resource releases without retaining old uniform
+arenas/textures; per-recorder bindings and submitted-pass keepalives retain
+resources through completion. First-use/unsupported raw passes fall back
+to wgpu-native encoding. The public `native::Device::from_backend` API
+stays the wgpu oracle, including bundles.
+
+Native scatter uploads and rendering now share one ordered queue batch,
+with prior-finisher submission still required before queue writes. The
+`native-worker` `submit_batches` counter counts these handoffs, not GPU
+completion. L150's late pending-upload flush must remain before the native
+wait/upload boundary when integrating that lane. Unchanged complete
+resident snapshots skip the dirty scan; changed snapshots keep the original
+scalar record order. Native constants still use resident scatter/staging.
+
+27 CPU and 53 GPU cases pass, including raw/wgpu images, D3D9-driver cases,
+comparison jobs, rejection recovery and resource release. Synthetic raw
+versus wgpu-native speed is mixed; no native gameplay/FPS acceptance yet.
+Full counts, hashes, timings and head's requested game A/B are in
+[tasks/L152-native-vk.md](tasks/L152-native-vk.md).

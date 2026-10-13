@@ -10,7 +10,7 @@ mod objects;
 mod pass;
 mod mapped;
 pub(crate) use mapped::MappedUniforms;
-pub(crate) use objects::{Context, Pipeline};
+pub(crate) use objects::{Context, Pipeline, PipelineTemplate, View, Object};
 pub(crate) use pass::{Bindings, Draw, Pass, Ready};
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -68,6 +68,8 @@ pub(crate) fn enabled() -> bool {
 
 /// Owned chunks accepted by L137's ordered encoder pool.
 pub(crate) enum Chunk {
+    /// Already finished upload/scatter, ordered before the rendering chunks.
+    Buffer(wgpu::CommandBuffer),
     Wgpu(wgpu::CommandEncoder),
     Vulkan(wgpu::Device, Vec<Pass>, usize),
 }
@@ -86,6 +88,7 @@ impl Chunk {
 
 pub(crate) fn finish(chunk: Chunk) -> Vec<Ready> {
     match chunk {
+        Chunk::Buffer(buffer) => vec![Ready { commands: vec![buffer], keepalive: vec![] }],
         Chunk::Wgpu(encoder) => vec![Ready {
             commands: crate::encode::finish_wgpu(encoder),
             keepalive: vec![],
@@ -94,7 +97,7 @@ pub(crate) fn finish(chunk: Chunk) -> Vec<Ready> {
     }
 }
 
-pub(crate) fn submit(queue: &wgpu::Queue, ready: Vec<Ready>) {
+pub(crate) fn submit(queue: &wgpu::Queue, ready: Vec<Ready>) -> wgpu::SubmissionIndex {
     let mut combined = Ready {
         commands: vec![],
         keepalive: vec![],
@@ -103,5 +106,5 @@ pub(crate) fn submit(queue: &wgpu::Queue, ready: Vec<Ready>) {
         combined.commands.extend(r.commands);
         combined.keepalive.extend(r.keepalive);
     }
-    combined.submit(queue);
+    combined.submit(queue)
 }
