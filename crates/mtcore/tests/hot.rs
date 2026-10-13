@@ -44,8 +44,10 @@ fn x87_image(v: &Value) -> [u8; 108] {
     }
     for i in 0..8 {
         let offset = 28 + 10 * i;
-        image[offset..offset + 8].copy_from_slice(&v[3 + i][0].as_u64().unwrap().to_le_bytes());
-        image[offset + 8..offset + 10].copy_from_slice(&(n(&v[3 + i][1]) as u16).to_le_bytes());
+        // Unicorn FPn is physical; FSAVE's payload is in logical ST order.
+        let physical = (i + ((n(&v[1]) >> 11) & 7) as usize) % 8;
+        image[offset..offset + 8].copy_from_slice(&v[3 + physical][0].as_u64().unwrap().to_le_bytes());
+        image[offset + 8..offset + 10].copy_from_slice(&(n(&v[3 + physical][1]) as u16).to_le_bytes());
     }
     image
 }
@@ -71,14 +73,23 @@ fn check(m: &dyn Mem, c: &Cpu, v: &Value, where_: &str) {
         "{where_} regs"
     );
     let flags = c.fl.snapshot().0 | if c.df { 0x400 } else { 0 };
-    assert_eq!(flags & 0xcd5, n(&v["flags"]), "{where_} flags");
+    let mask = v.get("flag_mask").map(n).unwrap_or(0xcd5);
+    assert_eq!(flags & mask, n(&v["flags"]) & mask, "{where_} flags");
     for i in 0..8 {
         for j in 0..4 {
             assert_eq!(c.xmm[i][j], n(&v["xmm"][i][j]), "{where_} xmm{i}.{j}");
         }
     }
     assert_eq!(c.mxcsr.0, n(&v["mxcsr"]), "{where_} mxcsr");
-    assert_eq!(c.st.clone().state, x87_image(&v["x87"]), "{where_} x87 unchanged");
+    let mut expected_x87 = x87_image(v.get("hardware_x87").unwrap_or(&v["x87"]));
+    if v["x87_executed"] == true {
+        // Native FNSAVE reserved words are FFFF (x87.rs's hardware
+        // contract); Unicorn exposes only CW/SW/tags/register payloads.
+        for offset in [2, 6, 10] {
+            expected_x87[offset..offset + 2].fill(0xff);
+        }
+    }
+    assert_eq!(c.st.clone().state, expected_x87, "{where_} x87");
     for (a, b) in pairs(&v["memory"]) {
         assert_eq!(m.u8(a), b, "{where_} memory {a:x}");
     }
@@ -120,14 +131,23 @@ fn run(body: LiftFn, case: &Value) {
     );
 }
 
-fn geometry_callback(m: &mut dyn Mem, c: &mut Cpu, event: &Value) {
+fn apply_callee_effects(m: &mut dyn Mem, c: &mut Cpu, event: &Value) {
     for (a, b) in pairs(&event["effects"]) {
         m.set_u8(a, b);
     }
     *c = cpu(event);
 }
 
-fn run_geometry(body: LiftFn, case: &Value) {
+fn release_x87(c: &mut Cpu) {
+    // Cpu/X87 intentionally have no Drop. A fresh synthetic Cpu per case
+    // must release its live/spilled identity rather than grow the host's
+    // short spill list; the real runtime keeps long-lived guest CPUs.
+    if c.st.home != 0 {
+        (ddnative_base::hooks::get().x87_release)(&mut c.st);
+    }
+}
+
+fn run_with_callees(body: LiftFn, case: &Value) {
     let mut m = Memory {
         bytes: pairs(&case["initial"]),
         ..Default::default()
@@ -140,7 +160,7 @@ fn run_geometry(body: LiftFn, case: &Value) {
         let i = *position.borrow();
         assert_eq!(target, n(&trace[i]["target"]));
         check(m, c, &trace[i], "geometry callee entry");
-        geometry_callback(m, c, &trace[i + 1]);
+        apply_callee_effects(m, c, &trace[i + 1]);
         check(m, c, &trace[i + 1], "geometry callee return");
         *position.borrow_mut() += 2;
     })));
@@ -150,6 +170,7 @@ fn run_geometry(body: LiftFn, case: &Value) {
     assert_eq!(*cursor.borrow(), events.len());
     check(&m, &c, &case["after"], "geometry return");
     assert_eq!(m.writes, pairs(&case["after"]["memory"]));
+    release_x87(&mut c);
 }
 
 fn geometry_vectors() -> Option<Value> {
@@ -170,6 +191,91 @@ fn identifier_vectors() -> Option<Value> {
     }
 }
 
+fn duration_vectors() -> Option<Value> {
+    let path = "E:/ddda-re/notes/native-L130/durations.json";
+    match std::fs::read_to_string(path) {
+        Ok(s) => Some(serde_json::from_str(&s).unwrap()),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => None,
+    }
+}
+
+fn duration_port(address: u32) -> LiftFn {
+    match address {
+        0x112bb40 => mtcore::hot::duration_u16,
+        0x112bb60 => mtcore::hot::duration_u8_at3,
+        0x112bb80 => mtcore::hot::duration_u8_at7,
+        0x112bba0 => mtcore::hot::duration_high_nibble32,
+        0x112bbc0 => mtcore::hot::duration_high_nibble16,
+        0x112bbe0 => mtcore::hot::duration_high_nibble8,
+        _ => panic!("unknown duration entry {address:x}"),
+    }
+}
+
+// verifies 0x0112bb40, 0x0112bb60, 0x0112bb80, 0x0112bba0, 0x0112bbc0, 0x0112bbe0
+#[test]
+fn durations_match_original_and_lifted() {
+    ddnative_host::install();
+    let Some(data) = duration_vectors() else {
+        return;
+    };
+    for case in data["cases"].as_array().unwrap() {
+        eprintln!("duration {:x} seed={}", n(&case["entry"]), case["seed"]);
+        run_with_callees(duration_port(n(&case["entry"])), case);
+        // L130_DURATION_REFERENCE
+    }
+    eprintln!(
+        "{} exact duration cases passed",
+        data["cases"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+#[ignore = "paired duration microbenchmark"]
+fn durations_cost() {
+    ddnative_host::install();
+    ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::Relaxed);
+    let data = duration_vectors().unwrap();
+    let mut m = Paged::default();
+    for case in data["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| n(&c["value"]) == 128 && n(&c["depth"]) == 3 && n(&c["rounding"]) == 0)
+    {
+        let entry = n(&case["entry"]);
+        let bodies: Vec<(&str, LiftFn)> = vec![("port", duration_port(entry))]; // L130_DURATION_COST
+        let initial = pairs(&case["initial"]);
+        let initial_cpu = cpu(&case["before"]);
+        for round in 0..5 {
+            for offset in 0..bodies.len() {
+                let (name, body) = bodies[(round + offset) % bodies.len()];
+                let mut elapsed = std::time::Duration::ZERO;
+                for iteration in 0..5020 {
+                    for (&a, &b) in &initial {
+                        m.set_u8(a, b);
+                    }
+                    let mut c = initial_cpu.clone();
+                    let start = std::time::Instant::now();
+                    body(std::hint::black_box(&mut m), std::hint::black_box(&mut c));
+                    let time = start.elapsed();
+                    if iteration >= 20 {
+                        elapsed += time;
+                    }
+                    if iteration == 0 {
+                        check(&m, &c, &case["after"], "duration bench gate");
+                    }
+                    release_x87(&mut c);
+                }
+                eprintln!(
+                    "duration entry={entry:x} round={round} {name} ns/call={:.1}",
+                    elapsed.as_nanos() as f64 / 5000.0
+                );
+            }
+        }
+    }
+}
+
 // verifies 0x00cd8760
 #[test]
 fn identifiers_match_original_and_lifted() {
@@ -178,7 +284,7 @@ fn identifiers_match_original_and_lifted() {
         return;
     };
     for case in data["cases"].as_array().unwrap() {
-        run_geometry(mtcore::hot::resolve_identifier, case);
+        run_with_callees(mtcore::hot::resolve_identifier, case);
         // L130_IDENTIFIER_REFERENCE
     }
     eprintln!(
@@ -257,7 +363,7 @@ fn geometry_matches_original_and_lifted() {
         return;
     };
     for case in data["cases"].as_array().unwrap() {
-        run_geometry(mtcore::hot::dispatch_geometry, case);
+        run_with_callees(mtcore::hot::dispatch_geometry, case);
         // L130_GEOMETRY_REFERENCE
     }
     eprintln!(

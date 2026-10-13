@@ -301,12 +301,95 @@ class IdentifierOracle(Oracle):
                     after=self.snapshot(),visited=sorted(self.visited),edges=sorted(self.edges))
 
 
+DURATIONS = (0x112bb40,0x112bb60,0x112bb80,0x112bba0,0x112bbc0,0x112bbe0)
+
+
+class DurationOracle(Oracle):
+    def __init__(self):
+        self.uc=Uc(UC_ARCH_X86,UC_MODE_32)
+        self.uc.ctl_set_tcg_buffer_size(16*1024*1024)
+        for address,size in ((0x112b000,0x1000),(BASE,0x1000),(STACK,STACK_SIZE),(h.RET,0x1000)):
+            self.uc.mem_map(address,size)
+        self.uc.mem_write(0x112bb40,h.code(0x112bb40,0xc0))
+        self.active=False
+        self.uc.hook_add(UC_HOOK_MEM_READ,self.read)
+        self.uc.hook_add(UC_HOOK_MEM_WRITE,self.write)
+        self.uc.hook_add(UC_HOOK_CODE,self.code)
+
+    def code(self,uc,address,size,data):
+        if address==h.RET: uc.emu_stop(); return
+        assert self.entry <= address < self.entry+0x20,hex(address)
+
+    def run(self,seed,entry,value,depth,rounding):
+        import x87_host
+        uc=self.uc; self.active=False; self.entry=entry; rng=random.Random(seed)
+        uc.mem_write(BASE,rng.randbytes(0x1000)); uc.mem_write(STACK,rng.randbytes(STACK_SIZE))
+        offset={0x112bb40:6,0x112bb60:3,0x112bb80:7,0x112bba0:0,0x112bbc0:4,0x112bbe0:4}[entry]
+        uc.mem_write(OWNER+offset,struct.pack('<I',value))
+        uc.mem_write(SP,struct.pack('<2I',h.RET,OWNER))
+        for reg in REGS: uc.reg_write(reg,rng.getrandbits(32))
+        uc.reg_write(x.UC_X86_REG_ESP,SP)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,rng.getrandbits(128))
+        top=seed%8
+        uc.reg_write(x.UC_X86_REG_FPCW,0x37f | (rounding<<10))
+        uc.reg_write(x.UC_X86_REG_FPSW,top<<11)
+        tags=0xffff
+        for i in range(depth): tags &= ~(3 << (((top+i)%8)*2))
+        uc.reg_write(x.UC_X86_REG_FPTAG,tags)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_FP0+i,((1<<63)|rng.getrandbits(63),0x3fff))
+        uc.reg_write(x.UC_X86_REG_MXCSR,0x1f80)
+        uc.reg_write(x.UC_X86_REG_EFLAGS,0x202 | (rng.getrandbits(12)&0xcd5))
+        self.initial,self.written={},set()
+        before=self.snapshot(False); initial_x87=x87_host.unicorn_state(uc); self.active=True
+        uc.emu_start(entry,h.RET,count=30)
+        assert uc.reg_read(x.UC_X86_REG_EIP)==h.RET
+        self.active=False
+        after=self.snapshot()
+        after['x87_executed']=True
+        hardware,_,_=x87_host.execute(initial_x87,0xdb,0,uc.mem_read(SP+4,4))
+        x87_host.set_unicorn_state(uc,hardware)
+        after['hardware_x87']=self.snapshot(False)['x87']
+        if depth < 8:
+            assert after['x87']==after['hardware_x87'],('FILD hardware mismatch',entry,seed)
+        else:
+            # Unicorn overwrites a full stack without raising the hardware's
+            # masked stack fault/indefinite result. Retain both observations;
+            # the original x86 FILD instruction on the host is authoritative.
+            assert after['x87']!=after['hardware_x87']
+        # SHR by >1 has undefined AF/OF; compare all architecturally
+        # defined arithmetic flags plus DF, never invent undefined bits.
+        after['flag_mask']=0x4c5 if entry in (0x112bbc0,0x112bbe0) else 0xcd5
+        return dict(entry=entry,seed=seed,value=value,depth=depth,rounding=rounding,
+                    before=before,initial=sorted(self.initial.items()),events=[],after=after)
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out')
     p.add_argument('--geometry',action='store_true')
     p.add_argument('--identifiers',action='store_true')
+    p.add_argument('--durations',action='store_true')
     a=p.parse_args()
+    if a.durations:
+        oracle=DurationOracle()
+        rng=random.Random(130)
+        values=[0,1,15,16,127,128,255,256,32767,32768,65535,0xffffffff]+[rng.getrandbits(32) for _ in range(32)]
+        cases=[oracle.run(i+1,*recipe) for i,recipe in enumerate(
+            ((entry,value,depth,rounding) for entry in DURATIONS for value in values
+             for depth in (0,3,7,8) for rounding in range(4)))]
+        out=Path(a.out or 'E:/ddda-re/notes/native-L130/durations.json'); out.parent.mkdir(parents=True,exist_ok=True)
+        out.write_text(json.dumps(dict(source='DDDA.exe 2017-12-13 Steam',
+                       exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+                       code={str(entry):h.code(entry,0x20).hex() for entry in DURATIONS},cases=cases),separators=(',',':')))
+        # Exact isolated lifter output for missing inventory entries. Never
+        # modifies patterns, inventory, generated shards or the canonical DB.
+        import lift
+        sources=[]
+        for entry in DURATIONS:
+            sources.append(lift.rust_fn(entry,'animation duration',lift.lift(entry,0x20,ext=True)))
+        out.with_suffix('.rs').write_text('\n'.join(sources))
+        print(f'{len(cases)} duration cases and six isolated lifted bodies -> {out}')
+        return
     if a.identifiers:
         oracle=IdentifierOracle()
         cases=[oracle.run(i+1,*recipe) for i,recipe in enumerate(

@@ -235,3 +235,87 @@ Private vectors/logs: `native-L130/identifiers.json` and
 Record with `--identifiers`, benchmark with `--bench --identifiers`.
 Next: exact ports for six emulated animation-duration decoders; head owns
 combined native gate and same-scene gameplay comparison.
+
+## Worker hotspot: six emulated animation duration readers
+
+Whole ports for **112BB40, 112BB60, 112BB80, 112BBA0, 112BBC0 and
+112BBE0** are registered through `mtcore::hot::PORTS` / ddports. These
+entries lack Ghidra functions and existing generated bodies; source is the
+original instruction bytes, decoded with Capstone. The animation format
+table at 1441CF0 selects them. They load a u16, one of two u8 fields, or a
+packed high nibble, overwrite the argument slot, and execute FILD m32int.
+Partial CX/CL writes, untouched registers/flags and the x87 stack are retained.
+No executable bytes or table contents are committed.
+
+The recorder runs the original instructions and separately asks the existing
+lifter for **six isolated Rust bodies in private scratch**. It does not
+change the inventory, patterns, canonical project or generated shards.
+
+- **4,224 cases pass** for ports and isolated lifted bodies: all six
+  entries, boundary/random packed fields, every rounding mode, rotated TOP,
+  depth 0/3/7/8 and randomized GPR/XMM/flags. Exact written bytes, GPR/XMM,
+  defined arithmetic flags/DF, MXCSR, x87 CW/SW/tags and all eight extended
+  registers are checked. SHR >1's architecturally undefined AF/OF are
+  explicitly excluded; other functions retain their existing flag checks.
+- **3,168 valid-stack cases agree between Unicorn and host FILD.** The
+  **1,056 full-stack cases expose a Unicorn defect**: it overwrites ST0
+  rather than raising the masked stack fault and returning indefinite.
+  Both observations remain in the private vectors; the original FILD
+  instruction executed on hardware supplies those cases' x87 oracle.
+  FSAVE's reserved words are checked against the existing hardware contract.
+- All four isolated suites pass (6,632 total whole-function cases,
+  6,434 recorded call/return boundaries in the three calling functions).
+  Focused mtcore hot tests **4 pass / 4 benchmark ignores**, ddports **1
+  pass**, strict own-crate clippy passes. Earlier complete core suite
+  remains green. No shard or game run, no FPS/image claim.
+
+Before/after benchmark uses **the actual ddruntime Unicorn fallback** on
+GuestMemory, with only the six original leaf code bodies and synthetic
+data mapped. No game session or window. Runtime/base/port opt3, five
+alternating rounds, 20 warmups + 1,000 measured calls per body/round;
+same input restoration outside timing and full oracle gate before timing.
+The warmed pool is reused. Fresh synthetic CPUs explicitly release their
+x87 identities outside timing: otherwise the benchmark itself accumulates
+stale spill entries (initial exploratory timings were invalid and discarded).
+
+| Entry | Runtime fallback ns | Port ns | Speedup |
+|---|---:|---:|---:|
+| 112BB40 | 3,635.0 | 89.7 | 40.5x |
+| 112BB60 | 4,319.9 | 88.1 | 49.0x |
+| 112BB80 | 4,325.8 | 106.4 | 40.7x |
+| 112BBA0 | 3,665.1 | 91.5 | 40.1x |
+| 112BBC0 | 3,726.6 | 105.8 | 35.2x |
+| 112BBE0 | 3,681.7 | 105.1 | 35.0x |
+
+Isolated opt1 lifted/opt3 port medians are similar, **89..118 ns**; the
+benefit is removal of emulation, not a claim of faster native arithmetic.
+Microbenchmark memory is small; production fallback revalidation sees more
+pages. No claim about the amount of process memory released by these ports.
+
+**Expected share removed:** of 112D970's 73 nearest samples, **61 actually
+contain younger ddruntime::emu frames**: main12, workers12/36/1. Removing
+97..98% of that sampled cost suggests approximately **1.1 percentage
+points of main busy work**, **3.4/3.6/0.5 points** of worker busy work.
+This is conditional on the captured call mix and this benchmark; the
+one-sample worker estimate is especially weak. It is not a whole-frame
+or FPS prediction. Other emulated entries remain in c17's log: these ports
+remove the six animation paths, not all gameplay emulation.
+
+Reproduce: record `--durations`, ordinary `check_main_thread.py` for all
+original/lifted comparisons, `--bench --durations` for isolated native
+timing, and `--bench --emu` for actual runtime fallback versus port.
+The last option adds `ddruntime` with **default-features=false, emu only**
+to the private scratch crate; it never builds shards. Private vectors and
+lift output are `native-L130/durations.json` and `.rs`; final logs are
+`C:/ddda-targets/L130/durations-{final-differential,final-bench,final-runtime-bench,core,clippy,ddports}.log`.
+
+Head's additional executor request (#11667): coordinated read-only with
+claude-2/codex-7. Codex-7 isolated the failure to the process-global sink
+being installed by a concurrent test (#11689/#11691), not an apply-port
+merge regression. Agreed on a test-only mutex and RAII sink reset; codex-7
+owns that fix. L130 makes no mtdraw changes.
+
+Next action: head integrates the duration family, checks the six fallback
+log entries disappear, and captures the same scene/profile; codex-7 owns
+the combined gate and milestone file. Further ports should follow the
+new remaining exclusive costs, accounting for readable callees.

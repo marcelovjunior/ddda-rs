@@ -15,6 +15,12 @@ pub const PORTS: &[(u32, x86::LiftFn, u8)] = &[
     (0x00e0_ec50, expand_dependencies, 0xff),
     (0x0117_87c0, dispatch_geometry, 0xff),
     (0x00cd_8760, resolve_identifier, 0xff),
+    (0x0112_bb40, duration_u16, 0xff),
+    (0x0112_bb60, duration_u8_at3, 0xff),
+    (0x0112_bb80, duration_u8_at7, 0xff),
+    (0x0112_bba0, duration_high_nibble32, 0xff),
+    (0x0112_bbc0, duration_high_nibble16, 0xff),
+    (0x0112_bbe0, duration_high_nibble8, 0xff),
 ];
 
 // Translated from 0x011787c0 (DDDA.exe 2017-12-13 Steam).
@@ -254,6 +260,68 @@ pub fn resolve_identifier(m: &mut dyn Mem, c: &mut Cpu) {
     }
     c.ebp = ddnative_base::emit::pop(m, pt, c);
     c.ebx = ddnative_base::emit::pop(m, pt, c);
+    ret(c, 0);
+}
+
+/// Duration readers from the animation format table at 0x01441cf0.
+/// They overwrite the caller's argument slot and return an integer in ST0.
+/// These entries were absent from the function inventory and emulated in c17.
+macro_rules! duration_reader {
+    ($name:ident, $address:literal, $kind:expr) => {
+        #[doc = concat!("Translated from ", $address, " (DDDA.exe 2017-12-13 Steam).")]
+        pub fn $name(m: &mut dyn Mem, c: &mut Cpu) {
+            read_duration::<$kind>(m, c);
+        }
+    };
+}
+duration_reader!(duration_u16, "0x0112bb40", 0);
+duration_reader!(duration_u8_at3, "0x0112bb60", 1);
+duration_reader!(duration_u8_at7, "0x0112bb80", 2);
+duration_reader!(duration_high_nibble32, "0x0112bba0", 3);
+duration_reader!(duration_high_nibble16, "0x0112bbc0", 4);
+duration_reader!(duration_high_nibble8, "0x0112bbe0", 5);
+
+// Translated from 0x0112bb40/60/80/a0/c0/e0 (DDDA.exe 2017-12-13 Steam).
+fn read_duration<const KIND: u8>(m: &mut dyn Mem, c: &mut Cpu) {
+    let pt = m.page_table();
+    let slot = c.esp.wrapping_add(4);
+    c.eax = m.fast_u32(pt, slot);
+    let value = match KIND {
+        0 => {
+            c.ecx = m.fast_u16(pt, c.eax.wrapping_add(6)) as u32;
+            c.ecx
+        }
+        1 | 2 => {
+            c.ecx = m.fast_u8(pt, c.eax.wrapping_add(if KIND == 1 { 3 } else { 7 })) as u32;
+            c.ecx
+        }
+        3 => {
+            c.ecx = m.fast_u32(pt, c.eax) >> 28;
+            c.ecx
+        }
+        4 => {
+            let word = m.fast_u16(pt, c.eax.wrapping_add(4)) as u32;
+            c.ecx = (c.ecx & !0xffff) | (word >> 12);
+            c.fl = x86::Flags::new(x86::SHR, word, 12, word >> 12, 16);
+            c.edx = c.ecx & 0xffff;
+            c.edx
+        }
+        5 => {
+            let byte = m.fast_u8(pt, c.eax.wrapping_add(4)) as u32;
+            c.ecx = (c.ecx & !255) | (byte >> 4);
+            c.fl = x86::Flags::new(x86::SHR, byte, 4, byte >> 4, 8);
+            c.edx = c.ecx & 255;
+            c.edx
+        }
+        _ => unreachable!(),
+    };
+    m.fast_set_u32(pt, slot, value);
+    c.st.memory::<0x00db, 4, false>(m, slot); // FILD m32int.
+    if KIND == 3 {
+        // The logical shift proves nonnegative: the original's FADD arm
+        // after TEST/JNS cannot execute, but TEST's return flags remain.
+        c.fl.alu_and(c.ecx, c.ecx, 32);
+    }
     ret(c, 0);
 }
 
