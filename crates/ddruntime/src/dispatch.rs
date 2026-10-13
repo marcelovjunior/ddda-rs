@@ -207,7 +207,13 @@ impl Registry {
                 if let Some(&(_, original)) = bodies.iter().find(|(a, _)| *a == 0x00e1_2a20) {
                     let _ = ddports::mtcore::semantic::E12A20_ORIGINAL.set(original);
                     ports.retain(|p| p.0 != 0x00e1_2a20);
-                    ports.push((0x00e1_2a20, ddports::mtcore::semantic::shader_lookup));
+                    // L184 (s3): the fully inline lookup; it falls back to the one above
+                    let lookup: ddnative_base::x86::LiftFn = if std::env::var("DDRUNTIME_SEMANTIC_L184").as_deref() == Ok("1") {
+                        ddports::mtcore::semantic_s3::shader_lookup
+                    } else {
+                        ddports::mtcore::semantic::shader_lookup
+                    };
+                    ports.push((0x00e1_2a20, lookup));
                 }
             }
             // L179 experiment (never a default): DDRUNTIME_SKIP_STABLE_SHADOW=1
