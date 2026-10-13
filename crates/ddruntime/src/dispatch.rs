@@ -221,6 +221,12 @@ impl Registry {
                 ports.retain(|p| p.0 != 0x00ef_ef80);
                 ports.push((0x00ef_ef80, skip_stable_shadow as LiftFn));
             }
+            // s10: find_nearest_object falls back to the original body past 256 hits
+            if std::env::var("DDRUNTIME_SEMANTIC_L184").as_deref() == Ok("1") {
+                if let Some(&(_, original)) = ddnative::generated::lifted::bodies().iter().find(|(a, _)| *a == 0x0049_e920) {
+                    let _ = ddports::mtcore::semantic_s10::FIND_NEAREST_ORIGINAL.set(original);
+                }
+            }
             if crate::critical_jobs::enabled() {
                 crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
             }

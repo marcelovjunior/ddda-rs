@@ -124,15 +124,7 @@ pub fn prepare_model_palette(m: &mut dyn Mem, cpu: &mut Cpu) {
             if cpu.eax != 0 {
                 let count = p.u32(m, model + 0x360);
                 let transforms = p.u32(m, model + 0x364);
-                for i in 0..count {
-                    palette_matrix(
-                        m,
-                        p,
-                        matrices.wrapping_add(i.wrapping_mul(64)),
-                        transforms.wrapping_add(i.wrapping_mul(160)),
-                        cpu.eax.wrapping_add(i.wrapping_mul(48)),
-                    );
-                }
+                palette_matrices(m, p, count, matrices, transforms, cpu.eax);
                 let countdown = p.u32(m, model + 0xd80);
                 if countdown != 0 {
                     p.set_u32(m, model + 0xd80, countdown - 1);
@@ -206,25 +198,103 @@ pub fn prepare_model_palette(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.esp = sp.wrapping_add(8);
 }
 
+/// The palette loop of 0x00FFC9F0: for each of `count` joints, joint matrix
+/// `i` (64 bytes from `matrices`) times joint record `i` (0xA0 bytes from
+/// `transforms`) into the 48-byte palette entry `i` of `output`.
+pub fn palette_matrices(m: &mut dyn Mem, p: Pages, count: u32, matrices: u32, transforms: u32, output: u32) {
+    for i in 0..count {
+        palette_matrix(m, p, matrices.wrapping_add(i.wrapping_mul(64)), transforms.wrapping_add(i.wrapping_mul(160)), output.wrapping_add(i.wrapping_mul(48)));
+    }
+}
+
 /// 00FFCF30..00FFD2C0: matrix rows become palette columns. Load both inputs
 /// before any output store, preserving overlap within the current matrix.
 fn palette_matrix(m: &mut dyn Mem, p: Pages, joints: u32, transform: u32, output: u32) {
+    use ddnative_base::mem::{store_at, READ, WRITE};
+    // Fast path: the 64-byte joint matrix, the 64 bytes of transform rows
+    // and the 48-byte output each inside one page: one permission check per
+    // block instead of one per word, and the twelve dot products as three
+    // packed columns (see [`palette_block`]).
+    if let (Some(jp), Some(tp), Some(op)) = (p.bytes(joints, 64, READ), p.bytes(transform.wrapping_add(16), 64, READ), p.bytes(output, 48, WRITE)) {
+        // SAFETY: each pointer covers its block inside one backed page; every
+        // input is read before the first output word is stored.
+        unsafe {
+            let result = palette_block(jp, tp);
+            for i in [2, 0, 1, 3, 5, 6, 7, 4, 8, 9, 10, 11] {
+                store_at(op.add(4 * i), 4, result[i]);
+            }
+        }
+        return;
+    }
+    palette_matrix_reference(m, p, joints, transform, output)
+}
+
+/// The twelve palette words of one joint from the 4x4 joint matrix at `jp`
+/// (64 bytes) and the four transform rows at `tp` (3 used words of each
+/// 16-byte row): output word `column * 4 + row` is the scalar-SSE dot
+/// product `((a[row][0] * b[0][column] + a[row][1] * b[1][column]) +
+/// a[row][2] * b[2][column]) + a[row][3] * b[3][column]` with the original's
+/// operand order (the matrix element first, except in row 0's second term).
+/// The four rows of a column run as the four lanes of `mulps`/`addps`,
+/// which perform the same IEEE operations per lane under the live MXCSR,
+/// so results (and NaN payload selection, which prefers the first operand)
+/// are those of the scalar code.
+///
+/// # Safety
+/// `jp` and `tp` must point at 64 readable bytes each.
+#[cfg(target_arch = "x86_64")]
+unsafe fn palette_block(jp: *const u8, tp: *const u8) -> [u32; 12] {
+    use std::arch::x86_64::*;
+    unsafe {
+        let r0 = _mm_loadu_ps(jp as *const f32);
+        let r1 = _mm_loadu_ps(jp.add(16) as *const f32);
+        let r2 = _mm_loadu_ps(jp.add(32) as *const f32);
+        let r3 = _mm_loadu_ps(jp.add(48) as *const f32);
+        // transpose: column k of the joint matrix as (row0..row3)
+        let t0 = _mm_unpacklo_ps(r0, r1);
+        let t1 = _mm_unpacklo_ps(r2, r3);
+        let t2 = _mm_unpackhi_ps(r0, r1);
+        let t3 = _mm_unpackhi_ps(r2, r3);
+        let a0 = _mm_movelh_ps(t0, t1);
+        let a1 = _mm_movehl_ps(t1, t0);
+        let a2 = _mm_movelh_ps(t2, t3);
+        let a3 = _mm_movehl_ps(t3, t2);
+        let mut out = [0u32; 12];
+        for column in 0..3usize {
+            let broadcast = |i: usize| _mm_castsi128_ps(_mm_set1_epi32((tp.add(16 * i + 4 * column) as *const i32).read_unaligned()));
+            let (b0, b1, b2, b3) = (broadcast(0), broadcast(1), broadcast(2), broadcast(3));
+            // row 0 multiplies (b1, a[0][1]) in that order; the others (a[row][1], b1)
+            let left1 = _mm_move_ss(a1, b1);
+            let right1 = _mm_move_ss(b1, a1);
+            let mut accumulator = a0;
+            let mut second = left1;
+            let mut third = a2;
+            let mut fourth = a3;
+            std::arch::asm!(
+                "mulps {acc}, {r0}", "mulps {second}, {r1}", "addps {acc}, {second}",
+                "mulps {third}, {r2}", "addps {acc}, {third}",
+                "mulps {fourth}, {r3}", "addps {acc}, {fourth}",
+                acc = inout(xmm_reg) accumulator, second = inout(xmm_reg) second,
+                third = inout(xmm_reg) third, fourth = inout(xmm_reg) fourth,
+                r0 = in(xmm_reg) b0, r1 = in(xmm_reg) right1, r2 = in(xmm_reg) b2, r3 = in(xmm_reg) b3,
+                options(nostack, preserves_flags, pure, nomem));
+            _mm_storeu_ps(out.as_mut_ptr().add(4 * column) as *mut f32, accumulator);
+        }
+        out
+    }
+}
+
+/// The per-word version of [`palette_matrix`] (before the block fast path),
+/// kept for benchmarks and as a cross-check.
+#[doc(hidden)]
+pub fn palette_matrix_reference(m: &mut dyn Mem, p: Pages, joints: u32, transform: u32, output: u32) {
     let a: [u32; 16] = std::array::from_fn(|i| p.u32(m, joints + i as u32 * 4));
-    let b: [[u32; 3]; 4] = std::array::from_fn(|i| {
-        std::array::from_fn(|j| p.u32(m, transform + 16 + i as u32 * 16 + j as u32 * 4))
-    });
+    let b: [[u32; 3]; 4] = std::array::from_fn(|i| std::array::from_fn(|j| p.u32(m, transform + 16 + i as u32 * 16 + j as u32 * 4)));
     let mut result = [0; 12];
     for row in 0..4 {
         for column in 0..3 {
-            let (second_left, second_right) = if row == 0 {
-                (b[1][column], a[1])
-            } else {
-                (a[row * 4 + 1], b[1][column])
-            };
-            result[column * 4 + row] = palette_dot(
-                [a[row * 4], second_left, a[row * 4 + 2], a[row * 4 + 3]],
-                [b[0][column], second_right, b[2][column], b[3][column]],
-            );
+            let (second_left, second_right) = if row == 0 { (b[1][column], a[1]) } else { (a[row * 4 + 1], b[1][column]) };
+            result[column * 4 + row] = palette_dot([a[row * 4], second_left, a[row * 4 + 2], a[row * 4 + 3]], [b[0][column], second_right, b[2][column], b[3][column]]);
         }
     }
     for i in [2, 0, 1, 3, 5, 6, 7, 4, 8, 9, 10, 11] {
