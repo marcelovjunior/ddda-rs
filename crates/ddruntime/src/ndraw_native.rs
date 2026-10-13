@@ -1508,6 +1508,8 @@ pub struct Caches {
     /// the previous decided draw (none: a frame's start, or a command the
     /// default path applied came between)
     last: Option<LastDraw>,
+    /// a copy of the D3D dirty index and its generation (`reads_dirty`)
+    dirty: (u64, Vec<u32>),
     /// stream and target bindings by address, with the frame they were last
     /// built in (kept across frames: `kept_part`)
     streams: FxMap<u32, (u64, Result<Arc<StreamPart>, Refusal>)>,
@@ -2485,6 +2487,22 @@ impl Inner {
     }
 }
 
+/// Whether a resource `d` reads is dirty (L180): against a copy of the
+/// (small) dirty index taken at its current generation, without the D3D
+/// objects' lookup per draw; the index itself when it is large. With the
+/// D3D lock held (decide), so the generation and the copy are exact.
+fn reads_dirty(copy: &mut (u64, Vec<u32>), d: &DrawCall) -> bool {
+    let generation = crate::d3d9dev::dirty_generation();
+    if copy.0 != generation {
+        objects(|o| o.dirty.snapshot(&mut copy.1));
+        copy.0 = generation;
+    }
+    if copy.1.len() > 16 {
+        return objects(|o| reads_of(d).any(|r| o.dirty.contains(&r)));
+    }
+    !copy.1.is_empty() && reads_of(d).any(|r| copy.1.contains(&r))
+}
+
 /// Send the taken draws not sent yet, as one backend command.
 fn send_batch(batch: &mut Vec<DrawCall>) {
     if !batch.is_empty() {
@@ -2590,7 +2608,7 @@ impl Native {
                 // the draw reads is dirty: nothing to flush (the D3D lock
                 // keeps the dirty set as it is meanwhile; a count of 0, read
                 // without it, skips the lookup)
-                if crate::d3d9dev::dirty_count() != 0 && objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
+                if crate::d3d9dev::dirty_count() != 0 && reads_dirty(&mut g.caches.dirty, &d) {
                     send_batch(&mut g.batch);
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
                 }
