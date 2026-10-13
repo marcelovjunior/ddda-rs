@@ -1,5 +1,20 @@
 # Milestones
 
+### L162d sky-shadow critical callback attribution (2026-10-13)
+
+- Exact c31 h0 sky-shadow object: DB7620 -> EE2C90, uSkyStableShadow
+  vtable160DF98. One callback/frame, batch-last150/150; main27/worker123.
+  Main shadow solo0.965ms/frame is part of earlier all-main2.661ms figure.
+- c26vk admits24 main/129 worker shadow stacks. Stable-shadow traversal
+  EFDC70 -> EFD240 -> DB63E0 builds model/material commands; guest memory
+  helpers dominate sampled PCs, x87 only5/153. Counts are not self times.
+- Original DBE560 nesting guard forces serial inner traversal. Existing
+  parallel branch shares the active queue; no safe simple split established.
+  Four attribution/provenance tests pass; no game/GPU/build or speedup claim.
+- Family split posted to head: codex-7 FED480/EA5B50, codex-9 DB63E0/EFD240
+  and split proof, codex-11 FEE320 evaluation. Next: isolated original
+  oracles/microbenchmarks before one integration train. See L162 brief.
+
 ### L162c job distribution and host scheduling (2026-10-13)
 
 - c31 h0 150-frame census: main 65,186 callbacks, six workers
