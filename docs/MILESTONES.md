@@ -1,5 +1,19 @@
 # Milestones
 
+### L167 critical callbacks and exact shadow state save (2026-10-13)
+
+- Ranked 20,700 validated joins: sky-stable shadow EE2C90 leads at
+  3.905/3.651 ms solo overlap per frame; per-join IDs/durations retained.
+- Opt-in JOB_SHADOW_SAVE=1 ports whole FED480 state save with ordered
+  checked page accesses. 432 original returns, 68,200 paired fault/access
+  checks and serial/atomic production-memory replays pass. All 56 paired
+  helper samples improve, median 1.47–1.87x; no callback/FPS gain claimed.
+- Four isolated and four ranking tests pass; mtcore/ddports 20 pass,
+  nine ignored; light runtime 251 pass, zero fail, seven ignored.
+  Combined native gate and head image/per-job A/B pending.
+- Next: head train with this independent switch, then matched shadow-save
+  0/1 capture. Full evidence: `docs/tasks/L167-critical-callbacks.md`.
+
 ### L158 combo31 critical paths and next lookup leaves (2026-10-13)
 
 - Late hash=0/1 captures: 150 frames / 10,350 joins each; main joins

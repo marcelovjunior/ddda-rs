@@ -1511,6 +1511,20 @@ The combined ARC microbenchmark improves 4.1-13.6%; FAST=2 alone is mixed.
 Modern-library parity and actual loading/image/control acceptance remain
 unestablished. Sources, hashes, measurements and limits:
 [task L156](tasks/L156-inflate-fast.md).
+## L167 exact shadow callback state save
+
+`DDRUNTIME_JOB_SHADOW_SAVE=1` opts into the whole FED480 context state-save
+port. Its partial-save branch retains 81 ordered MOVSD-width accesses,
+DF, overlap, guest ABI, and install-supplied selection keys, while using
+checked `Pages` in the native port. The full-save branch delegates to the
+existing memcpy dispatch. No scheduler or callback work order changes.
+
+432 original returns, 68,200 paired fault/access positions, and both
+serial/atomic production-memory replays pass. Isolated helper speedup is
+1.47–1.87x median; combined native gate and head callback/image/FPS A/B
+remain pending. Default off. Per-join ranking and source/corpus details:
+[L167 results](tasks/L167-critical-callbacks.md).
+
 ## L162 job participant diagnostic
 
 `DDRUNTIME_JOB_PARTICIPANTS=1..8` invokes original `00DBD620` after sMain
