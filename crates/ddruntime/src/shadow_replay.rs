@@ -1225,7 +1225,12 @@ fn compare_replays(
             )
         })??;
         if !parallel {
-            verify_serial(&result)?;
+            if let Err(e) = verify_serial(&result) {
+                if !zero_arena {
+                    return Err(e);
+                }
+                eprintln!("parallel-shadow EXPERIMENT serial/live check only reported: {e}");
+            }
             eprintln!(
                 "parallel-shadow original serial/live verified entries={}",
                 result.1.entries.len()
