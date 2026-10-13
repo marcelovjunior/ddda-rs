@@ -133,3 +133,20 @@ the combo15 profile (E:/ddda-re/notes/runs/profile_c15b.txt):
   wake latency (our event wait: the workers show 7-12% self time in
   wait_for_single_object). Readable ports of the hottest jobs are the
   other lever. No game-visible change is needed for either.
+
+## L141: instanced draws in the sink (2026-10-13)
+
+- The sink takes executor types 2 and 3 (51f5cc0c): types 0 and 1's
+  DrawCall with the streams 0x00DAB480's frequency loops leave on the
+  device (instance data 0x80000001 at step * stride + offset, geometry
+  0x40000000 | instances). Oracle test: a type 3 DrawCall equals the
+  runtime D3D9 path's after the stream apply and those calls.
+- A taken one changes nothing on the device: the executor sets every
+  frequency back to 1 and the instance sources back to the stream apply's
+  after the draw. That holds only if nothing else sets frequencies. Static
+  check (DDDA.exe analysis copy): the only code with an instancing
+  immediate (0x80000001, or OR 0x40000000) within 256 bytes of a vtable
+  +0x198 (SetStreamSourceFreq) load is 0x00DAB875..0x00DABAB0, the
+  executor's own; 21 other sites have one without the other. A heuristic,
+  not a proof.
+- Not yet compared in game: needs `DDDRAW_NATIVE=verify` (0 mismatches).
