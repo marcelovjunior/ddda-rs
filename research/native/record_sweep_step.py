@@ -86,6 +86,7 @@ class Oracle:
         return [(address + i, b) for i, b in enumerate(data)]
 
     def code(self, uc, address, size, data):
+        self.insns += 1
         if address == h.RET:
             uc.emu_stop()
             return
@@ -169,7 +170,7 @@ class Oracle:
             for k in range(3):
                 put(base + 4 * k, fl())
         put(query + 0x14, rng.choice((fl(0, 3), 0.0, 1e-9)))
-        self.initial, self.written, self.events = {}, set(), []
+        self.initial, self.written, self.events, self.insns = {}, set(), [], 0
         esp = SP - 24 - 4 * rng.randrange(0, 8)
         reanchor = rng.choice((0, 1, 1)) | (rng.randrange(1 << 24) << 8 if rng.random() < 0.5 else 0)
         uc.mem_write(esp, struct.pack('<IIIIII', h.RET, pos, nxt, anchor, query, reanchor))
@@ -183,7 +184,7 @@ class Oracle:
         uc.emu_start(ENTRY, h.RET, count=400000)
         after = dict(regs=self.regs(), memory=[(a, self.uc.mem_read(a, 1)[0]) for a in sorted(self.written)])
         initial = sorted(self.initial.items())
-        return dict(seed=seed, before=before, initial=initial, events=self.events, after=after)
+        return dict(seed=seed, before=before, initial=initial, events=self.events, after=after, insns=self.insns)
 
 
 def main():
@@ -196,6 +197,7 @@ def main():
     for c in cases:
         for e in c['events']:
             kinds[hex(e['target'])] = kinds.get(hex(e['target']), 0) + 1
+    print('mean original instructions per call (incl. stub entries):', sum(c['insns'] for c in cases) / n)
     json.dump(dict(function='0x0079E200', cases=cases), open(out, 'w'))
     print(f'{n} cases, {calls} calls {kinds} -> {out}')
 

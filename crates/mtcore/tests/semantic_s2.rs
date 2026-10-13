@@ -224,3 +224,104 @@ fn semantic_sweep_step_matches_original() {
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none());
     eprintln!("{n} ABI-level sweep_step cases passed");
 }
+
+// Backed pages exercise the same fast accessor path as the parallel runtime.
+#[derive(Default)]
+struct Paged {
+    table: ddnative_base::mem::PageTable,
+}
+impl Mem for Paged {
+    fn page_table(&self) -> Option<std::ptr::NonNull<ddnative_base::mem::PageTable>> {
+        Some(std::ptr::NonNull::from(&self.table))
+    }
+    fn u8(&self, a: u32) -> u8 {
+        let p = self.table.page((a >> 12) as usize);
+        assert!(!p.is_null());
+        // SAFETY: this table owns the backed page for the lifetime of self.
+        unsafe { ddnative_base::mem::load_at(p.add((a & 4095) as usize), 1) as u8 }
+    }
+    fn set_u8(&mut self, a: u32, v: u8) {
+        let page = (a >> 12) as usize;
+        let p = self.table.backed_page(page);
+        self.table.set_perm(page, 3);
+        // SAFETY: this table owns the backed page and a is inside it.
+        unsafe {
+            ddnative_base::mem::store_at(p.add((a & 4095) as usize), 1, v as u32);
+        }
+    }
+}
+
+/// ns/call of a port over every recorded case (collision callees replayed
+/// from the recording, so their cost is a table lookup), and the mean
+/// number of instructions the original executes for the same cases.
+fn bench(path: &str, body: LiftFn, name: &str) {
+    use ddnative_base::x86;
+    use std::{cell::RefCell, rc::Rc};
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let cases = data["cases"].as_array().unwrap();
+    let mut m = Paged::default();
+    let mut total = std::time::Duration::ZERO;
+    let mut floor = std::time::Duration::ZERO;
+    let mut calls = 0u32;
+    let mut instructions = 0u64;
+    for round in 0..5 {
+        for case in cases {
+            for (a, b) in pairs(&case["initial"]) {
+                m.set_u8(a, b);
+            }
+            let before = regs(&case["before"]);
+            let mut c = Cpu::default();
+            [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = before;
+            // parsed outside the timed region
+            let trace: Rc<Vec<(Vec<(u32, u8)>, u32, u32)>> = Rc::new(
+                case["events"].as_array().unwrap().iter().map(|e| (pairs(&e["after"]["memory"]).into_iter().collect(), regs(&e["after"])[0], regs(&e["after"])[4])).collect(),
+            );
+            let cursor = Rc::new(RefCell::new(0usize));
+            let position = cursor.clone();
+            x86::set_ext_calls(Some(Box::new(move |m, c, _| {
+                let k = *position.borrow();
+                let (writes, eax, esp) = &trace[k];
+                for &(a, b) in writes {
+                    m.set_u8(a, b);
+                }
+                c.eax = *eax;
+                c.esp = *esp;
+                *position.borrow_mut() += 1;
+            })));
+            let start = std::time::Instant::now();
+            body(std::hint::black_box(&mut m), std::hint::black_box(&mut c));
+            let elapsed = start.elapsed();
+            // the same replayed callee calls without the port (the floor)
+            let events = case["events"].as_array().unwrap().len();
+            let mut c2 = Cpu::default();
+            [c2.eax, c2.ecx, c2.edx, c2.ebx, c2.esp, c2.ebp, c2.esi, c2.edi] = before;
+            *cursor.borrow_mut() = 0;
+            let start = std::time::Instant::now();
+            for _ in 0..events {
+                x86::call_ext(std::hint::black_box(&mut m), std::hint::black_box(&mut c2), 0);
+            }
+            let floor_time = start.elapsed();
+            if round > 0 {
+                total += elapsed;
+                floor += floor_time;
+                calls += 1;
+            }
+            instructions += case["insns"].as_u64().unwrap_or(0);
+        }
+    }
+    x86::set_ext_calls(None);
+    eprintln!(
+        "{name}: port {:.0} ns/call ({:.0} of it replaying the recorded callees) over {calls} calls; original executes {:.1} instructions/call (incl. stubbed callee entries)",
+        total.as_nanos() as f64 / f64::from(calls),
+        floor.as_nanos() as f64 / f64::from(calls),
+        instructions as f64 / (5 * cases.len()) as f64
+    );
+}
+
+#[test]
+#[ignore = "microbenchmark"]
+fn semantic_s2_cost() {
+    ddnative_host::install();
+    bench("E:/ddda-re/notes/native-L184/probe_segment.json", mtcore::semantic_s2::probe_segment, "probe_segment 0x00fac6f0");
+    bench("E:/ddda-re/notes/native-L184/sweep_step.json", mtcore::semantic_s2::sweep_step, "sweep_step 0x0079e200");
+}

@@ -85,6 +85,7 @@ class Oracle:
         return bits(r.choice((r.uniform(-50, 50), r.uniform(-1e6, 1e6), 0.0, -0.0, math.nan, math.inf, 1e-30)))
 
     def code(self, uc, address, size, data):
+        self.insns += 1
         if address == h.RET:
             uc.emu_stop()
             return
@@ -157,7 +158,7 @@ class Oracle:
             uc.mem_write(off, bits(rng.uniform(-3, 3)) if rng.random() < 0.7 else struct.pack('<I', rng.randrange(1 << 32)))
         uc.mem_write(QUERY + 0x94, struct.pack('<I', rng.randrange(1 << 32)))
         uc.mem_write(QUERY + 0x98, struct.pack('<I', rng.choice((0, HEAP, rng.randrange(1 << 32)))))
-        self.initial, self.written, self.events = {}, set(), []
+        self.initial, self.written, self.events, self.insns = {}, set(), [], 0
         esp = SP - 12 - 4 * rng.randrange(0, 8)
         uc.mem_write(esp, struct.pack('<III', h.RET, SEG, QUERY))
         start = [rng.randrange(1 << 32) for _ in range(8)]
@@ -169,7 +170,7 @@ class Oracle:
         uc.emu_start(ENTRY, h.RET, count=200000)
         after = dict(regs=self.regs(), memory=[(a, self.uc.mem_read(a, 1)[0]) for a in sorted(self.written)])
         initial = sorted(self.initial.items())
-        return dict(seed=seed, before=before, initial=initial, events=self.events, after=after)
+        return dict(seed=seed, before=before, initial=initial, events=self.events, after=after, insns=self.insns)
 
 
 def main():
@@ -179,6 +180,7 @@ def main():
     cases = [oracle.case(seed) for seed in range(n)]
     calls = sum(len(c['events']) for c in cases)
     nhit = sum(1 for c in cases if any(e['target'] == 0x00DE46F0 for e in c['events']))
+    print('mean original instructions per call (incl. stub entries):', sum(c['insns'] for c in cases) / n)
     json.dump(dict(function='0x00FAC6F0', cases=cases), open(out, 'w'))
     print(f'{n} cases, {calls} calls, {nhit} hit -> {out}')
 
