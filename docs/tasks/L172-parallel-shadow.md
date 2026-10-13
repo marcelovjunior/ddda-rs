@@ -155,8 +155,9 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
-Head capture run cap172 reached gameplay but produced zero files and zero
-parallel-shadow lines. Hook installation, first shadow entry, first scoped/
+Head corrected cap172 receipt (#14296): the build failed before launch on
+a Cargo feature merge conflict; the existing run log was stale. No capture
+run occurred. The head fixed the conflict and is rebuilding85868a8a. Hook installation, first shadow entry, first scoped/
 unscoped traversal and sample start now log explicitly to distinguish a
 missing environment switch from a routing/selection failure. Awaiting launch
 receipt and rerun. Pre-service full feature-light gate:277 passed,0 failed,

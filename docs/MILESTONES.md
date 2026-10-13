@@ -2,8 +2,9 @@
 
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
-- Head cap172 reached gameplay but returned zero captures/hook lines.
-  Added installation and entry diagnostics; launch receipt/rerun pending.
+- Head corrected cap172 receipt: a build merge conflict prevented launch;
+  prior log was stale. Fixed by head; rebuild/capture pending. Added
+  installation and entry diagnostics.
   Full feature-light before service addition277/0/7; final replay10PASS
   with and without feature. Next: diagnose missing hook activation.
 
