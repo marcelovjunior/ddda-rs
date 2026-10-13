@@ -33,6 +33,12 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
         ports.push((0x00efd240, mtcore::shadow_pass::setup));
     }
+    // L176: the nDraw material's parameter lookup (semantic ports,
+    // crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_MATERIAL").as_deref() == Ok("1") {
+        ports.push((0x0106_6590, mtdraw::material::find_parameter));
+        ports.push((0x0106_6b10, mtdraw::material::bind_parameter));
+    }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.
     if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") {
