@@ -16,7 +16,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicU64, Ordering::Relaxed},
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
     },
 };
 
@@ -31,11 +31,14 @@ const ACCESS_LIMIT: usize = 40_000_000;
 static ORIGINAL: OnceLock<[LiftFn; 3]> = OnceLock::new();
 static RAW: OnceLock<Arc<BTreeMap<u32, LiftFn>>> = OnceLock::new();
 static SAMPLE: AtomicU64 = AtomicU64::new(0);
+static CAPTURE_START: OnceLock<std::time::Instant> = OnceLock::new();
 #[path = "shadow_replay_file.rs"]
 mod capture_file;
 thread_local! {
     static IN_SHADOW: Cell<bool> = const { Cell::new(false) };
     static REPLAY: RefCell<Option<Rc<Replay>>> = const { RefCell::new(None) };
+    static UNRESOLVED: Cell<u32> = const { Cell::new(0) };
+    static COUNTER_CAPACITY_READ: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(crate) fn enabled() -> bool {
@@ -48,6 +51,7 @@ pub(crate) fn enabled() -> bool {
 }
 
 pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) {
+    CAPTURE_START.get_or_init(std::time::Instant::now);
     let originals = [SHADOW, TRAVERSE, SCHEDULE].map(|address| {
         ports
             .iter()
@@ -68,9 +72,10 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
         ports.push((address, body));
     }
     eprintln!(
-        "parallel-shadow installed capture=v2 first={} count={} dump={:?}",
+        "parallel-shadow installed capture=v3 first={} count={} after_ms={} dump={:?}",
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_FIRST").unwrap_or_else(|_| "0".into()),
         std::env::var("DDRUNTIME_PARALLEL_SHADOW_COUNT").unwrap_or_else(|_| "1".into()),
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_AFTER_MS").unwrap_or_else(|_| "0".into()),
         std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP")
     );
 }
@@ -120,7 +125,7 @@ impl Journal<'_> {
         }
     }
     fn page(&self, address: u32) {
-        if self.failure.get().is_some() || self.input.borrow().has_page(address) {
+        if self.input.borrow().has_page(address) {
             return;
         }
         let base = address & !4095;
@@ -140,9 +145,6 @@ impl Journal<'_> {
         self.input.borrow_mut().capture_page(self.live, base, permissions);
     }
     fn seed(&self, start: u32, length: u32) {
-        if self.failure.get().is_some() {
-            return;
-        }
         let Some(end) = start.checked_add(length) else {
             self.fail(start, "range overflow");
             return;
@@ -150,8 +152,11 @@ impl Journal<'_> {
         let mut page = start & !4095;
         while page < end {
             self.page(page);
-            if self.failure.get().is_some() {
-                eprintln!("parallel-shadow seed refusal stage={} start={start:#x} length={length:#x}", self.stage.get());
+            if !self.input.borrow().has_page(page) {
+                eprintln!(
+                    "parallel-shadow seed refusal stage={} start={start:#x} length={length:#x}",
+                    self.stage.get()
+                );
                 return;
             }
             page += 4096;
@@ -163,12 +168,13 @@ impl Journal<'_> {
         }
     }
     fn observed(&self, address: u32, bytes: &[u8], write: bool) {
-        if self.failure.get().is_some() {
-            return;
-        }
         let mut writes = self.writes.borrow_mut();
         for (offset, &value) in bytes.iter().enumerate() {
             let at = address.wrapping_add(offset as u32);
+            if !self.input.borrow().has_page(at) {
+                self.fail(at, "observed byte lacks initial captured page");
+                continue;
+            }
             if write {
                 if writes.len() == lanes::MAX_TRACKED_BYTES && !writes.contains_key(&at) {
                     self.fail(at, "tracked write limit");
@@ -229,6 +235,18 @@ impl Journal<'_> {
             self.fail(textures, "primitive texture size overflow");
         }
     }
+    fn seed_render_commands(&self, render: u32) {
+        // DA7D70 (DDDA.exe 2017-12-13 Steam): command allocation returns
+        // ring_base[ring_index] + old cursor when old+size < capacity.
+        // FED890 requests fresh pages for FED200's empty child cursors even
+        // when the serial parent fits inside its already allocated page.
+        self.stage.set("DA7D70 command arena");
+        let ring = self.u32(render.wrapping_add(0x33db8));
+        let slot = render.wrapping_add(0x33dc0).wrapping_add(ring.wrapping_mul(4));
+        let base = self.u32(slot);
+        let capacity = self.u32(render.wrapping_add(0x33dcc));
+        self.seed(base, capacity);
+    }
 }
 impl Mem for Journal<'_> {
     fn probe(&self, a: u32, n: u32, w: bool) -> Result<(), u32> {
@@ -282,15 +300,66 @@ impl Mem for Journal<'_> {
 
 #[derive(Clone)]
 struct PrivateMemory(Rc<RefCell<LaneMemory>>);
+fn reject_unsynchronized_counter_access(address: u32) {
+    let counter = REPLAY.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|replay| replay.command_counter.as_ref().map(|counter| counter.address))
+    });
+    if counter.is_some_and(|base| address.wrapping_sub(base) < 4) {
+        std::panic::panic_any(Reject::AtomicConflict(counter.unwrap()));
+    }
+}
 impl Mem for PrivateMemory {
     fn probe(&self, a: u32, n: u32, w: bool) -> Result<(), u32> {
         self.0.borrow().probe(a, n, w)
     }
     fn u8(&self, a: u32) -> u8 {
+        reject_unsynchronized_counter_access(a);
         self.0.borrow().u8(a)
     }
+    fn u32(&self, address: u32) -> u32 {
+        if COUNTER_CAPACITY_READ.with(Cell::get) {
+            let counter = current().command_counter.clone();
+            if let Some(counter) = counter.filter(|counter| counter.address == address) {
+                return *counter.value.lock().unwrap();
+            }
+        }
+        u32::from_le_bytes(std::array::from_fn(|offset| {
+            self.u8(address.wrapping_add(offset as u32))
+        }))
+    }
     fn set_u8(&mut self, a: u32, v: u8) {
+        reject_unsynchronized_counter_access(a);
         self.0.borrow_mut().set_u8(a, v);
+    }
+}
+/// A completed stream must not consume the temporary secondary sort arena.
+/// FED3B0 copies roots and nested arrays to the parent before returning.
+struct PublishedView<'a> {
+    memory: &'a dyn Mem,
+    private: Vec<Range<u32>>,
+}
+impl Mem for PublishedView<'_> {
+    fn probe(&self, a: u32, n: u32, w: bool) -> Result<(), u32> {
+        for range in &self.private {
+            for offset in 0..n {
+                let at = a.wrapping_add(offset);
+                if range.contains(&at) {
+                    return Err(at);
+                }
+            }
+        }
+        self.memory.probe(a, n, w)
+    }
+    fn u8(&self, a: u32) -> u8 {
+        if self.private.iter().any(|range| range.contains(&a)) {
+            std::panic::panic_any(Reject::PrivateOutputEscape(a));
+        }
+        self.memory.u8(a)
+    }
+    fn set_u8(&mut self, _: u32, _: u8) {
+        panic!("read-only published view");
     }
 }
 struct Replay {
@@ -299,13 +368,57 @@ struct Replay {
     stack: Range<u32>,
     lane_count: usize,
     depth: usize,
+    command_counter: Option<Arc<CommandCounter>>,
+}
+
+struct CommandCounter {
+    address: u32,
+    value: Mutex<u32>,
+}
+
+fn private_exchange_add(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let replay = current();
+    let address = crate::services::arg(m, cpu, 0);
+    if let Some(counter) = &replay.command_counter {
+        if address == counter.address {
+            // DA7D80 (DDDA.exe 2017-12-13 Steam) atomically claims bytes
+            // from sRender+33DC8. This mutex is confined to one replay batch;
+            // no live memory/OS service participates. Preserve fetch-add wrap
+            // and return-old semantics, including failed capacity requests.
+            let delta = crate::services::arg(m, cpu, 1);
+            let mut value = counter.value.lock().unwrap();
+            cpu.eax = *value;
+            *value = value.wrapping_add(delta);
+            crate::services::ret(m, cpu, 8);
+            return;
+        }
+    }
+    crate::win32::interlocked_exchange_add(m, cpu);
 }
 fn current() -> Rc<Replay> {
     REPLAY.with(|v| v.borrow().as_ref().expect("private replay scope").clone())
 }
+fn private_command_capacity(m: &mut dyn Mem, cpu: &mut Cpu) {
+    // Original DA7DB0 (DDDA.exe 2017-12-13 Steam), called by DB7620,
+    // checks capacity against cursor+headroom. Run the original body so all
+    // flags/registers remain exact; only its aligned counter load is shared.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            COUNTER_CAPACITY_READ.with(|permit| permit.set(self.0));
+        }
+    }
+    let _restore = Restore(COUNTER_CAPACITY_READ.with(|permit| permit.replace(true)));
+    let original = *current()
+        .raw
+        .get(&0x00da7db0)
+        .expect("original command capacity helper");
+    original(m, cpu);
+}
 fn resolve(target: u32) -> LiftFn {
     match target {
         SCHEDULE => private_schedule,
+        0x00da7db0 => private_command_capacity,
         crate::fastmem::MEMCPY => crate::fastmem::memcpy,
         crate::fastmem::MEMSET => crate::fastmem::memset,
         _ => {
@@ -316,7 +429,14 @@ fn resolve(target: u32) -> LiftFn {
             // Import slots referenced by 0107FB57/0107FBAE (DDDA.exe
             // 2017-12-13 Steam). Read the captured binding, never assume
             // a loader token number or invoke the live service registry.
-            for (slot, service) in [(0x0139d160, private_enter as LiftFn), (0x0139d164, private_leave)] {
+            // DA7D80 calls InterlockedExchangeAdd through this captured IAT slot.
+            // PrivateMemory has no page table: the existing service uses tracked
+            // Mem reads/writes, never a raw host atomic or live service state.
+            for (slot, service) in [
+                (0x0139d160, private_enter as LiftFn),
+                (0x0139d164, private_leave),
+                (0x0139d0a8, private_exchange_add),
+            ] {
                 if replay.memory.probe(slot, 4, false).is_ok()
                     && replay.memory.u32(slot) == target
                     && target != 0
@@ -324,9 +444,24 @@ fn resolve(target: u32) -> LiftFn {
                     return service;
                 }
             }
-            std::panic::panic_any(Reject::UnsupportedTarget(target))
+            UNRESOLVED.with(|slot| slot.set(target));
+            unsupported_call
         }
     }
+}
+
+fn unsupported_call(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let target = UNRESOLVED.with(Cell::get);
+    let caller = if m.probe(cpu.esp, 4, false).is_ok() {
+        m.u32(cpu.esp)
+    } else {
+        0
+    };
+    eprintln!(
+        "parallel-shadow unsupported target={target:#x} return={caller:#x} ecx={:#x} esp={:#x}",
+        cpu.ecx, cpu.esp
+    );
+    std::panic::panic_any(Reject::UnsupportedTarget(target));
 }
 
 /// Exact uncontended guest-memory contract of threads::{enter,leave}_critical_section.
@@ -426,6 +561,7 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
     let scheduler = cpu.ecx;
     let count = memory.u32(scheduler + 0x8c) as usize;
     let mode = memory.u32(cpu.esp + 4);
+    eprintln!("parallel-shadow private schedule mode={mode} jobs={count}");
     if mode == 0 || mode > 3 || count > 8192 {
         std::panic::panic_any(Reject::UnsupportedScheduler(mode));
     }
@@ -451,6 +587,15 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
     }
     memory.set_u32(scheduler + 0x90, 0);
     memory.set_u32(scheduler + 0x94, mode);
+    let command_counter = if memory.probe(0x018d08f4, 4, false).is_ok() && memory.u32(0x018d08f4) != 0 {
+        let address = memory.u32(0x018d08f4).wrapping_add(0x33dc8);
+        Some(Arc::new(CommandCounter {
+            address,
+            value: Mutex::new(memory.u32(address)),
+        }))
+    } else {
+        None
+    };
     let input = Arc::new(replay.memory.0.borrow().frozen());
     let mut incoming = cpu.clone();
     incoming.mxcsr.0 = x86::stmxcsr();
@@ -477,6 +622,7 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
                     stack: scratch.clone(),
                     lane_count: 1,
                     depth: 1,
+                    command_counter: command_counter.clone(),
                 },
                 |m| {
                     let context = m.u32(scheduler + 0x1bdd0 + lane as u32 * 0x20);
@@ -527,8 +673,20 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
         },
     )
     .unwrap_or_else(|error| std::panic::panic_any(error));
+    if let Some(counter) = &command_counter {
+        let end = counter
+            .address
+            .checked_add(4)
+            .unwrap_or_else(|| std::panic::panic_any(Reject::AtomicConflict(counter.address)));
+        if results.iter().any(|lane| lane.touches(counter.address..end)) {
+            std::panic::panic_any(Reject::AtomicConflict(counter.address));
+        }
+    }
     lanes::merge(&input, &results, &[scratch.clone()]).unwrap_or_else(|error| std::panic::panic_any(error));
     replay.memory.0.borrow_mut().absorb(&results, scratch);
+    if let Some(counter) = &command_counter {
+        memory.set_u32(counter.address, *counter.value.lock().unwrap());
+    }
     if multiple {
         memory.set_u8(NESTING, nesting[0]);
         memory.set_u8(NESTING_OTHER, nesting[1]);
@@ -548,6 +706,16 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     if !IN_SHADOW.with(Cell::get) {
         static OUTSIDE: std::sync::Once = std::sync::Once::new();
         OUTSIDE.call_once(|| eprintln!("parallel-shadow traversal outside shadow scope"));
+        return original(memory, cpu);
+    }
+    let after_ms = std::env::var("DDRUNTIME_PARALLEL_SHADOW_AFTER_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    if CAPTURE_START
+        .get()
+        .is_some_and(|start| start.elapsed().as_millis() < u128::from(after_ms))
+    {
         return original(memory, cpu);
     }
     let index = SAMPLE.fetch_add(1, Relaxed);
@@ -578,7 +746,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         stage: Cell::new("inline recording lanes"),
     };
     // Source: DB63E0's eight inline contexts and DBE560's scheduler fields.
-    journal.seed(incoming.ecx + 0xd40, 8 * LANE_BYTES);
+    journal.seed(incoming.ecx, 0xd40 + 8 * LANE_BYTES);
     journal.stage.set("scheduler");
     let scheduler = journal.u32(SCHEDULER_GLOBAL);
     journal.seed(scheduler, 0x1c150);
@@ -594,7 +762,22 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         journal.stage.set("primary entry arena");
         journal.seed(journal.u32(context + 0x44), capacity);
         journal.stage.set("secondary entry arena");
-        journal.seed(journal.u32(context + 0x54), capacity);
+        // FED200 deliberately sets a child lane's +54 to null. It is not
+        // serial input; a nested parallel replay supplies private sort storage.
+        let secondary = journal.u32(context + 0x54);
+        if secondary != 0 {
+            journal.seed(secondary, capacity);
+        }
+        // Parallel FED200 alone reads these frame-ring/shader headers. The
+        // values stay install/runtime data, never inferred from other lanes.
+        journal.stage.set("FED200 renderer metadata");
+        let render = journal.u32(0x018d08f4);
+        journal.seed(render.wrapping_add(0x33dbc), 4);
+        journal.seed(render.wrapping_add(0x433dec), 0x20);
+        journal.seed_render_commands(render);
+        journal.stage.set("FED200 shader metadata");
+        let shader = journal.u32(0x018d12cc);
+        journal.seed(shader.wrapping_add(0x24), 0x1c);
         journal.seed_primitives();
     }));
     if preseed.is_err() {
@@ -621,56 +804,56 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         capture_context(&journal, context, Limits::default())
     }));
-    let result = if let Some(failure) = journal.failure.get() {
-        Err(format!("incomplete/incoherent capture: {failure:#x?}"))
-    } else if let Ok(Ok(observed)) = observed {
-        let input = Arc::new(journal.input.into_inner());
-        let writes = journal.writes.into_inner();
-        if let Some(directory) = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP") {
-            let save = || -> std::io::Result<()> {
-                let directory = std::path::PathBuf::from(directory);
-                std::fs::create_dir_all(&directory)?;
-                let path = directory.join(format!("shadow-{}-{index}.ddshadow", std::process::id()));
-                let file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)?;
-                let mut file = std::io::BufWriter::new(file);
-                capture_file::Fixture {
-                    input: input.clone(),
-                    incoming: incoming.clone(),
-                    outgoing: outgoing.clone(),
-                    mxcsr,
-                    result_mxcsr,
-                    context,
-                    scheduler,
-                    stack: stack.clone(),
-                    writes: writes.clone(),
-                }
-                .write(&mut file)?;
-                std::io::Write::flush(&mut file)?;
-                eprintln!("parallel-shadow capture={}", path.display());
-                Ok(())
-            };
-            if let Err(error) = save() {
-                eprintln!("parallel-shadow capture failed: {error}");
+    let rejection = journal
+        .failure
+        .get()
+        .map(|failure| format!("incomplete/incoherent capture: {failure:#x?}"))
+        .or_else(|| {
+            if matches!(observed, Ok(Ok(_))) {
+                None
+            } else {
+                Some("serial stream capture refused".into())
             }
+        });
+    let fixture = capture_file::Fixture {
+        input: Arc::new(journal.input.into_inner()),
+        incoming,
+        outgoing,
+        mxcsr,
+        result_mxcsr,
+        context,
+        scheduler,
+        stack,
+        writes: journal.writes.into_inner(),
+        rejection,
+    };
+    if let Some(directory) = std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DUMP") {
+        let save = || -> std::io::Result<()> {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory)?;
+            let path = directory.join(format!("shadow-{}-{index}.ddshadow", std::process::id()));
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)?;
+            let mut file = std::io::BufWriter::new(file);
+            fixture.write(&mut file)?;
+            std::io::Write::flush(&mut file)?;
+            eprintln!(
+                "parallel-shadow capture={} rejected={}",
+                path.display(),
+                fixture.rejection.is_some()
+            );
+            Ok(())
+        };
+        if let Err(error) = save() {
+            eprintln!("parallel-shadow capture failed: {error}");
         }
-        compare_replays(
-            input,
-            incoming,
-            outgoing,
-            mxcsr,
-            result_mxcsr,
-            context,
-            scheduler,
-            stack,
-            observed,
-            writes,
-            RAW.get().unwrap().clone(),
-        )
+    }
+    let result = if let Some(reason) = &fixture.rejection {
+        Err(reason.clone())
     } else {
-        Err("serial stream capture refused".into())
+        replay_fixture(fixture, RAW.get().unwrap().clone())
     };
     eprintln!("parallel-shadow sample={index} audit={result:?} publish=serial");
     x86::ldmxcsr(result_mxcsr);
@@ -687,23 +870,50 @@ pub fn replay_file(path: &std::path::Path) -> Result<usize, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let fixture =
         capture_file::Fixture::read(&mut std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
-    let final_input = fixture.input.with_writes(&fixture.writes);
-    let observed = capture_context(&final_input, fixture.context, Limits::default())
-        .map_err(|e| format!("recorded stream: {e:?}"))?;
-    compare_replays(
-        fixture.input,
-        fixture.incoming,
-        fixture.outgoing,
-        fixture.mxcsr,
-        fixture.result_mxcsr,
-        fixture.context,
-        fixture.scheduler,
-        fixture.stack,
-        observed,
-        fixture.writes,
-        RAW.get().unwrap().clone(),
-    )
+    replay_fixture(fixture, RAW.get().unwrap().clone())
 }
+
+fn replay_fixture(fixture: capture_file::Fixture, raw: Arc<BTreeMap<u32, LiftFn>>) -> Result<usize, String> {
+    let rejection = fixture.rejection.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let final_input = fixture.input.with_writes(&fixture.writes);
+        let observed = capture_context(&final_input, fixture.context, Limits::default())
+            .map_err(|e| format!("recorded stream: {e:?}"))?;
+        compare_replays(
+            fixture.input,
+            fixture.incoming,
+            fixture.outgoing,
+            fixture.mxcsr,
+            fixture.result_mxcsr,
+            fixture.context,
+            fixture.scheduler,
+            fixture.stack,
+            observed,
+            fixture.writes,
+            raw,
+        )
+    }))
+    .unwrap_or_else(|payload| {
+        Err(payload.downcast_ref::<Reject>().map_or_else(
+            || "recorded input panic".into(),
+            |reason| format!("recorded input: {reason:#x?}"),
+        ))
+    });
+    match rejection {
+        Some(reason) => Err(format!(
+            "REJECTED capture ({reason}); diagnostic replay only: {result:?}"
+        )),
+        None => result,
+    }
+}
+
+type ReplayResult = (
+    Cpu,
+    mtcore::shadow_lanes::StreamSnapshot,
+    BTreeMap<u32, u8>,
+    u32,
+    Vec<Range<u32>>,
+);
 
 fn compare_replays(
     input: Arc<Snapshot>,
@@ -718,6 +928,41 @@ fn compare_replays(
     observed_writes: BTreeMap<u32, u8>,
     raw: Arc<BTreeMap<u32, LiftFn>>,
 ) -> Result<usize, String> {
+    if input.u32(SCHEDULER_GLOBAL) != scheduler {
+        return Err("capture scheduler pointer disagrees with recorded memory".into());
+    }
+    let abi = |c: &Cpu| [c.eax, c.ebx, c.esi, c.edi, c.ebp, c.esp];
+    let scratch = stack.start..outgoing.esp;
+    let verify_serial = |result: &ReplayResult| -> Result<(), String> {
+        if abi(&result.0) != abi(&outgoing) {
+            return Err("original serial replay ABI differs from live serial".into());
+        }
+        compare_control_state(&outgoing, result_mxcsr, &result.0, result.3)
+            .map_err(|field| format!("live/original serial replay {field} mismatch"))?;
+        if observed.first_difference(&result.1).is_some() {
+            return Err("original serial replay stream differs from live serial".into());
+        }
+        for address in observed_writes.keys().chain(result.2.keys()) {
+            if scratch.contains(address) {
+                continue;
+            }
+            let a = observed_writes
+                .get(address)
+                .copied()
+                .unwrap_or_else(|| input.u8(*address));
+            let b = result
+                .2
+                .get(address)
+                .copied()
+                .unwrap_or_else(|| input.u8(*address));
+            if a != b {
+                return Err(format!(
+                    "live/original serial replay memory mismatch at {address:#x}: live={a:#04x} replay={b:#04x}"
+                ));
+            }
+        }
+        Ok(())
+    };
     let mut results = Vec::new();
     for parallel in [false, true] {
         let (input, raw, mut cpu, stack) = (input.clone(), raw.clone(), incoming.clone(), stack.clone());
@@ -725,6 +970,51 @@ fn compare_replays(
             .name(format!("shadow-replay-{parallel}"))
             .stack_size(64 << 20)
             .spawn(move || {
+                let mut private_ranges = Vec::new();
+                let input = if parallel {
+                    // DB63E0 reads the manager's category flags/masks and uses
+                    // its eight inline contexts. A nested caller can itself be
+                    // one of those contexts; FED200 must not overwrite it.
+                    // Retarget only this method's manager, preserving the root
+                    // context argument and every original object/list pointer.
+                    let (copy, range) = input
+                        .private_copy(cpu.ecx, 0xd40 + 8 * LANE_BYTES)
+                        .map_err(|error| format!("private recording manager: {error:?}"))?;
+                    cpu.ecx = range.start;
+                    private_ranges.push(range);
+                    Arc::new(copy)
+                } else {
+                    input
+                };
+                // DB63E0 and the primitive callbacks find their queue through
+                // 018D0B28. The outer queue is still active during this nested
+                // traversal: redirect it only inside this private transaction.
+                // DBE560/DBD8D0 access fields through +1C14C (captured below).
+                let (input, private_scheduler) = if parallel {
+                    let (copy, range) = input
+                        .private_copy(scheduler, 0x1c150)
+                        .map_err(|error| format!("private scheduler: {error:?}"))?;
+                    let base = range.start;
+                    private_ranges.push(range);
+                    (Arc::new(copy), base)
+                } else {
+                    (input, scheduler)
+                };
+                let (input, arena) = if parallel && input.u32(context + 0x54) == 0 {
+                    let size = input
+                        .u32(context + 0x4c)
+                        .checked_mul(8)
+                        .ok_or_else(|| "secondary arena size overflow".to_string())?;
+                    let (extended, range) = input
+                        .private_arena(size)
+                        .map_err(|error| format!("private secondary arena: {error:?}"))?;
+                    (Arc::new(extended), Some(range))
+                } else {
+                    (input, None)
+                };
+                if let Some(range) = &arena {
+                    private_ranges.push(range.clone());
+                }
                 let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(input, ACCESS_LIMIT))));
                 with_replay(
                     Replay {
@@ -733,24 +1023,47 @@ fn compare_replays(
                         stack,
                         lane_count: if parallel { 2 } else { 1 },
                         depth: 0,
+                        command_counter: None,
                     },
                     |m| {
+                        let nesting = [m.u8(NESTING), m.u8(NESTING_OTHER)];
                         if parallel {
+                            if let Some(range) = &arena {
+                                m.set_u32(context + 0x54, range.start);
+                            }
                             m.set_u8(NESTING, 0);
                             m.set_u8(NESTING_OTHER, 0);
-                            m.set_u32(scheduler + 0x98, 2);
-                            m.set_u32(scheduler + 0x8c, 0);
-                            m.set_u32(scheduler + 0x1c14c, 0);
+                            m.set_u32(SCHEDULER_GLOBAL, private_scheduler);
+                            m.set_u32(private_scheduler + 0x98, 2);
+                            m.set_u32(private_scheduler + 0x8c, 0);
+                            m.set_u32(private_scheduler + 0x1c14c, 0);
                         }
                         x86::ldmxcsr(mxcsr);
                         resolve(TRAVERSE)(m, &mut cpu);
                         let final_mxcsr = x86::stmxcsr();
                         ddnative_base::x87::park();
                         x86::ldmxcsr(x86::MXCSR_DEFAULT);
-                        let stream = capture_context(m, context, Limits::default())
+                        if parallel {
+                            if [m.u8(NESTING), m.u8(NESTING_OTHER)] != [0, 0]
+                                || m.u32(SCHEDULER_GLOBAL) != private_scheduler
+                            {
+                                return Err("private scheduler scope was not balanced".into());
+                            }
+                            m.set_u32(SCHEDULER_GLOBAL, scheduler);
+                            m.set_u8(NESTING, nesting[0]);
+                            m.set_u8(NESTING_OTHER, nesting[1]);
+                        }
+                        if arena.is_some() {
+                            m.set_u32(context + 0x54, 0);
+                        }
+                        let published = PublishedView {
+                            memory: m,
+                            private: private_ranges.clone(),
+                        };
+                        let stream = capture_context(&published, context, Limits::default())
                             .map_err(|e| format!("stream: {e:?}"))?;
                         let writes = memory.0.borrow().writes().clone();
-                        Ok::<_, String>((cpu.clone(), stream, writes, final_mxcsr))
+                        Ok::<_, String>((cpu.clone(), stream, writes, final_mxcsr, private_ranges.clone()))
                     },
                 )
             })
@@ -761,44 +1074,40 @@ fn compare_replays(
                 |e| format!("replay rejected: {e:?}"),
             )
         })??;
+        if !parallel {
+            verify_serial(&result)?;
+            eprintln!(
+                "parallel-shadow original serial/live verified entries={}",
+                result.1.entries.len()
+            );
+        }
         results.push(result);
     }
-    let abi = |c: &Cpu| [c.eax, c.ebx, c.esi, c.edi, c.ebp, c.esp];
-    if abi(&results[0].0) != abi(&outgoing) {
-        return Err("original serial replay ABI differs from live serial".into());
-    }
-    compare_control_state(&outgoing, result_mxcsr, &results[0].0, results[0].3)
-        .map_err(|field| format!("live/original serial replay {field} mismatch"))?;
-    if observed.first_difference(&results[0].1).is_some() {
-        return Err("original serial replay stream differs from live serial".into());
-    }
-    let scratch = stack.start..outgoing.esp;
-    for address in observed_writes.keys().chain(results[0].2.keys()) {
-        if scratch.contains(address) {
-            continue;
-        }
-        let a = observed_writes
-            .get(address)
-            .copied()
-            .unwrap_or_else(|| input.u8(*address));
-        let b = results[0]
-            .2
-            .get(address)
-            .copied()
-            .unwrap_or_else(|| input.u8(*address));
-        if a != b {
-            return Err(format!(
-                "live/original serial replay memory mismatch at {address:#x}"
-            ));
-        }
-    }
     if let Some(diff) = results[0].1.first_difference(&results[1].1) {
-        return Err(format!("serial/parallel stream mismatch: {diff:?}"));
+        fn header(stream: &mtcore::shadow_lanes::StreamSnapshot, path: &[usize]) -> Option<(u32, u32)> {
+            let mut entries = &stream.entries;
+            for (depth, &index) in path.iter().enumerate() {
+                let entry = entries.get(index)?;
+                if depth + 1 == path.len() {
+                    return Some((entry.key, entry.record.header));
+                }
+                entries = &entry.record.children;
+            }
+            None
+        }
+        return Err(format!(
+            "serial/parallel stream mismatch: {diff:?}; key/header serial={:#x?} parallel={:#x?}; entries={}/{}",
+            header(&results[0].1, &diff.path), header(&results[1].1, &diff.path),
+            results[0].1.entries.len(), results[1].1.entries.len(),
+        ));
     }
     // Conservative proof gate: no differing memory accepted yet. Private
     // scheduler/context relocation classification needs separate evidence.
     for address in results[0].2.keys().chain(results[1].2.keys()) {
-        if scratch.contains(address) {
+        // Only newly allocated private sort storage is discarded. FED3B0's
+        // consumed roots/children must already be outside it (PublishedView),
+        // and the complete stream comparison above must have passed.
+        if scratch.contains(address) || results[1].4.iter().any(|range| range.contains(address)) {
             continue;
         }
         let a = results[0]
@@ -813,7 +1122,7 @@ fn compare_replays(
             .unwrap_or_else(|| input.u8(*address));
         if a != b {
             return Err(format!(
-                "streams matched {} entries; serial/parallel memory mismatch at {address:#x}",
+                "streams matched {} entries; serial/parallel memory mismatch at {address:#x}: serial={a:#04x} parallel={b:#04x}",
                 observed.entries.len()
             ));
         }
@@ -823,8 +1132,8 @@ fn compare_replays(
     }
     compare_control_state(&results[0].0, results[0].3, &results[1].0, results[1].3)
         .map_err(|field| format!("serial/parallel {field} mismatch"))?;
-    if observed.entries.is_empty() {
-        return Err("empty stream is not shadow acceptance".into());
+    if observed.entries.len() <= input.u32(context + 0x48) as usize {
+        return Err("traversal appended no commands; existing stream is not shadow acceptance".into());
     }
     Ok(observed.entries.len())
 }
@@ -853,6 +1162,53 @@ fn compare_control_state(a: &Cpu, a_mxcsr: u32, b: &Cpu, b_mxcsr: u32) -> Result
 mod tests {
     use super::*;
     use crate::memory::{GuestMemory, READ, WRITE};
+
+    #[test]
+    fn merged_stream_must_not_retain_private_secondary_storage() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, 0x2000, READ | WRITE).unwrap();
+        live.set_u32(0x1048, 1);
+        live.set_u32(0x2100, 7 << 16);
+        live.set_u32(0x2104, 42);
+        live.set_u32(0x2108, 1);
+        let mut input = Snapshot::default();
+        for page in [0x1000, 0x2000] {
+            input.capture_page(&live, page, READ | WRITE);
+        }
+        let (input, range) = input.private_arena(8).unwrap();
+        let mut memory = LaneMemory::new(Arc::new(input), 10000);
+        memory.set_u32(0x1044, range.start);
+        memory.set_u32(range.start, 5);
+        memory.set_u32(range.start + 4, 0x2100);
+        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            capture_context(
+                &PublishedView {
+                    memory: &memory,
+                    private: vec![range.clone()],
+                },
+                0x1000,
+                Limits::default(),
+            )
+        }));
+        assert_eq!(
+            rejected.unwrap_err().downcast_ref::<Reject>(),
+            Some(&Reject::PrivateOutputEscape(range.start))
+        );
+        memory.set_u32(0x2000, memory.u32(range.start));
+        memory.set_u32(0x2004, memory.u32(range.start + 4));
+        memory.set_u32(0x1044, 0x2000);
+        let stream = capture_context(
+            &PublishedView {
+                memory: &memory,
+                private: vec![range],
+            },
+            0x1000,
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(stream.entries.len(), 1);
+        assert_eq!(stream.entries[0].key, 5);
+    }
 
     #[test]
     fn private_sections_match_runtime_recursive_guest_memory_contract() {
@@ -942,6 +1298,8 @@ mod tests {
         let teb = crate::seh::initialize_teb(&mut live, crate::services::MAIN_THREAD_ID, 0x1000, 0x2000);
         live.set_u32(0x0139d160, 0x7ff01230);
         live.set_u32(0x0139d164, 0x7ff04560);
+        live.set_u32(0x0139d0a8, 0x7ff07890);
+        live.set_u32(0x1300, u32::MAX - 2);
         live.set_u32(0x1104, u32::MAX);
         live.set_u32(0x1804, 0x1100);
         let mut input = Snapshot::default();
@@ -955,6 +1313,7 @@ mod tests {
             stack: 0x1000..0x2000,
             lane_count: 1,
             depth: 0,
+            command_counter: None,
         };
         with_replay(replay, |m| {
             for (target, recursion) in [(0x7ff01230, 1), (0x7ff01230, 2), (0x7ff04560, 1), (0x7ff04560, 0)] {
@@ -968,6 +1327,20 @@ mod tests {
                 assert_eq!(m.u32(0x1108), recursion);
                 assert_eq!(live.u32(0x1108), 0);
             }
+            m.set_u32(0x1804, 0x1300);
+            m.set_u32(0x1808, 7);
+            let mut cpu = Cpu {
+                esp: 0x1800,
+                ebx: 42,
+                ..Cpu::default()
+            };
+            assert!((m as &mut dyn Mem).atomic_u32(0x1300).is_none());
+            x86::call_ext(m, &mut cpu, 0x7ff07890);
+            assert_eq!(cpu.eax, u32::MAX - 2);
+            assert_eq!(cpu.esp, 0x180c);
+            assert_eq!(cpu.ebx, 42);
+            assert_eq!(m.u32(0x1300), 4);
+            assert_eq!(live.u32(0x1300), u32::MAX - 2);
         });
         assert_eq!(memory.u32(0x1104), u32::MAX);
         assert_eq!(memory.u32(0x110c), 0);
@@ -993,9 +1366,13 @@ mod tests {
                 ..Cpu::default()
             };
             private_enter(m, &mut cpu);
-            let allocated = m.u32(0x1300);
-            m.set_u32(0x1300, allocated + 16);
             cpu.esp = 0x1800;
+            m.set_u32(0x1804, 0x1300);
+            m.set_u32(0x1808, 16);
+            crate::win32::interlocked_exchange_add(m, &mut cpu);
+            let allocated = cpu.eax;
+            cpu.esp = 0x1800;
+            m.set_u32(0x1804, 0x1100);
             private_leave(m, &mut cpu);
             allocated
         })
@@ -1029,19 +1406,34 @@ mod tests {
 
     fn synthetic_traverse(m: &mut dyn Mem, cpu: &mut Cpu) {
         let parallel = current().lane_count > 1;
-        cpu.ecx = 0x40000;
-        m.set_u32(0x4008c, 4);
-        push(m, cpu, 1);
-        push(m, cpu, 0x1234);
-        private_schedule(m, cpu);
+        assert_eq!(m.u32(cpu.ecx + 0x20), 0x12345678);
+        if parallel {
+            assert_ne!(cpu.ecx, 0x200000);
+            m.set_u8(cpu.ecx + 0xd40 + LANE_BYTES, 99);
+        }
+        if parallel {
+            cpu.ecx = m.u32(SCHEDULER_GLOBAL);
+            assert_ne!(cpu.ecx, 0x40000);
+            m.set_u32(cpu.ecx + 0x8c, 4);
+            push(m, cpu, 1);
+            push(m, cpu, 0x1234);
+            private_schedule(m, cpu);
+        } else {
+            for job in 0..4 {
+                cpu.ecx = 0x3000 + job * 16;
+                push(m, cpu, 0x7000);
+                push(m, cpu, 0x1234);
+                synthetic_job(m, cpu);
+            }
+        }
         m.set_u32(0x1048, 4);
-        // Synthetic fixture's own postcondition, not a game-state exclusion.
-        m.set_u8(NESTING, 1);
-        m.set_u8(NESTING_OTHER, 1);
         if parallel {
             match m.u32(0x1010) {
                 3 => x86::ldmxcsr(0x3f80),
                 4 => resolve(0x12345678)(m, cpu),
+                5 => m.set_u8(NESTING, 1),
+                6 => m.set_u32(SCHEDULER_GLOBAL, 0x40000),
+                7 => m.set_u32(0x2004, m.u32(SCHEDULER_GLOBAL)),
                 _ => {}
             }
         }
@@ -1059,12 +1451,15 @@ mod tests {
             (0x40000, 0x1d000),
             (0x80000, 0x2000),
             (0x18d0000, 0x2000),
+            (0x200000, 0x1a0000),
         ];
         for (base, len) in ranges {
             live.map(base, len, READ | WRITE).unwrap();
         }
         live.set_u32(0x1010, mutation);
+        live.set_u32(0x200020, 0x12345678);
         live.set_u32(0x1044, 0x2000);
+        live.set_u32(0x104c, 16);
         live.set_u32(SCHEDULER_GLOBAL, 0x40000);
         live.set_u8(NESTING, 1);
         live.set_u8(NESTING_OTHER, 1);
@@ -1096,11 +1491,12 @@ mod tests {
             }
             expected.set_u8(0x1400 + job, 1);
         }
-        for (address, value) in [(0x1048, 4), (0x4008c, 0), (0x40090, 4), (0x40094, 1)] {
+        for (address, value) in [(0x1048, 4)] {
             expected.set_u32(address, value);
         }
         let incoming = Cpu {
             esp: 0x81000,
+            ecx: 0x200000,
             ..Cpu::default()
         };
         let outgoing = Cpu {
@@ -1117,6 +1513,7 @@ mod tests {
             scheduler: 0x40000,
             stack: 0x80000..0x82000,
             writes: expected.writes().clone(),
+            rejection: None,
         }
     }
 
@@ -1128,28 +1525,16 @@ mod tests {
             (2, Some("memory mismatch")),
             (3, Some("MXCSR mismatch")),
             (4, Some("UnsupportedTarget")),
+            (5, Some("scheduler scope was not balanced")),
+            (6, Some("scheduler scope was not balanced")),
+            (7, Some("PrivateOutputEscape")),
         ] {
             let fixture = synthetic_fixture(mutation);
             let mut bytes = Vec::new();
             fixture.write(&mut bytes).unwrap();
             let fixture = capture_file::Fixture::read(&mut &bytes[..]).unwrap();
-            let observed = capture_context(
-                &fixture.input.with_writes(&fixture.writes),
-                fixture.context,
-                Limits::default(),
-            )
-            .unwrap();
-            let result = compare_replays(
-                fixture.input,
-                fixture.incoming,
-                fixture.outgoing,
-                fixture.mxcsr,
-                fixture.result_mxcsr,
-                fixture.context,
-                fixture.scheduler,
-                fixture.stack,
-                observed,
-                fixture.writes,
+            let result = replay_fixture(
+                fixture,
                 Arc::new(BTreeMap::from([
                     (TRAVERSE, synthetic_traverse as LiftFn),
                     (0x400010, synthetic_job as LiftFn),
@@ -1163,6 +1548,110 @@ mod tests {
                 ),
             }
         }
+    }
+
+    #[test]
+    fn rejected_capture_cannot_be_accepted_even_when_diagnostic_replay_matches() {
+        let mut fixture = synthetic_fixture(0);
+        fixture.rejection = Some("unreadable preseed page".into());
+        let mut bytes = Vec::new();
+        fixture.write(&mut bytes).unwrap();
+        let fixture = capture_file::Fixture::read(&mut &bytes[..]).unwrap();
+        let error = replay_fixture(
+            fixture,
+            Arc::new(BTreeMap::from([
+                (TRAVERSE, synthetic_traverse as LiftFn),
+                (0x400010, synthetic_job as LiftFn),
+            ])),
+        )
+        .unwrap_err();
+        assert!(error.contains("REJECTED capture"));
+        assert!(error.contains("diagnostic replay only: Ok(4)"));
+    }
+
+    #[test]
+    fn serial_live_mismatch_is_reported_before_parallel_execution() {
+        let mut fixture = synthetic_fixture(4); // Parallel body would refuse its import.
+        fixture.outgoing.eax ^= 1;
+        let error = replay_fixture(
+            fixture,
+            Arc::new(BTreeMap::from([
+                (TRAVERSE, synthetic_traverse as LiftFn),
+                (0x400010, synthetic_job as LiftFn),
+            ])),
+        )
+        .unwrap_err();
+        assert_eq!(error, "original serial replay ABI differs from live serial");
+    }
+
+    #[test]
+    fn unchanged_existing_commands_do_not_count_as_shadow_work() {
+        let mut fixture = synthetic_fixture(0);
+        fixture.input = Arc::new(fixture.input.with_writes(&BTreeMap::from([(0x1048, 4)])));
+        let error = replay_fixture(
+            fixture,
+            Arc::new(BTreeMap::from([
+                (TRAVERSE, synthetic_traverse as LiftFn),
+                (0x400010, synthetic_job as LiftFn),
+            ])),
+        )
+        .unwrap_err();
+        assert!(error.contains("traversal appended no commands"));
+    }
+
+    #[test]
+    fn rejected_preseed_retains_later_bounded_serial_evidence() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, 4096, READ | WRITE).unwrap();
+        live.set_u32(0x1000, 7);
+        let mut journal = Journal {
+            live: &mut live,
+            input: RefCell::new(Snapshot::default()),
+            writes: RefCell::new(BTreeMap::new()),
+            failure: Cell::new(None),
+            stage: Cell::new("preseed"),
+        };
+        journal.seed(0, 4096);
+        journal.stage.set("serial");
+        assert_eq!(journal.u32(0x1000), 7);
+        journal.set_u32(0x1000, 9);
+        assert_eq!(journal.input.borrow().u32(0x1000), 7);
+        assert_eq!(journal.live.u32(0x1000), 9);
+        assert_eq!(journal.writes.borrow().get(&0x1000), Some(&9));
+        assert_eq!(
+            journal.failure.get(),
+            Some(CaptureFailure {
+                stage: "preseed",
+                reason: "unreadable page",
+                address: 0
+            })
+        );
+    }
+
+    #[test]
+    fn command_arena_preseed_includes_unvisited_allocation_pages() {
+        let mut live = GuestMemory::new();
+        live.map(0x100000, 0x34000, READ | WRITE).unwrap();
+        live.map(0x200000, 0x3000, READ | WRITE).unwrap();
+        live.set_u32(0x133db8, 1);
+        live.set_u32(0x133dc0, 0); // Inactive ring must not be read as the arena.
+        live.set_u32(0x133dc4, 0x200820);
+        live.set_u32(0x133dc8, 0x100);
+        live.set_u32(0x133dcc, 0x1800);
+        live.set_u8(0x20201f, 43);
+        let journal = Journal {
+            live: &mut live,
+            input: RefCell::new(Snapshot::default()),
+            writes: RefCell::new(BTreeMap::new()),
+            failure: Cell::new(None),
+            stage: Cell::new("test"),
+        };
+        journal.seed_render_commands(0x100000);
+        assert!(journal.failure.get().is_none());
+        assert!(journal.input.borrow().has_page(0x202000));
+        assert_eq!(journal.input.borrow().u8(0x20201f), 43);
+        assert!(journal.writes.borrow().is_empty());
+        assert_eq!(journal.live.u32(0x133dc8), 0x100);
     }
 
     #[test]
@@ -1284,6 +1773,7 @@ mod tests {
                 stack: 0x80000..0x82000,
                 lane_count: 2,
                 depth: 0,
+                command_counter: None,
             };
             let mut cpu = Cpu {
                 ecx: 0x40000,
@@ -1309,6 +1799,88 @@ mod tests {
     }
 
     #[test]
+    fn shared_command_counter_claims_disjoint_bytes_and_rejects_ordinary_access() {
+        fn capacity_body(m: &mut dyn Mem, cpu: &mut Cpu) {
+            cpu.eax = m.u32(cpu.ecx + 0x33dc8);
+            cpu.esp += 4;
+        }
+        fn allocate(m: &mut dyn Mem, cpu: &mut Cpu) {
+            let job = (cpu.ecx - 0x3000) / 0x10;
+            let address = m.u32(0x018d08f4) + 0x33dc8;
+            push(m, cpu, 16);
+            push(m, cpu, address);
+            push(m, cpu, 0xda7d86);
+            private_exchange_add(m, cpu);
+            let allocated = cpu.eax;
+            cpu.ecx = m.u32(0x018d08f4);
+            push(m, cpu, 0xdb762e);
+            resolve(0x00da7db0)(m, cpu);
+            assert_ne!(
+                cpu.eax,
+                m.u32(0x1020),
+                "capacity reads the updated shared counter"
+            );
+            if m.u32(0x1010) != 0 {
+                let _ = m.u32(address); // The helper's read permission has ended.
+            }
+            m.set_u32(0x1400 + job * 4, allocated);
+            cpu.esp += 8;
+        }
+        for (direct_access, initial) in [(false, 0x100u32), (true, 0x100), (false, u32::MAX - 31)] {
+            let fixture = synthetic_fixture(0);
+            let (input, render) = fixture.input.private_arena(0x34000).unwrap();
+            let address = render.start + 0x33dc8;
+            let mut setup = LaneMemory::new(Arc::new(input), ACCESS_LIMIT);
+            setup.set_u32(0x018d08f4, render.start);
+            setup.set_u32(address, initial);
+            setup.set_u32(0x1010, u32::from(direct_access));
+            setup.set_u32(0x1020, initial);
+            setup.set_u32(0x81004, 1);
+            let input = Arc::new(setup.frozen());
+            let private = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(
+                input.clone(),
+                ACCESS_LIMIT,
+            ))));
+            let replay = Replay {
+                raw: Arc::new(BTreeMap::from([
+                    (0x400010, allocate as LiftFn),
+                    (0x00da7db0, capacity_body as LiftFn),
+                ])),
+                memory: private.clone(),
+                stack: fixture.stack,
+                lane_count: 2,
+                depth: 0,
+                command_counter: None,
+            };
+            let mut cpu = Cpu {
+                ecx: 0x40000,
+                esp: 0x81000,
+                ..Cpu::default()
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_replay(replay, |m| private_schedule(m, &mut cpu));
+            }));
+            if direct_access {
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<Reject>(),
+                    Some(&Reject::AtomicConflict(address))
+                );
+                assert_eq!(private.u32(address), initial);
+                assert_eq!(private.u32(0x1400), 0);
+            } else {
+                result.unwrap();
+                let mut allocations: Vec<_> = (0..4).map(|job| private.u32(0x1400 + job * 4)).collect();
+                allocations.sort();
+                let mut expected: Vec<_> = (0..4).map(|job| initial.wrapping_add(job * 16)).collect();
+                expected.sort();
+                assert_eq!(allocations, expected);
+                assert_eq!(private.u32(address), initial.wrapping_add(64));
+            }
+            assert_eq!(input.u32(address), initial);
+        }
+    }
+
+    #[test]
     fn unknown_external_call_is_rejected_before_host_dispatch() {
         let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(
             Arc::new(Snapshot::default()),
@@ -1320,6 +1892,7 @@ mod tests {
             stack: 0..0,
             lane_count: 1,
             depth: 0,
+            command_counter: None,
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             with_replay(replay, |m| {

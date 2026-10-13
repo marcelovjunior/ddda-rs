@@ -155,6 +155,61 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Second real v3 capture shadow-48204-300.ddshadow is complete (no rejection):
+1,633 pages/13,226 write bytes, SHA256
+c3414a55e0ea0a692d07c3f2aa2576cac3195d46be2e1ea89904bf32e74d7f80.
+Original serial/live comparison passes for6 entries. Parallel stops at
+CreateEventA (captured token0x7ff00490); no equality is claimed.
+
+The captured root is exactly manager+d40+LANE_BYTES: initializing nested
+children in place would overwrite the parent lane. Replay now copies the
+complete manager header/inline contexts privately and retargets DB63E0 this
+only; its original parent argument and object/list pointers are preserved.
+PublishedView forbids references into both temporary manager and sort arena.
+33 focused shadow tests pass, including unaligned private-copy isolation and
+manager retargeting. Unsupported-import diagnostics now include guest return
+address, so the event creation can be traced before implementing any service.
+Next: head rebuild offline example only, replay the complete existing capture.
+
+
+Nonempty-work gate now requires appended commands, not merely a nonempty
+pre-existing stream. The real capture goes from2 to6 roots (four appended).
+Fifteen focused replay tests pass, including refusal when an unchanged
+nonempty prefix would otherwise look like successful shadow work.
+
+
+Real v3 capture shadow-44100-300.ddshadow:6,759,804 bytes,1,632 pages,
+13,226 written bytes; SHA256
+4193551ef5af0d3a409f85f5ee5375a6b60dff89552ce91b12c1fcfe2a4fadef.
+It is an outer lane (context+58=1), whose secondary arena at+54 is zero.
+FED200 explicitly initializes child+54 to zero, so capture no longer treats
+that absent serial input as a failed read. Parallel replay supplies bounded
+private sort storage. FED3B0 copies roots/nested arrays back to the parent;
+a read barrier requires every consumed output byte to leave private storage
+before those private writes can be discarded. The original+54 is restored.
+All other memory/ABI/resource gates remain. Private addresses are host-only
+snapshot allocations, never reservations or writes in the live guest.
+
+Old-capture serial execution completes; parallel first refuses missing page
+0x647066f4 (sRender+0x433e04, read only by FED200). New capture preseeds the
+exact FED200 frame-ring and shader header fields. Serial/live verification
+now runs BEFORE parallel execution and reports its own result. Thirty-one
+focused shadow tests pass, including arena bounds, output-reference rejection
+and serial-mismatch-before-parallel checks. Head recapture is required;
+old rejected input never becomes accepted. Production publication remains
+open; no TRAIN READY or speedup claim.
+
+
+Capture format v3 now saves bounded diagnostic fixtures even when preseed or
+stream capture rejects. The journal retains its first failure while recording
+later valid serial input/writes. The file contains the rejection reason;
+offline replay can diagnose it but ALWAYS returns rejection, even if the
+synthetic stream/memory comparison succeeds. Live execution does not replay
+or publish rejected captures. Twelve focused replay tests pass, including
+round-trip rejection metadata and diagnostic-match-cannot-accept coverage.
+Head must rebuild both binaries with v3 for the queued capture.
+
+
 First actual cap172 run (#14314/14315) confirms hooks and sample300 entry,
 but rejects capture at address0 before writing a file. The old failure word
 conflated host allocations with unreadable seeded pages and overwrote first
@@ -218,3 +273,85 @@ Codex-7's original merge and comparator evidence is recorded separately in
 
 No game, GPU test, shard build, push, installation write, private data copy,
 or decompiler dump committed. Production TRAIN READY is not claimed.
+
+2026-10-13 real replay follow-up: pinned a66f3de7 example verifies serial/live
+6 entries from shadow-48204-300; private manager copy removes the previous
+CreateEventA detour. Next refusal is InterlockedExchangeAdd, called at
+DA7D80 through IAT 0139D0A8 (return DA7D86). Private replay now resolves
+that captured slot to the existing pure Mem/Cpu service; no raw page table
+means tracked reads/writes. Regression covers wraparound, old return value,
+stdcall stack, preserved EBX and unchanged live memory. Focused shadow:33
+passed/0 failed. No new original parallel equality claim yet.
+Capture was t23s/169 draws with one queued job. Added diagnostic selection
+DDRUNTIME_PARALLEL_SHADOW_AFTER_MS=60000 FIRST=0 COUNT=1 for a later sample
+(FIRST counts scoped calls after the delay). Next: head rebuild offline
+example, replay existing input, then obtain a representative multi-job capture.
+
+2026-10-13 private scheduler follow-up: DB63E0/DBE560/DBD8D0 queue
+storage is now copied to a bounded private arena and018D0B28 redirected
+only inside replay. The existing outer scheduler bytes remain unchanged.
+Nesting guards and global pointer must balance before restoring their
+captured values; consumed commands may not refer to private scheduler
+storage. Synthetic serial now invokes jobs directly while synthetic
+parallel uses the private queue. Serialized regression additionally rejects
+unbalanced guard, changed scheduler pointer, and scheduler-pointer escape.
+Shared allocation dependency regression now invokes the actual tracked
+InterlockedExchangeAdd service. Focused shadow:33 passed/0 failed.
+The complete default light suite at661bdb1a:288 passed/0 failed/7 ignored.
+Original parallel equality remains OPEN; head offline example rebuild next.
+
+2026-10-13 original replay at head build aeada9d1 (includes1b384b1f):
+serial/live6 entries PASS; private scheduler mode1/jobs1 gets past XADD.
+Next refusal is MissingPage0x64d31820 at EA5B50, a fresh DA7D70 command
+allocation. The serial root reused its current page (cursor advanced0x410;
+render cursor stayed0x1e000). Capture now seeds the current DA7D70 arena
+from render+33DC0+4*ring_index, index at+33DB8, capacity at+33DCC.
+All bytes come from the same live capture; absent old-fixture bytes are
+never fabricated. Regression covers inactive-ring exclusion and previously
+unvisited pages, including an unaligned arena end, with no live writes.
+Focused shadow:34 passed/0 failed. Next head action: rebuild ddplay plus
+shadow_replay with ddruntime/parallel-shadow and run capture with
+DDRUNTIME_PARALLEL_SHADOW=1 DDRUNTIME_PARALLEL_SHADOW_AFTER_MS=60000
+DDRUNTIME_PARALLEL_SHADOW_FIRST=0 DDRUNTIME_PARALLEL_SHADOW_COUNT=1
+DDRUNTIME_PARALLEL_SHADOW_DUMP=E:/ddda-re/notes/native-L172/replay.
+Still no original parallel equality, production publication or TRAIN READY.
+
+2026-10-13 gameplay capture shadow-48124-0 (16,223,235 bytes), head
+fca9c47d build: serial/live66 entries PASS, private scheduler175 jobs. Both
+callback lanes complete; merge refuses renderer command cursor64306CB9.
+Closed with a transaction-local shared atomic counter for the exact
+sRender+33DC8 InterlockedExchangeAdd used by DA7D80. Claims preserve
+return-old/wrapping semantics and synchronize only within this replay;
+allocation capacity checks remain in the original DA7D70 body. Ordinary
+reads or writes of that counter by any lane reject with AtomicConflict.
+All other read/write dependencies stay checked; only after successful
+merge is the counter stored once in parent private memory. Allocation
+order may vary across workers, as with the original atomic allocator;
+strict consumed-stream comparison is still mandatory. Synthetic tests
+cover disjoint claims, wraparound, unchanged input, and ordinary-access
+refusal before any child writes are absorbed:35 focused pass/0 failed.
+Next: head offline-example rebuild and replay48124; no new game needed.
+Production publication/equality remain OPEN.
+
+2026-10-13 head build3a4dfe16/c78206fc replay48124: serial/live66
+PASS;175 jobs; now refuses AtomicConflict64306CB8. Ordinary cursor
+access exists, so the atomic-only ownership assumption is not accepted.
+Moved refusal to PrivateMemory read/write site to preserve its caller
+backtrace; end-of-batch ownership check remains.35 focused tests pass.
+Next: offline rebuild/replay identifies the exact ordinary access.
+
+2026-10-13 pinned749097e4/815df443 replay confirms direct cursor reader
+is original DA7DB0 on both lanes, called by DB7620. Ghidra and generated
+body agree: read cursor+headroom, unsigned compare against capacity.
+Private resolver now runs that ORIGINAL body under scoped permission for
+its aligned u32 counter load. It sees the synchronized transaction counter;
+all flags/register effects still come from the original body. Byte reads,
+ordinary writes, and other callers remain refused. Regression proves the
+helper sees updates and permission ends on return;35 focused pass.
+Next: offline rebuild/replay48124; no recapture required.
+
+2026-10-13 pinned b8f57fb6/8750e8bf replay48124: serial/live66 PASS,
+175 jobs, lane dependency merge PASSES. Full stream comparison now rejects
+root entry2 record header. Added bounded key/header/count diagnostics;
+no header masks or comparator relaxation.35 focused tests pass. Next:
+offline rebuild/replay to identify exact bits and trace original consumer.

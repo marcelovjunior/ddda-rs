@@ -28,6 +28,50 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn private_copy(&self, source: u32, length: u32) -> Result<(Self, Range<u32>), Reject> {
+        source.checked_add(length).ok_or(Reject::InvalidPrivateRange)?;
+        let (mut output, range) = self.private_arena(length)?;
+        for offset in (0..length).step_by(PAGE as usize) {
+            let page = Arc::make_mut(output.pages.get_mut(&(range.start + offset)).unwrap());
+            let count = (length - offset).min(PAGE) as usize;
+            for (index, byte) in page.bytes[..count].iter_mut().enumerate() {
+                *byte = self.byte(source + offset + index as u32, false)?;
+            }
+        }
+        Ok((output, range))
+    }
+    /// Storage owned solely by the offline transaction, not the live guest
+    /// allocator. Select an unused range in THIS snapshot's address space.
+    /// Consumers must prove all published references leave this storage before
+    /// dropping it. The address preference and bound are host policy.
+    pub(crate) fn private_arena(&self, length: u32) -> Result<(Self, Range<u32>), Reject> {
+        if length == 0 || length > 64 << 20 {
+            return Err(Reject::InvalidPrivateRange);
+        }
+        let length = length.checked_add(PAGE - 1).ok_or(Reject::InvalidPrivateRange)? & !(PAGE - 1);
+        let mut base = 0x8000_0000u32;
+        loop {
+            let end = base.checked_add(length).ok_or(Reject::InvalidPrivateRange)?;
+            match self.pages.range(base..end).next() {
+                Some((&occupied, _)) => {
+                    base = occupied.checked_add(PAGE).ok_or(Reject::InvalidPrivateRange)?
+                }
+                None => {
+                    let mut result = self.clone();
+                    for page in (base..end).step_by(PAGE as usize) {
+                        result.pages.insert(
+                            page,
+                            Arc::new(Page {
+                                bytes: Box::new([0; PAGE as usize]),
+                                permissions: READ | WRITE,
+                            }),
+                        );
+                    }
+                    return Ok((result, base..end));
+                }
+            }
+        }
+    }
     pub(crate) fn with_writes(&self, writes: &BTreeMap<u32, u8>) -> Self {
         let mut result = self.clone();
         result.apply(writes);
@@ -160,10 +204,12 @@ pub(crate) enum Reject {
     },
     ThreadStart,
     UnsupportedTarget(u32),
+    AtomicConflict(u32),
     UnsupportedScheduler(u32),
     IncoherentInput(u32),
     PublicationConflict(u32),
     UnsupportedLock(u32),
+    PrivateOutputEscape(u32),
 }
 
 /// Each lane owns its writes and reads the same immutable input. Keeping
@@ -309,6 +355,15 @@ pub(crate) struct LaneResult<T> {
     pub(crate) range: Range<usize>,
     pub(crate) output: T,
     memory: LaneMemory,
+}
+
+impl<T> LaneResult<T> {
+    /// A separately synchronized service may own a field only if no callback
+    /// also accessed it through ordinary memory. Do not suppress dependencies.
+    pub(crate) fn touches(&self, range: Range<u32>) -> bool {
+        self.memory.reads.borrow().range(range.clone()).next().is_some()
+            || self.memory.writes.range(range).next().is_some()
+    }
 }
 
 /// Ordered contiguous partitions, not work stealing: FED3B0 concatenates
@@ -549,6 +604,50 @@ mod tests {
         snapshot.capture_page(&m, 0x1000, READ | WRITE);
         snapshot.capture_page(&m, 0x3000, READ);
         Arc::new(snapshot)
+    }
+
+    #[test]
+    fn private_arena_is_bounded_and_never_replaces_captured_pages() {
+        let mut live = GuestMemory::new();
+        live.map(0x80001000, PAGE, READ | WRITE).unwrap();
+        live.set_u32(0x80001000, 0x12345678);
+        let mut input = Snapshot::default();
+        input.capture_page(&live, 0x80001000, READ | WRITE);
+        let (extended, range) = input.private_arena(PAGE + 1).unwrap();
+        assert_eq!(range, 0x80002000..0x80004000);
+        assert_eq!(extended.u32(0x80001000), 0x12345678);
+        assert_eq!(extended.u32(range.start), 0);
+        assert!(!input.has_page(range.start));
+        assert!(matches!(input.private_arena(0), Err(Reject::InvalidPrivateRange)));
+        assert!(matches!(
+            input.private_arena(u32::MAX),
+            Err(Reject::InvalidPrivateRange)
+        ));
+    }
+
+    #[test]
+    fn private_copy_preserves_unaligned_source_and_isolates_parent_aliases() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, PAGE * 2, READ | WRITE).unwrap();
+        for offset in 0..64 {
+            live.set_u8(0x1ff0 + offset, offset as u8);
+        }
+        let mut input = Snapshot::default();
+        for page in [0x1000, 0x2000] {
+            input.capture_page(&live, page, READ | WRITE);
+        }
+        let (copy, range) = input.private_copy(0x1ff0, 64).unwrap();
+        let mut memory = LaneMemory::new(Arc::new(copy), 1000);
+        for offset in 0..64 {
+            assert_eq!(memory.u8(range.start + offset), offset as u8);
+        }
+        memory.set_u32(range.start + 16, 0xabcdef01);
+        assert_eq!(memory.u32(0x2000), 0x13121110);
+        assert_eq!(live.u32(0x2000), 0x13121110);
+        assert!(matches!(
+            input.private_copy(0x2ff0, 64),
+            Err(Reject::MissingPage(0x3000))
+        ));
     }
 
     #[test]

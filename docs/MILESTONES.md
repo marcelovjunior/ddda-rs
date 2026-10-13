@@ -115,46 +115,23 @@
   limits: `docs/tasks/L169-shadow.md`.
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
-- Actual cap172 reaches sample300 but rejects capture at0. First-cause
-  stage/reason/seed/allocation diagnostics added;10replay tests pass.
-  Next: head rerun and source-backed capture correction; no equality yet.
-
-- Final default light with one test thread:281 passed/0 failed/7 ignored.
-  Concurrent-run inherited timing failures both pass; no checks skipped.
-  L172 focused10replay+11executor pass. Awaiting head actual capture.
-
-- Head corrected cap172 receipt: a build merge conflict prevented launch;
-  prior log was stale. Fixed by head; rebuild/capture pending. Added
-  installation and entry diagnostics.
-  Full feature-light before service addition277/0/7; final replay10PASS
-  with and without feature. Next: diagnose missing hook activation.
-
-- Publication preflight: 11 executor tests pass, including three new
-  all-before-store checks. Complete serialized synthetic replay and private
-  uncontended critical-section model: 10 replay tests pass, including
-  differential runtime service checks and allocator dependency refusal.
-  Still awaiting real capture; no live publication or speed claim.
-
-- Continuation: capture v2 preserves live outgoing MXCSR; replay compares
-  x87 and thread control state. Five focused replay tests pass; real
-  capture and production publication remain pending.
-
-- Private contiguous helper lanes, dependency-checked ordered merge, and
-  strict command/resource-byte comparison are implemented. Opt-in proof
-  runner captures the real serial traversal and replays raw serial/queued
-  bodies privately; unknown host services and incomplete inputs refuse.
-  Live output remains serial. No real-stream acceptance or speedup claimed.
-- TLS routing precedes global overrides and warmed caches only in the
-  `parallel-shadow` Cargo feature. The unconditional check measured slower
-  in 9/9 isolated pairs, so ordinary builds retain the old call path.
-- 17 focused runtime checks and two routing tests pass. Lane oracle:
-  12 tests, eight original FED3B0 returns and 227 shader fixtures reproducing
-  1,704 original uploads (29 conservative refusals). Default light: 271
-  passed / zero failures / seven ignored before final capture-file addition.
-  Final feature-enabled light: 272 passed / zero failures / seven ignored.
-- Next: head proof build and one nonempty private `.ddshadow` capture;
-  offline replay closes unsupported services/dependencies before candidate
-  publication and TRAIN READY. `docs/tasks/L172-parallel-shadow.md`.
+- Gameplay capture48124: original serial/live66 entries PASS;175 queued
+  jobs complete both private lanes. Real serial/parallel equality OPEN.
+- Missing imports/pages and parent aliasing closed so far: captured IAT
+  lock/XADD services, private manager/scheduler/secondary storage, runtime
+  command-arena preseed. Consumed output must not reference private storage.
+- Shared command cursor and original DA7DB0 capacity reads now coordinated
+  inside the private batch. Real lane dependency merge PASSES. Full stream
+  comparison refuses root entry2 header; bounded exact-bit diagnostics added.
+  No masks or comparator relaxation; publication still gated.
+- Latest focused shadow:35 passed/0 failed. Latest full default light at
+  661bdb1a:288 passed/0 failed/7 ignored. Synthetic tests are not original
+  acceptance. Prior oracle:8 original FED3B0 returns and227 shader fixtures,
+  1704 uploads (29 conservative refusals).
+- Live output remains serial; publication and FPS/job-time acceptance are
+  OPEN. No TRAIN READY. One next action: head offline-example rebuild and
+  replay48124 to identify header bits and trace their original consumer.
+  Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)
 
