@@ -108,7 +108,7 @@ fn verify(entry: u32, body: LiftFn) {
     ddnative_host::install();
     let Some(data) = vectors(entry) else { return };
     let cases = data["cases"].as_array().unwrap();
-    assert!(cases.len() >= 96);
+    assert!(cases.len() >= 160, "complete L173 leaf corpus required");
     for case in cases {
         let mut m = Memory {
             bytes: pairs(&case["initial"]),

@@ -34,6 +34,7 @@ mod semantic_draw;
 '''
     strict=(repo/'crates/mtcore/tests/semantic_draw_a.rs').read_text().split('// verifies')[0].replace('//!','//')
     strict=strict.replace('format!("E:/ddda-re/notes/native-L173/{entry:08x}.json")','"E:/ddda-re/notes/native-L171/draw_mesh.json".to_string()')
+    strict=strict.replace('cases.len() >= 160, "complete L173 leaf corpus required"','cases.len() >= 302, "complete EA5320 corpus required"')
     # This function is void; unlike the leaf suite, do not require incidental
     # EAX. The head harness explicitly uses returns=false for this contract.
     strict=strict.replace('[c.eax, c.ebx,','[0, c.ebx,').replace('[after[0], after[3],','[0, after[3],')

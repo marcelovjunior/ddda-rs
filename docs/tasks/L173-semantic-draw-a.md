@@ -96,9 +96,27 @@ the below-stack heap fix, then L173's stricter per-call memory/sphere check.
 An additional isolated lifted-body replay validates the recorder itself.
 EA5320 is void, so incidental EAX is excluded here as in the head's harness.
 
-Initial 302-case replay stopped on an unrecorded incoming argument for an
-early-return path. The recorder now includes the complete known incoming
-ABI frame (28 bytes) instead of only arguments read by that original path.
-Corrected recording and final replay are waiting for the head's paused
-game comparison; no semantic equivalence claim yet. Head source compiled
-at `fb948fc26080c6bbc3272979ff5f093bfc94ddcc`.
+Initial replay stopped on an unrecorded incoming argument for an early-return
+path. The final recorder includes the complete known incoming ABI frame
+(28 bytes) instead of only arguments read by that original path.
+
+**All 302 originals pass in three isolated tests:** head's ABI harness,
+L173's strict heap/call/sphere harness, and the unmodified lifted body.
+No changes to the head's implementation were needed. Tested source commit:
+`fb948fc26080c6bbc3272979ff5f093bfc94ddcc`; this is a void function so only
+incidental EAX is excluded. Calls preserve the full tested contract.
+The head-harness copy uses actual call arities and excludes only discarded
+stack memory, correcting its pre-existing below-ESP comparison omission.
+
+Final `native-L171/draw_mesh.json` SHA-256:
+`ac7d2fd4ce0ec5c6f343380ea038de2ce919682d3871af9f330426cd4ee7314b`.
+Reproduce: research Python/heavy.py `research/native/record_l173_mesh.py`,
+then `python scripts/check_l173_mesh.py`. Log:
+`E:/ddda-re/notes/native-L173/mesh-test-final.log` (three pass in 7.88 s).
+Head notified in board #14172; codex-6 received the template for FFC350.
+
+Final focused leaf rerun with `DDNATIVE_REQUIRE_VECTORS=1`: four pass,
+including three below-stack heap corruptions rejected. All expected
+leaf corpora now require at least 160 cases; mesh requires 302.
+Next remains head integration and game/image acceptance; no game/shard run
+was performed by this agent.
