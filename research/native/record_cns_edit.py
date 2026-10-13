@@ -234,6 +234,13 @@ class Oracle:
         w(MODEL + 0x368, struct.pack('<I', TABLE))
         w(TABLE, bytes(rng.randrange(4) for _ in range(256)))
         w(THIS + 0xA8, struct.pack('<I', rng.randrange(0, 5)))
+        # fields the scaling providers (modes 9, 10, 11, 15) read
+        w(THIS + 0xB0, bytes([rng.choice((0, 0, 1))]))
+        w(THIS + 0xC0, b''.join(f32(rng.choice((1.0, rng.uniform(0.1, 2), 0.0))) for _ in range(3)))
+        w(MODEL + 0x60, b''.join(f32(rng.choice((1.0, rng.uniform(0.1, 2), 0.0))) for _ in range(3)))
+        w(THIS + 0x54, struct.pack('<I', MODEL))
+        w(THIS + 0xAC, struct.pack('<I', rng.choice((0xFF, 0xFF, 0, 1, 2, 3, 0x1FF))))
+        w(JOINT + 0x93, bytes([rng.choice((0, 1, 2, 2, 3))]))
         for k in range(4):
             if rng.random() < 0.9:
                 w(JOINTS + 0xA0 * k + 0x10, self.matrix())
@@ -249,6 +256,7 @@ class Oracle:
         self.remember(esp, 12)
         before = dict(regs=self.regs())
         uc.emu_start(ENTRY, h.RET, count=100000)
+        self.remember(THIS + 0xC0, 12)  # the port loads mode 11's per-axis weights up front
         after = dict(regs=self.regs(), memory=[(a, uc.mem_read(a, 1)[0]) for a in sorted(self.written)])
         return dict(seed=seed, mode=mode, before=before, initial=sorted(self.initial.items()), events=self.events, after=after)
 

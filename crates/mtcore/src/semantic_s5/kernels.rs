@@ -18,6 +18,9 @@ const K_14F0E9C: f32 = f32::from_bits(0x3f000000);
 const K_14F9E04: f32 = f32::from_bits(0x40000000);
 const K_150A350: f32 = f32::from_bits(0x34000000);
 const K_1521690: f32 = f32::from_bits(0x00000000);
+const K_1629510: f32 = f32::from_bits(0x3f800000);
+const K_1629514: f32 = f32::from_bits(0x3f800000);
+const K_1629518: f32 = f32::from_bits(0x3f800000);
 const K_16295C0: f32 = f32::from_bits(0x3f800000);
 const K_16295C4: f32 = f32::from_bits(0x00000000);
 const K_16295C8: f32 = f32::from_bits(0x00000000);
@@ -455,4 +458,168 @@ pub(super) fn kernel_m7_scale_translate(l: &[f32; 20], trig: &mut dyn FnMut(bool
     let v4: f32 = (if c1 { l[3] } else { (l[0] * l[3]) });
     let v5: f32 = (if c1 { l[4] } else { (l[0] * l[4]) });
     [v2, v3, v4, v5, l[5], l[6], l[7], l[8], l[9], l[10], l[11], l[12], (l[13] + l[14]), (l[15] + l[16]), (l[17] + l[18]), quiet(l[19])]
+}
+
+/// Inputs of `kernel_m9`, in order.
+pub(super) fn load_m9(m: &dyn Mem, pg: Pages, b: &Bases, s: &Matrix) -> [f32; 19] {
+    let _ = (m, pg, b, s);
+    [
+        b.angles[1],
+        b.angles[2],
+        rd(m, pg, b.joint + 20),
+        rd(m, pg, b.joint + 16),
+        rd(m, pg, b.joint + 24),
+        rd(m, pg, b.joint + 28),
+        pg.u8(m, b.this + 0xb0) as f32,
+        b.mscale[24 - 24],
+        rd(m, pg, b.joint + 36),
+        rd(m, pg, b.joint + 32),
+        rd(m, pg, b.joint + 40),
+        rd(m, pg, b.joint + 44),
+        b.mscale[25 - 24],
+        rd(m, pg, b.joint + 52),
+        rd(m, pg, b.joint + 48),
+        rd(m, pg, b.joint + 56),
+        rd(m, pg, b.joint + 60),
+        b.mscale[26 - 24],
+        b.angles[0],
+    ]
+}
+
+/// Kernel of 0x00867B70 (modes 9 and 10): Euler rotation, rows scaled by the model scale divided by the joint's row lengths.
+#[allow(clippy::all, unused_parens)]
+pub(super) fn kernel_m9(l: &[f32; 19], trig: &mut dyn FnMut(bool, f32) -> f32) -> [f32; 16] {
+    let v1: f32 = trig(false, l[0]);
+    let v2: f32 = (-v1);
+    let v3: f32 = (0.0_f32 * v2);
+    let v4: f32 = trig(false, l[1]);
+    let v5: f32 = trig(true, l[0]);
+    let v6: f32 = (v4 * v5);
+    let v7: f32 = (0.0_f32 * v6);
+    let v8: f32 = trig(true, l[1]);
+    let v9: f32 = (v5 * v8);
+    let v10: f32 = ((((l[2] * l[2]) + (l[3] * l[3])) + (l[4] * l[4])) + (l[5] * l[5])).sqrt();
+    let c11: bool = (l[6] != 0.0_f32);
+    let v12: f32 = (if c11 { K_1629510 } else { l[7] });
+    let v13: f32 = (if (!(v10 > K_150A350)) { v12 } else { (v12 / v10) });
+    let v14: f32 = (0.0_f32 * v9);
+    let v15: f32 = ((((l[8] * l[8]) + (l[9] * l[9])) + (l[10] * l[10])) + (l[11] * l[11])).sqrt();
+    let v16: f32 = (if c11 { K_1629514 } else { l[12] });
+    let v17: f32 = (if (!(v15 > K_150A350)) { v16 } else { (v16 / v15) });
+    let v18: f32 = ((((l[13] * l[13]) + (l[14] * l[14])) + (l[15] * l[15])) + (l[16] * l[16])).sqrt();
+    let v19: f32 = (if c11 { K_1629518 } else { l[17] });
+    let v20: f32 = (if (!(v18 > K_150A350)) { v19 } else { (v19 / v18) });
+    let v21: f32 = (v14 + v7);
+    let v22: f32 = trig(false, l[18]);
+    let v23: f32 = (v22 * v5);
+    let v24: f32 = (0.0_f32 * v23);
+    let v25: f32 = trig(true, l[18]);
+    let v26: f32 = (v1 * v4);
+    let v27: f32 = ((v25 * v8) + (v22 * v26));
+    let v28: f32 = (0.0_f32 * v27);
+    let v29: f32 = (v1 * v8);
+    let v30: f32 = ((v22 * v29) - (v4 * v25));
+    let v31: f32 = (0.0_f32 * v30);
+    let v32: f32 = (v31 + v28);
+    let v33: f32 = (v25 * v5);
+    let v34: f32 = (0.0_f32 * v33);
+    let v35: f32 = ((v25 * v26) - (v22 * v8));
+    let v36: f32 = (0.0_f32 * v35);
+    let v37: f32 = ((v25 * v29) + (v22 * v4));
+    let v38: f32 = (0.0_f32 * v37);
+    let v39: f32 = (v38 + v36);
+    [(v3 + (v7 + (v9 * v13))), ((v14 + (v6 * v17)) + v3), ((v2 * v20) + v21), (v3 + v21), (v24 + (v28 + (v30 * v13))), (((v27 * v17) + v31) + v24), ((v23 * v20) + v32), (v24 + v32), (v34 + (v36 + (v37 * v13))), (((v35 * v17) + v38) + v34), (v39 + (v33 * v20)), (v34 + v39), (0.0_f32 * v13), (0.0_f32 * v17), (0.0_f32 * v20), 1.0_f32]
+}
+
+/// Inputs of `kernel_m11`, in order.
+pub(super) fn load_m11(m: &dyn Mem, pg: Pages, b: &Bases, s: &Matrix) -> [f32; 23] {
+    let _ = (m, pg, b, s);
+    [
+        pg.u8(m, b.joint + 0x93) as f32,
+        b.angles[1],
+        b.angles[2],
+        rd(m, pg, b.joint + 16),
+        rd(m, pg, b.joint + 20),
+        rd(m, pg, b.joint + 24),
+        rd(m, pg, b.joint + 28),
+        pg.u8(m, b.this + 0xb0) as f32,
+        b.mscale[24 - 24],
+        rd(m, pg, b.this + 192),
+        b.angles[0],
+        rd(m, pg, b.joint + 32),
+        rd(m, pg, b.joint + 36),
+        rd(m, pg, b.joint + 40),
+        rd(m, pg, b.joint + 44),
+        b.mscale[25 - 24],
+        rd(m, pg, b.this + 196),
+        rd(m, pg, b.joint + 48),
+        rd(m, pg, b.joint + 52),
+        rd(m, pg, b.joint + 56),
+        rd(m, pg, b.joint + 60),
+        b.mscale[26 - 24],
+        rd(m, pg, b.this + 200),
+    ]
+}
+
+/// Kernel of 0x0086D180 (mode 11): Euler rotation, rows scaled by (this scale / joint row length) * model scale.
+#[allow(clippy::all, unused_parens)]
+pub(super) fn kernel_m11(l: &[f32; 23], trig: &mut dyn FnMut(bool, f32) -> f32) -> [f32; 16] {
+    let c1: bool = (l[0] != 2.0_f32);
+    let v2: f32 = trig(true, l[1]);
+    let v3: f32 = trig(true, l[2]);
+    let v4: f32 = (v2 * v3);
+    let v5: f32 = ((((l[3] * l[3]) + (l[4] * l[4])) + (l[5] * l[5])) + (l[6] * l[6])).sqrt();
+    let c6: bool = (l[7] != 0.0_f32);
+    let v7: f32 = (if c6 { K_1629510 } else { l[8] });
+    let v8: f32 = (if (!(v5 > K_150A350)) { v7 } else { (v7 * (l[9] / v5)) });
+    let v9: f32 = (if c1 { (v4 * v8) } else { v4 });
+    let v10: f32 = trig(false, l[2]);
+    let v11: f32 = (v10 * v2);
+    let v12: f32 = (if c1 { (v11 * v8) } else { v11 });
+    let v13: f32 = trig(false, l[1]);
+    let v14: f32 = (-v13);
+    let v15: f32 = (if c1 { (v14 * v8) } else { v14 });
+    let v16: f32 = (if c1 { (0.0_f32 * v8) } else { 0.0_f32 });
+    let v17: f32 = trig(false, l[10]);
+    let v18: f32 = (v13 * v3);
+    let v19: f32 = trig(true, l[10]);
+    let v20: f32 = ((((l[11] * l[11]) + (l[12] * l[12])) + (l[13] * l[13])) + (l[14] * l[14])).sqrt();
+    let v21: f32 = (if c6 { K_1629514 } else { l[15] });
+    let v22: f32 = (if (!(v20 > K_150A350)) { v21 } else { (v21 * (l[16] / v20)) });
+    let v23: f32 = (v13 * v10);
+    let v24: f32 = ((v17 * v10) + (v19 * v18));
+    let v25: f32 = ((((l[17] * l[17]) + (l[18] * l[18])) + (l[19] * l[19])) + (l[20] * l[20])).sqrt();
+    let v26: f32 = (if c6 { K_1629518 } else { l[21] });
+    let v27: f32 = (if (!(v25 > K_150A350)) { v26 } else { (v26 * (l[22] / v25)) });
+    let v28: f32 = (if c1 { (v24 * v27) } else { v24 });
+    let v29: f32 = ((v19 * v23) - (v17 * v3));
+    let v30: f32 = (if c1 { (v29 * v27) } else { v29 });
+    let v31: f32 = (v19 * v2);
+    let v32: f32 = (if c1 { (v31 * v27) } else { v31 });
+    let v33: f32 = (if c1 { (0.0_f32 * v27) } else { 0.0_f32 });
+    [v9, v12, v15, v16, (((v17 * v18) - (v10 * v19)) * v22), (((v19 * v3) + (v17 * v23)) * v22), ((v17 * v2) * v22), (0.0_f32 * v22), v28, v30, v32, v33, 0.0_f32, 0.0_f32, 0.0_f32, 1.0_f32]
+}
+
+/// Inputs of `kernel_m15_euler`.
+pub(super) fn load_m15_euler(m: &dyn Mem, pg: Pages, b: &Bases, s: &Matrix) -> [f32; 3] {
+    let _ = (m, pg, b, s);
+    [
+        b.angles[1],
+        b.angles[2],
+        b.angles[0],
+    ]
+}
+
+/// Kernel of 0x0086AFF0 (mode 15), its Euler rotation.
+#[allow(clippy::all, unused_parens)]
+pub(super) fn kernel_m15_euler(l: &[f32; 3], trig: &mut dyn FnMut(bool, f32) -> f32) -> [f32; 16] {
+    let v1: f32 = trig(true, l[0]);
+    let v2: f32 = trig(true, l[1]);
+    let v3: f32 = trig(false, l[1]);
+    let v4: f32 = trig(false, l[0]);
+    let v5: f32 = trig(false, l[2]);
+    let v6: f32 = (v4 * v2);
+    let v7: f32 = trig(true, l[2]);
+    let v8: f32 = (v4 * v3);
+    [(v1 * v2), (v3 * v1), (-v4), 0.0_f32, ((v5 * v6) - (v3 * v7)), ((v5 * v8) + (v7 * v2)), (v5 * v1), 0.0_f32, ((v7 * v6) + (v5 * v3)), ((v7 * v8) - (v5 * v2)), (v7 * v1), 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 1.0_f32]
 }

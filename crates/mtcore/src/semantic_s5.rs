@@ -360,13 +360,9 @@ fn provider_for(mode: u32, this: u32, joint: u32, model: u32, frame: u32) -> Opt
     // mode: (target, call site return, [eax, ecx, esi, edi], args, angles, offset and scale)
     let (target, back, r, args, nargs, takes_angles, offset_and_scale) = match mode {
         8 => (0x0086_7420, 0x0086_163c, [angles, this, f(0x200), this], [this, joint, model], 3, true, false),
-        9 => (0x0086_7b70, 0x0086_1709, [9, model, f(0x300), angles], [this, joint, model], 3, true, true),
-        10 => (0x0086_7b70, 0x0086_1709, [10, this, f(0x280), angles], [this, joint, model], 3, true, true),
-        11 => (0x0086_d180, 0x0086_17ec, [angles, model, f(0x180), joint], [this, model, angles], 3, true, true),
         12 => (0x0086_8000, 0x0086_1803, [12, model, joint, f(0x1c0)], [this, 0, 0], 1, false, false),
         13 => (0x0086_9260, 0x0086_18d6, [model, this, joint, f(0x240)], [this, model, angles], 3, true, false),
         14 => (0x0086_a100, 0x0086_19a9, [14, angles, joint, f(0x2c0)], [this, model, angles], 3, true, false),
-        15 => (0x0086_aff0, 0x0086_1a76, [angles, this, f(0x340), this], [this, joint, 0], 2, true, true),
         _ => return None,
     };
     let regs = Registers { eax: r[0], ecx: r[1], esi: r[2], edi: r[3] };
@@ -460,6 +456,18 @@ fn apply(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, model: 
         let callee_entry = frame.wrapping_sub(8);
         let callee_frame = (callee_entry.wrapping_sub(4) & !15).wrapping_sub(0xdc + 4);
         (aim_twist_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame), true)
+    } else if mode == 9 || mode == 10 {
+        let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
+        let callee_frame = (frame.wrapping_sub(16).wrapping_sub(4) & !15).wrapping_sub(0x5c + 4);
+        (euler_row_scaled_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame), true)
+    } else if mode == 11 {
+        let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
+        let callee_frame = (frame.wrapping_sub(16).wrapping_sub(4) & !15).wrapping_sub(0x6c + 4);
+        (euler_weighted_scaled_matrix(m, c, pg, this, model, joint, Angles::Values(angles), callee_frame), true)
+    } else if mode == 15 {
+        let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
+        let callee_frame = (frame.wrapping_sub(12).wrapping_sub(4) & !15).wrapping_sub(0x38 + 8);
+        (euler_or_ratio_matrix(m, c, pg, this, joint, Angles::Values(angles), callee_frame), true)
     } else if mode == 7 {
         // 0x00865990 folded in (three stack arguments, so its entry ESP is F - 16)
         let angles = [0x70, 0x74, 0x78].map(|offset| read_f32(m, pg, this + offset) * DEGREES_TO_RADIANS);
@@ -601,6 +609,8 @@ pub(crate) struct Bases {
     angles: [f32; 3],
     /// a vector returned by a guest helper
     r: [f32; 3],
+    /// the model's scale (`model + 0x60..0x68`), read only when the kernel needs it
+    mscale: [f32; 3],
 }
 
 /// The joint record of `model` for joint index `index` (the byte table at
@@ -776,4 +786,129 @@ pub fn euler_twist_provider(m: &mut dyn Mem, c: &mut Cpu) {
     c.esp = entry.wrapping_add(4 + 12);
     c.esi = out;
     c.edi = joint;
+}
+
+// ---------------------------------------------------------------------
+// 0x00867B70 (modes 9, 10), 0x0086D180 (mode 11), 0x0086AFF0 (mode 15)
+
+/// Return addresses of the first sinf/cosf call sites of each provider.
+const M9_TRIG_SITES: [u32; 2] = [0x0086_7b8c, 0x0086_7bc9];
+const M11_TRIG_SITES: [u32; 2] = [0x0086_d19c, 0x0086_d1d9];
+const M15_TRIG_SITES: [u32; 2] = [0x0086_b00f, 0x0086_b04c];
+
+/// The model's scale vector, which the providers use when the byte at
+/// `this + 0xB0` is clear (otherwise they scale from 1).
+fn model_scale(m: &dyn Mem, pg: Pages, this: u32, model: u32) -> [f32; 3] {
+    if pg.u8(m, this + 0xb0) == 0 {
+        [read_f32(m, pg, model + 0x60), read_f32(m, pg, model + 0x64), read_f32(m, pg, model + 0x68)]
+    } else {
+        [0.0; 3]
+    }
+}
+
+/// Matrix of modes 9 and 10 (0x00867B70): the Euler rotation of the angles
+/// with its three rows scaled by (the model's scale, or 1) divided by the
+/// length of the joint's own rows.
+fn euler_row_scaled_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u32, joint: u32, angles: Angles, frame: u32) -> Matrix {
+    let angles = [angles.get(m, pg, 0), angles.get(m, pg, 1), angles.get(m, pg, 2)];
+    let bases = Bases { this, joint, angles, mscale: model_scale(m, pg, this, model), ..Default::default() };
+    let inputs = kernels::load_m9(m, pg, &bases, &IDENTITY);
+    kernels::kernel_m9(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, M9_TRIG_SITES[cosine as usize]))
+}
+
+/// Matrix of mode 11 (0x0086D180): like [`euler_row_scaled_matrix`] with
+/// the scale weighted by the floats at `this + 0xC0`; a joint with byte
+/// `+0x93` equal to 2 only scales its second row.
+fn euler_weighted_scaled_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model: u32, joint: u32, angles: Angles, frame: u32) -> Matrix {
+    let angles = [angles.get(m, pg, 0), angles.get(m, pg, 1), angles.get(m, pg, 2)];
+    let bases = Bases { this, joint, angles, mscale: model_scale(m, pg, this, model), ..Default::default() };
+    let inputs = kernels::load_m11(m, pg, &bases, &IDENTITY);
+    kernels::kernel_m11(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, M11_TRIG_SITES[cosine as usize]))
+}
+
+/// Matrix of mode 15 (0x0086AFF0): the Euler rotation, replaced by a pure
+/// scale matrix when `this + 0xAC` selects a reference joint (of the model
+/// at `this + 0x54`): each diagonal element is the ratio of the length of
+/// a row of the reference joint to that of the same row of `joint`
+/// (1 where the joint's row is too short).
+fn euler_or_ratio_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, joint: u32, angles: Angles, frame: u32) -> Matrix {
+    let angles = [angles.get(m, pg, 0), angles.get(m, pg, 1), angles.get(m, pg, 2)];
+    let bases = Bases { this, joint, angles, ..Default::default() };
+    let inputs = kernels::load_m15_euler(m, pg, &bases, &IDENTITY);
+    let euler = kernels::kernel_m15_euler(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, M15_TRIG_SITES[cosine as usize]));
+    let reference_index = pg.u32(m, this + 0xac);
+    if reference_index == 0xff {
+        return euler;
+    }
+    let model = pg.u32(m, this + 0x54);
+    let reference = joint_record(m, pg, model, reference_index);
+    if reference == 0 {
+        return euler;
+    }
+    // 0x01629510..18: the default ratios (1.0)
+    let mut ratio = [1.0f32; 3];
+    for (row, r) in ratio.iter_mut().enumerate() {
+        let at = |base: u32, k: u32| read_f32(m, pg, base + 0x10 + 0x10 * row as u32 + 4 * k);
+        let own = (((at(joint, 0) * at(joint, 0) + at(joint, 1) * at(joint, 1)) + at(joint, 2) * at(joint, 2)) + at(joint, 3) * at(joint, 3)).sqrt();
+        if own > ANGLE_EPSILON {
+            let other = (((at(reference, 0) * at(reference, 0) + at(reference, 1) * at(reference, 1)) + at(reference, 2) * at(reference, 2)) + at(reference, 3) * at(reference, 3)).sqrt();
+            *r = other / own;
+        }
+    }
+    let mut matrix = [0.0f32; 16];
+    matrix[0] = ratio[0];
+    matrix[5] = ratio[1];
+    matrix[10] = ratio[2];
+    matrix[15] = 1.0;
+    matrix
+}
+
+/// 0x00867B70 (modes 9, 10; usercall: EDI = pointer to the three angles, ESI =
+/// output buffer; stack arguments `this`, `joint`, `model`; `ret 0xc`).
+// Translated from 0x00867B70 (DDDA.exe 2017-12-13 Steam)
+pub fn euler_row_scaled_provider(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let (this, joint, model) = (pg.u32(m, entry + 4), pg.u32(m, entry + 8), pg.u32(m, entry + 12));
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x5c + 4);
+    let (angles, out) = (c.edi, c.esi);
+    let matrix = euler_row_scaled_matrix(m, c, pg, this, model, joint, Angles::Memory(angles), frame);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 12);
+    c.esi = out;
+    c.edi = angles;
+}
+
+/// 0x0086D180 (mode 11; usercall: EDI = joint, ESI = output buffer; stack
+/// arguments `this`, `model`, pointer to the angles; `ret 0xc`).
+// Translated from 0x0086D180 (DDDA.exe 2017-12-13 Steam)
+pub fn euler_weighted_scaled_provider(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let (this, model, angles) = (pg.u32(m, entry + 4), pg.u32(m, entry + 8), pg.u32(m, entry + 12));
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x6c + 4);
+    let (joint, out) = (c.edi, c.esi);
+    let matrix = euler_weighted_scaled_matrix(m, c, pg, this, model, joint, Angles::Memory(angles), frame);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 12);
+    c.esi = out;
+    c.edi = joint;
+}
+
+/// 0x0086AFF0 (mode 15; usercall: EAX = pointer to the angles, ESI = output
+/// buffer; stack arguments `this`, `joint`; `ret 8`).
+// Translated from 0x0086AFF0 (DDDA.exe 2017-12-13 Steam)
+pub fn euler_or_ratio_provider(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let (this, joint) = (pg.u32(m, entry + 4), pg.u32(m, entry + 8));
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x38 + 8);
+    let (angles, out) = (c.eax, c.esi);
+    let matrix = euler_or_ratio_matrix(m, c, pg, this, joint, Angles::Memory(angles), frame);
+    write_matrix(m, pg, out, &matrix);
+    c.eax = out;
+    c.esp = entry.wrapping_add(4 + 8);
+    c.esi = out;
 }

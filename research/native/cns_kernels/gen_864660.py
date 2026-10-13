@@ -7,9 +7,9 @@ def region(start,stop,regs,xmm=None,slots=None,identity=False):
     for k,v in (xmm or {}).items(): S.st.x[k]=[d.leaf(v),S.z,S.z,S.z]
     for k,v in (slots or {}).items(): S.st.slot[k]=d.leaf(v)
     if identity:
-        for k in range(16): S.st.mem[('ESI',4*k)]=d.leaf('C%x'%(0x16295c0+4*k))
+        for k in range(16): S.st.mem[('S',4*k)]=d.leaf('C%x'%(0x16295c0+4*k))
     S.run(S.st,start,stop)
-    outs=[S.st.mem.get(('ESI',4*k), S.initial('ESI',4*k)) for k in range(16)]
+    outs=[S.st.mem.get(('S',4*k), S.initial('S',4*k)) for k in range(16)]
     return d,S,outs
 out=[]
 for name,start,stop,kw in [

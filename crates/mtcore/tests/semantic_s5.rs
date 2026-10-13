@@ -211,3 +211,18 @@ fn semantic_euler_twist_provider_matches_original() {
     let count = cases(&path, mtcore::semantic_s5::euler_twist_provider, input_registers, true);
     eprintln!("{count} ABI-level 0x00865990 cases passed");
 }
+
+// verifies 0x00867b70 (modes 9, 10), 0x0086d180 (mode 11), 0x0086aff0 (mode 15): ABI level, EAX = the output buffer
+#[test]
+fn semantic_scale_providers_match_original() {
+    ddnative_host::install();
+    for (name, body, label) in [
+        ("m9", mtcore::semantic_s5::euler_row_scaled_provider as x86::LiftFn, "0x00867b70"),
+        ("m11", mtcore::semantic_s5::euler_weighted_scaled_provider, "0x0086d180"),
+        ("m15", mtcore::semantic_s5::euler_or_ratio_provider, "0x0086aff0"),
+    ] {
+        let path = format!("E:/ddda-re/notes/native-L184/cns_{name}.json");
+        let count = cases(&path, body, input_registers, true);
+        eprintln!("{count} ABI-level {label} cases passed");
+    }
+}

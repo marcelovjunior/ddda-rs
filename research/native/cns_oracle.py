@@ -57,6 +57,7 @@ class Oracle:
         for address, size in list(arenas) + [(STACK, 0x10000), (h.RET, 0x1000)]:
             map_range(address, size)
         self.arenas = arenas
+        self.speculative = []   # (address, size) the port may read although the original does not (fields of live objects)
         uc.hook_add(UC_HOOK_MEM_READ, self.read)
         uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
         uc.hook_add(UC_HOOK_CODE, self.code)
@@ -143,6 +144,8 @@ class Oracle:
         self.remember(esp, 4 * (1 + len(words)))
         before = dict(regs=self.regs())
         self.uc.emu_start(entry, h.RET, count=300000)
+        for a, n in self.speculative:
+            self.remember(a, n)
         after = dict(regs=self.regs(), memory=[(a, self.uc.mem_read(a, 1)[0]) for a in sorted(self.written)])
         return dict(seed=seed, mode=0, before=before, initial=sorted(self.initial.items()), events=self.events, after=after)
 
