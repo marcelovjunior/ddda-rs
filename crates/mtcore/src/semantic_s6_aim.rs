@@ -8,12 +8,12 @@ use ddnative_base::x86::Cpu;
 
 use crate::semantic::call_from;
 use crate::semantic_s6::{invert4, Mat4};
+use crate::semantic_s6_pose::IDENTITY;
 
 /// FLT_EPSILON; rotations smaller than this are skipped.
 const MIN_ANGLE: f32 = 1.192_092_9e-7;
 /// Degrees to radians (0x0161C22C).
 const DEGREES_TO_RADIANS: f32 = 0.017_453_292;
-const IDENTITY: Mat4 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
 
 /// What each pose kind does: the factors the source's angle (degrees)
 /// is multiplied by to get the swing angle about the direction to the
@@ -44,11 +44,24 @@ fn angle_factors(kind: u8) -> Option<(f32, f32)> {
 pub fn aim_pose(m: &mut dyn Mem, c: &mut Cpu) {
     let pg = Pages::of(m);
     let entry = c.esp;
-    let (joint, out, model) = (c.ecx, c.esi, c.edi);
+    let source = pg.u32(m, entry.wrapping_add(4));
+    // (the source is read first only when the kind has angles; the
+    // matrix function reads the same values in the original's order)
+    let pose = aim_pose_matrix(m, c, pg, entry, c.ecx, source, c.edi);
+    for (i, v) in pose.iter().enumerate() {
+        pg.set_u32(m, c.esi.wrapping_add(4 * i as u32), v.to_bits());
+    }
+    c.eax = c.esi;
+    c.esp = entry.wrapping_add(4 + 4); // ret 4
+}
+
+/// The pose matrix of [`aim_pose`] for `joint` (ECX) and `source` (the
+/// stack argument) and `model`; `entry` is the routine's ESP at
+/// entry (its return address on top).
+pub fn aim_pose_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, joint: u32, source: u32, model: u32) -> Mat4 {
     let f32_at = |m: &dyn Mem, a: u32| f32::from_bits(pg.u32(m, a));
     let mut pose = IDENTITY;
     if let Some((swing_factor, roll_factor)) = angle_factors(pg.u8(m, joint.wrapping_add(0x93))) {
-        let source = pg.u32(m, entry.wrapping_add(4));
         let radians = f32_at(m, source.wrapping_add(0x538)) * DEGREES_TO_RADIANS;
         let swing = radians * swing_factor;
         let roll = radians * roll_factor;
@@ -78,11 +91,7 @@ pub fn aim_pose(m: &mut dyn Mem, c: &mut Cpu) {
         }
         c.ebp = saved_ebp;
     }
-    for (i, v) in pose.iter().enumerate() {
-        pg.set_u32(m, out.wrapping_add(4 * i as u32), v.to_bits());
-    }
-    c.eax = out;
-    c.esp = entry.wrapping_add(4 + 4); // ret 4
+    pose
 }
 
 /// The model's joint record for bone `kind + 2` (0 / 0xff: none).

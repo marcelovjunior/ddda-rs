@@ -96,22 +96,18 @@ fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu), matrix_at: 
             assert_eq!(target, n(&event["target"]), "case {i}: call {k} target");
             let want = regs(call);
             assert_eq!(c.esp, want[ESP], "case {i}: call {target:x} ESP");
-            // callee-saved registers as the original holds them: EBX and
-            // EBP always; ESI and EDI are the pose builders' inputs (in
-            // the original's later calls they are scratch)
+            // EBX and EBP as the original holds them (the pose routines'
+            // frames set EBP)
             assert_eq!([c.ebx, c.ebp], [want[EBX], want[EBP]], "case {i}: call {target:x} EBX/EBP");
-            let builder = (0x0082_8bd0..=0x0082_9c60).contains(&target);
-            if builder {
-                assert_eq!([c.esi, c.edi], [want[ESI], want[EDI]], "case {i}: call {target:x} ESI/EDI");
-            }
-            let crt = target == 0x012f_161f || target == 0x012f_0906;
-            if crt {
-                assert_eq!(c.xmm[0][0], n(&call["xmm0"]), "case {i}: call {target:x} XMM0");
-            } else {
-                assert_eq!(c.ecx, want[ECX], "case {i}: call {target:x} ECX");
-            }
-            if matches!(target, 0x0082_91b0 | 0x0082_9a00 | 0x0082_9c60) {
-                assert_eq!(c.eax, want[EAX], "case {i}: call {target:x} EAX (pose source)");
+            let q = |lo: u32, hi: u32| lo as u64 | ((hi as u64) << 32);
+            match target {
+                // double atan2(y = XMM0, x = XMM1) -> XMM0
+                0x012f_1109 => {
+                    assert_eq!(q(c.xmm[0][0], c.xmm[0][1]), call["xmm0q"].as_u64().unwrap(), "case {i}: atan2 y");
+                    assert_eq!(q(c.xmm[1][0], c.xmm[1][1]), call["xmm1q"].as_u64().unwrap(), "case {i}: atan2 x");
+                }
+                0x3000_0058 => assert_eq!(c.ecx, want[ECX], "case {i}: root_matrix ECX"),
+                _ => assert_eq!(c.xmm[0][0], n(&call["xmm0"]), "case {i}: call {target:x} XMM0"),
             }
             // the callee reads its return address and stack arguments
             let recorded = pairs(&call["memory"]);
@@ -126,7 +122,8 @@ fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu), matrix_at: 
             }
             c.eax = regs(back)[EAX];
             c.esp = regs(back)[ESP];
-            c.xmm[0][0] = n(&back["xmm0"]);
+            let r = back.get("xmm0q").map_or(n(&back["xmm0"]) as u64, |v| v.as_u64().unwrap());
+            (c.xmm[0][0], c.xmm[0][1]) = (r as u32, (r >> 32) as u32);
             *position.borrow_mut() += 1;
         })));
         body(&mut m, &mut c);

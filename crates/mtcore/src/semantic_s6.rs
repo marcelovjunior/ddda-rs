@@ -26,6 +26,7 @@ use ddnative_base::mem::{Mem, Pages};
 use ddnative_base::x86::Cpu;
 
 use crate::semantic::call_from;
+use crate::semantic_s6_pose::{build_pose, has_pose_routine, PoseCall};
 
 /// A 4x4 float matrix, row-major (element `4 * row + column`), as the
 /// game stores them.
@@ -44,61 +45,6 @@ const SLERP_LIMIT: f32 = 0.999_999_88;
 const NO_PARENT: u8 = 0xff;
 /// Size of a joint record of the model's joint array.
 const JOINT_STRIDE: u32 = 0xa0;
-
-/// Where [`PoseBuilder`] goes in the original: kind -> builder.
-///
-/// The builders are the nine not-yet-ported routines at 0x00828BD0 ...
-/// 0x00829EC0. All of them write a 4x4 pose matrix to the buffer in ESI
-/// (a local of this function's frame) and return its address in EAX; they
-/// are called with the original's registers, so the lifted bodies run
-/// unchanged.
-#[derive(Clone, Copy)]
-struct PoseBuilder {
-    /// Entry of the builder.
-    entry: u32,
-    /// The original's return address after the call.
-    back: u32,
-    /// The buffer ESI points to, relative to the function's frame.
-    buffer: u32,
-    /// How the builder is fed.
-    input: PoseInput,
-}
-
-#[derive(Clone, Copy)]
-enum PoseInput {
-    /// ECX = the joint record.
-    Joint,
-    /// EAX = the filter's pose source, ECX = the filter.
-    Source,
-    /// ECX = the joint record, the pose source pushed, EDI = the model
-    /// (`ret 4`).
-    JointSourceModel,
-}
-
-/// The builder for a filter kind (`this + 0x68`), or none for the kinds
-/// the original skips (4, 7, 8, 11..13, 15, 17, 19 and anything above 20).
-/// The original dispatches through a 20-entry byte table at 0x00874D64
-/// and a jump table at 0x00874D34.
-fn pose_builder(kind: u32) -> Option<PoseBuilder> {
-    use PoseInput::*;
-    let (entry, back, buffer, input) = match kind {
-        1 => (0x0082_8bd0, 0x0087_2490, 0xe0, Joint),
-        2 => (0x0082_8ec0, 0x0087_24a3, 0x90, Joint),
-        3 => (0x0082_91b0, 0x0087_24b6, 0x140, Source),
-        5 => (0x0082_93f0, 0x0087_24c9, 0x280, Joint),
-        9 => (0x0082_96f0, 0x0087_24d9, 0x200, Joint),
-        // The four-byte push before these shifts the buffer offsets the
-        // original's `lea esi, [esp + n]` encode by 4.
-        6 => (0x0082_9ec0, 0x0087_24ed, 0x300, JointSourceModel),
-        10 => (0x0082_9ec0, 0x0087_2501, 0x180, JointSourceModel),
-        14 => (0x0082_9ec0, 0x0087_2515, 0x1c0, JointSourceModel),
-        18 => (0x0082_9ec0, 0x0087_2529, 0x240, JointSourceModel),
-        16 => (0x0082_9a00, 0x0087_2539, 0x2c0, Source),
-        20 => (0x0082_9c60, 0x0087_2549, 0x340, Source),
-        _ => return None,
-    };
-    Some(PoseBuilder { entry, back, buffer, input })
-}
 
 /// 0x00872420, `filter->apply(joint, model)` (thiscall, `ret 8`): update
 /// one joint's local matrix from the filter.
@@ -132,38 +78,29 @@ pub fn motion_filter_apply(m: &mut dyn Mem, c: &mut Cpu) {
         c.esp = done;
         return;
     }
-    let Some(builder) = pose_builder(pg.u32(m, filter.wrapping_add(0x68))) else {
+    if !has_pose_routine(pg.u32(m, filter.wrapping_add(0x68))) {
         c.esp = done;
         return;
-    };
+    }
     let joint = pg.u32(m, entry.wrapping_add(4));
+    let model = pg.u32(m, entry.wrapping_add(8));
     // The original's frame: EBP = entry - 4, aligned down to 16, 0x374
     // bytes of locals, then EBX, ESI and EDI pushed.
     let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x374 + 12);
     let saved = (c.ebx, c.ebp, c.esi, c.edi);
     let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
-    // The callee-saved registers the original holds during its calls
-    // (the builders take ESI and EDI as inputs).
+    // The callee-saved registers the original holds during its calls.
     c.ebx = joint;
     c.ebp = entry.wrapping_sub(4);
     c.edi = source;
-
-    // 1. the pose matrix of the filter's kind
-    c.esi = frame.wrapping_add(builder.buffer);
-    let (this, args): (u32, &[u32]) = match builder.input {
-        PoseInput::Joint => (joint, &[]),
-        PoseInput::Source => {
-            c.eax = source;
-            (filter, &[])
-        }
-        PoseInput::JointSourceModel => {
-            c.edi = pg.u32(m, entry.wrapping_add(8));
-            (joint, &[source])
-        }
-    };
-    let pose_at = call_from(m, c, pg, frame, this, args, builder.back, guest(builder.entry));
-    let mut pose = read_mat4(m, pg, pose_at);
     c.esi = filter;
+
+    // 1. the pose matrix of the filter's kind (the original's calls of the
+    //    pose routines are folded into build_pose)
+    let kind = pg.u32(m, filter.wrapping_add(0x68));
+    let call = PoseCall { pages: pg, joint, source, model, frame };
+    let mut pose = build_pose(m, c, &call, kind);
+    c.ebp = entry.wrapping_sub(4);
 
     // 2. weaker than full weight: pull the pose toward the rest pose
     let weight = f32_at(m, filter.wrapping_add(0x44));
@@ -176,7 +113,6 @@ pub fn motion_filter_apply(m: &mut dyn Mem, c: &mut Cpu) {
     let result = if pg.u32(m, filter.wrapping_add(0x6c)) == 0 {
         mul4(&pose, &local)
     } else {
-        let model = pg.u32(m, entry.wrapping_add(8));
         let parent = match pg.u8(m, joint.wrapping_add(0x91)) {
             NO_PARENT => {
                 // model->root_matrix(-1)
