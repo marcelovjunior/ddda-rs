@@ -697,7 +697,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
     let part = match previous {
         Some(p) if Arc::ptr_eq(&p.meta, &meta) && p.alpha == alpha && p.written == written
             && *p.constants[0] == banks[0] && *p.constants[1] == banks[1] => p.clone(),
-        _ => { if let Some(p) = previous { eprintln!("DEBUG rebuild: meta {} alpha {} written {} c0 {} c1 {}", Arc::ptr_eq(&p.meta, &meta), p.alpha == alpha, p.written == written, *p.constants[0] == banks[0], *p.constants[1] == banks[1]); } Arc::new(BindingPart { meta, alpha, constants: [Arc::new(banks[0].clone()), Arc::new(banks[1].clone())], written }) }
+        _ => Arc::new(BindingPart { meta, alpha, constants: [Arc::new(banks[0].clone()), Arc::new(banks[1].clone())], written }),
     };
     c.banks = banks;
     Ok(part)
