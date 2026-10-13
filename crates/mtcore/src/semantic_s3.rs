@@ -2,7 +2,7 @@
 //! method and the joint/model update helper (see each function).
 use crate::semantic::call_from;
 use ddnative_base::mem::{Mem, Pages, READ};
-use ddnative_base::x86::{call_ext, Cpu};
+use ddnative_base::x86::Cpu;
 
 /// An x87 `fld dword` / `fstp dword` round trip: exact for every float but a
 /// signalling NaN, which the load quiets.
@@ -65,7 +65,7 @@ pub fn finish_draw(m: &mut dyn Mem, c: &mut Cpu) {
         (c.ebx, c.ebp, c.esi, c.edi) = saved;
         c.esp = entry.wrapping_add(4);
     };
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     let flags = pg.u8(m, unit.wrapping_add(0x2627));
     if flags & 2 == 0 || flags & 8 == 0 || flags & 4 == 0 {
         return finish(c);
@@ -281,7 +281,7 @@ pub fn update_model_bounds(m: &mut dyn Mem, c: &mut Cpu) {
     if count == 0 {
         // the original's frame at the call: 16-byte aligned, 0xc4 locals, three pushes
         let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0xc4 + 12);
-        call_from(m, c, pg, frame, model, &[], 0x00ff_b0e9, |m, c| call_ext(m, c, 0x00ea_3d00));
+        call_from(m, c, pg, frame, model, &[], 0x00ff_b0e9, |m, c| crate::semantic::call_guest(m, c, 0x00ea_3d00));
         return finish(c);
     }
     let skinned = pg.u8(m, model.wrapping_add(0x108)) & 0x40 != 0;
@@ -405,7 +405,7 @@ pub fn update_scene_objects(m: &mut dyn Mem, c: &mut Cpu) {
     let saved = (c.ebx, c.ebp, c.esi, c.edi);
     // the original's frame at its calls: four pushes
     let frame = entry.wrapping_sub(16);
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     let at = |offset: u32| scene.wrapping_add(offset);
     pg.set_u32(m, at(0xd48), 1);
     pg.set_u32(m, at(0xd44), 0x18);
@@ -506,7 +506,7 @@ pub fn sync_runtime_object(m: &mut dyn Mem, c: &mut Cpu) {
     // then two pushes
     let frame = (entry.wrapping_sub(4) & !7).wrapping_sub(8);
     let at = |offset: u32| record.wrapping_add(offset);
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     let finish = |c: &mut Cpu| c.esp = entry.wrapping_add(4);
     // the runtime object, read again after every call as the original does
     let object = |m: &dyn Mem| pg.u32(m, at(0x28));
@@ -673,7 +673,7 @@ pub fn apply_effect_toggle(m: &mut dyn Mem, c: &mut Cpu) {
     // the original's frame at its calls: four pushes
     let frame = entry.wrapping_sub(16);
     let at = |offset: u32| job.wrapping_add(offset);
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     let call = |m: &mut dyn Mem, c: &mut Cpu, this: u32, args: &[u32], back: u32, target: u32| {
         call_from(m, c, pg, frame, this, args, back, guest(target))
     };
@@ -1138,7 +1138,7 @@ pub fn world_position(m: &mut dyn Mem, c: &mut Cpu) {
         let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x1c + 4);
         let local = frame.wrapping_add(0x10);
         let method = pg.u32(m, pg.u32(m, root).wrapping_add(0x30));
-        let found = call_from(m, c, pg, frame, root, &[local], 0x00ea_1f8d, |m, c| call_ext(m, c, method)) & 0xff != 0;
+        let found = call_from(m, c, pg, frame, root, &[local], 0x00ea_1f8d, |m, c| crate::semantic::call_guest(m, c, method)) & 0xff != 0;
         c.eax = out;
         if found {
             for axis in 0..3u32 {
@@ -1190,7 +1190,7 @@ pub fn classify_overlap_with(m: &mut dyn Mem, c: &mut Cpu, ports: Option<(ddnati
     let test = |m: &mut dyn Mem, c: &mut Cpu, port: Option<ddnative_base::x86::LiftFn>, target: u32, args: &[u32], back: u32| {
         call_from(m, c, pg, frame, other, args, back, |m, c| match port {
             Some(port) => port(m, c),
-            None => call_ext(m, c, target),
+            None => crate::semantic::call_guest(m, c, target),
         })
     };
     let mut answer = test(m, c, ports.map(|p| p.0), 0x00ff_0780, &[object.wrapping_add(0x160)], 0x00ea_1f08);

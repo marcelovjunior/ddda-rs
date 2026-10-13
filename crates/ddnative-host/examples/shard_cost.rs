@@ -90,6 +90,13 @@ fn main() {
         cpu.st.register::<0xc9de>(); // fmulp st1, st0
         cpu.st.register::<0xd8dd>();
     }), n, "fld1 x2 + fmulp + fstp st0");
+    // the floor: the same instructions with no helper at all (live FPU of this thread)
+    {
+        let mut buf = [0u32; 4];
+        let p = bb(buf.as_mut_ptr());
+        bench(|_| rep!({ unsafe { std::arch::asm!("fld dword ptr [{p}]", "fstp dword ptr [{p} + 4]", p = in(reg) p) }; }), n, "floor: raw fld+fstp m32");
+        bench(|_| rep!({ unsafe { std::arch::asm!("fld1", "fstp st(0)") }; }), n, "floor: raw fld1+fstp st0");
+    }
     // flags
     let mut fl = Flags::default();
     bench(|i| rep!({ bb(fl.alu_sub(i, bb(100), bb(32))); bb(fl.zf()); }), n, "sub+zf");

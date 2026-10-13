@@ -4,7 +4,7 @@
 //! and every call to other guest code kept as a guest call.
 use crate::semantic::call_from;
 use ddnative_base::mem::{Mem, Pages};
-use ddnative_base::x86::{call_ext, Cpu};
+use ddnative_base::x86::Cpu;
 
 /// What the x87 `FLD m32` / `FSTP m32` pair does to a float's bits: a
 /// signalling NaN comes back quiet, everything else is unchanged.
@@ -54,7 +54,7 @@ struct Regs {
 fn guest_call(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, target: u32, regs: Regs, args: &[u32], back: u32) -> u32 {
     call_from(m, c, pg, frame, regs.ecx, args, back, |m, c| {
         (c.eax, c.edx, c.esi, c.edi) = (regs.eax, regs.edx, regs.esi, regs.edi);
-        call_ext(m, c, target);
+        crate::semantic::call_guest(m, c, target);
     })
 }
 

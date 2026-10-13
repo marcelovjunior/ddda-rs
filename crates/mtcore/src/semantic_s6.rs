@@ -88,7 +88,7 @@ pub fn motion_filter_apply(m: &mut dyn Mem, c: &mut Cpu) {
     // bytes of locals, then EBX, ESI and EDI pushed.
     let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x374 + 12);
     let saved = (c.ebx, c.ebp, c.esi, c.edi);
-    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target);
     // The callee-saved registers the original holds during its calls.
     c.ebx = joint;
     c.ebp = entry.wrapping_sub(4);

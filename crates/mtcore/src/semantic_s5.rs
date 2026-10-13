@@ -27,7 +27,7 @@
 //! guest call. The providers, the blend and the parent accessor stay guest
 //! calls, made with the original's registers and frame layout.
 use ddnative_base::mem::{Mem, Pages};
-use ddnative_base::x86::{call_ext, Cpu};
+use ddnative_base::x86::Cpu;
 
 /// Degrees to radians, 0x0161C22C.
 const DEGREES_TO_RADIANS: f32 = f32::from_bits(0x3c8e_fa35);
@@ -89,7 +89,7 @@ fn guest_call(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, target: u32, 
     c.esp = c.esp.wrapping_sub(4);
     pg.set_u32(m, c.esp, back);
     (c.eax, c.ecx, c.esi, c.edi) = (regs.eax, regs.ecx, regs.esi, regs.edi);
-    call_ext(m, c, target);
+    crate::semantic::call_guest(m, c, target);
     c.eax
 }
 

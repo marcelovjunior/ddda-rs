@@ -123,7 +123,9 @@ fn clear_call(g: &G, c: &mut Caches, info: &FrameInfo, fallback: u32, args: Clea
     }
     let t = {
         let mut map = std::mem::take(&mut c.target_bindings);
-        let r = kept_part(&mut map, c.frame, targets, || target_part(g, c, info, targets));
+        let mut builds = 0;
+        let r = kept_part(&mut map, c.frame, targets, || target_part(g, c, info, targets), &mut builds);
+        c.built[0] += builds;
         c.target_bindings = map;
         r?
     };

@@ -27,7 +27,7 @@
 //! 2017-12-13 Steam).
 use crate::semantic::call_from;
 use ddnative_base::mem::{Mem, Pages};
-use ddnative_base::x86::{call_ext, Cpu};
+use ddnative_base::x86::Cpu;
 
 mod field {
     pub const SOURCE: u32 = 4;
@@ -51,7 +51,7 @@ const RETRY_ERROR_ADDRESS: u32 = 0x018d_0230;
 fn source_call(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, source: u32, slot: u32, args: &[u32], back: u32) -> u32 {
     let vtable = pg.u32(m, source);
     let target = pg.u32(m, vtable.wrapping_add(slot));
-    call_from(m, c, pg, frame, source, args, back, |m, c| call_ext(m, c, target))
+    call_from(m, c, pg, frame, source, args, back, |m, c| crate::semantic::call_guest(m, c, target))
 }
 
 /// The CRT memcpy (which behaves as memmove) of `len` bytes, through the

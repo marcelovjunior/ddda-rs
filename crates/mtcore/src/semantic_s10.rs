@@ -5,13 +5,13 @@
 use crate::semantic::call_from;
 use ddnative_base::{
     mem::{Mem, Pages},
-    x86::{self, Cpu},
+    x86::Cpu,
 };
 
 /// Runs the guest function at `target` (the lifted body behind the runtime's
 /// call handler).
 fn guest(target: u32) -> impl FnOnce(&mut dyn Mem, &mut Cpu) {
-    move |m, c| x86::call_ext(m, c, target)
+    move |m, c| crate::semantic::call_guest(m, c, target)
 }
 
 /// The descriptor a trivial `mov eax, imm32; ret` getter returns, read

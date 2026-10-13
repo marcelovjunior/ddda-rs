@@ -210,7 +210,7 @@ impl Upload<'_> {
             this,
             args,
             back,
-            move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target),
+            move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target),
         )
     }
     /// Take `size` bytes from the context's constant arena, growing it
@@ -450,7 +450,7 @@ pub fn set_fade(m: &mut dyn Mem, c: &mut Cpu) {
             page_allocator,
             &[chunk],
             0x00ff_1372,
-            |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, 0x00da_7d70),
+            |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, 0x00da_7d70),
         );
         pg.set_u32(m, field(0x24), block);
         pg.set_u32(
@@ -551,7 +551,7 @@ impl Collect<'_> {
             this,
             args,
             back,
-            move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target),
+            move |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, target),
         );
     }
     /// A call through slot `slot` of `object`'s vtable.
@@ -1610,7 +1610,7 @@ fn arena_take(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, si
             allocator,
             &[chunk],
             back,
-            |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, 0x00da_7d70),
+            |m: &mut dyn Mem, c: &mut Cpu| crate::semantic::call_guest(m, c, 0x00da_7d70),
         );
         pg.set_u32(m, this + 0x24, page);
         pg.set_u32(

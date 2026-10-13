@@ -694,7 +694,7 @@ fn call(
         pages.set_u32(memory, cpu.esp, value);
     }
     cpu.ecx = this;
-    x86::call_ext(memory, cpu, target);
+    crate::semantic::call_guest(memory, cpu, target);
 }
 
 // Translated from 0x010655A0 (DDDA.exe 2017-12-13 Steam).

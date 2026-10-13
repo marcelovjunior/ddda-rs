@@ -74,3 +74,26 @@ single-binding bench does not exercise.
   The content cache still avoids allocating when they did not change.
 - Oracle test: a binding used again after another one in the same frame
   sees its new values; the consecutive draw keeps its part.
+
+## The original's upload skipping (cb495a30, verified in combo46)
+
+- combo44 still had a ps c4 mismatch on a written register, marked
+  "decoded for this draw". It is the original's upload skipping in
+  0x00DAA8B0, as `mtstate::shader` decodes it:
+  - the same binding as the context holds: nothing is uploaded;
+  - after a binding with the same vertex shader (and pixel shader, for the
+    pixel stage), an upload whose value slot holds the same pointer is
+    skipped, so the device keeps the earlier values even though the memory
+    changed.
+- The sink now models this. The previous apply is the sink's model after a
+  decided draw, else the executor context's +0x10/+0x24/+0x28.
+  - Same binding: the previous draw's constants.
+  - Skipped registers: the previous draw's constants, else the device's.
+  - A per-draw part only when held values differ.
+- combo46 verify: 0 mismatches over the run, but 4.2–4.8 µs per decided
+  draw.
+- ca5a50d6 brings the cost down:
+  - copy-on-write banks: no clone when the held or uncovered values equal
+    the part's;
+  - texture lists found by slots, textures and states, with a per-frame
+    slot check.
