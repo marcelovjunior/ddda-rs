@@ -9,8 +9,12 @@
   brief, no fast-boot option: original timing/input paths remain unchanged.
 - Boot profile implicates scene/geometry setup; a nested Vorbis symbol is
   inconsistent with original callers. Exact opt-in FE9580/12EB690 counters
-  added; wrapper-effects regression and eight parser tests pass. Next:
-  head's counter run before selecting the port; UI timings need head marks.
+  added; wrapper-effects regression and eight parser tests pass.
+- Float compare/LAHF/TEST/Jcc fusion covers **1,537 sites / 701 functions**,
+  nine in FE9580. Three tests pass, including **401,408 native oracle
+  cases** preserving AH, flags and MXCSR. Whole geometry port is WIP.
+  Next: head integration regeneration/gate and counter run; UI timings
+  need head marks. No measured geometry or first-Present speedup yet.
 
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 

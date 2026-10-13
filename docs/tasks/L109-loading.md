@@ -115,6 +115,32 @@ record the subdivision argument (FEAE50 passes 4 at startup). No log
 switch means no extra wrappers. These counters disambiguate profiler
 symbol names; they do not change decoding or geometry generation.
 
+#### Float comparison fusion (head scope extension 11162)
+
+Generation now folds an adjacent `COMISS/UCOMISS; LAHF; TEST AH,imm8;
+Jcc` within a single basic block. The hardware compare still executes
+under live MXCSR. AH and the full outgoing lazy TEST flags remain
+materialized; the branch uses the compare's four-way result directly.
+No dead-flags assumption, float reassociation, NaN shortcut, or runtime
+address special case is used. Restartable instruction entries and
+`LIFT_LEAN=0` retain literal emission. Existing caches work without relift.
+
+Private-cache census (`scripts/scan_float_compare.py`): **1,537 sites in
+701 functions**, including **nine FE9580 sites**. All current sites use
+mask 0x44 (790 JP, 747 JNP). FE9580's depth-four normal accumulation scans
+3,072 triangles against 9,216 vertices: **28,311,552 candidates**.
+
+Three new tests pass: decoder/boundary guards, all **4,096 mask/condition
+combinations** over four compare outcomes, and **401,408 native x86 oracle
+cases** comparing branch, EAX/AH, defined TEST flags, unchanged XMM lanes,
+and MXCSR. The native cases include signed zero, subnormal, finite,
+infinite, quiet/signaling NaN operands; both compare instructions; and
+seven rounding/DAZ/FTZ settings. Compiled at opt-level 1 without shards.
+This verifies the emission rule; affected original-function vectors,
+regeneration/native gate and game timing remain pending head integration.
+The whole readable FE9580 port requested alongside fusion is still work
+in progress. No geometry speedup or new boot-time result is claimed yet.
+
 ### Continuation: readable inflate fast loop (2026-10-13)
 
 Rebased onto `task/fps-line`; baseline instrumentation/read scratch is
