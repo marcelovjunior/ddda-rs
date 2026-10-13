@@ -574,6 +574,28 @@ fn write_pp(m: &mut dyn Mem, p: u32, pp: &PresentParameters) {
     }
 }
 
+/// D3D9's CreateDevice without D3DCREATE_FPU_PRESERVE (0x2) sets the
+/// calling thread's x87 control word to single precision, round to nearest
+/// (the D3DCREATE_FPU_PRESERVE documentation), and every later x87
+/// computation on that thread runs that way. The runtime did not, so the
+/// guest kept MSVC's 53-bit precision (L182, claude-9: the executor's clear
+/// compares an unrounded x87 product with 1.0 and missed at 53 bits).
+/// `DDRUNTIME_D3D_FPU_PRESERVE=1` keeps the old behaviour.
+fn single_precision_unless_preserved(m: &mut dyn Mem, cpu: &mut Cpu, flags: u32) {
+    const D3DCREATE_FPU_PRESERVE: u32 = 0x2;
+    if flags & D3DCREATE_FPU_PRESERVE != 0 || std::env::var("DDRUNTIME_D3D_FPU_PRESERVE").as_deref() == Ok("1") {
+        return;
+    }
+    // precision control (bits 8-9) 00 = 24 bits, rounding (bits 10-11) 00 = nearest
+    let control = cpu.st.control() & !0x0f00;
+    // FLDCW m16 (D9 /5) from a scratch word below the stack pointer, as the
+    // guest's own code would load it
+    let scratch = cpu.esp.wrapping_sub(16);
+    m.set_u16(scratch, control);
+    cpu.st.memory::<0x28d9, 2, false>(m, scratch);
+    eprintln!("ddruntime: CreateDevice set the guest x87 control word to {control:#06x} (no D3DCREATE_FPU_PRESERVE)");
+}
+
 /// IDirect3D9::CreateDevice(this, adapter, devtype, focus window, flags,
 /// D3DPRESENT_PARAMETERS*, IDirect3DDevice9**). The completed parameters
 /// are written back, as D3D9 does.
@@ -594,7 +616,9 @@ pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
             with_device(device, |d| d.swap_chains.push(chain));
             bind_implicit(m, device, chain, pp);
             m.set_u32(out, device);
-            crate::load_log::event("d3d_device_created", format_args!("device={device:#x}"));
+            crate::load_log::event("d3d_device_created", format_args!("device={device:#x} flags={flags:#x}"));
+            eprintln!("ddruntime: CreateDevice behavior flags {flags:#x}");
+            single_precision_unless_preserved(m, cpu, flags);
             D3D_OK
         }
     };
