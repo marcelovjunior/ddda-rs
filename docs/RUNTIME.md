@@ -1,5 +1,14 @@
 # Phase 1 runtime proposal (R01)
 
+## L109 loading telemetry
+
+`DDRUNTIME_LOAD_LOG=1` adds process-relative startup/movie/file/archive/GPU
+timing and frame counters. `scripts/load_timeline.py` produces a timeline;
+UI milestones require explicit head-observed timestamps. Service totals
+are inclusive across threads, not additive wall-time phases. Archive
+wrappers retain original code and registered overrides. See
+[timing boundaries and validation](tasks/L109-loading.md).
+
 ## L82 render service tails (2026-10-13)
 
 **Input convoy follow-up:** GetAsyncKeyState/GetKeyState and the stateless

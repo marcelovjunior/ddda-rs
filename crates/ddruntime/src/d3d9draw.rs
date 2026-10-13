@@ -484,6 +484,8 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// Present the swap chain's first back buffer.
 pub fn present_back_buffer(m: &dyn Mem, back_buffer: u32) {
+    static FIRST_PRESENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    crate::load_log::once(&FIRST_PRESENT, "first_present");
     PRESENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     flush(m, back_buffer);
     if let Some(t) = target(back_buffer) {

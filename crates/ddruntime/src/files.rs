@@ -183,6 +183,7 @@ fn new_handle(f: &mut Files, o: Open) -> u32 {
 
 /// CreateFileA/W(name, access, share, security, disposition, flags, template).
 fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
+    let load_started = crate::load_log::begin();
     let name = if wide { guest_str_w(m, arg(m, cpu, 0)) } else { guest_str_a(m, arg(m, cpu, 0)) };
     let (access, disposition) = (arg(m, cpu, 1), arg(m, cpu, 4));
     let result = with_files(|f| -> Result<u32, u32> {
@@ -230,6 +231,7 @@ fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
         };
         Ok(new_handle(f, Open::File(file)))
     });
+    crate::load_log::open_done(load_started, &name, result.is_ok());
     cpu.eax = match result {
         Ok(h) => h,
         Err(e) => {
@@ -254,6 +256,7 @@ fn put_bytes(m: &mut dyn Mem, at: u32, data: &[u8]) {
 /// ReadFile(handle, buffer, count, read*, overlapped): synchronous reads
 /// only (an OVERLAPPED argument is refused until asynchronous I/O exists).
 pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let load_started = crate::load_log::begin();
     let (h, buf, count, read_out, overlapped) =
         (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     assert_eq!(overlapped, 0, "ReadFile with OVERLAPPED: asynchronous I/O is not implemented");
@@ -272,6 +275,7 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
             n as u32
         })
     });
+    crate::load_log::read_done(load_started, read.unwrap_or(0) as u64);
     cpu.eax = match read {
         Some(n) => {
             if read_out != 0 {
@@ -296,6 +300,7 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// reaches the end completes with the bytes there were. The game's reader
 /// is MtFile::vf08 (0x00D0D440) with completion 0x00D0D430.
 pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let load_started = crate::load_log::begin();
     let (h, buf, count, ov, routine) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     let offset = m.u32(ov + 8) as u64 | (m.u32(ov + 12) as u64) << 32;
     let file = with_files(|f| match f.handles.get_mut(&h) {
@@ -315,6 +320,7 @@ pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
             Ok(v.len() as u32)
         })
     });
+    crate::load_log::read_done(load_started, data.as_ref().copied().unwrap_or(0) as u64);
     cpu.eax = match data {
         Ok(n) => {
             m.set_u32(ov, 0); // Internal: STATUS_SUCCESS

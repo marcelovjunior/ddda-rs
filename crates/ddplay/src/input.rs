@@ -240,6 +240,7 @@ fn autoplay(events: EventSender) {
             let per = if frames > 0 { draws / frames } else { 0 };
             let t = start.elapsed().as_secs_f64();
             eprintln!("ddplay stage-probe t={t:.0}s draws/frame={per} fps={:.1}", frames as f64 / 3.0);
+            ddruntime::load_log::event("stage_probe", format_args!("draws_per_frame={per} frames={frames} source=autoplay"));
             if playing {
                 continue;
             }

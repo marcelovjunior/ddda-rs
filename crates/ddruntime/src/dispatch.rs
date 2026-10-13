@@ -183,7 +183,11 @@ impl Registry {
         let mut r = Self::new();
         // the readable ports and mods over their lifted bodies (L60)
         #[cfg(feature = "game")]
-        ddports::ensure();
+        ddports::ensure_with(|ports| {
+            if crate::load_log::enabled() {
+                crate::load_log::wrap_archive(ports, &ddnative::generated::lifted::bodies());
+            }
+        });
         #[cfg(feature = "game")]
         r.set_instruction_lookup(ddnative::generated::lifted::instruction);
         #[cfg(feature = "game")]
