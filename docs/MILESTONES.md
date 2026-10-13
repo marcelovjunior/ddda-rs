@@ -1,5 +1,25 @@
 # Milestones
 
+### L133 native rejection fallback and Vulkan interop (2026-10-13)
+
+- Combo17 native log: **63,496 rejected jobs / 3,488,189 lost draws**;
+  producer enqueue counters were mistaken for worker acceptance. Compare
+  mode ran **zero** comparisons (capability flag bypass, sent to claude-2).
+- `native_or_draw` retains original DrawCalls on the same worker FIFO;
+  atomic rejection replays them once without a producer wait. **12 CPU
+  transport tests pass**; integrated by claude-2. Combo19 has **42,880 matching
+  attachment/aspect comparisons / zero mismatches** for accepted jobs.
+- `ab4318c9`: bounded triangle strips exclude restart by the D3D9 index-range
+  contract; covers **99.954%** of cap1 strips. **Seven worker GPU / 16 CPU
+  tests pass**; runtime light **187 pass / one inherited gamma failure /
+  three ignored**. Query, channel-fill and depth-bias cases keep FIFO fallback.
+- Raw Vulkan drawing with wgpu-owned targets/VB/IB, tracked barriers and
+  wgpu queue submission: **eight image cases pass**. Preliminary median
+  **0.354 us/draw** vs ash **0.326** / wgpu **1.129**, prefilled uniforms;
+  shared-load timing limits and migration risks in the L133 brief.
+- Next: head's fresh Compare/Native run with the strip fix to measure wider
+  uptake and FPS. No valid combo17 native image/FPS acceptance claim.
+
 ### L129 combined integer/float flag fusion gate (2026-10-13)
 
 - Merged FPS-line `05b35e35` with both lifter emitters and regenerated

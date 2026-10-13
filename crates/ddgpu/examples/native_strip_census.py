@@ -7,18 +7,26 @@ This checks the declared D3D9 range, not the contents of index buffers.
 import argparse
 import collections
 import json
+import os
 import struct
 
 
 def summarize(path):
     counts = collections.Counter()
     with open(path, "rb") as stream:
+        end = os.fstat(stream.fileno()).st_size
         if stream.read(12) != b"DDFRAME\0\x01\0\0\0":
             raise ValueError("requires DDFRAME version 1")
         while header := stream.read(5):
             if len(header) != 5:
-                raise ValueError("incomplete record header")
+                counts["truncated_tail_records"] += 1
+                break
             tag, size = struct.unpack("<BI", header)
+            # A capture can end mid-record when its process is stopped. Report
+            # this explicitly and census only the complete command prefix.
+            if size > end - stream.tell():
+                counts["truncated_tail_records"] += 1
+                break
             if tag == 1:
                 stream.seek(size, 1)
                 continue
