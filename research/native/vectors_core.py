@@ -68,7 +68,7 @@ PORTS = {
     0x00CF5C00: "new", 0x00CF7340: "plist_ctor", 0x004027A0: "plist_add", 0x00CF74E0: "plist_clear",
     0x00CF76C0: "plist_dtor", 0x004025C0: "arr_clear", 0x00402620: "arr_reserve", 0x00402530: "arr_dtor",
     0x00CF5450: "reg_add", 0x00CF54A0: "reg_remove", 0x00CF5E40: "set_alloc", 0x00CF5750: "propagate",
-    0x00CF55E0: "find_child", 0x00CF5870: "find_name",
+    0x00CF55E0: "find_child", 0x00CF5870: "find_name", 0x00DB82C0: "tree_range",
 }
 MODELS = {0x00CF73F0: "pool40_alloc", 0x012EFE20: "memset", 0x012EFEA0: "memcpy"}
 
@@ -305,6 +305,44 @@ def build(kind, rnd):
         q = rnd.choice(ids) if ids and rnd.random() < 0.6 else rnd.choice([rnd.getrandbits(32), 0x305, 0])
         args = [q]
         g = [(BUCKETS, struct.pack("<256I", *buckets))]
+    elif kind == "tree_range":
+        # MSVC std::set<u32>: node _Left +0, _Parent +4, _Right +8, key +0xC,
+        # _Color +0x10, _Isnil +0x11; the tree holds _Myhead at +4, whose
+        # _Parent is the root and whose _Isnil is set; leaves point at it
+        head = sc.alloc(0x18)
+        sc.u8(head + 0x11, 1)
+        keys = rnd.sample(range(1, 1 << 16), rnd.choice([0, 1, 2, 3, 7, 20, 60]))
+        if rnd.random() < 0.3:
+            keys = [k * 0x10001 for k in keys]
+        root = head
+        nodes = {}
+        for k in keys:
+            n = sc.alloc(0x18)
+            sc.u32(n + 0, head)
+            sc.u32(n + 8, head)
+            sc.u32(n + 0xC, k)
+            sc.u8(n + 0x11, 0)
+            nodes[n] = k
+            if root == head:
+                root = n
+                sc.u32(n + 4, head)
+                continue
+            p = root
+            while True:
+                side = 0 if k < nodes[p] else 8
+                child = struct.unpack_from("<I", sc.b, p + side - SCRATCH)[0]
+                if child == head:
+                    sc.u32(p + side, n)
+                    sc.u32(n + 4, p)
+                    break
+                p = child
+        sc.u32(head + 4, root)
+        sc.u32(obj + 4, head)
+        q = rnd.choice(keys) if keys and rnd.random() < 0.5 else rnd.choice(
+            [0, 0xFFFFFFFF, rnd.getrandbits(32), (min(keys) - 1) if keys else 5, (max(keys) + 1) if keys else 6])
+        key = sc.alloc(4)
+        sc.u32(key, q)
+        args = [sc.alloc(8), key]
     elif kind == "crc":
         s = bytes(rnd.randrange(1, 256) for _ in range(rnd.choice([0, 0, 1, 2, 3, 5, 8, 17, 40])))
         args = [sc.cstr(s), rnd.choice([0xFFFFFFFF, 0, rnd.getrandbits(32)])]
