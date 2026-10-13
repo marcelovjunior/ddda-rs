@@ -12,6 +12,22 @@
   `docs/tasks/L159-vk-default.md`.
 - Next: head `DDGPU_VK=1 DDGPU_VK_SHADOW=997` gameplay image gate, then
   separately adopt the staged default-on commit only after acceptance.
+### L163 boot attribution and exact stream skip (2026-10-13)
+
+- Boot intervals mix original logo holds, authored GUI sequences, input
+  residence and work. Autoplay cadence ~1.66 s; title entry/exit nominally
+  5.3 s. Storage's 120-frame hold has original input escape; no timer edits.
+- Combo30 loading: decoders 16.969 CPU s / 14 s; 207 non-wait samples.
+  CF02E0 76, CFEEC0 59 (28.5%), DB9F40 service/lock loop 52. New opt-in
+  ARCHIVE_SKIP batches buffered skip, preserving original refill and ABI.
+- CPU timeline replaces repeated Toolhelp with one first-Present discovery
+  plus cached GetThreadTimes; process residual covers unregistered CPU.
+  Boot-detail observations opt-in. 192 original-instruction + 192 scalar
+  skip cases pass; 16 parser tests pass; final library results in brief.
+- Not yet compared in game; inherited gamma Reset failure remains. Next:
+  head skip0/1 load/image run plus boot detail; retain FAST2/TABLE opt-ins.
+  Evidence and limitations: docs/LOADING.md, docs/tasks/L163-loader-cpu.md.
+
 ### L156 exact inflate and Huffman builder (2026-10-13)
 
 - Opt-in FAST=2 adds bounded table/output spans, packed input pairs and
@@ -30,7 +46,7 @@
 
 - Exact E0E5E0 hash candidate: **528 original returns** match port and
   isolated lift; **672 paired fault/access cases** pass. All **105 paired
-  CPU samples improve**, median **1.63–2.01x**. Opt-in JOB_HASH=1;
+  CPU samples improve**, median **1.63â€“2.01x**. Opt-in JOB_HASH=1;
   combined native gate and head per-job A/B remain pending.
 - Late c26s1 main-only callback leaders: DB7620 **10.679 ms/Present**,
   4B9FF0 **5.179**, 1090F70 **3.933**. These dispatch virtual methods;
@@ -78,7 +94,7 @@
   joins/frame at 0x00DBE66D, **18.644 / 17.813 ms/frame** inclusive with
   cache/futex 0/0 versus 1/1. Long-join tails dominate; main Sleep is absent
   in this interval. Render request waiting overlaps main work.
-- Opt-in event cache and address waits; shared-table microbench 5.64–7.34x,
+- Opt-in event cache and address waits; shared-table microbench 5.64â€“7.34x,
   event ping-pong mixed. No game/FPS gain claimed. Default single-object
   polls avoid vectors; abandoned mutex and invalid multiwait-count handling
   corrected. TLS/general waits remain service-lock serialized.
@@ -225,8 +241,8 @@
 - Head-requested fast decoder follow-up: `DDRUNTIME_ZLIB_FAST=1` page access
   and ordered forward copies pass **632 leaf cases x3 configurations** plus
   **217 streams / 12,893 returns**, with and without the new outer port.
-  Real ARC whole/chunked microbench **1.59–1.69x** over current decoder;
-  repetitive synthetic **3.11–4.47x**. Fast light **207 pass / gamma failure /
+  Real ARC whole/chunked microbench **1.59â€“1.69x** over current decoder;
+  repetitive synthetic **3.11â€“4.47x**. Fast light **207 pass / gamma failure /
   5 ignored**, plus final three access checks and parallel-policy replay.
 - Next: head's matched **FAST=0/1, PORT=0** loading A/B; both remain opt-in.
 
@@ -474,7 +490,7 @@
 - Matched optimized 5,000 draws / 40 pipelines / 200 sampled sets, synthetic
   8,200 VS + 7,300 PS register writes/frame: full **1.644**, resident **1.264**,
   resident + bundles **0.843 us/draw**, including upload/finish/submit.
-  Three alternating repeats; bundle range 0.822–0.868. Uploads **15.67 MB ->
+  Three alternating repeats; bundle range 0.822â€“0.868. Uploads **15.67 MB ->
   340 KB/frame**. Minimal shaders; no gameplay/FPS claim.
 - **6 GPU tests / 11 CPU tests pass**; runtime light **171 pass / 1 inherited
   fullscreen gamma-reset failure / 3 ignored**. Core `e062d80a`.
@@ -499,7 +515,7 @@
 ### L109c boot attribution and inflate default (2026-10-13)
 
 - Head combo6: boot archive inflate **4.85 -> 1.39 s**, first Present still
-  **5.84–5.86 s**. Cold run has zero shader modules/pipelines through 5.02 s.
+  **5.84â€“5.86 s**. Cold run has zero shader modules/pipelines through 5.02 s.
 - **632 exact inflate cases** pass again; default-on and explicit-off
   registration tested. Read-ahead remains default-off. Per head's updated
   brief, no fast-boot option: original timing/input paths remain unchanged.
@@ -1040,7 +1056,7 @@
 - **0x00478600 records 3/3** after separating entry register objects from
   zero-return mocks. Its object is passed in ESI; the general input policy
   reuses the existing pointer palette and keeps all bound/alias/call guards.
-- Private native-L28c: **59,559 → 59,560 records / 177,271 → 177,274
+- Private native-L28c: **59,559 â†’ 59,560 records / 177,271 â†’ 177,274
   cases**. All old records are unchanged. The strengthened SIMD-store
   guard also re-records all **33 old guarded cases identically**.
   **102 light tests pass**; the cleanup expectation is resolved.
@@ -1067,7 +1083,7 @@
   functions, three cases each. It traces closed callees and enforces
   unknown-write non-aliasing assumptions during original execution.
   Ordinary instruction limits and unknown-control refusals remain.
-- Private native-L28c: **59,548 → 59,559 records / 177,238 → 177,271
+- Private native-L28c: **59,548 â†’ 59,559 records / 177,238 â†’ 177,271
   cases**; all old records/cases unchanged. **79 light tests pass**.
   One older cleanup-test expectation awaits its file owner's correction;
   the valid split cleanup and actual imbalance have a passing regression.
@@ -1083,8 +1099,8 @@
   `image-bounded-v1` policy uses that proof plus the existing 20,000
   allowance. Unknown/input-dependent control retains the ordinary guard.
 - Every original case registers all **13,061** entries from ten image
-  tables correctly. Private native-L28c: **59,547 → 59,548 records /
-  177,235 → 177,238 cases**. Hash audit: every old record/case unchanged.
+  tables correctly. Private native-L28c: **59,547 â†’ 59,548 records /
+  177,235 â†’ 177,238 cases**. Hash audit: every old record/case unchanged.
   **49 light tests pass**; no full Rust replay or shared-data writes.
 - **Next action:** boot preview, then the remaining constructor route;
   merge the lifter owner's integration branch before budget-area edits.
@@ -1095,7 +1111,7 @@
   `0x00B54BE0`, three fixtures each, using the same delayed-callee cleanup
   rule. Its no-stack-arguments regression passes: **43 light tests** total.
 - This batch adds **13 functions / 39 cases** overall: native-L28c
-  **59,534 → 59,547 records / 177,196 → 177,235 cases**. Cumulative hash
+  **59,534 â†’ 59,547 records / 177,196 â†’ 177,235 cases**. Cumulative hash
   audit proves all old records and case multisets unchanged. All four
   requested boot-route functions are recorded and reported for preview.
 - **Next action:** integration replay/boot preview; coordinate remaining
@@ -1111,7 +1127,7 @@
   before the later argument push; branch and ESP barriers remain. The
   constructor's image-backed inputs avoid its byte-divisor zero at
   `0x01104491`. **42 light tests pass** including the new barrier test.
-- Private native-L28c: **59,542 → 59,544 records / 177,220 → 177,226
+- Private native-L28c: **59,542 â†’ 59,544 records / 177,220 â†’ 177,226
   cases**; all old records/case multisets unchanged by hash audit. All
   four requested boot-route functions now have fixtures. The set remains
   open for preview, with full replay deferred to the integration train.
@@ -1124,7 +1140,7 @@
   belongs to `0x00DA89B0` (`ret 8`), not the COM call. The general rule has
   two synthetic regression tests; all **41** relevant light tests pass.
 - Eight render functions now record, including boot-route `0x01129030`
-  and `0x01129460`: **59,534 → 59,542 records / 177,196 → 177,220 cases**.
+  and `0x01129460`: **59,534 â†’ 59,542 records / 177,196 â†’ 177,220 cases**.
   Hash audit proves every old record/case multiset unchanged. Private
   native-L28c remains open for head's requested boot preview and additions.
 - **Next action:** trace remaining boot stop `0x00DA9EC0`, then
@@ -1140,8 +1156,8 @@
   seeds related first/last/output arguments before execution.
 - Refreshed `0x00F6A380`, the sole imported caller still mocking closed
   `__alloca_probe` (`0x012F2280`). Private native-L28c:
-  **59,533 → 59,534 entries**, **177,188 → 177,196 cases**; missing
-  candidate fixtures **229 → 228**. Separate hash audits prove the refresh
+  **59,533 â†’ 59,534 entries**, **177,188 â†’ 177,196 cases**; missing
+  candidate fixtures **229 â†’ 228**. Separate hash audits prove the refresh
   changed only that caller and the partition addition changed no old
   records. **39 light tests pass**; Rust replay is the head's train.
 - **Next action:** integrate this frozen pair and resume the real boot;
@@ -1158,7 +1174,7 @@
   44 unproven tables remain, against 59,173 of 59,500 expected verified
   on the train-2 base. native-L45: 33 stale records refreshed in place,
   everything else hash-identical. native-L45b (train 3): 12 boot
-  functions recorded (0x00DFECF0, `___crtExitProcess`, `_purecall`, …),
+  functions recorded (0x00DFECF0, `___crtExitProcess`, `_purecall`, â€¦),
   audit ok. The discovery boundary rule drops 58 non-code admissions.
   L27b is merged on `task/L27b-integrate`.
 - **Checked:** 134 Python tests plus `test_steps.py`. **Not checked:**
@@ -1176,8 +1192,8 @@
   caller stack. Original wrappers 0x012F4E90/0x012F4EA6 each pass 3/3
   trials; `__alloca_probe` 0x012F2280 now promotes and all 23 existing
   mocking callers re-record. No recorder rejection check changed.
-- Private native-L17: 59,090 → **59,115 selected entries**, 175,899 →
-  **175,969 cases**, 317 → **292** missing fixtures. Seven additions are
+- Private native-L17: 59,090 â†’ **59,115 selected entries**, 175,899 â†’
+  **175,969 cases**, 317 â†’ **292** missing fixtures. Seven additions are
   in TITLE_PATH.md, including 0x004709D0 (title-data loading). Hash audit:
   59,066 old entries/case multisets unchanged; only the promoted helper
   and its 23 callers refreshed, with no removals or stale mocks.
@@ -1473,8 +1489,8 @@ See SHADING.md and the M1 section above.
 
 **M3 (together):** `ddhost` (FRAME.md, ADR 0002), with economy, Rift and
 progression wired in, and two-player save/load with stable hashes. `ddnet`
-LAN co-op passes loopback tests under 10% loss and 40 ± 20 ms (prediction
-error ≤ 5.7 cm). `ddview --host/--join` is in progress (claude-10).
+LAN co-op passes loopback tests under 10% loss and 40 Â± 20 ms (prediction
+error â‰¤ 5.7 cm). `ddview --host/--join` is in progress (claude-10).
 
 **M4 (fight):** `ddcombat` covers hit volumes on joints, the exact shape
 tests, hit history, the damage formulas and region pools; the goblin's
@@ -1483,7 +1499,7 @@ The think tables are in progress (claude-9). Status effects: build-up
 only.
 
 **M5/M6 groundwork:**
-- `ddstory` runs the opening (q0000 → q0002) in the traced frame order.
+- `ddstory` runs the opening (q0000 â†’ q0002) in the traced frame order.
 - The event player plays st200 ev10 with its cameras, subtitles and NPC
   outfits.
 - Characters are assembled from the save: one skeleton, part masks,
@@ -1514,8 +1530,8 @@ ddview --join 127.0.0.1:47812 --save <save>
 
 **M5 opening slice (codex-18, merged 0c291a6, 2026-10-09):** the
 Cassardis opening plays through in LAN co-op with no teleports:
-- st200 ev10 → control → Quina conversation;
-- a collision-only, 197-waypoint walk into the village → ev15 → q0002
+- st200 ev10 â†’ control â†’ Quina conversation;
+- a collision-only, 197-waypoint walk into the village â†’ ev15 â†’ q0002
   boot;
 - the end state matches the original's: SceNo 1400, GSF 372 and 381 set,
   q0001 bits `[18000000, 0, 3]`.
@@ -1576,7 +1592,7 @@ Next action: q0003 trace (road to the Encampment), head.
     60 m instead of four cascades over 1 km;
   - whole-stage parts respect their shadow-cast flag;
   - the distant ring is 6 cells.
-  - Cassardis walk 46 → 12 ms; field 18 → 11 ms. `--perf` logs frame
+  - Cassardis walk 46 â†’ 12 ms; field 18 â†’ 11 ms. `--perf` logs frame
     times and the main systems.
 - **Cassardis rendering:**
   - one LOD per model, measured to the model's bounding-sphere centre
@@ -2094,7 +2110,7 @@ opening (codex-31), route perf (codex-29).
   files and private data are not committed. See L14 Results for per-rule
   counts, evidence and exact regeneration steps. No shared writes or push.
 
-### L15 runtime prerequisites — verified privately, ready for adoption
+### L15 runtime prerequisites â€” verified privately, ready for adoption
 
 - **Implemented:** distinct original-entry recorder contracts at model
   addresses; per-Cpu FS base and Unicorn GDT/TEB setup; general mock cleanup
@@ -2177,8 +2193,8 @@ opening (codex-31), route perf (codex-29).
   branch and runs one gen + `native_gate.sh` + runtime tests
   (docs/tasks/AGENT-RULES.md, "Batched verification"). Train 1 landed on
   main 59f55a9:
-  - L25: performance. GPU present 2.9-3.5 ms → 0.4-0.6 ms; per-draw
-    backend cost 475 µs → 18 µs; vector replay 551 → 357 ms.
+  - L25: performance. GPU present 2.9-3.5 ms â†’ 0.4-0.6 ms; per-draw
+    backend cost 475 Âµs â†’ 18 Âµs; vector replay 551 â†’ 357 ms.
   - L29: every render-target format the renderer uses equals the driver.
   - L24: 29 readable math ports (`crates/mtmath`, `docs/MATH.md`).
   - L26: an offline Steam client (14 imports, 37 interface methods) and
@@ -2314,7 +2330,7 @@ opening (codex-31), route perf (codex-29).
     0x00DA9EC0, 0x00419100 and the sBbsRpgMain-ctor route are recorded.
   `tests/options.rs` passes un-ignored.
 - **Incident:** L27b emitted a per-instruction step function for every
-  lifted function. The shards tripled (lift_12: 21 → 61 MB), one rustc
+  lifted function. The shards tripled (lift_12: 21 â†’ 61 MB), one rustc
   reached 11 GB, and the machine ran out of RAM (Claude Code stopped the
   head's background jobs: Ghidra server, status server, memory guard).
   Fixes:
@@ -2407,8 +2423,8 @@ opening (codex-31), route perf (codex-29).
 ## Milestone 2026-10-12: the boot reaches the game's main loop
 
 - On main 3f3ca505 (train 10), the real boot runs the CRT start-up and
-  WinMain and enters the main loop (WinMain 0x004079E0 → loop 0x00DF0D20
-  → `sBbsRpgMain::vf06` 0x0041DD60, the frame). It runs frame after frame,
+  WinMain and enters the main loop (WinMain 0x004079E0 â†’ loop 0x00DF0D20
+  â†’ `sBbsRpgMain::vf06` 0x0041DD60, the frame). It runs frame after frame,
   with no stop and no hang (claude-2, 1,500 s run, 73 host-stack samples
   via `research/runtime/stack_sampler.py`).
 - The worker pools, the sound thread and the other guest threads sit in
@@ -2487,7 +2503,7 @@ opening (codex-31), route perf (codex-29).
 - ddplay (debug, `--features emu`; main + L21 + L51 + 24eaf3bb) reaches the
   title screen. claude-2's DPI-aware PrintWindow screenshots show:
   - the ESRB "MATURE 17+" rating screen (t=120 s);
-  - the title movie with its music (the Dragon's Dogma wyrm logo, ©CAPCOM);
+  - the title movie with its music (the Dragon's Dogma wyrm logo, Â©CAPCOM);
   - at t=900 s the title, "DRAGON'S DOGMA / DARK ARISEN", the red wyrm
     over the forest, "PRESS ANY BUTTON".
   It ran at 0.1-2 fps in the debug build with the service trace and
