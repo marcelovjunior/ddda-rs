@@ -1,6 +1,6 @@
 # Milestones
 
-### L147 CRT profile attribution checkpoint (2026-10-13)
+### L147 CRT profile attribution and upload copies (2026-10-13)
 
 - `_NLG_Return2` is a one-byte CRT return followed by private memcpy code.
   DbgHelp's export-only Size is synthetic and cannot establish a function
@@ -9,10 +9,15 @@
 - 17 Python tests pass; benign-process capture/replay reattributes the same
   78/84 samples from `_NLG_Return2` to `memcpy_repmovs_amd`. No game run or
   FPS claim. Raw module/PC evidence is retained for offline resolution.
-- L144 already removed snapshot zeroing/DrawCall copies. Remaining backend
-  and guest-worker caller costs need head's raw capture; text-only c21/c23
-  cannot recover them. Next: capture with L147 profiler, then optimize the
-  measured remaining callers. Details: `docs/tasks/L147-nlg.md`.
+- Older c17 raw stacks identify eight backend copy samples in redundant
+  image packing/buffer clones; both now removed. 22 CPU and 12 focused GPU
+  tests pass. Tight 64 KiB image preparation: 2.718 -> 0.006 us, seven ->
+  zero allocations. Queue staging remains; no end-to-end/FPS claim.
+- All 17 c17 NLG samples on guest 0x1038 call X87::memory (L146 owner
+  informed); L144 already removed snapshot zeroing/DrawCall copies.
+  Runtime light: 202 pass, five ignored, inherited gamma failure after
+  isolated timing retry. Next: head captures current combo24 with corrected
+  profiler; text-only c21/c23 cannot recover PCs. `docs/tasks/L147-nlg.md`.
 
 ### L134 x87 helper follow-up, next batch (2026-10-13)
 

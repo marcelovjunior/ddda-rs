@@ -1171,3 +1171,20 @@ targets, and ordinary/step-enabled binding replacement. The 12-log audit found
 15 first-seen entries per run, including the six already-ported L130 readers;
 activation in a game run remains for head to verify. See
 `tasks/L136-ports-dispatch.md` for counts and their phase/frequency limits.
+
+## L147 upload preparation ownership (2026-10-13)
+
+The wgpu backend pads an already-owned buffer upload in place, and borrows
+tightly packed Direct-format image rows until Queue::write_texture has
+copied them into staging. This removes a second host buffer clone and a
+second full image packing allocation. Padded/converted images preserve
+their prior paths, and pending uploads, flush-before-write ordering,
+finisher waits and small-buffer mirrors keep their existing semantics.
+
+22 ddgpu CPU tests and 12 focused GPU upload/copy/draw/texture tests pass;
+runtime light has 202 distinct passes, five ignored and the inherited
+fullscreen-gamma failure after an isolated contention-timing retry. The
+CPU preparation benchmark's tight 64 KiB image median is 2.718 -> 0.006 us
+(7 -> 0 allocations/reallocations); GPU staging still copies the data.
+Evidence, symbolization correction, benchmark limits and head's pending
+game capture are recorded in `tasks/L147-nlg.md`.
