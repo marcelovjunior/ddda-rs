@@ -15,6 +15,13 @@ function totals do not change: this replaces an already lifted body.
 
 ## L109 loading telemetry
 
+`DDPLAY_ALLOC_LOG=1` additionally wraps the unchanged System allocator with
+requested-byte ownership counters. Together with `DDRUNTIME_LOAD_LOG=1`,
+`allocator_totals` separates Rust live/peak bytes and 4 KiB aligned page
+allocations from process commitment. Driver allocations and allocator
+overhead are excluded; snapshots are approximate across concurrent threads.
+See [memory investigation](tasks/L109d-memory.md).
+
 ReadFileEx optionally caches immutable install archives with
 `DDRUNTIME_FILE_READ_AHEAD=1`: 256 KiB forward windows, 8 MiB retained
 buffer capacity per runtime, overlay/writable files excluded. It remains

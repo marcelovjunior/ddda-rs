@@ -1,5 +1,16 @@
 # Milestones
 
+### L109d memory ownership diagnostics (2026-10-13)
+
+- Head reports 2.6 -> 15.7–17 GB private memory at save load; cause remains
+  unmeasured. L109c process/guest counters are ready in `e7099da7`.
+- New opt-in `DDPLAY_ALLOC_LOG=1` measures live Rust requested bytes and
+  4 KiB aligned allocations through the unchanged System allocator.
+  Standalone off/on tests cover allocation, zeroing, realloc and real global
+  allocator startup. No game run by agent.
+- Next: head's combined process/guest/Rust counter run, then an attributed
+  memory fix; save-load time follows. `docs/tasks/L109d-memory.md`.
+
 ### L129 combined integer/float flag fusion gate (2026-10-13)
 
 - Merged FPS-line `05b35e35` with both lifter emitters and regenerated
