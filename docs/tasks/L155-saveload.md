@@ -209,8 +209,11 @@ Retained private log SHA-256 receipts (outside the disposable target):
 - `C:/ddda-targets/L155-exact.log`:
   `4f1a73767f28ed154c5ffd27afafe9ec37fc1aa64ae70a1b6c3fab19b7644fd2`
 
-All cargo work used four jobs, incremental off and the dedicated L155 target;
-remove that target after completion per head board #12750. No agent
+All cargo work used four jobs, incremental off and the dedicated L155 target.
+Final cleanup requested by head #12750 was attempted after verifying the
+absolute target and absence of a link. Automatic approval review rejected
+both the guarded and literal `Remove-Item` command as "blocked by policy";
+`C:/ddda-targets/L155` remains for head cleanup. No agent
 game/GPU/shard run, push, game-data commit or installation change. No full
 per-save filename manifest or original-game image/control comparison claimed.
 Next: head's repeated/logging-off FAST acceptance and resource-worker profile.
