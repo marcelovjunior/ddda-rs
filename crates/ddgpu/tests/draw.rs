@@ -1073,7 +1073,7 @@ fn deferred_frame_matches_synchronous_image() {
             let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
             c.f[0] = colour.map(f32::to_bits);
             let mut d = draw(ps_constant(), c, vec![]);
-            d.vertices = Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]);
+            d.vertices = Vertices::Streams(vec![(0, 0x300, 0, 24, 1)].into());
             d.indices = Indices::Buffer(0x301, 101);
             backend.query_begin(0x500);
             backend.draw(&d);
