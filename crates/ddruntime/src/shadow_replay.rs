@@ -1411,7 +1411,7 @@ fn compare_replays(
             let around = |x: &mtcore::shadow_lanes::Binding| -> Vec<String> {
                 let mut regs: BTreeMap<u16, [Option<u8>; 16]> = BTreeMap::new();
                 for &(o, c) in &x.constants {
-                    if c.stage == ca.stage && c.section == 1 && (c.register as i32 - register as i32).abs() <= 3 {
+                    if c.stage == ca.stage && c.section == 1 && c.register < 32 {
                         regs.entry(c.register).or_insert([None; 16])[c.byte as usize] = x.bytes.get(o as usize).copied();
                     }
                 }
