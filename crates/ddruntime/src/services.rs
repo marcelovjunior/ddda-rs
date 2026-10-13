@@ -81,13 +81,6 @@ pub(crate) struct State {
     exit_list: Vec<u32>,
     /// The guest's unhandled-exception filter (SetUnhandledExceptionFilter).
     pub(crate) exception_filter: u32,
-    /// GetLastError / SetLastError.
-    pub(crate) last_error: u32,
-    /// TLS slots (TlsAlloc): None = free.
-    pub(crate) tls: Vec<Option<u32>>,
-    /// How often each TLS index was allocated (a thread's saved value
-    /// belongs to one allocation; crate::threads).
-    pub(crate) tls_epoch: Vec<u32>,
     /// VirtualAlloc's reservations (crate::win32).
     pub(crate) virtual_space: crate::win32::VirtualSpace,
     /// Strings the runtime hands the guest once (command line, environment).
@@ -360,12 +353,17 @@ pub const INTEGER_APIS: &[&str] = &[
     "InterlockedExchangeAdd", "InterlockedCompareExchange",
 ];
 
-/// Imports whose services touch no runtime state (only guest memory, host
-/// atomics, the host clock or the caller's thread id): they run without
-/// the guest lock in parallel mode (L65, dispatch::Binding::LockFree). The
-/// game calls the Interlocked family and the timers every frame from
-/// several threads.
+/// Imports that require no guest service lock: guest memory, atomics,
+/// thread-owned values, the host clock, or state under a dedicated lock.
+/// Serial mode retains its service-boundary yield points. These bindings
+/// still enter the full host FPU boundary (dispatch::Binding::LockFree).
 pub const LOCK_FREE: &[(&str, &str)] = &[
+    ("KERNEL32.dll", "ReleaseSemaphore"),
+    // L153: thread-owned values plus atomic allocation generations.
+    ("KERNEL32.dll", "TlsGetValue"),
+    ("KERNEL32.dll", "TlsSetValue"),
+    ("KERNEL32.dll", "GetLastError"),
+    ("KERNEL32.dll", "SetLastError"),
     // L82: atomic accepted-key and per-thread queue snapshots. New input
     // alone takes the narrow pump lock, preserving hook/queue ordering.
     ("USER32.dll", "GetAsyncKeyState"),

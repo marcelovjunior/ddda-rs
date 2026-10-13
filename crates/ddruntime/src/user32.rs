@@ -274,7 +274,7 @@ fn create_window(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
     };
     let title = if a[2] == 0 { String::new() } else { name_arg(m, a[2], wide) };
     let Some(class) = desk(|d| d.classes.iter().find(|c| c.name.eq_ignore_ascii_case(&class_name)).cloned()) else {
-        with_state(|s| s.last_error = 1407); // ERROR_CANNOT_FIND_WND_CLASS
+        crate::runtime::set_last_error(1407); // ERROR_CANNOT_FIND_WND_CLASS
         cpu.eax = 0;
         return ret(m, cpu, 48);
     };
@@ -915,7 +915,7 @@ const IMN_SETCANDIDATEPOS: u32 = 0x9;
 const IMN_SETCOMPOSITIONWINDOW: u32 = 0xB;
 
 fn set_error(e: u32) {
-    with_state(|s| s.last_error = e);
+    crate::runtime::set_last_error(e);
 }
 
 /// Tell the window that has the context (the focus window) about a change,

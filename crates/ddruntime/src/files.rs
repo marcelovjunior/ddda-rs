@@ -16,7 +16,7 @@
 //! install, as when Steam launches the game). An absolute path must lie in
 //! the install or the sandbox; anything else is refused with
 //! ERROR_ACCESS_DENIED, so the guest cannot touch the rest of the machine.
-use crate::services::{arg, ret, with_state};
+use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 use std::collections::HashMap;
@@ -87,7 +87,7 @@ pub fn set_roots(install: &Path, sandbox: &Path) {
 }
 
 fn set_error(e: u32) {
-    with_state(|s| s.last_error = e);
+    crate::runtime::set_last_error(e);
 }
 
 /// Where a guest path lives: (install-relative path) or refused.

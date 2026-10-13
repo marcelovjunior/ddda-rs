@@ -1,7 +1,7 @@
 """Summarize complete L153 census snapshots; no game data is required.
 
 python scripts/sync_profile.py run.log --first 2 --last -1 --top 30
-Indices select complete two-second snapshots (default: zero to final).
+Indices select complete periodic snapshots (default: zero to final).
 Times are inclusive wall time, summed across threads; not CPU percentages.
 """
 import argparse
@@ -14,14 +14,28 @@ FIELDS = ("calls", "ns", "contended", "service_contended", "blocks", "timeouts")
 
 def snapshots(lines):
     current = None
+    invalid = None
+    previous = {}
+    previous_valid = False
+    sparse_gap = False
     for line in lines:
         if line.startswith("sync-census "):
-            current = {"meta": dict(re.findall(r"(\w+)=(\d+)", line)), "rows": {}}
+            if current is not None:
+                sparse_gap = True
+            meta = dict(re.findall(r"(\w+)=(\d+)", line))
+            if meta.get("sparse") != "1":
+                sparse_gap = False
+            current = {"meta": meta, "rows": previous.copy() if meta.get("sparse") == "1" else {}}
+            invalid = None
         elif current is not None and line.startswith("sync-row "):
             before, _, name = line.strip().partition(" name=")
             fields = dict(re.findall(r"(\w+)=(0x[\da-f]+|\d+)", before))
             if not name or not all(k in fields for k in (*FIELDS, "tid", "target", "site", "arg0")):
-                raise ValueError("malformed sync-row")
+                # A process may stop halfway through the final stderr row.
+                # Reject malformed COMPLETE snapshots, but discard unfinished
+                # ones exactly as we do when the last row was not truncated.
+                invalid = "malformed sync-row"
+                continue
             row = {k: int(v, 0) for k, v in fields.items()}
             row["name"] = name
             hist = re.search(r"hist_us=(\[[\d, ]+\])", before)
@@ -29,6 +43,12 @@ def snapshots(lines):
             key = (row["tid"], row["target"], row["site"], row["arg0"], name)
             current["rows"][key] = row
         elif current is not None and line.startswith("sync-census-end "):
+            if invalid is not None:
+                raise ValueError(invalid)
+            if current["meta"].get("sparse") == "1" and (sparse_gap or not previous_valid):
+                raise ValueError("sparse census needs an uninterrupted complete full snapshot baseline")
+            previous = current["rows"]
+            previous_valid = True
             yield current
             current = None
 
