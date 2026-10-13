@@ -783,3 +783,302 @@ pub fn apply_effect_toggle(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4 + 4);
 }
+
+// ---------------------------------------------------------------------------
+// Box / sphere distance (0x00D53730, 0x00D53F30, 0x00D13AB0)
+
+/// The extended-precision (x87, 64-bit significand) values the box tests
+/// compute with, in software: the original squares and adds `f32`
+/// differences on the x87 stack and compares the result with the squared
+/// radius, which `f64` arithmetic would not reproduce bit for bit.
+///
+/// Only what the box tests need: conversion from `f32`, subtraction,
+/// multiplication, addition and ordering of non-negative values, each
+/// rounded to nearest-even at 64 bits as the hardware does.
+#[derive(Clone, Copy, Debug)]
+enum Extended {
+    Nan,
+    Infinity(bool),
+    Zero(bool),
+    /// `mantissa * 2^exponent`, `mantissa` normalised (top bit set)
+    Finite { negative: bool, exponent: i32, mantissa: u64 },
+}
+
+impl Extended {
+    fn from_f32(bits: u32) -> Extended {
+        let negative = bits >> 31 != 0;
+        let field = (bits >> 23) & 0xff;
+        let fraction = bits & 0x7f_ffff;
+        match (field, fraction) {
+            (0xff, 0) => Extended::Infinity(negative),
+            (0xff, _) => Extended::Nan,
+            (0, 0) => Extended::Zero(negative),
+            (0, _) => Extended::round(negative, fraction as u128, -149),
+            _ => Extended::round(negative, (fraction | 0x80_0000) as u128, field as i32 - 150),
+        }
+    }
+
+    /// `value * 2^exponent` rounded to a 64-bit significand (nearest even).
+    /// The low bit of `value` may be a sticky bit for bits shifted out.
+    fn round(negative: bool, value: u128, exponent: i32) -> Extended {
+        if value == 0 {
+            return Extended::Zero(false);
+        }
+        let shift = value.leading_zeros();
+        let normalised = value << shift;
+        let mut mantissa = (normalised >> 64) as u64;
+        let rest = normalised as u64;
+        let mut exponent = exponent - shift as i32 + 64;
+        if rest > 1 << 63 || (rest == 1 << 63 && mantissa & 1 == 1) {
+            let (next, carried) = mantissa.overflowing_add(1);
+            mantissa = if carried { 1 << 63 } else { next };
+            exponent += carried as i32;
+        }
+        Extended::Finite { negative, exponent, mantissa }
+    }
+
+    fn negated(self) -> Extended {
+        match self {
+            Extended::Nan => Extended::Nan,
+            Extended::Infinity(n) => Extended::Infinity(!n),
+            Extended::Zero(n) => Extended::Zero(!n),
+            Extended::Finite { negative, exponent, mantissa } => Extended::Finite { negative: !negative, exponent, mantissa },
+        }
+    }
+
+    fn add(self, other: Extended) -> Extended {
+        use Extended::*;
+        match (self, other) {
+            (Nan, _) | (_, Nan) => Nan,
+            (Infinity(a), Infinity(b)) => if a == b { Infinity(a) } else { Nan },
+            (Infinity(a), _) | (_, Infinity(a)) => Infinity(a),
+            (Zero(a), Zero(b)) => Zero(a && b),
+            (Zero(_), value) | (value, Zero(_)) => value,
+            (Finite { negative: na, exponent: ea, mantissa: ma }, Finite { negative: nb, exponent: eb, mantissa: mb }) => {
+                // `high` has the larger magnitude
+                let ((nh, eh, mh), (nl, el, ml)) = if (ea, ma) >= (eb, mb) { ((na, ea, ma), (nb, eb, mb)) } else { ((nb, eb, mb), (na, ea, ma)) };
+                let high = (mh as u128) << 62;
+                let wide = (ml as u128) << 62;
+                let distance = (eh - el) as u32;
+                // shift the smaller right, keeping a sticky bit
+                let low = if distance >= 128 {
+                    1
+                } else {
+                    let lost = wide & ((1u128 << distance) - 1);
+                    (wide >> distance) | (lost != 0) as u128
+                };
+                if nh == nl {
+                    Extended::round(nh, high + low, eh - 62)
+                } else if high == low {
+                    Zero(false)
+                } else {
+                    Extended::round(nh, high - low, eh - 62)
+                }
+            }
+        }
+    }
+
+    fn mul(self, other: Extended) -> Extended {
+        use Extended::*;
+        match (self, other) {
+            (Nan, _) | (_, Nan) => Nan,
+            (Infinity(_), Zero(_)) | (Zero(_), Infinity(_)) => Nan,
+            (Infinity(a), Infinity(b)) => Infinity(a != b),
+            (Infinity(a), Finite { negative, .. }) | (Finite { negative, .. }, Infinity(a)) => Infinity(a != negative),
+            (Zero(a), Zero(b)) => Zero(a != b),
+            (Zero(a), Finite { negative, .. }) | (Finite { negative, .. }, Zero(a)) => Zero(a != negative),
+            (Finite { negative: na, exponent: ea, mantissa: ma }, Finite { negative: nb, exponent: eb, mantissa: mb }) => {
+                Extended::round(na != nb, ma as u128 * mb as u128, ea + eb)
+            }
+        }
+    }
+
+    /// `self < other` for non-negative values, false when unordered.
+    fn less_than(self, other: Extended) -> bool {
+        use Extended::*;
+        let key = |v: Extended| match v {
+            Zero(_) => Some((0u8, 0i32, 0u64)),
+            Finite { exponent, mantissa, .. } => Some((1, exponent, mantissa)),
+            Infinity(_) => Some((2, 0, 0)),
+            Nan => None,
+        };
+        match (key(self), key(other)) {
+            (Some(a), Some(b)) => a < b,
+            _ => false,
+        }
+    }
+
+    fn is_nan(self) -> bool {
+        matches!(self, Extended::Nan)
+    }
+
+    /// The x87 register image (significand, sign and biased exponent) of a
+    /// zero or finite value.
+    fn to_register(self) -> Option<(u64, u16)> {
+        match self {
+            Extended::Zero(negative) => Some((0, (negative as u16) << 15)),
+            Extended::Finite { negative, exponent, mantissa } => Some((mantissa, ((negative as u16) << 15) | (exponent + 63 + 16383) as u16)),
+            _ => None,
+        }
+    }
+}
+
+/// `(dx*dx + dy*dy) + dz*dz` for `d = point - clamped` in software
+/// extended precision (what [`push_squared_distance`] leaves in ST0).
+fn squared_distance_software(point: [u32; 3], clamped: [u32; 3]) -> Extended {
+    let square = |axis: usize| {
+        let difference = Extended::from_f32(point[axis]).add(Extended::from_f32(clamped[axis]).negated());
+        difference.mul(difference)
+    };
+    square(0).add(square(1)).add(square(2))
+}
+
+/// For the tests: the software squared distance as an x87 register image
+/// (`None` for NaN or infinity).
+#[doc(hidden)]
+pub fn squared_distance_software_register(point: [u32; 3], clamped: [u32; 3]) -> Option<(u64, u16)> {
+    squared_distance_software(point, clamped).to_register()
+}
+
+/// For the tests: the hardware x87 sequence of the original, leaving the
+/// squared distance in ST0.
+#[doc(hidden)]
+pub fn squared_distance_hardware(c: &mut Cpu, point: [u32; 3], clamped: [u32; 3]) {
+    push_squared_distance(c, point, clamped)
+}
+
+/// Clamp `point` into the box whose lower corner is at `box_address` and
+/// upper corner at `+0x10` (three floats each): per axis, the lower bound
+/// replaces the coordinate when it is above it, then the upper bound when
+/// the (possibly replaced) coordinate is above it. Comparisons with NaN
+/// are false, so a NaN bound never clamps. Returns the clamped coordinates
+/// (as float bits).
+fn clamp_to_box(m: &dyn Mem, pg: Pages, box_address: u32, point: [u32; 3]) -> [u32; 3] {
+    let float = |address: u32| f32::from_bits(pg.u32(m, address));
+    let mut clamped = point;
+    for axis in 0..3u32 {
+        let coordinate = f32::from_bits(point[axis as usize]);
+        let low = float(box_address.wrapping_add(4 * axis));
+        let high = float(box_address.wrapping_add(0x10 + 4 * axis));
+        if low > coordinate {
+            clamped[axis as usize] = low.to_bits();
+        }
+        if coordinate > high {
+            clamped[axis as usize] = high.to_bits();
+        }
+    }
+    clamped
+}
+
+/// The squared distance between two points, as the original's x87 sequence
+/// computes it, left in ST0: `(dx*dx + dy*dy) + dz*dz` with
+/// `d = point - clamped` and every step in extended precision.
+fn push_squared_distance(c: &mut Cpu, point: [u32; 3], clamped: [u32; 3]) {
+    // FLD m32 point, FSUB m32 clamped (D8 /4)
+    let difference = |c: &mut Cpu, axis: usize| {
+        c.st.push(point[axis]);
+        let mut operand = [0u8; 10];
+        operand[..4].copy_from_slice(&clamped[axis].to_le_bytes());
+        c.st.exec::<0x20d8>(&mut operand);
+    };
+    difference(c, 0);
+    difference(c, 1);
+    difference(c, 2);
+    c.st.register::<0xc2d9>(); // fld st(2)
+    c.st.register::<0xcbde>(); // fmulp st(3), st
+    c.st.register::<0xc1d9>(); // fld st(1)
+    c.st.register::<0xcade>(); // fmulp st(2), st
+    c.st.register::<0xcad9>(); // fxch st(2)
+    c.st.register::<0xc1de>(); // faddp st(1), st
+    c.st.register::<0xc1d9>(); // fld st(1)
+    c.st.register::<0xcade>(); // fmulp st(2), st
+    c.st.register::<0xc1de>(); // faddp st(1), st
+}
+
+fn read_point(m: &dyn Mem, pg: Pages, address: u32) -> [u32; 3] {
+    [0, 4, 8].map(|offset| pg.u32(m, address.wrapping_add(offset)))
+}
+
+// Translated from 0x00d53730 (DDDA.exe 2017-12-13 Steam).
+/// 0x00D53730, `closest_point_on_box(box, point, out) -> distance^2` (cdecl,
+/// plain `ret`): clamp `point` into the axis-aligned box (lower corner at
+/// `box`, upper corner at `box + 0x10`), store the clamped point at
+/// `out[0..3]` and 0.0 at `out[3]`, and return the squared distance between
+/// the point and its clamped copy in ST0 (extended precision).
+pub fn closest_point_on_box(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let box_address = pg.u32(m, entry.wrapping_add(4));
+    let point_address = pg.u32(m, entry.wrapping_add(8));
+    let out = pg.u32(m, entry.wrapping_add(12));
+    let point = read_point(m, pg, point_address);
+    let clamped = clamp_to_box(m, pg, box_address, point);
+    for (axis, bits) in clamped.into_iter().enumerate() {
+        pg.set_u32(m, out.wrapping_add(4 * axis as u32), bits);
+    }
+    pg.set_u32(m, out.wrapping_add(12), 0);
+    push_squared_distance(c, point, clamped);
+    c.esp = entry.wrapping_add(4);
+}
+
+// Translated from 0x00d53f30 (DDDA.exe 2017-12-13 Steam).
+/// 0x00D53F30, `distance_sq_to_box(box, point) -> distance^2` (cdecl, plain
+/// `ret`): 0x00D53730 with a scratch output, the squared distance in ST0.
+pub fn distance_sq_to_box(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let box_address = pg.u32(m, entry.wrapping_add(4));
+    let point = read_point(m, pg, pg.u32(m, entry.wrapping_add(8)));
+    let clamped = clamp_to_box(m, pg, box_address, point);
+    push_squared_distance(c, point, clamped);
+    c.esp = entry.wrapping_add(4);
+}
+
+// Translated from 0x00d13ab0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00D13AB0, `sphere_touches_box(box, sphere) -> bool` (cdecl, plain
+/// `ret`; `sphere` is x, y, z, radius): 1 when the radius squared is at
+/// least the squared distance from the centre to the box (0x00D53F30), 0
+/// otherwise and when either is NaN. The original leaves the radius in the
+/// caller's second argument slot (it reuses it to pass the float through
+/// the x87), so the port stores it there too.
+///
+/// The x87 work is done in software ([`Extended`]) with the same roundings,
+/// so this makes no x87 or guest calls at all.
+pub fn sphere_touches_box(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let box_address = pg.u32(m, entry.wrapping_add(4));
+    let sphere = pg.u32(m, entry.wrapping_add(8));
+    let radius = pg.u32(m, sphere.wrapping_add(0xc));
+    // FLD m32 / FSTP m32 of the radius into the argument slot
+    pg.set_u32(m, entry.wrapping_add(8), through_x87(radius));
+    let centre = read_point(m, pg, sphere);
+    let clamped = clamp_to_box(m, pg, box_address, centre);
+    // Almost every call is decided by a wide margin: estimate both sides in
+    // f64 (relative error below 1e-15, f32 inputs and squares are in range)
+    // and use the exact extended arithmetic only when they are within 1e-12.
+    let estimate = {
+        let difference = |axis: usize| f32::from_bits(centre[axis]) as f64 - f32::from_bits(clamped[axis]) as f64;
+        let (dx, dy, dz) = (difference(0), difference(1), difference(2));
+        let radius = f32::from_bits(radius) as f64;
+        (radius * radius, (dx * dx + dy * dy) + dz * dz)
+    };
+    const MARGIN: f64 = 1e-12;
+    if estimate.0.is_nan() || estimate.1.is_nan() {
+        c.eax = 0;
+        c.esp = entry.wrapping_add(4);
+        return;
+    }
+    if estimate.0 > estimate.1 * (1.0 + MARGIN) || estimate.0 * (1.0 + MARGIN) < estimate.1 {
+        c.eax = (estimate.0 > estimate.1) as u32;
+        c.esp = entry.wrapping_add(4);
+        return;
+    }
+    let squared_distance = squared_distance_software(centre, clamped);
+    let radius = Extended::from_f32(radius);
+    let squared_radius = radius.mul(radius);
+    // fcomip st, st(1): CF = radius^2 < distance^2 or unordered
+    let below = squared_radius.less_than(squared_distance) || squared_radius.is_nan() || squared_distance.is_nan();
+    c.eax = (!below) as u32;
+    c.esp = entry.wrapping_add(4);
+}

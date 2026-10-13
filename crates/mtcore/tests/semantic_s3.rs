@@ -59,6 +59,12 @@ fn cpu_regs(c: &Cpu) -> [u32; 8] {
 
 /// Run `body` on every case of `path`, replaying the recorded callee events.
 fn abi_cases(path: &str, body: LiftFn, returns: bool, callee: fn(u32) -> Callee) -> usize {
+    abi_cases_checked(path, body, returns, callee, |_, _, _| {})
+}
+
+/// As `abi_cases`, with `extra` run on the CPU after every case (to check
+/// state the ABI comparison does not cover, such as ST0).
+fn abi_cases_checked(path: &str, body: LiftFn, returns: bool, callee: fn(u32) -> Callee, extra: fn(&mut Cpu, &Value, usize)) -> usize {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
@@ -108,6 +114,7 @@ fn abi_cases(path: &str, body: LiftFn, returns: bool, callee: fn(u32) -> Callee)
         body(&mut m, &mut c);
         x86::set_ext_calls(None);
         assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
+        extra(&mut c, case, i);
         let eax = if returns { [c.eax, after[0]] } else { [0, 0] };
         let got = [eax[0], c.ebx, c.esp, c.ebp, c.esi, c.edi];
         let want = [eax[1], after[3], after[4], after[5], after[6], after[7]];
@@ -342,4 +349,95 @@ fn semantic_apply_effect_toggle_matches_original() {
         apply_effect_toggle_callee,
     );
     eprintln!("{n} ABI-level apply_effect_toggle cases passed");
+}
+
+/// The recorded ST0 (10 bytes of the extended value) against the CPU's,
+/// then the x87 state is released.
+fn check_st0(c: &mut Cpu, case: &Value, i: usize) {
+    let want: Vec<u8> = case["st0"].as_array().unwrap().iter().map(|b| b.as_u64().unwrap() as u8).collect();
+    let (mantissa, exponent) = c.st.top_extended().unwrap_or_else(|| panic!("case {i}: x87 stack empty"));
+    let mut have = mantissa.to_le_bytes().to_vec();
+    have.extend(exponent.to_le_bytes());
+    assert_eq!(have, want, "case {i}: ST0");
+    assert_eq!(c.st.depth(), 1, "case {i}: x87 depth");
+    (ddnative_base::hooks::get().x87_release)(&mut c.st);
+}
+
+fn no_callees(target: u32) -> Callee {
+    panic!("unexpected callee {target:x}")
+}
+
+// verifies 0x00d53730 (ABI level; ST0 = distance^2)
+#[test]
+fn semantic_closest_point_on_box_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_checked("E:/ddda-re/notes/native-L184/box_closest.json", mtcore::semantic_s3::closest_point_on_box, false, no_callees, check_st0);
+    eprintln!("{n} ABI-level closest_point_on_box cases passed");
+}
+
+// verifies 0x00d53f30 (ABI level; ST0 = distance^2)
+#[test]
+fn semantic_distance_sq_to_box_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_checked("E:/ddda-re/notes/native-L184/box_wrapper.json", mtcore::semantic_s3::distance_sq_to_box, false, no_callees, check_st0);
+    eprintln!("{n} ABI-level distance_sq_to_box cases passed");
+}
+
+// verifies 0x00d13ab0 (ABI level; includes the radius left in the argument slot)
+#[test]
+fn semantic_sphere_touches_box_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases("E:/ddda-re/notes/native-L184/box_touch.json", mtcore::semantic_s3::sphere_touches_box, true, no_callees);
+    eprintln!("{n} ABI-level sphere_touches_box cases passed");
+}
+
+/// A float with the bit patterns that stress extended rounding: wide and
+/// equal exponents, denormals, few-bit significands.
+fn random_float(r: u64) -> u32 {
+    let sign = ((r >> 40) as u32 & 1) << 31;
+    let fraction = (r as u32) & 0x7f_ffff;
+    let field = match (r >> 33) & 7 {
+        0 => 0,                                // zero / denormal
+        1 | 2 => 120 + ((r >> 8) as u32 & 15), // a narrow band: ties and cancellation
+        3 => 1 + ((r >> 12) as u32 % 254),     // everything
+        _ => 100 + ((r >> 12) as u32 % 54),
+    };
+    let fraction = if (r >> 36) & 3 == 0 { fraction & 0x7f_f000 } else { fraction }; // few-bit significands
+    sign | (field << 23) | fraction
+}
+
+/// The software extended arithmetic against the x87 hardware on random
+/// inputs: wide and equal exponents, denormals, near-cancellation, ties.
+#[test]
+fn software_extended_squared_distance_matches_x87() {
+    ddnative_host::install();
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut c = Cpu::default();
+    let mut compared = 0u32;
+    for case in 0..300_000u32 {
+        // axes in exponent bands 0, 30..34 or 62..66 apart: the squares are
+        // 60 to 130 bits apart, where the sum's sticky bit decides ties
+        let shift = [0u32, 30, 31, 32, 33, 34, 62, 63, 64, 65, 66];
+        let offsets = [0, 1, 2].map(|_| shift[(next() % shift.len() as u64) as usize]);
+        let near = |bits: u32, offset: u32| if (bits >> 23) & 0xff == 0 || (bits >> 23) & 0xff > 0x7f { bits } else { bits.wrapping_add(offset << 23) };
+        let point = [0, 1, 2].map(|k| near(random_float(next()), offsets[k] / 2));
+        // the clamped copy is either the point itself or another value
+        let clamped = [0, 1, 2].map(|k| if next() & 3 == 0 { point[k] } else { near(random_float(next()), offsets[k] / 2) });
+        let want = mtcore::semantic_s3::squared_distance_software_register(point, clamped);
+        mtcore::semantic_s3::squared_distance_hardware(&mut c, point, clamped);
+        let have = c.st.top_extended().unwrap();
+        (ddnative_base::hooks::get().x87_release)(&mut c.st);
+        c.st = Default::default();
+        if let Some(want) = want {
+            assert_eq!(have, want, "case {case}: {point:x?} {clamped:x?}");
+            compared += 1;
+        }
+    }
+    assert!(compared > 100_000);
 }
