@@ -40,6 +40,8 @@ constant blocks from them again. That re-derivation is the cost:
 | combo19 DDDRAW_NATIVE=1 with fallback | 15.4 / 16.0-16.7 | 69 jobs, 3,507 draws/frame; rejected jobs drawn as DrawCalls |
 | combo20 default (drawcall default; +8 ports L130, L132b) | 19.1 / 28.7-30.0 | bound: wgpu-finish (wgpu-core encode + driver) 77% |
 | combo20 DDDRAW_NATIVE=1 | 17.0 / 17.3-18.0 | worker accepts 30% of jobs; refusals: strip restart 62,805, occlusion query 3,502, RT sampler fill 3,069, state 195 2,213 |
+| combo21 default (+L119 sampler mirror, L135, L109d, L136, L133 strips) | 19.0 / 18-21 (heavy 5,700-draw scene; same-scene re-run of combo20: 18.6) | 7.25 us per decided draw (combo20 7.97-8.40); bound wgpu-finish 77%, GPU 32%; memory peak ~3.2 GB (was 16-18 GB) |
+| combo21 DDDRAW_NATIVE=1 | 9.8 / 7-8 | worker accepts 90% of jobs, but the worker is re-created 129 times (release discard) and d3d9-backend is bound; refusals: RT sampler fill, state 195, sampled attachment feedback, strip restart |
 
 (average / end of the run; L114, inlining the memory and flag helpers into
 the shards, gave no gain for 2.5x the compile time and was dropped.)

@@ -16,6 +16,49 @@
   loading gains and top-ten game sites remain unmeasured. Details and final
   suite status: `docs/tasks/L140-loading.md`.
 
+### L134 x87 helper follow-up, next batch (2026-10-13)
+
+- Discarding x87 callers omit unused PUSHFQ/POP capture; public flag-returning
+  calls, opcode guards, memory order and PREEMPT polling remain intact.
+  **34 base tests pass in debug/play**, including 312 full-state/access
+  cases. Runtime light: **190 pass / inherited gamma failure / 3 ignored**.
+- Caller-opt1/base-opt3 FLD1/pop median **5.407 -> 2.350 ns/pair**, all three
+  alternating pairs improve. Other pairs are load-sensitive; no FPS claim.
+  Profile evidence, exact benchmark and limits: `docs/tasks/L134-combined-gate.md`.
+- Not included in either green gate below. Next: combine this helper with
+  the next integration batch for required native replay, then head gameplay.
+
+### L134 second combined gate: L132b and L130 integration (2026-10-13)
+
+- Exact production pin `7aa2d159`, checked on L134 `10a484e9`: expanded
+  required-vector play gate **94 pass / 0 fail / 4 benchmarks ignored**.
+  All 33 shards rebuilt; **178,130 lifted cases** pass, as do every readable
+  port suite and inventory declaration checks. Five existing gaps remain.
+- L132b packed permission/backing entries (9 -> 8 MiB page table) pass
+  31 base tests and the full lifted replay. L130's eight new ports pass
+  the required core oracles, including six duration decoder implementations.
+  L136 tracks missing runtime activation for entries without generated
+  bodies; this gate does not prove that activation. No FPS claim here.
+- The fixed shared-sink lock passes both 400-frame mtdraw comparisons.
+  Details and per-suite counts: `docs/tasks/L134-combined-gate.md`.
+- Next: measured x87 helper follow-up, then the next batched native gate
+  and head game comparison; x87 candidate is not part of this green pin.
+
+### L134 combined native gate, first integration (2026-10-13)
+
+- FPS line `941f5d2c` plus final L132 `ff98640d`: expanded play-profile
+  required-vector gate **88 passed / 0 failed / 1 benchmark ignored**;
+  **178,130 lifted cases** and inventory checks pass. Original apply and
+  state oracles include 1,568 ABI cases, 811 decodes and 3,584 state cases.
+- Found a process-wide sink race in parallel mtdraw tests; shared test lock
+  fixes it without changing the executor or weakening comparisons. Adopted
+  owner's `4bcef3fa`. Standard gate now includes base, draw, registry and
+  state suites. Existing five inventory verification gaps remain.
+- L131 c17 profile identifies remaining memory cost and x87 helper cost;
+  a private x87 flag-capture experiment is promising, not integrated here.
+  No game/image/FPS claim. Details: `docs/tasks/L134-combined-gate.md`.
+- Next: head's second combined pin `7aa2d159` (L132b plus newer ports and
+  worker fixes), then the next helper batch.
 ### L109d memory ownership diagnostics (2026-10-13)
 
 - Head's c18 run reaches 17.05 GiB private memory with only ~0.64 GiB live
