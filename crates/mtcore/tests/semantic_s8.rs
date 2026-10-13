@@ -214,3 +214,14 @@ fn semantic_triangle_reduction_matches_original() {
     }
     eprintln!("{} triangle reduction cases passed", cases.len());
 }
+
+// verifies 0x00d63ff0, 0x00d1b540 and 0x00d12e10 alone (ABI level, EAX included)
+#[test]
+fn semantic_collision_helpers_match_original() {
+    ddnative_host::install();
+    let dir = "E:/ddda-re/notes/native-L184";
+    let n = abi_cases_with_calls(&format!("{dir}/support.json"), mtcore::semantic_s8_sweep::shape_support);
+    let m = abi_cases_with_calls(&format!("{dir}/add_point.json"), mtcore::semantic_s8_sweep::simplex_add_point);
+    let k = abi_cases_with_calls(&format!("{dir}/segment.json"), mtcore::semantic_s8_sweep::simplex_segment_closest);
+    eprintln!("{n} support, {m} add_point, {k} segment cases passed");
+}

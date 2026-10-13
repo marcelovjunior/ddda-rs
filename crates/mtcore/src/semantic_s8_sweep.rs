@@ -114,7 +114,8 @@ fn copy_point(pg: Pages, m: &mut dyn Mem, out: u32, from: u32) {
 /// Support points of the shape in `direction`: the capsule's farthest end
 /// plus `radius * direction` into `shape + 0x10`, and the triangle vertex
 /// farthest along `-direction` (all ones when that is the zero vector) into
-/// `shape + 0x20`. Returns the capsule pointer (the original's EAX).
+/// `shape + 0x20`. Returns the original's EAX: the capsule pointer with
+/// AH replaced by the comparison flags of its `LAHF`.
 fn support(pg: Pages, m: &mut dyn Mem, shape: u32, d: Vector) -> u32 {
     let capsule = pg.u32(m, shape);
     let p0 = vector(pg, m, capsule);
@@ -131,9 +132,21 @@ fn support(pg: Pages, m: &mut dyn Mem, shape: u32, d: Vector) -> u32 {
     pg.set_u32(m, shape.wrapping_add(0x1c), 0);
     let triangle = pg.u32(m, shape.wrapping_add(4));
     let mut n = [-d[0], -d[1], -d[2]];
-    if ((n[1] * n[1]) + (n[0] * n[0])) + (n[2] * n[2]) == 0.0 {
+    let norm = ((n[1] * n[1]) + (n[0] * n[0])) + (n[2] * n[2]);
+    if norm == 0.0 {
         n = [ONE; 3];
     }
+    // the original's `UCOMISS; LAHF` leaves the comparison flags in AH
+    // (SF/AF clear, bit 1 set; ZF, PF, CF as the compare sets them)
+    let flags_in_ah: u32 = if norm.is_nan() {
+        0x47
+    } else if norm > 0.0 {
+        0x02
+    } else if norm < 0.0 {
+        0x03
+    } else {
+        0x42
+    };
     let side = |m: &dyn Mem, k: u32| -> (Vector, f32) {
         let v = vector(pg, m, triangle.wrapping_add(0x10 * k));
         (v, (v[1] * n[1] + v[0] * n[0]) + v[2] * n[2])
@@ -149,7 +162,7 @@ fn support(pg: Pages, m: &mut dyn Mem, shape: u32, d: Vector) -> u32 {
     let _ = best_e;
     store(pg, m, shape.wrapping_add(0x20), best);
     pg.set_u32(m, shape.wrapping_add(0x2c), 0);
-    capsule
+    (capsule & 0xffff_00ff) | (flags_in_ah << 8)
 }
 
 /// 0x00D63FF0, `shape->support(direction)` (thiscall, `ret 4`): see [`support`].
@@ -226,10 +239,13 @@ fn add_point(c: &mut Cpu, pg: Pages, m: &mut dyn Mem, s: u32, p: Vector, a_at: u
     let point = |m: &dyn Mem, k: u32| vector(pg, m, s.wrapping_add(simplex::POINTS + 0x10 * k));
     match n {
         1 => {
-            let v0 = point(m, 0);
-            // a coordinate farther away than 0.001 (or NaN) makes it new
-            let far = |k: usize| COINCIDENT < (p[k] - v0[k]).abs() || (p[k] - v0[k]).is_nan();
-            if !far(0) && !far(1) && !far(2) {
+            // a coordinate farther away than 0.001 (or NaN) makes it new;
+            // the original checks x, y, z in turn and reads only what it needs
+            let near = |m: &dyn Mem, k: u32| {
+                let d = p[k as usize] - rf(pg, m, s.wrapping_add(simplex::POINTS + 4 * k));
+                !(COINCIDENT < d.abs() || d.is_nan())
+            };
+            if near(m, 0) && near(m, 1) && near(m, 2) {
                 return 0;
             }
         }
