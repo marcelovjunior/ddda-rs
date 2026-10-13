@@ -12,7 +12,9 @@
   old `00532110`; raw title chain verifies the PC bypass. L151 preparation
   remains a boot candidate, not the dominant warm-cache save-load cost.
 - **15 parser tests pass**, both 39-interval logs ranked with hashes and
-  nested/parallel costs kept distinct. Next: head repeat/logging-off FAST
+  nested/parallel costs kept distinct. Light suite **212 reported passes /
+  inherited gamma failure / five ignored**; required vectors **632 fast
+  cases x3 + 12 outer cases pass**. Next: head repeat/logging-off FAST
   acceptance and resource-worker profiling. `docs/tasks/L155-saveload.md`.
 
 ### L155 save-load source map (2026-10-13)

@@ -188,8 +188,29 @@ flags and nested counters. **15 parser tests pass**, including missing/bad
 durations, timestamp rounding, stable order and no periodic-sample mixing.
 Both c25 logs parse successfully with **39 transition intervals each**.
 
-The merged L151 light build compiled in 1m06s; tests are held by head's
-combo25 pause, not yet reported as passed. No agent game/GPU/shard run,
-push, game-data commit or installation change. No full per-save filename
-manifest or original-game image/control comparison claimed. Next: complete
-light validation after pause and head's repeated/logging-off FAST acceptance.
+The merged L151 light build compiled in 1m06s. Full
+`cargo test -p ddruntime --no-default-features --no-fail-fast` completed:
+**212 reported passes / one inherited fullscreen-gamma Reset failure /
+five ignored**. Two passes are nested diagnostic children (210 top-level
+passes). Head's pause held the unit-test process during c25; its 699.67 s
+elapsed time is not a test-performance result. No timing failure remained.
+
+After pause, required-vector FAST=1/PORT=0 focused rerun: **3 tests pass**,
+including **632 original fast cases x3 memory/decoder configurations** and
+**12 outer guard/terminal cases**, plus opt-in/override registration. Earlier
+217-stream/12,893-return evidence is inherited from L145, not rerun here.
+
+Retained private log SHA-256 receipts (outside the disposable target):
+
+- `C:/ddda-targets/L155-examples.log`:
+  `ec9bd667beda4768e5aa81637ae803564093dc835ca47541387f1675947754ff`
+- `C:/ddda-targets/L155-light.log`:
+  `6b7b18734817fe28724d68f261a512938f69f7037542220ab3bb42df5661555e`
+- `C:/ddda-targets/L155-exact.log`:
+  `4f1a73767f28ed154c5ffd27afafe9ec37fc1aa64ae70a1b6c3fab19b7644fd2`
+
+All cargo work used four jobs, incremental off and the dedicated L155 target;
+remove that target after completion per head board #12750. No agent
+game/GPU/shard run, push, game-data commit or installation change. No full
+per-save filename manifest or original-game image/control comparison claimed.
+Next: head's repeated/logging-off FAST acceptance and resource-worker profile.
