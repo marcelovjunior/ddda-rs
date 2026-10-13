@@ -35,12 +35,12 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
         ports.push((0x00efd240, mtcore::shadow_pass::setup));
     }
-    // L176: the nDraw material's parameter lookup (semantic ports,
-    // crates/mtdraw/tests/material.rs).
+    // L176: the nDraw material's parameter binding, colour and update
+    // (semantic ports, crates/mtdraw/tests/material.rs). 0x01066590,
+    // 0x010655A0 and 0x00FEDD60 are ported in L176 too but registered from
+    // L170, L174 and L171.
     if std::env::var("DDRUNTIME_MATERIAL").as_deref() == Ok("1") {
-        ports.push((0x0106_6590, mtdraw::material::find_parameter));
         ports.push((0x0106_6b10, mtdraw::material::bind_parameter));
-        ports.push((0x0106_55a0, mtdraw::material::apply_material_state));
         ports.push((0x0106_7790, mtdraw::material::material_colour));
         ports.push((0x0106_2f20, mtdraw::material::update_material));
     }
@@ -49,11 +49,6 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_SET_TARGET").as_deref() == Ok("1") {
         ports.push((0x00fe_fb90, mtdraw::target::set_render_target));
     }
-    // L176: the draw recording's record sort (semantic port, a stable
-    // merge sort; crates/mtdraw/tests/material.rs).
-    if std::env::var("DDRUNTIME_RECORD_SORT").as_deref() == Ok("1") {
-        ports.push((0x00fe_dd60, mtdraw::sort::sort_records));
-    }
     // L176: the draw context's frustum tests (semantic ports,
     // crates/mtdraw/tests/material.rs).
     if std::env::var("DDRUNTIME_CULL").as_deref() == Ok("1") {
@@ -61,6 +56,11 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         ports.push((0x00ff_0ad0, mtdraw::cull::cull_oriented));
         ports.push((0x00ff_0d20, mtdraw::cull::cull_box));
         ports.push((0x00ff_0e60, mtdraw::cull::cull_box_all));
+    }
+    // L176: sSceneExt::vf16, the draw's light setup (semantic port,
+    // crates/mtdraw/tests/material.rs).
+    if std::env::var("DDRUNTIME_LIGHTS").as_deref() == Ok("1") {
+        ports.push((0x0049_b1a0, mtdraw::lights::scene_lights));
     }
     // L171: semantic (ABI-level) rewrites replace the instruction-level
     // ports at the same addresses.

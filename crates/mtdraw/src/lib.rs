@@ -22,6 +22,7 @@ pub mod apply;
 pub mod cull;
 mod apply_shader;
 pub mod executor;
+pub mod lights;
 pub mod material;
 pub mod target;
 pub mod sink;
