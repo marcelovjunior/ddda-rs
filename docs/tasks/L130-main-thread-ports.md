@@ -357,3 +357,34 @@ The milestone file remains owned by codex-7; send the above evidence for
 its merge-ready entry. Next: FEDC00 restore/record oracle and measurement,
 then FED200 and the remaining assigned whole-function candidates. No game,
 GPU or shard build/run in this continuation.
+
+### FEDC00 restore and command recording
+
+Whole ABI port registered through mtcore/ddports. **96 original Unicorn +
+isolated lifted cases / 480 call-return boundaries pass**, including all
+four conditional edges, depths 0..3, descriptor counts 0..4096, varying
+pending draws, allocation-free/exact-fit/refill paths and allocator zero.
+The zero-result case maps page zero in synthetic memory to check the
+original unchecked writes; this is not an assertion that allocation
+failure is safe in the game. The original memcpy and allocator remain
+external calls, with explicit synthetic effects checked at both boundaries.
+
+Five alternating opt1-lifted/opt3-port medians (ns/call): empty descriptor
+with spare capacity **775.8 -> 495.1**, exact capacity **716.2 -> 639.9**,
+refill **700.8 -> 699.7**, zero allocator result **816.1 -> 697.9**;
+32-entry descriptor **823.5 -> 853.0**. Mixed results, shared-machine
+timing, synthetic callees: no guaranteed workload/FPS improvement.
+All seven isolated suites pass, registry test passes, strict own-crate
+clippy passes. Logs: `restore-lanes-differential.log`, `restore-bench.log`,
+`recording-{registry,clippy}.log` under `C:/ddda-targets/L130`.
+
+**Activation correction (c20):** all six duration readers still appear in
+the runtime fallback log despite being in ddports. Registry only inserts
+generated entry addresses; these six have none. Head assigned **L136 to
+codex-11** to bind missing overrides and test `call_ext`. Prior leaf
+comparisons and fallback microbenchmarks remain valid; actual runtime
+activation and any resulting FPS/memory saving were never established.
+The c20 FPS change must not be attributed to these six ports.
+
+Next: commit the separately verified FED200 lane initializer, then finish
+the E10FC0 dependency-key wrapper oracle. Milestone update sent to its owner.

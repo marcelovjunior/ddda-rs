@@ -22,6 +22,7 @@ pub const PORTS: &[(u32, x86::LiftFn, u8)] = &[
     (0x0112_bbc0, duration_high_nibble16, 0xff),
     (0x0112_bbe0, duration_high_nibble8, 0xff),
     (0x00fe_db80, save_draw_recording_state, 0xff),
+    (0x00fe_dc00, restore_draw_recording_state, 0xff),
 ];
 
 // Translated from 0x00fedb80 (DDDA.exe 2017-12-13 Steam).
@@ -61,6 +62,128 @@ pub fn save_draw_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
     }
     c.esi = emit::pop(m, pt, c);
     ret(c, 8);
+}
+
+// Translated from 0x00fedc00 (DDDA.exe 2017-12-13 Steam).
+/// Restore a nested recording state and append its command/sort references.
+pub fn restore_draw_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
+    use ddnative_base::emit;
+    let pt = m.page_table();
+    macro_rules! r {
+        ($a:expr) => {
+            m.fast_u32(pt, $a)
+        };
+    }
+    macro_rules! w {
+        ($a:expr, $v:expr) => {
+            m.fast_set_u32(pt, $a, $v)
+        };
+    }
+    macro_rules! field {
+        ($offset:expr) => {
+            c.esi.wrapping_add($offset)
+        };
+    }
+    macro_rules! push_fast {
+        ($v:expr) => {
+            emit::push($v, m, pt, c)
+        };
+    }
+    macro_rules! call {
+        ($target:expr, $resume:expr) => {{
+            push_fast!($resume);
+            x86::call_ext(m, c, $target);
+        }};
+    }
+    push_fast!(c.ebx);
+    push_fast!(c.ebp);
+    push_fast!(c.esi);
+    c.esi = c.ecx;
+    w!(field!(0x30874), r!(field!(0x30874)).wrapping_sub(1));
+    let depth = r!(field!(0x30874));
+    c.ecx = r!(field!(0x14));
+    c.eax = depth.wrapping_mul(0x8144);
+    c.fl = x86::Flags::new(x86::IMUL, depth, 0x8144, c.eax, 32);
+    push_fast!(c.edi);
+    c.edx = c.ecx.wrapping_mul(8).wrapping_add(0x144);
+    push_fast!(c.edx);
+    c.eax = c.eax.wrapping_add(c.esi).wrapping_add(0x81f8);
+    push_fast!(c.eax);
+    c.ecx = field!(0xb4);
+    push_fast!(c.ecx);
+    call!(0x12efea0, 0xfedc37);
+    c.edx = r!(field!(0x30874));
+    c.edi = r!(field!(0x48)).wrapping_sub(r!(field!(c.edx.wrapping_mul(8).wrapping_add(0x30850))));
+    c.eax = r!(field!(0x4c));
+    c.ecx = r!(field!(0x44));
+    c.ebx = field!(c.edx.wrapping_mul(8).wrapping_add(0x3084c));
+    c.eax = c.fl.alu_sub(c.eax, c.edi, 32);
+    c.ebp = c.ecx.wrapping_add(c.eax.wrapping_mul(8));
+    w!(field!(0x4c), c.eax);
+    c.edx = r!(c.ebx.wrapping_add(4));
+    c.eax = c.edi.wrapping_mul(8);
+    push_fast!(c.eax);
+    c.eax = c.ecx.wrapping_add(c.edx.wrapping_mul(8));
+    push_fast!(c.eax);
+    push_fast!(c.ebp);
+    call!(0x12efea0, 0xfedc71);
+    c.edx = r!(field!(0x24)).wrapping_add(0x10);
+    c.ecx = r!(c.ebx.wrapping_add(4));
+    c.esp = c.esp.wrapping_add(0x18);
+    w!(field!(0x48), c.ecx);
+    c.fl.alu_sub(c.edx, r!(field!(0x28)), 32);
+    if !c.fl.cf() && !c.fl.zf() {
+        c.ecx = r!(0x18d08f4);
+        push_fast!(0x1000);
+        call!(0xda7d70, 0xfedc95);
+        w!(field!(0x24), c.eax);
+        if c.eax != 0 {
+            c.eax = c.eax.wrapping_add(0x1000);
+            w!(field!(0x28), c.eax);
+        } else {
+            w!(field!(0x28), 0);
+        }
+    }
+    c.eax = r!(field!(0x24));
+    c.ecx = c.eax.wrapping_add(0x10);
+    w!(field!(0x24), c.ecx);
+    c.ecx = (r!(c.eax) & 0xfff6ffff) | 0x60000;
+    w!(c.eax, c.ecx);
+    c.edx = r!(c.ebx);
+    w!(c.eax.wrapping_add(8), c.ebp);
+    w!(c.eax.wrapping_add(4), c.edx);
+    w!(c.eax.wrapping_add(12), c.edi);
+    c.edx = (r!(field!(0x6c)) << 20) | (c.ecx & 0xfffff);
+    w!(c.eax, c.edx);
+    c.ecx = ((r!(field!(0x74)) ^ c.edx) & 0x7fff) ^ c.edx;
+    w!(c.eax, c.ecx);
+    c.ecx = r!(field!(0x48));
+    c.edx = r!(field!(0x44));
+    c.ebx = r!(field!(0x164));
+    c.edx = c.edx.wrapping_add(c.ecx.wrapping_mul(8));
+    c.ecx = c.ecx.wrapping_add(1);
+    w!(field!(0x48), c.ecx);
+    c.edi = 1;
+    w!(field!(0x74), r!(field!(0x74)).wrapping_add(c.edi));
+    c.ecx = r!(c.edx);
+    c.ebx <<= 27;
+    c.ecx = (c.ecx & 0x7ffffff) | c.ebx;
+    w!(c.edx, c.ecx);
+    c.ebx = r!(field!(0x164));
+    c.ebp = r!(field!(0x178));
+    c.ebx >>= 5;
+    c.ebp = ((c.ebp.wrapping_add(c.ebx) ^ c.ecx) & 0x7ffffff) ^ c.ecx;
+    w!(c.edx, c.ebp);
+    w!(c.edx.wrapping_add(4), c.eax);
+    c.ecx = r!(field!(0x30c78));
+    w!(field!(c.ecx.wrapping_mul(4).wrapping_add(0x30878)), c.eax);
+    let count = c.fl.alu_add(r!(field!(0x30c78)), c.edi, 32);
+    w!(field!(0x30c78), count);
+    c.edi = emit::pop(m, pt, c);
+    c.esi = emit::pop(m, pt, c);
+    c.ebp = emit::pop(m, pt, c);
+    c.ebx = emit::pop(m, pt, c);
+    ret(c, 0);
 }
 
 // Translated from 0x011787c0 (DDDA.exe 2017-12-13 Steam).
