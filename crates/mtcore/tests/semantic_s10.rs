@@ -70,6 +70,9 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
     let cases = data["cases"].as_array().unwrap();
     let mut made: BTreeMap<u32, usize> = BTreeMap::new();
     for (i, case) in cases.iter().enumerate() {
+        if std::env::var_os("S10_TRACE").is_some() {
+            eprintln!("case {i}");
+        }
         let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
         let before = regs(&case["before"]);
         let after = regs(&case["after"]);
@@ -112,16 +115,28 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
                     assert_eq!(m.u8(a), b, "case {i}: call {target:x} memory {a:x}");
                 }
             }
+            // memory the callee reads from the caller's frame (beyond its arguments)
+            if let Some(checks) = call.get("checks") {
+                for (a, b) in pairs(checks) {
+                    assert_eq!(m.u8(a), b, "case {i}: call {target:x} reads {a:x}");
+                }
+            }
             for (a, b) in pairs(&back["memory"]) {
                 m.set_u8(a, b);
             }
             c.eax = regs(back)[EAX];
             c.esp = regs(back)[ESP];
+            // a callee that returns a float in ST0
+            if let Some(bits) = trace[k].get("st0") {
+                c.st.push(n(bits));
+            }
             log2.borrow_mut().push(target);
             *position.borrow_mut() += 1;
         })));
         body(&mut m, &mut c);
         x86::set_ext_calls(None);
+        // leave no x87 state behind (the host would keep it parked)
+        ddnative_base::x87::park();
         assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
         for t in log.borrow().iter() {
             *made.entry(*t).or_default() += 1;
@@ -132,6 +147,10 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
         assert_eq!(got, want, "case {i}: eax/ebx/esp/ebp/esi/edi");
         let esp = after[ESP];
         let expected = pairs(&case["after"]["memory"]);
+        if std::env::var_os("S10_DIFF").is_some() {
+            let bad: Vec<String> = expected.iter().filter(|(&a, &b)| a >= esp && m.bytes.get(&a).copied() != Some(b)).map(|(&a, &b)| format!("{a:x}:{:?}/{b}", m.bytes.get(&a))).collect();
+            eprintln!("case {i} diffs {}: {:?}", bad.len(), bad);
+        }
         for (&a, &b) in &expected {
             if a >= esp {
                 assert_eq!(m.bytes.get(&a).copied(), Some(b), "case {i}: memory {a:x}");
@@ -219,4 +238,27 @@ fn semantic_bind_consumer_to_model_matches_original() {
     let callees = [Callee { target: 0x00fe_d890, reads: &[ECX], stack_args: 1 }];
     let (cases, made) = run_cases(&vectors("consumer_state.json"), mtcore::semantic_s10::bind_consumer_to_model, false, &callees, &[]);
     eprintln!("{cases} ABI-level consumer_state cases passed; calls {made:x?}");
+}
+
+// verifies 0x0049e920 (ABI level); the stub getters stand in for virtual +0x10
+#[test]
+fn semantic_find_nearest_object_matches_original() {
+    let callees: Vec<Callee> = (0..4).map(|k| Callee { target: 0x3000_0000 + 0x10 * k, reads: &[ECX], stack_args: 0 }).collect();
+    let (cases, made) = run_cases(&vectors("find_nearest.json"), mtcore::semantic_s10::find_nearest_object, true, &callees, &[]);
+    eprintln!("{cases} ABI-level find_nearest cases passed; calls {made:x?}");
+}
+
+// verifies 0x00fe66a0 (ABI level; void). The first range's virtual +0x4c
+// returns its float in ST0 (the recorded `st0` is pushed).
+#[test]
+fn semantic_gather_ambient_probe_matches_original() {
+    let callees = [
+        Callee { target: 0x00d1_3600, reads: &[], stack_args: 2 },
+        Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x3000_0200, reads: &[ECX], stack_args: 3 },
+        Callee { target: 0x0117_87c0, reads: &[], stack_args: 6 },
+        Callee { target: 0x00fe_d890, reads: &[ECX], stack_args: 1 },
+    ];
+    let (cases, made) = run_cases(&vectors("ambient_probe.json"), mtcore::semantic_s10::gather_ambient_probe, false, &callees, &[]);
+    eprintln!("{cases} ABI-level ambient_probe cases passed; calls {made:x?}");
 }

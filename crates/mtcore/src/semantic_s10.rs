@@ -726,3 +726,663 @@ pub fn bind_consumer_to_model(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4 + 8);
 }
+
+/// The original body of 0x0049E920, set by the runtime when it installs
+/// [`find_nearest_object`]; only used for the pathological case of more
+/// than 256 hits (the original keeps 256 and then sorts past its array).
+pub static FIND_NEAREST_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = std::sync::OnceLock::new();
+
+/// Class-id globals of 0x0049E920: objects of the first class are range
+/// tested, objects of the second or third class are skipped, any other
+/// object ends the search with no result.
+const CLASS_RANGED: u32 = 0x019a_5e30;
+const CLASS_SKIPPED_B: u32 = 0x019a_60b0;
+const CLASS_SKIPPED_C: u32 = 0x019a_60d0;
+
+// Translated from 0x0049e920 (DDDA.exe 2017-12-13 Steam).
+/// 0x0049E920, `find_nearest_object(list, exclude, owner_id, position,
+/// range_scale, max_dy, param)` (stdcall, `ret 0x1c`): the list's object
+/// (count +0x24, pointers +0x30) of the first class (descriptor chain
+/// containing the id at 0x019A5E30) nearest to `position` (three floats),
+/// or 0.
+///
+/// An object is a candidate when it is not `exclude`, its flags (+4) have
+/// kind 2 (low three bits) and bit 0x400, it is of the first class with
+/// `owner_id` at +0x2574 (and `param` at +0x2534 when `param` is set), the
+/// planar distance (x, z at +0x40 / +0x48) is within `range_scale *
+/// [0x014F9E04]` (and `range_scale > 0`) and the height difference (y at
+/// +0x44, absolute value through the mask at 0x0161C330) does not exceed
+/// `max_dy`. An object of neither the first, the second (0x019A60B0) nor
+/// the third (0x019A60D0) class makes the whole search return 0 at once.
+///
+/// The original bubble-sorts the hits by distance and returns the first;
+/// that is the first hit of the smallest distance, found here by a scan
+/// (the sort itself when a distance is a NaN, whose order the sort defines).
+/// The class descriptor comes from virtual +0x10, called three times per
+/// object by the original; a plain `mov eax, imm; ret` getter is read from
+/// its code once instead, any other is called three times.
+pub fn find_nearest_object(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // The original's frame: EBP = entry - 4, ESP aligned to 8, 0x80c locals,
+    // EBX, ESI, EDI pushed.
+    let ebp = entry.wrapping_sub(4);
+    let frame = (ebp & !7).wrapping_sub(0x80c).wrapping_sub(12);
+    let list = arg(m, 0);
+    let total = pg.u32(m, list.wrapping_add(0x24));
+    let mut hits: Vec<(u32, f32)> = Vec::new();
+    let finish = |c: &mut Cpu, result: u32| {
+        (c.ebx, c.ebp, c.esi, c.edi) = saved;
+        c.eax = result;
+        c.esp = entry.wrapping_add(4 + 0x1c);
+    };
+    let mut index = 0u32;
+    while index < total {
+        let object = pg.u32(m, pg.u32(m, arg(m, 0).wrapping_add(0x30)).wrapping_add(index.wrapping_mul(4)));
+        index += 1;
+        if object == arg(m, 1) {
+            continue;
+        }
+        let flags = pg.u32(m, object.wrapping_add(4));
+        if flags & 7 != 2 || flags & 0x400 == 0 {
+            continue;
+        }
+        // the object's class descriptor (virtual +0x10, resume addresses of its three calls)
+        let vtable = pg.u32(m, object);
+        let method = pg.u32(m, vtable.wrapping_add(0x10));
+        let constant = constant_getter(m, pg, method);
+        c.esi = object;
+        let descriptor = |m: &mut dyn Mem, c: &mut Cpu, resume: u32| -> u32 {
+            if let Some(dti) = constant {
+                return dti;
+            }
+            let vtable = pg.u32(m, object);
+            let method = pg.u32(m, vtable.wrapping_add(0x10));
+            c.eax = method;
+            c.edx = vtable;
+            call_from(m, c, pg, frame, object, &[], resume, guest(method))
+        };
+        let dti = descriptor(m, c, 0x0049_e9a1);
+        let class = pg.u32(m, CLASS_RANGED);
+        let ranged = chain_has(m, pg, dti, class);
+        let dti = descriptor(m, c, 0x0049_e9d2);
+        let class = pg.u32(m, CLASS_SKIPPED_B);
+        let skipped_b = chain_has(m, pg, dti, class);
+        let dti = descriptor(m, c, 0x0049_ea0b);
+        let class = pg.u32(m, CLASS_SKIPPED_C);
+        let skipped_c = chain_has(m, pg, dti, class);
+        if !ranged {
+            if skipped_b {
+                continue;
+            }
+            if !skipped_c {
+                return finish(c, 0);
+            }
+            continue;
+        }
+        if pg.u32(m, object.wrapping_add(0x2574)) != arg(m, 2) {
+            continue;
+        }
+        let param = arg(m, 6);
+        if param != 0 && pg.u32(m, object.wrapping_add(0x2534)) != param {
+            continue;
+        }
+        let f = |m: &dyn Mem, a: u32| f32::from_bits(pg.u32(m, a));
+        let position = arg(m, 3);
+        let dx = f(m, position) - f(m, object.wrapping_add(0x40));
+        let dz = f(m, position.wrapping_add(8)) - f(m, object.wrapping_add(0x48));
+        let distance = (dz * dz + dx * dx).sqrt();
+        let scale = f32::from_bits(arg(m, 4));
+        if 0.0 >= scale {
+            continue;
+        }
+        let limit = scale * f32::from_bits(pg.u32(m, 0x014f_9e04));
+        if distance > limit {
+            continue;
+        }
+        let dy = f(m, position.wrapping_add(4)) - f(m, object.wrapping_add(0x44));
+        let dy = f32::from_bits(dy.to_bits() & pg.u32(m, 0x0161_c330));
+        if dy > f32::from_bits(arg(m, 5)) {
+            continue;
+        }
+        if hits.len() >= 0x100 {
+            // more hits than the original's array: it sorts past it
+            let original = FIND_NEAREST_ORIGINAL.get().expect("0x0049E920 original body");
+            (c.ebx, c.ebp, c.esi, c.edi) = saved;
+            c.esp = entry;
+            return original(m, c);
+        }
+        hits.push((object, distance));
+    }
+    // the first hit of the smallest distance; with a NaN distance the
+    // original's bubble sort decides
+    let nearest = if hits.iter().any(|h| h.1.is_nan()) {
+        let mut sorted = hits;
+        let mut passes = sorted.len().saturating_sub(1);
+        while passes > 0 {
+            for j in 0..passes {
+                if sorted[j].1 > sorted[j + 1].1 {
+                    sorted.swap(j, j + 1);
+                }
+            }
+            passes -= 1;
+        }
+        sorted.first().map_or(0, |h| h.0)
+    } else {
+        let mut best: Option<(u32, f32)> = None;
+        for &(object, distance) in &hits {
+            if best.map_or(true, |b| distance < b.1) {
+                best = Some((object, distance));
+            }
+        }
+        best.map_or(0, |b| b.0)
+    };
+    finish(c, nearest);
+}
+
+/// Words in the lighting-probe accumulator (a spherical-harmonics style
+/// vector of 36 floats) and the bytes of the original's frame the port
+/// models (offsets from the frame's ESP).
+const PROBE_WORDS: usize = 36;
+const ACCUMULATOR: u32 = 0x20;
+const CONTRIBUTION: u32 = 0xd0;
+
+/// Reads a guest f32 pair as the 64-bit value `MOVQ` / `SQRTSD` load.
+#[inline]
+fn read_u64(m: &dyn Mem, pg: Pages, address: u32) -> u64 {
+    u64::from(pg.u32(m, address)) | u64::from(pg.u32(m, address.wrapping_add(4))) << 32
+}
+
+// Translated from 0x00fe66a0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00FE66A0, `scene->gather_ambient_probe(model, light_mask, flags,
+/// position)` (thiscall, `ret 0x10`; void): gather the lighting around
+/// `position` for `model` into the model's per-draw lighting constants
+/// (block at +0x11c0, 0x90 bytes).
+///
+/// The scene (`this`) holds light lists in `this[0x20]` as ranges
+/// (`this[0x3c]` + `this[0x40]`, `this[0x34]` + `this[0x38]`, `this[0x2c]`
+/// + `this[0x30]`, `this[0x44]` + `this[0x48]`). An object takes part when
+/// its kind word (+4) has the model's class bit (byte +0x168 of the
+/// model) in bits 16..25, kind 2 in the low three bits and 0x4800 set.
+///
+/// - flags bit 1: the first range's objects (that pass the test of
+///   0x00D13600 against `position`) report a float through their virtual
+///   +0x4c (x87 `ST0`); the largest per kind (word +0x32 zero or not) goes
+///   to two float slots.
+/// - flags bit 0: the second and third ranges' objects (mask `light_mask`
+///   against +0x34, bit 1 of +0x30; the third also needs 0x00D13600 on its
+///   +0x210) fill 36 floats through virtual +0x4c(model, position,
+///   buffer) -> bool; the contributions are summed. With `this[0xb5c]` and
+///   `this[0xb60]` both set, the nested search 0x011787C0 gathers them
+///   instead (callback 0x00FE5190 on a sphere around `position`).
+/// - the model's state slot 0x28f0 is bound to one of two device
+///   constants by whether anything contributed; the fourth range's first
+///   matching object supplies a direction, intensity and resource (flags
+///   bit 2 picks that resource over the default; slot 0x1cb8 follows).
+/// - finally the constants block is allocated in the model's allocator and
+///   filled with the direction, the intensities and the probe converted
+///   to its band form: the sum's 36 floats scaled by the normalisation
+///   constants (sqrt of the constants at 0x0161D290 / 0x0161CA58 /
+///   0x0143A4E0 / 0x01408CA8 divided by their multipliers), 28 of them
+///   copied to the block.
+///
+/// The frame is modelled in a local array at the original's offsets, and
+/// synced with guest memory around the three calls that see it (the
+/// virtual buffer fill and the nested search).
+pub fn gather_ambient_probe(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let model = pg.u32(m, entry.wrapping_add(4));
+    let slots = StateSlots { pg, model };
+    // The original's frame: EBP = entry - 4, ESP aligned to 16, 0x1b4
+    // locals, EBX, ESI, EDI pushed. `frame` is its ESP.
+    let frame = ((entry.wrapping_sub(4)) & !0xf).wrapping_sub(0x1b4).wrapping_sub(12);
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let rd = |m: &dyn Mem, address: u32| pg.u32(m, address);
+    let rd64 = |m: &dyn Mem, address: u32| read_u64(m, pg, address);
+    let guest_call = |m: &mut dyn Mem, c: &mut Cpu, this: u32, target: u32, args: &[u32], resume: u32| {
+        call_from(m, c, pg, frame, this, args, resume, guest(target))
+    };
+    // frame words at the original's offsets
+    let mut l = [0u32; 0x1c0 / 4];
+    let f = |bits: u32| f32::from_bits(bits);
+
+    l[0xbc / 4] = 1u32 << (pg.u8(m, model.wrapping_add(0x168)) & 0x1f);
+    let flags = arg(m, 2);
+    l[0xcc / 4] = rd(m, 0x018c_fe5c);
+    l[0xc8 / 4] = rd(m, 0x018c_fe58);
+    let class_bit = l[0xbc / 4];
+    let takes_part = |word: u32| (word >> 16) & class_bit & 0x3ff != 0 && word & 7 == 2 && word & 0x4800 == 0x4800;
+    let buffer_address = frame.wrapping_add(CONTRIBUTION);
+
+    // 1. floats reported by the first range
+    if flags & 2 != 0 && pg.u32(m, this.wrapping_add(0x40)) != 0 {
+        let mut i = 0u32;
+        loop {
+            let index = pg.u32(m, this.wrapping_add(0x3c)).wrapping_add(i);
+            let list = pg.u32(m, this.wrapping_add(0x20));
+            let object = pg.u32(m, list.wrapping_add(index.wrapping_mul(4)));
+            if takes_part(pg.u32(m, object.wrapping_add(4))) {
+                let position = arg(m, 3);
+                guest_call(m, c, object, 0x00d1_3600, &[position, object.wrapping_add(0x60)], 0x00fe_674f);
+                if c.eax & 0xff != 0 {
+                    let position = arg(m, 3);
+                    let method = pg.u32(m, pg.u32(m, object).wrapping_add(0x4c));
+                    call_from(m, c, pg, frame, object, &[position], 0x00fe_6763, guest(method));
+                    // FSTP float: the callee's ST0
+                    let reported = match c.st.top_f32() {
+                        Some(bits) => {
+                            c.st.pop();
+                            bits
+                        }
+                        None => 0xffc0_0000,
+                    };
+                    l[0x1c / 4] = reported;
+                    let slot = if pg.u16(m, object.wrapping_add(0x32)) == 0 { 0xc8 / 4 } else { 0xcc / 4 };
+                    if f(reported) > f(l[slot]) {
+                        l[slot] = reported;
+                    }
+                }
+            }
+            i = i.wrapping_add(1);
+            if i >= pg.u32(m, this.wrapping_add(0x40)) {
+                break;
+            }
+        }
+    }
+
+    // 2. contributions of the second and third ranges
+    let want_probe = flags & 1 != 0;
+    l[0xc4 / 4] = flags & 1;
+    let mut hit = false;
+    // sum one contribution (the buffer the virtual call filled)
+    let mut accumulate = |m: &dyn Mem, l: &mut [u32; 0x1c0 / 4], hit: &mut bool| {
+        let base = (ACCUMULATOR / 4) as usize;
+        let buffer = (CONTRIBUTION / 4) as usize;
+        for k in 0..PROBE_WORDS {
+            let contribution = pg.u32(m, buffer_address.wrapping_add(4 * k as u32));
+            l[buffer + k] = contribution;
+            l[base + k] = if *hit { (f(contribution) + f(l[base + k])).to_bits() } else { contribution };
+        }
+        *hit = true;
+    };
+    if want_probe && pg.u32(m, this.wrapping_add(0x38)) != 0 {
+        let mut j = 0u32;
+        loop {
+            let index = pg.u32(m, this.wrapping_add(0x34)).wrapping_add(j);
+            let list = pg.u32(m, this.wrapping_add(0x20));
+            let object = pg.u32(m, list.wrapping_add(index.wrapping_mul(4)));
+            let light_mask = arg(m, 1);
+            if pg.u32(m, object.wrapping_add(0x34)) & light_mask != 0
+                && takes_part(pg.u32(m, object.wrapping_add(4)))
+                && (pg.u32(m, object.wrapping_add(0x30)) >> 1) & 1 != 0
+            {
+                let method = pg.u32(m, pg.u32(m, object).wrapping_add(0x4c));
+                let position = arg(m, 3);
+                call_from(m, c, pg, frame, object, &[model, position, buffer_address], 0x00fe_6861, guest(method));
+                if c.eax & 0xff != 0 {
+                    accumulate(m, &mut l, &mut hit);
+                }
+            }
+            j = j.wrapping_add(1);
+            if j >= pg.u32(m, this.wrapping_add(0x38)) {
+                break;
+            }
+        }
+    }
+    if want_probe {
+        if pg.u8(m, this.wrapping_add(0xb5c)) == 0 || pg.u32(m, this.wrapping_add(0xb60)) == 0 {
+            if pg.u32(m, this.wrapping_add(0x30)) != 0 {
+                let mut k = 0u32;
+                loop {
+                    let index = pg.u32(m, this.wrapping_add(0x2c)).wrapping_add(k);
+                    let list = pg.u32(m, this.wrapping_add(0x20));
+                    let object = pg.u32(m, list.wrapping_add(index.wrapping_mul(4)));
+                    let light_mask = arg(m, 1);
+                    if pg.u32(m, object.wrapping_add(0x34)) & light_mask != 0
+                        && takes_part(pg.u32(m, object.wrapping_add(4)))
+                        && (pg.u32(m, object.wrapping_add(0x30)) >> 1) & 1 != 0
+                    {
+                        let position = arg(m, 3);
+                        guest_call(m, c, object, 0x00d1_3600, &[object.wrapping_add(0x210), position], 0x00fe_6f4f);
+                        if c.eax & 0xff != 0 {
+                            let method = pg.u32(m, pg.u32(m, object).wrapping_add(0x4c));
+                            let position = arg(m, 3);
+                            call_from(m, c, pg, frame, object, &[model, position, buffer_address], 0x00fe_6f70, guest(method));
+                            if c.eax & 0xff != 0 {
+                                accumulate(m, &mut l, &mut hit);
+                            }
+                        }
+                    }
+                    k = k.wrapping_add(1);
+                    if k >= pg.u32(m, this.wrapping_add(0x30)) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            // the nested search: a sphere around `position` and a callback that
+            // sums into the accumulator, which therefore lives in guest memory
+            // for the call
+            l[0x188 / 4] = rd(m, 0x0162_adb0);
+            let position = arg(m, 3);
+            l[0x190 / 4] = pg.u32(m, position);
+            l[0x194 / 4] = pg.u32(m, position.wrapping_add(4));
+            let high = rd64(m, position.wrapping_add(8));
+            l[0x198 / 4] = high as u32;
+            l[0x19c / 4] = (high >> 32) as u32;
+            let light_mask = arg(m, 1);
+            l[0x160 / 4] = light_mask;
+            let old = l[0x168 / 4];
+            l[0x168 / 4] = (old & !0xff) | u32::from(hit);
+            l[0x164 / 4] = class_bit;
+            l[0x16c / 4] = model;
+            l[0x170 / 4] = frame.wrapping_add(ACCUMULATOR);
+            l[0x180 / 4] = 0x0157_92e8;
+            l[0x184 / 4] = 5;
+            for (offset, word) in [
+                (0x160u32, l[0x160 / 4]),
+                (0x164, l[0x164 / 4]),
+                (0x168, l[0x168 / 4] & 0xff),
+                (0x16c, l[0x16c / 4]),
+                (0x170, l[0x170 / 4]),
+                (0x180, l[0x180 / 4]),
+                (0x184, l[0x184 / 4]),
+                (0x188, l[0x188 / 4]),
+                (0x190, l[0x190 / 4]),
+                (0x194, l[0x194 / 4]),
+                (0x198, l[0x198 / 4]),
+                (0x19c, l[0x19c / 4]),
+            ] {
+                if offset == 0x168 {
+                    pg.set_u8(m, frame.wrapping_add(offset), word as u8);
+                } else {
+                    pg.set_u32(m, frame.wrapping_add(offset), word);
+                }
+            }
+            for k in 0..PROBE_WORDS {
+                pg.set_u32(m, frame.wrapping_add(ACCUMULATOR + 4 * k as u32), l[(ACCUMULATOR / 4) as usize + k]);
+            }
+            let ecx = c.ecx;
+            guest_call(
+                m,
+                c,
+                ecx,
+                0x0117_87c0,
+                &[frame.wrapping_add(0x180), this, 0x00fe_5190, frame.wrapping_add(0x160), 0, 0xffff_ffff],
+                0x00fe_6eb6,
+            );
+            hit = pg.u8(m, frame.wrapping_add(0x168)) != 0;
+            for k in 0..PROBE_WORDS {
+                l[(ACCUMULATOR / 4) as usize + k] = pg.u32(m, frame.wrapping_add(ACCUMULATOR + 4 * k as u32));
+            }
+        }
+    }
+
+    // 3. the model's state slot 0x28f0 follows whether anything contributed
+    if hit {
+        slots.set_value(m, 0x28f0, 0x26f8, 0x4df, 0x4df);
+    } else {
+        slots.set_value(m, 0x28f0, 0x2700, 0x4df, 0xbeaa_b4e0);
+    }
+
+    // 4. the fourth range's first matching object: direction, intensity, resource
+    let lights = pg.u32(m, this.wrapping_add(0x48));
+    let one = rd(m, 0x0140_6ce0);
+    l[0x160 / 4] = rd(m, 0x018c_fe80);
+    l[0x164 / 4] = rd(m, 0x018c_fe84);
+    l[0x168 / 4] = rd(m, 0x018c_fe88);
+    l[0x1bc / 4] = one;
+    l[0xc4 / 4] = one;
+    l[0xc0 / 4] = lights;
+    l[0x1c / 4] = 0;
+    if lights != 0 {
+        let first = pg.u32(m, this.wrapping_add(0x44));
+        let list = pg.u32(m, this.wrapping_add(0x20));
+        let mut pointer = list.wrapping_add(first.wrapping_mul(4));
+        let mut i = 0u32;
+        while i < lights {
+            let object = pg.u32(m, pointer);
+            let light_mask = arg(m, 1);
+            if pg.u32(m, object.wrapping_add(0x34)) & light_mask != 0 && takes_part(pg.u32(m, object.wrapping_add(4))) {
+                let source = pg.u32(m, object.wrapping_add(0x238));
+                let resource = if source != 0 { pg.u32(m, source.wrapping_add(0xcc)) } else { 0 };
+                l[0x1bc / 4] = pg.u32(m, object.wrapping_add(0x230));
+                l[0x160 / 4] = pg.u32(m, object.wrapping_add(0x50));
+                l[0x164 / 4] = pg.u32(m, object.wrapping_add(0x54));
+                l[0x168 / 4] = pg.u32(m, object.wrapping_add(0x58));
+                l[0x1c / 4] = resource;
+                l[0xc4 / 4] = pg.u32(m, object.wrapping_add(0x234));
+                break;
+            }
+            pointer = pointer.wrapping_add(4);
+            i += 1;
+        }
+    }
+    if arg(m, 2) & 4 == 0 {
+        slots.set_resource(m, 0x1cb8, 0, 0x358, 0xf1d7_e000);
+    } else {
+        let mut resource = l[0x1c / 4];
+        if resource == 0 {
+            resource = pg.u32(m, pg.u32(m, 0x018d_2c80).wrapping_add(0x2c0));
+        }
+        slots.set_resource(m, 0x1cb8, resource, 0x358, 0xf1d7_e000);
+    }
+
+    // 5. the constants block
+    let flags_word = slots.field(m, 0x5c);
+    slots.set_field(m, 0x5c, flags_word | 2);
+    slots.log_old(m, 0x11c0, 0x1f9);
+    let skeleton = pg.u32(m, pg.u32(m, model.wrapping_add(0x18)).wrapping_add(0x7e4));
+    let size = (u32::from(pg.u16(m, skeleton.wrapping_add(0x18))).wrapping_mul(4).wrapping_add(0xf)) & !0xf;
+    if slots.field(m, 0x24).wrapping_add(size) > slots.field(m, 0x28) {
+        call_from(m, c, pg, frame, model, &[size], 0x00fe_7935, guest(0x00fe_d890));
+    }
+    let block = slots.field(m, 0x24);
+    slots.set_field(m, 0x24, block.wrapping_add(size));
+    slots.set_field(m, 0x11c0, block);
+    slots.mark_dirty(m, 1);
+    if block != 0 {
+        let one = rd(m, 0x0140_6ce0);
+        let direction = [l[0x160 / 4], l[0x164 / 4], l[0x168 / 4]];
+        for (k, word) in [direction[0], direction[1], direction[2], l[0x1bc / 4], l[0xc4 / 4], l[0xc8 / 4], l[0xcc / 4]].into_iter().enumerate() {
+            pg.set_u32(m, block.wrapping_add(4 * k as u32), word);
+        }
+        let device = pg.u32(m, 0x018d_08f4);
+        let word = x87_copy_f32(pg.u32(m, device.wrapping_add(0x11c)));
+        pg.set_u32(m, block.wrapping_add(0x1c), word);
+        // x: the original's XMM registers (low 64 bits)
+        let mut x = [0u64; 8];
+        x[0] = u64::from(direction[0]);
+        x[1] = u64::from(direction[1]);
+        x[2] = u64::from(direction[2]);
+        x[5] = u64::from(one);
+        if hit {
+            x[6] = u64::from(l[0x2c / 4]);
+            x[7] = u64::from(l[0x24 / 4]);
+        } else {
+            l[0x20 / 4] = x[0] as u32;
+            l[0x50 / 4] = x[1] as u32;
+            l[0x80 / 4] = x[2] as u32;
+            for offset in [0x28u32, 0x30, 0x34, 0x38, 0x3c, 0x40, 0x54, 0x58, 0x5c, 0x60, 0x64, 0x68, 0x6c, 0x70, 0x84, 0x88, 0x8c, 0x90, 0x94, 0x98, 0x9c, 0xa0] {
+                l[(offset / 4) as usize] = 0;
+            }
+            x[0] = 0;
+            x[6] = 0;
+            x[7] = 0;
+        }
+        {
+            x[0] = f64::from_bits(rd64(m, 0x0161d290)).sqrt().to_bits();
+            x[2] ^= x[2];
+            x[2] = (x[2] & !0xffff_ffff) | u64::from((f64::from_bits(x[0]) as f32).to_bits());
+            x[0] = x[2];
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) * f32::from_bits(rd(m, 0x01406cec))).to_bits());
+            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits((x[5] as u32)) / f32::from_bits((x[0] as u32))).to_bits());
+            x[0] = f64::from_bits(rd64(m, 0x0161ca58)).sqrt().to_bits();
+            x[1] ^= x[1];
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f64::from_bits(x[0]) as f32).to_bits());
+            x[0] = x[2];
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) * f32::from_bits(rd(m, 0x01406cf4))).to_bits());
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) / f32::from_bits((x[0] as u32))).to_bits());
+            x[0] = f64::from_bits(rd64(m, 0x0143a4e0)).sqrt().to_bits();
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[3] = x[2];
+            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits((x[3] as u32)) * f32::from_bits(rd(m, 0x01434024))).to_bits());
+            x[2] = (x[2] & !0xffff_ffff) | u64::from((f32::from_bits((x[2] as u32)) * f32::from_bits(rd(m, 0x0142a8f0))).to_bits());
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f64::from_bits(x[0]) as f32).to_bits());
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) / f32::from_bits((x[3] as u32))).to_bits());
+            x[3] = f64::from_bits(rd64(m, 0x01408ca8)).sqrt().to_bits();
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[3] = u64::from((f64::from_bits(x[3]) as f32).to_bits());
+            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits((x[3] as u32)) / f32::from_bits((x[2] as u32))).to_bits());
+            x[2] = u64::from(rd(m, 0x0161c280));
+            x[6] ^= x[2];
+            l[96] = x[6] as u32;
+            x[6] = u64::from(l[10]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            l[98] = x[6] as u32;
+            x[6] = u64::from(l[8]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[5] as u32))).to_bits());
+            l[48] = x[6] as u32;
+            x[7] ^= x[2];
+            l[97] = x[7] as u32;
+            x[7] = x[3];
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[14])).to_bits());
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) - f32::from_bits((x[7] as u32))).to_bits());
+            l[99] = x[6] as u32;
+            x[6] = u64::from(l[23]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] ^= x[2];
+            l[100] = x[6] as u32;
+            x[6] = u64::from(l[21]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] ^= x[2];
+            l[101] = x[6] as u32;
+            x[6] = u64::from(l[22]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            l[102] = x[6] as u32;
+            x[6] = u64::from(l[20]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[5] as u32))).to_bits());
+            l[48] = x[6] as u32;
+            x[7] = u64::from(l[48]);
+            x[6] = x[3];
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits(l[26])).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) - f32::from_bits((x[6] as u32))).to_bits());
+            x[6] = u64::from(l[35]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] ^= x[2];
+            l[104] = x[6] as u32;
+            x[6] = u64::from(l[33]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[6] ^= x[2];
+            l[105] = x[6] as u32;
+            x[6] = u64::from(l[34]);
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits((x[1] as u32))).to_bits());
+            x[1] = u64::from(l[32]);
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) * f32::from_bits((x[5] as u32))).to_bits());
+            x[5] = x[3];
+            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits((x[5] as u32)) * f32::from_bits(l[38])).to_bits());
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) - f32::from_bits((x[5] as u32))).to_bits());
+            x[5] = u64::from(l[96]);
+            l[52] = x[5] as u32;
+            x[5] = u64::from(l[97]);
+            l[53] = x[5] as u32;
+            x[5] = u64::from(l[98]);
+            l[54] = x[5] as u32;
+            x[5] = u64::from(l[99]);
+            x[4] = x[0];
+            x[4] = (x[4] & !0xffff_ffff) | u64::from((f32::from_bits((x[4] as u32)) * f32::from_bits(rd(m, 0x01406cf0))).to_bits());
+            l[55] = x[5] as u32;
+            x[5] = u64::from(l[100]);
+            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits((x[3] as u32)) * f32::from_bits(rd(m, 0x01406cf4))).to_bits());
+            l[56] = x[5] as u32;
+            x[5] = u64::from(l[101]);
+            l[63] = x[1] as u32;
+            l[57] = x[5] as u32;
+            x[5] = u64::from(l[102]);
+            l[58] = x[5] as u32;
+            x[5] = u64::from(l[104]);
+            l[59] = x[7] as u32;
+            x[1] = x[0];
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) * f32::from_bits(l[12])).to_bits());
+            l[96] = x[1] as u32;
+            l[60] = x[5] as u32;
+            x[5] = u64::from(l[105]);
+            x[1] = x[0];
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) * f32::from_bits(l[13])).to_bits());
+            x[1] ^= x[2];
+            l[61] = x[5] as u32;
+            l[65] = x[1] as u32;
+            l[62] = x[6] as u32;
+            x[6] = x[0];
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits(l[24])).to_bits());
+            x[7] = x[3];
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[26])).to_bits());
+            l[102] = x[7] as u32;
+            x[7] = x[0];
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[27])).to_bits());
+            x[7] ^= x[2];
+            x[5] = x[3];
+            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits((x[5] as u32)) * f32::from_bits(l[14])).to_bits());
+            x[3] = (x[3] & !0xffff_ffff) | u64::from((f32::from_bits((x[3] as u32)) * f32::from_bits(l[38])).to_bits());
+            l[98] = x[5] as u32;
+            x[1] = u64::from(l[98]);
+            l[66] = x[1] as u32;
+            l[103] = x[7] as u32;
+            l[100] = x[6] as u32;
+            x[1] = u64::from(l[100]);
+            x[7] = x[0];
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[36])).to_bits());
+            l[68] = x[1] as u32;
+            x[1] = u64::from(l[102]);
+            x[5] = x[0];
+            x[5] = (x[5] & !0xffff_ffff) | u64::from((f32::from_bits((x[5] as u32)) * f32::from_bits(l[15])).to_bits());
+            x[6] = x[0];
+            x[6] = (x[6] & !0xffff_ffff) | u64::from((f32::from_bits((x[6] as u32)) * f32::from_bits(l[25])).to_bits());
+            l[70] = x[1] as u32;
+            x[1] = u64::from(l[103]);
+            l[104] = x[7] as u32;
+            x[7] = x[0];
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) * f32::from_bits(l[39])).to_bits());
+            x[7] = (x[7] & !0xffff_ffff) | u64::from((f32::from_bits((x[7] as u32)) * f32::from_bits(l[37])).to_bits());
+            x[0] ^= x[2];
+            l[71] = x[1] as u32;
+            x[1] = u64::from(l[104]);
+            x[7] ^= x[2];
+            l[72] = x[1] as u32;
+            l[75] = x[0] as u32;
+            x[1] = x[7];
+            x[0] = x[4];
+            x[0] = (x[0] & !0xffff_ffff) | u64::from((f32::from_bits((x[0] as u32)) * f32::from_bits(l[16])).to_bits());
+            l[73] = x[1] as u32;
+            x[5] ^= x[2];
+            x[6] ^= x[2];
+            x[2] = u64::from(l[96]);
+            x[1] = x[4];
+            x[1] = (x[1] & !0xffff_ffff) | u64::from((f32::from_bits((x[1] as u32)) * f32::from_bits(l[28])).to_bits());
+            x[4] = (x[4] & !0xffff_ffff) | u64::from((f32::from_bits((x[4] as u32)) * f32::from_bits(l[40])).to_bits());
+            l[76] = x[0] as u32;
+            x[0] = u64::from(rd(m, 0x01406ce0));
+            l[105] = x[7] as u32;
+            l[64] = x[2] as u32;
+            l[67] = x[5] as u32;
+            l[69] = x[6] as u32;
+            l[74] = x[3] as u32;
+            l[77] = x[1] as u32;
+            l[78] = x[4] as u32;
+            l[79] = x[0] as u32;
+        }
+        for k in 0..28u32 {
+            let word = l[(CONTRIBUTION / 4 + k) as usize];
+            pg.set_u32(m, block.wrapping_add(0x20 + 4 * k), word);
+        }
+    }
+    let flags_word = slots.field(m, 0x5c);
+    slots.set_field(m, 0x5c, flags_word & !2);
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 0x10);
+}
