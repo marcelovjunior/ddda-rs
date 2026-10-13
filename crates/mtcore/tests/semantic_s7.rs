@@ -316,3 +316,40 @@ fn semantic_integrate_falloff_matches_original() {
     let n = abi_cases_with_calls_ret(&path, mtcore::semantic_s7_falloff::integrate_falloff, false);
     eprintln!("{n} ABI-level integrate_falloff cases passed");
 }
+
+// verifies 0x012f05c0 (_ftol2_sse): ST0 loaded with fld m64, called, EAX and the
+// x87 stack compared with the original
+#[test]
+fn semantic_ftol2_sse_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S7_FTOL_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/ftol2_sse.json".into());
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let cases = data["cases"].as_array().unwrap();
+    for (i, case) in cases.iter().enumerate() {
+        let mut m = Memory::default();
+        for (k, b) in 1u32.to_le_bytes().iter().enumerate() {
+            m.bytes.insert(0x019a_a078 + k as u32, *b);
+        }
+        let value = case["value"].as_u64().unwrap();
+        for (k, b) in value.to_le_bytes().iter().enumerate() {
+            m.bytes.insert(0x3000_0000 + k as u32, *b);
+        }
+        let before = regs(&case["before"]);
+        let after = regs(&case["after"]);
+        let mut c = Cpu::default();
+        [c.eax, c.ecx, c.edx, c.ebx, _, c.ebp, c.esi, c.edi] = before;
+        c.esp = n(&case["entry_esp"]);
+        c.st.real_memory::<0x00dd, 8, false>(&mut m, 0x3000_0000); // fld qword
+        mtcore::semantic_s7_ftol::ftol2_sse(&mut m, &mut c);
+        let got = [c.eax, c.ebx, c.esp, c.ebp, c.esi, c.edi];
+        let want = [after[0], after[3], n(&case["entry_esp"]) + 4, after[5], after[6], after[7]];
+        assert_eq!(got, want, "case {i}: value {:e}", f64::from_bits(value));
+        assert_eq!(c.st.depth(), 0, "case {i}: x87 depth");
+    }
+    eprintln!("{} ftol2_sse cases passed", cases.len());
+}
