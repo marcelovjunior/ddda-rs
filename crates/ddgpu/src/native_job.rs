@@ -1178,6 +1178,10 @@ impl Worker {
         }
         // L124 finisher owns the expensive encoder finish. Queue writes may
         // only follow submission of the previous arena users. No GPU wait.
+        // Preparing native sampled views can create a texture and consume its
+        // pending uploads after run_native_job's initial flush. L150 copies
+        // must be submitted before the independent native consumer encoder.
+        if backend.uploads.is_some() { backend.flush(); }
         backend.wait_finisher();
         let (scatter, encoder) = recorder.finish_parts();
         let after = recorder.stats;

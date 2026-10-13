@@ -149,6 +149,8 @@ fn main() {
     // Reuse the same warmed device, shaders and pipelines. The submission
     // interval now includes owned snapshot copies and bounded-queue handoff;
     // total time still waits for actual GPU completion through read_back.
+    let pixels = gpu.read_back(&bb).expect("benchmark image");
+    println!("image hash={} upload_stats={:?}", blake3::hash(&pixels), gpu.upload_stats());
     let mut deferred = d3d9cmd::DeferredBackend::new(Box::new(gpu));
     frame(&mut deferred);
     let allocations = ALLOCS.load(Ordering::Relaxed);

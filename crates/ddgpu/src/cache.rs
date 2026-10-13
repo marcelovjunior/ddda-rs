@@ -29,7 +29,7 @@ impl Ring {
             }
         }
         let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: usage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        Ring { buffer, cpu: vec![0; size as usize], mapped: None, at: 0, dirty_from: 0, generation: 0 }
+        Ring { buffer, cpu: if crate::upload_ring::enabled() { Vec::new() } else { vec![0; size as usize] }, mapped: None, at: 0, dirty_from: 0, generation: 0 }
     }
 
     pub fn size(&self) -> u64 {
@@ -55,6 +55,18 @@ impl Ring {
         };
         Some((off, bytes))
     }
+
+    /// L150 reserves a fresh destination offset; the producer fills mapped
+    /// COPY_SRC storage instead of the legacy CPU vector.
+    pub fn reserve(&mut self, len: u64, align: u64) -> Option<u64> {
+        let off = self.at.next_multiple_of(align);
+        if off + len > self.size() { return None; }
+        self.at = off + len;
+        Some(off)
+    }
+
+    /// Primary Vulkan uniforms keep L148 direct mapping and its wrap fence.
+    pub fn is_mapped(&self) -> bool { self.mapped.is_some() }
 
     /// Write the staged bytes to the GPU buffer.
     pub fn upload(&mut self, queue: &wgpu::Queue) {

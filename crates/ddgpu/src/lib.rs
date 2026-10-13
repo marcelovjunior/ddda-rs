@@ -25,6 +25,8 @@ use std::sync::Arc;
 
 mod cache;
 mod upload_data;
+mod upload_ring;
+pub use upload_ring::Stats as UploadStats;
 mod compute_quads;
 mod backend_data;
 mod encode;
@@ -54,10 +56,10 @@ mod constant_bytes_tests {
     fn raw_register_bits_match_little_endian_words() {
         let registers = [[0, 0x8000_0000, 0x7fc0_1234, u32::MAX], [1, 2, 3, 4]];
         let mut bytes = [0u8; 32];
-        super::copy_float_registers(&mut bytes, &registers);
+        super::copy_float_registers(wgpu::WriteOnly::from_mut(&mut bytes[..]), &registers);
         let expected: Vec<u8> = registers.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
         assert_eq!(bytes.as_slice(), expected);
-        super::copy_float_registers(&mut [], &[]);
+        super::copy_float_registers(wgpu::WriteOnly::from_mut(&mut []), &[]);
     }
 }
 
@@ -175,19 +177,25 @@ fn target_format(d3d: u32, srgb: bool) -> Option<wgpu::TextureFormat> {
 
 /// Convert one row-pitched image to the GPU layout (tight rows).
 fn convert(conv: Conversion, bytes: &[u8], width: u32, rows: u32, pitch: u32, bpp_src: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    convert_emit(conv, bytes, width, rows, pitch, bpp_src, |bytes| out.extend_from_slice(bytes));
+    out
+}
+
+fn convert_emit(conv: Conversion, bytes: &[u8], width: u32, rows: u32, pitch: u32, bpp_src: u32, mut emit: impl FnMut(&[u8])) {
     let (w, h, pitch) = (width as usize, rows as usize, pitch as usize);
     let src_row = |y: usize| &bytes[(y * pitch).min(bytes.len())..(y * pitch + w * bpp_src as usize).min(bytes.len())];
-    let mut out = Vec::new();
+
     let u16le = |b: &[u8], k: usize| u16::from_le_bytes([b[2 * k], b[2 * k + 1]]);
     let f32le = |b: &[u8], k: usize| f32::from_le_bytes(b[4 * k..4 * k + 4].try_into().unwrap());
     let one16 = half_one();
     for y in 0..h {
         let r = src_row(y);
         match conv {
-            Conversion::Direct => out.extend_from_slice(r),
+            Conversion::Direct => emit(r),
             Conversion::OpaqueAlpha => {
                 for px in r.chunks_exact(4) {
-                    out.extend_from_slice(&[px[0], px[1], px[2], 255]);
+                    emit(&[px[0], px[1], px[2], 255]);
                 }
             }
             Conversion::R5G6B5 | Conversion::X1R5G5B5 | Conversion::A1R5G5B5 | Conversion::A4R4G4B4 => {
@@ -200,29 +208,29 @@ fn convert(conv: Conversion, bytes: &[u8], width: u32, rows: u32, pitch: u32, bp
                         Conversion::A1R5G5B5 => [ex((v >> 10) & 31, 5), ex((v >> 5) & 31, 5), ex(v & 31, 5), if v >> 15 != 0 { 255 } else { 0 }],
                         _ => [ex((v >> 8) & 15, 4), ex((v >> 4) & 15, 4), ex(v & 15, 4), ex(v >> 12, 4)],
                     };
-                    out.extend_from_slice(&px);
+                    emit(&px);
                 }
             }
             Conversion::L8 => {
                 for &l in &r[..w] {
-                    out.extend_from_slice(&[l, l, l, 255]);
+                    emit(&[l, l, l, 255]);
                 }
             }
             Conversion::A8L8 => {
                 for px in r.chunks_exact(2) {
-                    out.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
+                    emit(&[px[0], px[0], px[0], px[1]]);
                 }
             }
             Conversion::A8 => {
                 for &a in &r[..w] {
-                    out.extend_from_slice(&[0, 0, 0, a]);
+                    emit(&[0, 0, 0, a]);
                 }
             }
             Conversion::R32F | Conversion::G32R32F => {
                 for k in 0..w {
                     let (r0, g0) = if conv == Conversion::R32F { (f32le(r, k), 1.0) } else { (f32le(r, 2 * k), f32le(r, 2 * k + 1)) };
                     for v in [r0, g0, 1.0, 1.0] {
-                        out.extend_from_slice(&v.to_le_bytes());
+                        emit(&v.to_le_bytes());
                     }
                 }
             }
@@ -238,7 +246,7 @@ fn convert(conv: Conversion, bytes: &[u8], width: u32, rows: u32, pitch: u32, bp
                         _ => [sn(4 * k), sn(4 * k + 1), sn(4 * k + 2), sn(4 * k + 3)],
                     };
                     for x in v {
-                        out.extend_from_slice(&x.to_le_bytes());
+                        emit(&x.to_le_bytes());
                     }
                 }
             }
@@ -246,13 +254,12 @@ fn convert(conv: Conversion, bytes: &[u8], width: u32, rows: u32, pitch: u32, bp
                 for k in 0..w {
                     let (r0, g0) = if conv == Conversion::R16F { (u16le(r, k), one16) } else { (u16le(r, 2 * k), u16le(r, 2 * k + 1)) };
                     for v in [r0, g0, one16, one16] {
-                        out.extend_from_slice(&v.to_le_bytes());
+                        emit(&v.to_le_bytes());
                     }
                 }
             }
         }
     }
-    out
 }
 
 /// 1.0 as an IEEE half.
@@ -427,6 +434,7 @@ pub struct WgpuBackend {
     /// vec4s, its uniform ring offset and the ring generation it was
     /// written in (L78)
     last_constants: RefCell<[(std::sync::Arc<d3d9cmd::Constants>, Vec<[u32; 4]>, u32, u64, usize); 2]>,
+    uploads: Option<RefCell<upload_ring::UploadRing>>,
     uniforms: RefCell<Ring>,
     inline: RefCell<Ring>,
     /// group 0: the constant blocks in the uniform ring (dynamic offsets)
@@ -495,7 +503,7 @@ type PassKey = (Vec<Option<wgpu::TextureView>>, Option<wgpu::TextureView>, Optio
 /// L124: a thread that finishes command encoders and submits them in the
 /// order given.
 struct Finisher {
-    send: Option<std::sync::mpsc::Sender<Vec<vk::Chunk>>>,
+    send: Option<std::sync::mpsc::Sender<(Vec<vk::Chunk>, upload_ring::Submitted)>>,
     sent: Cell<u64>,
     done: Arc<(std::sync::Mutex<(u64, bool)>, std::sync::Condvar)>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -503,16 +511,17 @@ struct Finisher {
 
 impl Finisher {
     fn new(queue: wgpu::Queue, threads: usize, profile: encode::Profile) -> Finisher {
-        let (send, recv) = std::sync::mpsc::channel::<Vec<vk::Chunk>>();
+        let (send, recv) = std::sync::mpsc::channel::<(Vec<vk::Chunk>, upload_ring::Submitted)>();
         let done = Arc::new((std::sync::Mutex::new((0u64, false)), std::sync::Condvar::new()));
         let d = done.clone();
         let thread = std::thread::Builder::new().name("wgpu-finish".into()).spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let pool = encode::Pool::new(threads, profile.clone(), vk::finish);
-                for encoders in recv {
+                for (encoders, uploads) in recv {
                     let buffers = pool.finish(encoders);
                     let start = profile.start();
                     vk::submit(&queue, buffers);
+                    uploads.recycle(&queue);
                     profile.end(8, start);
                     let (m, c) = &*d;
                     m.lock().unwrap().0 += 1;
@@ -529,12 +538,12 @@ impl Finisher {
     }
 
     fn submit(&self, enc: wgpu::CommandEncoder) {
-        self.submit_batch(vec![vk::Chunk::Wgpu(enc)]);
+        self.submit_batch(vec![vk::Chunk::Wgpu(enc)], Default::default());
     }
 
-    fn submit_batch(&self, encoders: Vec<vk::Chunk>) {
+    fn submit_batch(&self, encoders: Vec<vk::Chunk>, uploads: upload_ring::Submitted) {
         self.sent.set(self.sent.get() + 1);
-        self.send.as_ref().unwrap().send(encoders).expect("the finisher thread stopped");
+        self.send.as_ref().unwrap().send((encoders, uploads)).expect("the finisher thread stopped");
     }
 
     fn wait(&self) {
@@ -771,6 +780,7 @@ impl WgpuBackend {
             memo: Default::default(),
             vk_bindings: Default::default(),
             last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX, 0), (Default::default(), Vec::new(), 0, u64::MAX, 0)]),
+            uploads: upload_ring::enabled().then(|| RefCell::new(upload_ring::UploadRing::new())),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
             layout0,
@@ -849,12 +859,19 @@ impl WgpuBackend {
         self.end_pass();
         let mut encoders = std::mem::take(&mut *self.chunks.borrow_mut());
         if let Some(enc) = self.open.borrow_mut().take() { encoders.push(vk::Chunk::Wgpu(enc)); }
-        self.uniforms.borrow_mut().upload(&self.queue);
-        self.inline.borrow_mut().upload(&self.queue);
+        let uploads = if let Some(uploads) = &self.uploads {
+            let (prefix, submitted) = uploads.borrow_mut().finish(&self.device);
+            if let Some(prefix) = prefix { encoders.insert(0, vk::Chunk::Wgpu(prefix)); }
+            submitted
+        } else {
+            self.uniforms.borrow_mut().upload(&self.queue);
+            self.inline.borrow_mut().upload(&self.queue);
+            Default::default()
+        };
         if !encoders.is_empty() {
             match &self.finisher {
                 Some(f) => {
-                    f.submit_batch(encoders);
+                    f.submit_batch(encoders, uploads);
                     self.submissions.set(self.submissions.get() + 1);
                 }
                 None => {
@@ -863,10 +880,15 @@ impl WgpuBackend {
                     let buffers = pool.finish(encoders);
                     let start = self.encode_profile.start();
                     vk::submit(&self.queue, buffers);
+                    uploads.recycle(&self.queue);
                     self.encode_profile.end(8, start);
                     self.submissions.set(self.submissions.get() + 1);
                 }
             }
+        }
+        if self.uploads.is_some() {
+            // Drive completion/remapping without waiting for the GPU.
+            let _ = self.device.poll(wgpu::PollType::Poll);
         }
         self.chunk_start.set(0);
         self.open_draws.set(0);
@@ -900,6 +922,11 @@ impl WgpuBackend {
         self.set_async_submit(async_submit);
     }
 
+    /// Opt-in upload page/copy counters; zero when DDGPU_UPLOAD_RING is off.
+    pub fn upload_stats(&self) -> UploadStats {
+        self.uploads.as_ref().map(|u| u.borrow().stats).unwrap_or_default()
+    }
+
     /// Backend queue submissions, including explicit readbacks and queries.
     /// Present sinks submit independently and are not included.
     pub fn submission_count(&self) -> u64 {
@@ -907,6 +934,9 @@ impl WgpuBackend {
     }
 
     fn submit_encoder(&self, enc: wgpu::CommandEncoder) {
+        // Pending texture creation may have recorded uploads after the caller's
+        // initial flush. Submit those before this independent readback encoder.
+        if self.uploads.is_some() { self.flush(); }
         // L124: after everything the finisher holds
         self.wait_finisher();
         let start = self.encode_profile.start();
@@ -986,18 +1016,25 @@ impl WgpuBackend {
     /// Room in a ring for `bytes` (`len` reserved), flushing and starting
     /// the ring again when it is full: the offset.
     fn ring_alloc(&self, ring: &RefCell<Ring>, bytes: &[u8], len: u64, align: u64) -> u64 {
-        self.ring_fill(ring, len, align, |dst| dst[..bytes.len()].copy_from_slice(bytes))
+        self.ring_fill(ring, len, align, |mut dst| dst.slice(..bytes.len()).copy_from_slice(bytes))
     }
 
     /// As [`ring_alloc`](Self::ring_alloc), the room filled by `fill`.
-    fn ring_fill(&self, ring: &RefCell<Ring>, len: u64, align: u64, fill: impl FnOnce(&mut [u8])) -> u64 {
+    fn ring_fill(&self, ring: &RefCell<Ring>, len: u64, align: u64, fill: impl FnOnce(wgpu::WriteOnly<'_, [u8]>)) -> u64 {
         if !ring.borrow().fits(len, align) {
             self.flush();
             ring.borrow_mut().restart();
         }
         let mut r = ring.borrow_mut();
+        if let Some(uploads) = &self.uploads {
+            if !r.is_mapped() {
+                let off = r.reserve(len, align).expect("ring room after a restart");
+                uploads.borrow_mut().prefix_buffer(&self.device, &r.buffer, off, len, align, fill);
+                return off;
+            }
+        }
         let (off, dst) = r.alloc(len, align).expect("ring room after a restart");
-        fill(dst);
+        fill(wgpu::WriteOnly::from_mut(dst));
         off
     }
 
@@ -1237,6 +1274,31 @@ impl WgpuBackend {
                 (width * out_bpp, bpp)
             }
         };
+        let physical = wgpu::Extent3d { width: width.next_multiple_of(block), height: height.next_multiple_of(block), depth_or_array_layers: *depth };
+        if let Some(uploads) = &self.uploads {
+            let mut enc = self.copy_encoder();
+            uploads.borrow_mut().texture(&self.device, &mut enc,
+                wgpu::TexelCopyTextureInfo {
+                    texture: &t.texture, mip_level: level,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: if t.kind == TexKind::Cube { face } else { 0 } },
+                    aspect: wgpu::TextureAspect::All,
+                }, physical, gpu_row, rows, |z, y, mut dst| {
+                    let at = ((z * rows + y) * pitch) as usize;
+                    if conv == Conversion::Direct {
+                        dst.copy_from_slice(&bytes[at..at + gpu_row as usize]);
+                    } else {
+                        // Preserve the existing conversion arithmetic exactly.
+                        let mut out = 0;
+                        convert_emit(conv, &bytes[at..], *width, 1, *pitch, src_bpp, |bytes| {
+                            dst.slice(out..out + bytes.len()).copy_from_slice(bytes);
+                            out += bytes.len();
+                        });
+                        assert_eq!(out, dst.len());
+                    }
+                });
+            *self.open.borrow_mut() = Some(enc);
+            return;
+        }
         let data = if conv == Conversion::Direct {
             upload_data::direct_image(bytes, gpu_row, rows, *depth, *pitch)
         } else {
@@ -1839,10 +1901,17 @@ impl WgpuBackend {
     fn inline_buffer(&self, bytes: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
         let size = (bytes.len() as u64).next_multiple_of(4).max(4);
         let b = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: usage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let mut padded = bytes.to_vec();
-        padded.resize(size as usize, 0);
-        self.wait_finisher();
-        self.queue.write_buffer(&b, 0, &padded);
+        if let Some(uploads) = &self.uploads {
+            uploads.borrow_mut().prefix_buffer(&self.device, &b, 0, size, 8, |mut dst| {
+                dst.slice(..bytes.len()).copy_from_slice(bytes);
+                dst.slice(bytes.len()..).fill(0);
+            });
+        } else {
+            let mut padded = bytes.to_vec();
+            padded.resize(size as usize, 0);
+            self.wait_finisher();
+            self.queue.write_buffer(&b, 0, &padded);
+        }
         b
     }
 
@@ -2955,9 +3024,18 @@ impl GraphicsBackend for WgpuBackend {
                 let size = (bytes.len() as u64).next_multiple_of(4).max(4);
                 match self.buffers.get(resource) {
                     Some(b) if b.size() == size => {
-                        upload_data::pad_buffer(bytes);
-                        self.wait_finisher();
-                        self.queue.write_buffer(b, 0, bytes);
+                        if let Some(uploads) = &self.uploads {
+                            let mut enc = self.copy_encoder();
+                            uploads.borrow_mut().buffer(&self.device, &mut enc, b, size, |mut dst| {
+                                dst.slice(..bytes.len()).copy_from_slice(bytes);
+                                dst.slice(bytes.len()..).fill(0);
+                            });
+                            *self.open.borrow_mut() = Some(enc);
+                        } else {
+                            upload_data::pad_buffer(bytes);
+                            self.wait_finisher();
+                            self.queue.write_buffer(b, 0, bytes);
+                        }
                     }
                     _ => {
                         let b = self.inline_buffer(bytes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX);

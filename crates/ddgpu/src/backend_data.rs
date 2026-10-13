@@ -44,7 +44,7 @@ impl<T> DrawMemo<T> {
 }
 
 /// Bit-preserving little-endian copy of complete register ranges.
-pub(crate) fn copy_registers(dst: &mut [u8], registers: &[[u32; 4]]) {
+pub(crate) fn copy_registers(mut dst: wgpu::WriteOnly<'_, [u8]>, registers: &[[u32; 4]]) {
     assert_eq!(dst.len(), registers.len() * 16);
     #[cfg(target_endian = "little")]
     {
@@ -53,17 +53,17 @@ pub(crate) fn copy_registers(dst: &mut [u8], registers: &[[u32; 4]]) {
         dst.copy_from_slice(bytes);
     }
     #[cfg(target_endian = "big")]
-    for (out, word) in dst.chunks_exact_mut(4).zip(registers.iter().flatten()) {
-        out.copy_from_slice(&word.to_le_bytes());
+    for (index, word) in registers.iter().flatten().enumerate() {
+        dst.slice(index * 4..index * 4 + 4).copy_from_slice(&word.to_le_bytes());
     }
 }
 
-pub(crate) fn pack_constants(dst: &mut [u8], c: &Constants, floats: usize, extra: &[[u32; 4]]) {
+pub(crate) fn pack_constants(mut dst: wgpu::WriteOnly<'_, [u8]>, c: &Constants, floats: usize, extra: &[[u32; 4]]) {
     assert_eq!(dst.len(), 16 * (floats + 32 + extra.len()));
     let used = c.f.len().min(floats);
-    copy_registers(&mut dst[..used * 16], &c.f[..used]);
-    dst[used * 16..floats * 16].fill(0);
-    let (ints, tail) = dst[floats * 16..].split_at_mut(256);
+    copy_registers(dst.slice(..used * 16), &c.f[..used]);
+    dst.slice(used * 16..floats * 16).fill(0);
+    let (mut ints, mut tail) = dst.into_slice(floats * 16..).split_at(256);
     #[cfg(target_endian = "little")]
     {
         // i32 is four bytes with no padding; raw signed bits are the GPU ABI.
@@ -71,15 +71,15 @@ pub(crate) fn pack_constants(dst: &mut [u8], c: &Constants, floats: usize, extra
         ints.copy_from_slice(bytes);
     }
     #[cfg(target_endian = "big")]
-    for (out, word) in ints.chunks_exact_mut(4).zip(c.i.iter().flatten()) {
-        out.copy_from_slice(&word.to_le_bytes());
+    for (index, word) in c.i.iter().flatten().enumerate() {
+        ints.slice(index * 4..index * 4 + 4).copy_from_slice(&word.to_le_bytes());
     }
     // Boolean registers occupy one vec4 each. Build all padding at once;
     // these are raw u32 values, not normalized Rust bools.
     let mut bools = [[0u32; 4]; 16];
     for (out, &value) in bools.iter_mut().zip(&c.b) { out[0] = value; }
-    copy_registers(&mut tail[..256], &bools);
-    copy_registers(&mut tail[256..], extra);
+    copy_registers(tail.slice(..256), &bools);
+    copy_registers(tail.slice(256..), extra);
 }
 
 #[derive(Clone, Copy, Default)]
@@ -175,7 +175,7 @@ mod tests {
             for extras in [0, 1, 5, 6] {
                 let extra = vec![[u32::MAX, 0, 0x7f80_0000, 0x8000_0000]; extras];
                 let mut actual = vec![0xcc; 16 * (floats + 32 + extras)];
-                pack_constants(&mut actual, &c, floats, &extra);
+                pack_constants(wgpu::WriteOnly::from_mut(&mut actual[..]), &c, floats, &extra);
                 let expected: Vec<u8> = (0..floats).map(|i| c.f.get(i).copied().unwrap_or([0; 4]))
                     .chain(c.i.map(|v| v.map(|w| w as u32)))
                     .chain(c.b.map(|b| [b, 0, 0, 0])).chain(extra)
