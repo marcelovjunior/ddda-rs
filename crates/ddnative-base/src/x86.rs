@@ -395,6 +395,12 @@ impl Flags {
     pub fn new(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
         Self::from_parts(kind, a, b, r, bits)
     }
+    /// `Flags::new` for callers inside this crate (inlined: the public
+    /// constructor stays out of line for the shards).
+    #[inline(always)]
+    pub(crate) fn make(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
+        Self::from_parts(kind, a, b, r, bits)
+    }
     // Internal construction avoids an out-of-line sret temporary/copy in each
     // ALU helper. The public constructor remains out of line for the shards.
     #[inline]

@@ -385,6 +385,55 @@ impl dyn Mem + '_ {
         // SAFETY: allowed returns 4 bytes inside a backed page.
         unsafe { load_at(p, 4) }
     }
+    /// The dwords at `addr` and `addr + 4`, as two `fast_u32` calls in that
+    /// order (one page-table check when both lie in one readable page).
+    #[inline(never)]
+    pub fn fast_u64_words(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> [u32; 2] {
+        if let Some(p) = allowed(pt, addr, 8, READ) {
+            // SAFETY: allowed returns 8 bytes inside a backed page.
+            return unsafe { [load_at(p, 4), load_at(p.add(4), 4)] };
+        }
+        [self.fast_u32(pt, addr), self.fast_u32(pt, addr.wrapping_add(4))]
+    }
+    /// The dwords at `addr` ..= `addr + 12`, as four `fast_u32` calls in order.
+    #[inline(never)]
+    pub fn fast_u128_words(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> [u32; 4] {
+        if let Some(p) = allowed(pt, addr, 16, READ) {
+            // SAFETY: allowed returns 16 bytes inside a backed page.
+            return unsafe { [load_at(p, 4), load_at(p.add(4), 4), load_at(p.add(8), 4), load_at(p.add(12), 4)] };
+        }
+        std::array::from_fn(|k| self.fast_u32(pt, addr.wrapping_add(4 * k as u32)))
+    }
+    /// Dword stores to `addr` and `addr + 4` in that order, as two `fast_set_u32` calls.
+    #[inline(never)]
+    pub fn fast_set_u64_words(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, x: [u32; 2]) {
+        if let Some(p) = allowed(pt, addr, 8, WRITE) {
+            // SAFETY: allowed returns 8 writable bytes inside a backed page.
+            unsafe {
+                store_at(p, 4, x[0]);
+                store_at(p.add(4), 4, x[1]);
+            }
+            return;
+        }
+        self.fast_set_u32_inner(pt, addr, x[0]);
+        self.fast_set_u32_inner(pt, addr.wrapping_add(4), x[1]);
+    }
+    /// Dword stores to `addr` ..= `addr + 12` in order, as four `fast_set_u32` calls.
+    #[inline(never)]
+    pub fn fast_set_u128_words(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, x: [u32; 4]) {
+        if let Some(p) = allowed(pt, addr, 16, WRITE) {
+            // SAFETY: allowed returns 16 writable bytes inside a backed page.
+            unsafe {
+                for (k, &v) in x.iter().enumerate() {
+                    store_at(p.add(4 * k), 4, v);
+                }
+            }
+            return;
+        }
+        for (k, &v) in x.iter().enumerate() {
+            self.fast_set_u32_inner(pt, addr.wrapping_add(4 * k as u32), v);
+        }
+    }
     #[inline(never)]
     pub fn fast_set_u8(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u8) {
         let Some(p) = allowed(pt, addr, 1, WRITE) else { return self.slow_set_u8(addr, v); };
