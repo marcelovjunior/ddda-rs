@@ -61,6 +61,7 @@ impl CountingAllocator {
         self.peak.fetch_max(live, Relaxed);
         self.count.fetch_add(1, Relaxed);
         self.requested.fetch_add(size, Relaxed);
+        sites::allocation(layout.size());
         if layout.size() == 4096 && layout.align() == 4096 { self.pages.fetch_add(size, Relaxed); }
     }
 
@@ -112,7 +113,113 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator::new();
 
 pub fn snapshot() -> Option<Snapshot> {
+    sites::report();
     enabled().then(|| ALLOCATOR.snapshot())
+}
+
+// Every successful allocation, including realloc's full new request, is
+// attributed when DDPLAY_ALLOC_STACKS=1. Deliberately separate from the cheap
+// ownership counter: stack walking is diagnostic overhead, not a timing run.
+mod sites {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::{Acquire, Release, Relaxed}};
+    const DEPTH: usize = 16;
+    const SLOTS: usize = 8192;
+    struct Site { key: AtomicU64, frames: [AtomicUsize; DEPTH], bytes: AtomicU64, calls: AtomicU64 }
+    impl Site {
+        const fn new() -> Self { Self { key: AtomicU64::new(0), frames: [const { AtomicUsize::new(0) }; DEPTH], bytes: AtomicU64::new(0), calls: AtomicU64::new(0) } }
+    }
+    static TABLE: [Site; SLOTS] = [const { Site::new() }; SLOTS];
+    static DROPPED_BYTES: AtomicU64 = AtomicU64::new(0);
+    static MODE: super::AtomicU8 = super::AtomicU8::new(0);
+    thread_local! { static BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+    fn enabled() -> bool {
+        let previous = MODE.load(Relaxed);
+        if previous != 0 { return previous == 2; }
+        #[cfg(windows)]
+        let on = unsafe {
+            unsafe extern "system" {
+                fn GetEnvironmentVariableA(name: *const u8, value: *mut u8, size: u32) -> u32;
+                fn GetLastError() -> u32;
+                fn SetLastError(error: u32);
+            }
+            let error = GetLastError();
+            let mut value = [0u8; 2];
+            let length = GetEnvironmentVariableA(c"DDPLAY_ALLOC_STACKS".as_ptr().cast(), value.as_mut_ptr(), 2);
+            SetLastError(error);
+            length == 1 && value[0] == b'1'
+        };
+        #[cfg(not(windows))]
+        let on = false;
+        MODE.store(if on { 2 } else { 1 }, Relaxed);
+        on
+    }
+
+    fn record(frames: &[usize; DEPTH], bytes: u64) {
+        let hash = frames.iter().fold(0xcbf29ce484222325u64, |h, pc| (h ^ *pc as u64).wrapping_mul(0x100000001b3)).max(2);
+        for probe in 0..64 {
+            let slot = &TABLE[(hash as usize + probe) % SLOTS];
+            let mut key = slot.key.load(Acquire);
+            if key == 0 && slot.key.compare_exchange(0, 1, Acquire, Relaxed).is_ok() {
+                for (destination, value) in slot.frames.iter().zip(frames) { destination.store(*value, Relaxed); }
+                slot.key.store(hash, Release);
+                key = hash;
+            }
+            // Never spin on an interrupted writer or take an allocator lock.
+            if key == hash && slot.frames.iter().zip(frames).all(|(a, b)| a.load(Relaxed) == *b) {
+                slot.bytes.fetch_add(bytes, Relaxed);
+                slot.calls.fetch_add(1, Relaxed);
+                return;
+            }
+        }
+        DROPPED_BYTES.fetch_add(bytes, Relaxed);
+    }
+
+    pub(super) fn allocation(bytes: usize) {
+        if !enabled() { return; }
+        let _ = BUSY.try_with(|busy| {
+            if busy.replace(true) { return; }
+            #[cfg(windows)]
+            unsafe {
+                #[link(name = "kernel32")]
+                unsafe extern "system" {
+                    fn RtlCaptureStackBackTrace(skip: u32, count: u32, frames: *mut *mut std::ffi::c_void, hash: *mut u32) -> u16;
+                    fn GetLastError() -> u32;
+                    fn SetLastError(error: u32);
+                }
+                let error = GetLastError();
+                let mut frames = [0usize; DEPTH];
+                RtlCaptureStackBackTrace(1, DEPTH as u32, frames.as_mut_ptr().cast(), std::ptr::null_mut());
+                SetLastError(error);
+                record(&frames, bytes as u64);
+            }
+            busy.set(false);
+        });
+    }
+
+    pub(super) fn report() {
+        if !enabled() { return; }
+        let _ = BUSY.try_with(|busy| {
+            if busy.replace(true) { return; }
+            let mut rows: Vec<_> = TABLE.iter().enumerate().filter_map(|(id, slot)| {
+                (slot.key.load(Acquire) > 1).then(|| (slot.bytes.load(Relaxed), id, slot))
+            }).collect();
+            rows.sort_unstable_by_key(|row| std::cmp::Reverse(row.0));
+            #[cfg(windows)]
+            let base = unsafe {
+                unsafe extern "system" { fn GetModuleHandleW(name: *const u16) -> *mut std::ffi::c_void; }
+                GetModuleHandleW(std::ptr::null()) as usize
+            };
+            #[cfg(not(windows))]
+            let base = 0usize;
+            for (bytes, id, slot) in rows.into_iter().take(10) {
+                let frames: Vec<_> = slot.frames.iter().map(|pc| format!("{:x}", pc.load(Relaxed))).collect();
+                eprintln!("alloc-site id={id} bytes={bytes} calls={} base={base:x} pcs={}", slot.calls.load(Relaxed), frames.join(","));
+            }
+            eprintln!("alloc-site-overflow bytes={}", DROPPED_BYTES.load(Relaxed));
+            busy.set(false);
+        });
+    }
 }
 
 #[cfg(test)]

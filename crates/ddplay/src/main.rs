@@ -166,7 +166,7 @@ impl App {
                         backend.draws_per_submit = 512;
                         // L71: the driver's pipeline compilation kept between
                         // runs, in DDPLAY_PIPELINE_CACHE (a directory; 0: off),
-                        // by default %LOCALAPPDATA%\ddda-rs\pipelines
+                        // by default DDRUNTIME_HOME/pipelines (sandbox)
                         let cache_dir = match std::env::var_os("DDPLAY_PIPELINE_CACHE") {
                             Some(v) if v == "0" => None,
                             Some(v) => Some(std::path::PathBuf::from(v)),
