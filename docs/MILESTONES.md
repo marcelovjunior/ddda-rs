@@ -1,5 +1,23 @@
 # Milestones
 
+### L162c job distribution and host scheduling (2026-10-13)
+
+- c31 h0 150-frame census: main 65,186 callbacks, six workers
+  88,096 / 78,545 / 64,249 / 55,879 / 52,116 / 42,930. Main final-callback
+  solo tails add 2.661 ms/frame before its joins. Worst main/worker tails
+  start within 92..135 us but run 14.65..18.51 ms; late queue ordering is
+  not established as their cause. Shared atomic FIFO already distributes work.
+- Independent priority/ideal-processor opt-ins forward original Windows
+  requests previously ignored. Foreground requests CPU hints only; background
+  requests priority -1. No invented boost, affinity pin or callback reordering.
+- 19 parser and four host scheduling tests pass, including suspended guest
+  startup in both modes. Light 254 reported passes / zero failures / seven
+  ignored before final lifecycle refinement; final focused four pass.
+  No game/FPS gain measured. Details: `docs/tasks/L162-job-wake.md`.
+- Blocker: no post-fix p8 trace yet; old ctor-only run cannot prove eighth-lane
+  work. Next: head capture p8 per-thread callbacks, then independent scheduling
+  A/B with participant/hash/sync settings fixed and profile-off acceptance.
+
 ### L159 Vulkan default image gate (2026-10-13)
 
 - Same-run selected raw pass oracle copies attachment load state, replays

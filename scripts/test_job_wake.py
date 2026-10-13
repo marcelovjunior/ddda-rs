@@ -20,6 +20,42 @@ def fixture():
 
 
 class WakeTests(unittest.TestCase):
+    def test_callback_census_includes_main_and_awakened_idle_workers(self):
+        records = fixture()
+        records[0][1]["queued"] = 2
+        records[0][1]["participants"] = 8
+        records.append(("Job", dict(id=2, tid=1, start=170, end=190, panicked=False)))
+        result = analyze(records)
+        census = result["callback_summary"]["per_thread"]
+        self.assertEqual(census["1"]["jobs"], 1)
+        self.assertFalse(census["1"]["worker"])
+        self.assertEqual(census["4"]["callback_ns"], 20)
+        self.assertEqual(census["1"]["final_solo_ns"], 10)
+        self.assertEqual(result["batches"][0]["last_job_start_rank"], 1)
+        self.assertEqual(result["callback_summary"]["eight_participant_batches_with_seven_working_workers"], 0)
+        records[3][1]["tid"] = 1
+        census = analyze(records)["callback_summary"]["per_thread"]
+        self.assertEqual(census["4"]["jobs"], 0)
+        self.assertEqual(census["4"]["batches_with_jobs"], 0)
+
+    def test_eighth_participation_requires_callbacks_on_seven_workers(self):
+        records = fixture()
+        records[0][1].update(queued=8, participants=8)
+        records.append(("Job", dict(id=2, tid=1, start=160, end=180, panicked=False)))
+        for index in range(6):
+            for source in [1, 2, 3]:
+                kind, row = copy.deepcopy(records[source])
+                if "handle" in row:
+                    row["handle"] += index + 1
+                if kind == "Job" or row["site"] == WAIT:
+                    row["tid"] += index + 1
+                records.append((kind, row))
+        result = analyze(records)
+        self.assertEqual(result["callback_summary"]["eight_participant_batches_with_seven_working_workers"], 1)
+        self.assertEqual(sum(r["jobs"] for r in result["callback_summary"]["per_thread"].values()), 8)
+        records[-1][1]["panicked"] = True
+        self.assertFalse(analyze(records)["callback_summary"]["per_thread"])
+
     def test_gzip_source_hash_is_original_trace(self):
         text = "critical version=1\n" + "\n".join(
             kind + " { " + ", ".join(f"{k}: {str(v).lower()}" for k, v in row.items()) + " }"

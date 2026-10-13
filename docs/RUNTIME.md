@@ -1512,3 +1512,16 @@ configured eight but an idle seventh worker; the first-frame follow-up still
 needs head acceptance. Later game/user configuration changes remain effective.
 See `docs/tasks/L162-job-wake.md` for exact 7/8 capture env, verification
 status and the `scripts/job_wake.py` per-join latency/tail report.
+
+L162c adds independent Windows opt-ins `DDRUNTIME_THREAD_PRIORITY=1` and
+`DDRUNTIME_THREAD_IDEAL=1`. These forward the game's SetThreadPriority and
+SetThreadIdealProcessor requests using retained host thread handles (also
+valid before guest ResumeThread), preserving host errors and return values.
+Defaults retain the previous stubs. The ideal processor is a scheduling hint,
+not an affinity restriction; x86's query sentinel 32 maps to the host sentinel.
+Foreground workers request ideal CPUs 1..7 at `00DBDF30`, with no priority
+boost. The background pool requests priority -1 and ideal CPUs 0..7 at
+`00DBDFE0`. No new priority, queue ordering, or worker count is imposed.
+Four Windows tests cover actual host state, suspended creation, current-thread
+handles, invalid/closed handles, aliases and ABI/error results. Gameplay
+performance and eighth-lane callback confirmation still require head captures.

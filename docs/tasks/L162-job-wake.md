@@ -6,6 +6,88 @@ Assigned by head/user 2026-10-13. Runtime only, no agent game/shard runs.
 
 ## Results
 
+### L162c: distribution and original host scheduling requests
+
+Merged `task/fps-line` before this follow-up. Read-only Ghidra audit confirms
+`00DBE560` signals enabled workers in ascending slot order, then invokes the
+main dispatcher `00DBD8D0`. Main and `00DBDC90` workers claim the same FIFO
+through InterlockedIncrement at scheduler+90. There are no per-worker queues
+to steal from. A running callback cannot migrate or split. Reordering entries
+or making main skip long callbacks would change original game scheduling;
+the evidence does not justify such a runtime patch. `00DC5C20` around the
+parallel batch only writes two engine flags, not OS thread priority.
+
+New complete-batch census, c31 h0 frames 6600..6749 (150 frames), same source
+hash recorded below; 12,600 complete batches, zero rejected selected batches:
+
+| Guest execution lane (thread ID) | Callbacks | Callback time ms/frame |
+|---|---:|---:|
+| Main, 1000 | 65,186 | 22.051 |
+| Worker, 1070 | 88,096 | 24.911 |
+| Worker, 1074 | 78,545 | 23.460 |
+| Worker, 1078 | 64,249 | 24.029 |
+| Worker, 107C | 55,879 | 19.843 |
+| Worker, 1080 | 52,116 | 17.493 |
+| Worker, 1084 | 42,930 | 16.747 |
+
+Times are inclusive callback wall time, not thread CPU time; lanes overlap.
+Earlier-signaled workers get more callbacks, but job counts do not represent
+equal work. Trace IDs identify execution lanes; the analyzer does not invent
+slot numbers by sorting IDs. Seventh worker 1088 is absent from this p7 trace.
+The census retains awakened workers with zero callbacks and specifically
+counts p8 batches in which seven distinct workers obtain callbacks.
+
+Main owns the final callback in 2,080 of 11,250 nonempty batches. Its final
+solo tails total **2.66139 ms/frame**; those precede main's join and therefore
+are not contained in the previous 14.819 ms/frame join measurement. Workers'
+unclipped solo tails total 7.13795 ms/frame (the earlier 7.08581 figure is
+clipped to main's join). The five largest main tails are DB7620 callbacks:
+start **92.0..106.7 us** after batch entry, duration **14.650..18.009 ms**,
+solo tail **6.934..9.381 ms**. Five largest worker tails start **95..134.3 us**
+after entry, duration **14.805..18.510 ms**. They start early, not near the
+end of their batch. Workers can finish while main remains in its long callback;
+this does not establish runnable queued work left behind or kernel idleness.
+General final-callback start delay p50/p95/p99 is 42.6/383.9/1127 us, but
+includes naturally late short jobs in large queues. No queue-order fix is proven.
+
+**Implemented candidate:** independent `DDRUNTIME_THREAD_PRIORITY=1` and
+`DDRUNTIME_THREAD_IDEAL=1` forward original Win32 requests. Both default off.
+`00DBDF30` foreground construction requests ideal CPUs 1..7 only; foreground
+priority stays normal. `00DBDFE0` background construction requests -1 priority
+and ideal CPUs 0..7. Both API calls were previously success stubs. No affinity
+API is imported by the original or bound here; ideal processor is only a hint.
+API contracts: [SetThreadPriority](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadpriority)
+and [SetThreadIdealProcessor](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadidealprocessor).
+
+CreateThread retains its host JoinHandle before returning, allowing scheduling
+requests before ResumeThread without an asynchronous registration race. Final
+guest-handle close detaches/releases it; aliases keep it alive. Pseudo-current
+handles resolve directly on the calling host thread. Native errors are returned
+through guest last-error; x86 ideal-query sentinel 32 maps to the x64 sentinel
+64. Non-Windows opt-in calls report not-supported. No boost chosen by the
+runtime, no affinity pinning, no synchronization primitive or game code changed.
+
+**Tested:** 19 parser tests; four focused Windows tests, including real suspended
+guest creation in both serial and parallel modes, prove callback-entry priority
+-1/ideal CPU 0 before first work, handle/alias/close behavior and stdcall/error
+results. Full runtime light gate before the final lifecycle test/close-scan
+refinement: **254 reported passes, zero failures, seven ignored**; final four
+focused tests pass after those changes. Four build jobs, incremental off,
+`C:/ddda-targets/L162`; no game/GPU/shard run. No timing speedup claimed from
+these semantic tests, and no original-game image comparison performed.
+
+Private outputs: `L162-job-wake/c-lanes-h0.json`, `c-light.log`, and
+`c-scheduling-final.log` under `E:/ddda-re/notes`. The analyzer reads the
+compressed trace and retains its decompressed hash. Counts posted to head
+on board #13573. First-frame p8 run requested #13526; available c31p8 files
+still predate the setter follow-up, so **eighth-lane work remains unconfirmed**.
+
+**Next head action:** in the next integration build first capture p8 activation
+and per-thread callbacks with the existing trace. Independently compare
+priority/ideal 0/0, 1/0, 0/1 with participants/hash/cache/futex held fixed;
+then profile-off image/FPS acceptance. The API candidates restore ignored
+requests but are not yet a demonstrated remedy for the long callback tails.
+
 Implemented opt-in `DDRUNTIME_JOB_PARTICIPANTS=1..8`. Absent leaves the
 original initialization unchanged; invalid values stop initialization.
 After original sMain constructor `00DBE810` returns, the wrapper invokes
