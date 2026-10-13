@@ -403,3 +403,9 @@ objects under D3D lock; v3 remains readable. No comparator relaxation.
 37 focused tests pass; format checks cover legacy, oversized and duplicate
 shader banks. Next: head-only v4 capture with exact shader tokens; continue
 consumer proof and publication boundary while waiting.
+
+2026-10-13 v4 adea3d4b build completed32s (including ddplay), capture
+requested from head. Added bounded state-difference categories independent
+of first stream refusal, to expose the remaining publication state gate;
+no category exempts any byte.37 focused tests pass. Next: replay48124
+and trace non-command state while awaiting head-only v4 capture.

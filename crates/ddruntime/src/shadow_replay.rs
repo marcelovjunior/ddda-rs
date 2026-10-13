@@ -1145,6 +1145,56 @@ fn compare_replays(
         }
         results.push(result);
     }
+    // Diagnose the independent state gate even when a stream difference stops
+    // acceptance first. These categories never exempt bytes from comparison.
+    let mut state_differences = BTreeMap::<&str, (usize, u32)>::new();
+    let render = input
+        .probe(0x018d08f4, 4, false)
+        .ok()
+        .map(|_| input.u32(0x018d08f4));
+    let command_arena = render.filter(|render| *render != 0).and_then(|render| {
+        let index = input.u32(render + 0x33db8);
+        let base = input.u32(render + 0x33dc0 + index * 4);
+        base.checked_add(input.u32(render + 0x33dcc)).map(|end| base..end)
+    });
+    for address in results[0]
+        .2
+        .keys()
+        .chain(results[1].2.keys())
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+    {
+        if scratch.contains(&address) || results[1].4.iter().any(|range| range.contains(&address)) {
+            continue;
+        }
+        let a = results[0]
+            .2
+            .get(&address)
+            .copied()
+            .unwrap_or_else(|| input.u8(address));
+        let b = results[1]
+            .2
+            .get(&address)
+            .copied()
+            .unwrap_or_else(|| input.u8(address));
+        if a != b {
+            let category = if (context..context + LANE_BYTES).contains(&address) {
+                "root context"
+            } else if command_arena
+                .as_ref()
+                .is_some_and(|range| range.contains(&address))
+            {
+                "command arena"
+            } else if (scheduler..scheduler + 0x1c150).contains(&address) {
+                "outer scheduler"
+            } else {
+                "other state"
+            };
+            let row = state_differences.entry(category).or_insert((0, address));
+            row.0 += 1;
+        }
+    }
+    eprintln!("parallel-shadow state differences (byte count, first address)={state_differences:#x?}");
     if let Some(diff) = results[0].1.first_difference(&results[1].1) {
         fn entry<'a>(
             stream: &'a mtcore::shadow_lanes::StreamSnapshot,

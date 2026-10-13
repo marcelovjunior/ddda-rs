@@ -139,7 +139,9 @@
   for the root22 shader consumer. Original producer writes CBSkinning xyz
   only; installed MFX declares scalar+float2, but shader indirect indexing
   prevents blanket padding proof. V4 adds exact referenced shader bytecode
-  to private captures (v3 readable); request head-only fresh capture.
+  to private captures (v3 readable); head-only fresh capture requested.
+  State-difference diagnostics run independently of first stream refusal;
+  all memory/stream acceptance gates remain strict.
   Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)
