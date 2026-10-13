@@ -1258,7 +1258,13 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
                 }
             } else { f };
             let only_d3d = spec.name == "IDirect3DDevice9" && DEVICE_ONLY_SLOTS.contains(&slot)
-                || spec.name == "IDirect3DSwapChain9" && slot == 3;
+                || spec.name == "IDirect3DSwapChain9" && slot == 3
+                // L144: AddRef/Release of every D3D9 object touch only the
+                // reference counts; a Release to zero without the guest
+                // lock defers the destruction (release_of, L93). Under the
+                // guest lock they cost ~190 ns a call (its mutex, the
+                // time-slice clock read), the device's own ~60 ns.
+                || (slot == 1 || slot == 2) && INTERFACES.iter().any(|s| std::ptr::eq(s, spec));
             let b = if spec.name == "IDirect3DDevice9" && STATE_SLOTS.contains(&slot) {
                 crate::dispatch::Binding::DeviceState(f)
             } else if spec.name == "IDirect3DQuery9" && slot == 7 {
