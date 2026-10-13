@@ -444,7 +444,29 @@ fn report_watch(a: u32, v: u8) {
         eprintln!("parallel-shadow watch {:?} write {a:#x} = {v:#04x} after {}", std::thread::current().id(), recent.join(" "));
     }
 }
+/// Debug (DDRUNTIME_PARALLEL_SHADOW_TRACE=function,offset in hex): log ECX
+/// and the dword at ECX + offset on every entry to the function.
+fn traced() -> Option<(u32, u32)> {
+    static TRACE: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    *TRACE.get_or_init(|| {
+        let v = std::env::var("DDRUNTIME_PARALLEL_SHADOW_TRACE").ok()?;
+        let (f, o) = v.split_once(',')?;
+        Some((u32::from_str_radix(f.trim_start_matches("0x"), 16).ok()?, u32::from_str_radix(o.trim_start_matches("0x"), 16).ok()?))
+    })
+}
+fn trace_entry(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let (function, offset) = traced().unwrap();
+    eprintln!(
+        "parallel-shadow trace {:?} {function:#x} ecx={:#x} [ecx+{offset:#x}]={:#x}",
+        std::thread::current().id(), cpu.ecx, m.u32(cpu.ecx.wrapping_add(offset))
+    );
+    let body = *current().raw.get(&function).expect("traced function body");
+    body(m, cpu);
+}
 fn resolve(target: u32) -> LiftFn {
+    if traced().is_some_and(|(f, _)| f == target) {
+        return trace_entry;
+    }
     if !watched().is_empty() {
         RECENT.with(|r| {
             let mut r = r.borrow_mut();
