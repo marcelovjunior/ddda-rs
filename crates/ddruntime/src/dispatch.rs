@@ -210,6 +210,17 @@ impl Registry {
                     ports.push((0x00e1_2a20, ddports::mtcore::semantic::shader_lookup));
                 }
             }
+            // L179 experiment (never a default): DDRUNTIME_SKIP_STABLE_SHADOW=1
+            // skips the sky stable-shadow cascades, uStableShadow::vf24
+            // 0x00EFEF80 (`ret 4`), so the shadow map stops updating: an
+            // upper bound for what a parallel shadow job (L172) can gain.
+            if std::env::var("DDRUNTIME_SKIP_STABLE_SHADOW").as_deref() == Ok("1") {
+                fn skip_stable_shadow(_: &mut dyn ddnative_base::mem::Mem, c: &mut ddnative_base::x86::Cpu) {
+                    c.esp = c.esp.wrapping_add(8);
+                }
+                ports.retain(|p| p.0 != 0x00ef_ef80);
+                ports.push((0x00ef_ef80, skip_stable_shadow as LiftFn));
+            }
             if crate::critical_jobs::enabled() {
                 crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
             }
