@@ -639,7 +639,7 @@ impl RenderContext {
     /// context's bump allocator (`ctx[0x24]`, limit `ctx[0x28]`, grown by
     /// 0x00FED890 `ctx->grow(bytes)`), and marks dirty bit 1. Returns the new
     /// copy. `memcpy` (0x012EFEA0) is done natively.
-    fn recopy_block(&self, m: &mut dyn Mem, c: &mut Cpu, frame: u32, holder: u32, field: u32, grow_back: u32) -> u32 {
+    fn recopy_block(&self, m: &mut dyn Mem, c: &mut Cpu, frame: u32, holder: u32, field: u32, grow_back: u32, from_block: bool) -> u32 {
         let pg = self.pg;
         let block = pg.u32(m, self.word(m, 0x18).wrapping_add(holder));
         let bytes = ((pg.u16(m, block.wrapping_add(0x18)) as u32) * 4 + 0xf) & 0xffff_fff0;
@@ -649,8 +649,8 @@ impl RenderContext {
         }
         let copy = self.word(m, 0x24);
         self.set_word(m, 0x24, copy.wrapping_add(bytes));
-        let size = (pg.u16(m, block.wrapping_add(0x18)) as u32) * 4;
-        let source = self.word(m, field);
+        let size = if from_block && copy == 0 { 0 } else { (pg.u16(m, block.wrapping_add(0x18)) as u32) * 4 };
+        let source = if size == 0 { 0 } else if from_block { pg.u32(m, block.wrapping_add(0x24)) } else { self.word(m, field) };
         // the CRT memcpy behaves like memmove: read everything before writing
         let words: Vec<u32> = (0..size).step_by(4).map(|k| pg.u32(m, source.wrapping_add(k))).collect();
         for (k, v) in words.into_iter().enumerate() {
@@ -735,7 +735,7 @@ pub fn sync_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
                 });
             }
         }
-        let copy = rc.recopy_block(m, c, frame, 0xc2c, 0x1a50, 0x00c8_98fb);
+        let copy = rc.recopy_block(m, c, frame, 0xc2c, 0x1a50, 0x00c8_98fb, false);
         if copy != 0 {
             let on = query(m, c, 0x64c4_3356, 0x00c8_9944) != 0;
             let weight = if on { pg.u32(m, 0x0153_19b8) } else { 0 };
@@ -749,9 +749,9 @@ pub fn sync_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
             rc.release(m, 0x2068 + 8 * i, 0x3ce + i);
         }
     }
-    rc.recopy_block(m, c, frame, 0xc08, 0x1a08, 0x00c8_9c74);
-    rc.recopy_block(m, c, frame, 0x7b8, 0x1168, 0x00c8_9ccb);
-    rc.recopy_block(m, c, frame, 0xc1c, 0x1a30, 0x00c8_9d22);
+    rc.recopy_block(m, c, frame, 0xc08, 0x1a08, 0x00c8_9c74, false);
+    rc.recopy_block(m, c, frame, 0x7b8, 0x1168, 0x00c8_9ccb, false);
+    rc.recopy_block(m, c, frame, 0xc1c, 0x1a30, 0x00c8_9d22, false);
     c.eax = result;
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(12);
@@ -1274,4 +1274,85 @@ pub fn cull_bounds(m: &mut dyn Mem, c: &mut Cpu) {
     }
     let result = culler_call(m, c, 0x00ff_0ad0, &[shape.wrapping_add(0x40), result], 0x00ea_5091);
     finish(c, result)
+}
+
+// Translated from 0x00f23260 (DDDA.exe 2017-12-13 Steam).
+/// 0x00F23260, `object->draw_attachment(ctx)` (thiscall, `ret 4`): for an
+/// object of kind 1 or 2 (`this[4] & 7`) with an attached effect node
+/// `this[0x1E0]` that has data (`node[0xF0]`) and a weight `node[0x158]`
+/// different from the constant at 0x01561738, asks the node for its slot
+/// (0x00EA1EE0 `node->slot(ctx)`, negative = none), prepares it
+/// (0x00EA1F40, the virtual method 0x64, 0x00EA1FD0) and draws it with
+/// 0x00F1FD30 `this->draw(ctx, node[0xF0], node[0xF8], &scratch, slot,
+/// prepared)`. Then it updates the draw context: the binding at
+/// `ctx + 0x2E08` follows `shared[0x2C10]` and the slot at `ctx + 0x1D90` is
+/// released; and when bit 30 of `node[0x108]` is set the binding at
+/// `ctx + 0x2EB0` follows `shared[0x2CC8]` (tag 0x950A6599) and the constant
+/// block `[[ctx + 0x18] + 0x89C]` is re-copied into frame memory
+/// (`ctx[0x1330]`, journalled as 0x227) whose float at +8 is zeroed, with
+/// bit 1 of `ctx[0x5C]` set around the journal entry.
+pub fn draw_attachment(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let ctx = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let finish = |c: &mut Cpu| {
+        (c.ebx, c.ebp, c.esi, c.edi) = saved;
+        c.esp = entry.wrapping_add(8);
+    };
+    let kind = pg.u32(m, this.wrapping_add(4)) & 7;
+    if kind != 2 && kind != 1 {
+        return finish(c);
+    }
+    let node = pg.u32(m, this.wrapping_add(0x1e0));
+    if node == 0 || pg.u32(m, node.wrapping_add(0xf0)) == 0 {
+        return finish(c);
+    }
+    // the original's frame after its prologue and three pushes
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x14 + 12);
+    let scratch = frame.wrapping_add(0x10);
+    let weight = float(pg, m, node.wrapping_add(0x158));
+    if weight == float(pg, m, 0x0156_1738) {
+        return finish(c);
+    }
+    (c.esi, c.edi) = (ctx, this);
+    let node_call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, args: &[u32], back: u32| -> u32 {
+        let node = pg.u32(m, this.wrapping_add(0x1e0));
+        call_from(m, c, pg, frame, node, args, back, |m, c| ddnative_base::x86::call_ext(m, c, target))
+    };
+    let slot = node_call(m, c, 0x00ea_1ee0, &[ctx], 0x00f2_32bf);
+    if (slot as i32) < 0 {
+        return finish(c);
+    }
+    c.ebx = slot;
+    node_call(m, c, 0x00ea_1f40, &[scratch], 0x00f2_32d9);
+    {
+        let node = pg.u32(m, this.wrapping_add(0x1e0));
+        let method = pg.u32(m, pg.u32(m, node).wrapping_add(0x64));
+        call_from(m, c, pg, frame, node, &[ctx], 0x00f2_32e7, |m, c| ddnative_base::x86::call_ext(m, c, method));
+    }
+    let prepared = node_call(m, c, 0x00ea_1fd0, &[ctx], 0x00f2_32f3);
+    let node = pg.u32(m, this.wrapping_add(0x1e0));
+    let (data_b, data_a) = (pg.u32(m, node.wrapping_add(0xf8)), pg.u32(m, node.wrapping_add(0xf0)));
+    call_from(m, c, pg, frame, this, &[ctx, data_a, data_b, scratch, slot, prepared], 0x00f2_3316, |m, c| {
+        ddnative_base::x86::call_ext(m, c, 0x00f1_fd30)
+    });
+    // update the draw context
+    let rc = RenderContext { pg, ctx };
+    rc.follow(m, 0x2e08, 0x2c10, 0x582, 0x582);
+    rc.release(m, 0x1d90, 0x373);
+    let node = pg.u32(m, this.wrapping_add(0x1e0));
+    if (pg.u32(m, node.wrapping_add(0x108)) >> 0x1e) & 1 == 0 {
+        return finish(c);
+    }
+    rc.follow(m, 0x2eb0, 0x2cc8, 0x597, 0x950a_6599);
+    let v = rc.word(m, 0x5c) | 2;
+    rc.set_word(m, 0x5c, v);
+    rc.journal(m, 0x227, 0x1330);
+    let copy = rc.recopy_block(m, c, frame, 0x89c, 0x1330, 0x00f2_358d, true);
+    pg.set_u32(m, copy.wrapping_add(8), 0);
+    let v = rc.word(m, 0x5c) & 0xffff_fffd;
+    rc.set_word(m, 0x5c, v);
+    finish(c)
 }
