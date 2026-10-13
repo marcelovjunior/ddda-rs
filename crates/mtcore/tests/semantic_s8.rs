@@ -80,13 +80,19 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
         let after = regs(&case["after"]);
         let mut c = Cpu::default();
         [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = before;
-        let events: Vec<Value> = case["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|e| e.get("target").map_or(true, |t| !native_callees.contains(&n(t))))
-            .cloned()
-            .collect();
+        // paired format: a native callee's call event and its return event both go
+        let mut events: Vec<Value> = Vec::new();
+        let all = case["events"].as_array().unwrap();
+        let mut at = 0;
+        while at < all.len() {
+            let skip = all[at].get("target").is_some_and(|t| native_callees.contains(&n(t)));
+            if skip {
+                at += if all[at].get("kind").is_some() { 2 } else { 1 };
+            } else {
+                events.push(all[at].clone());
+                at += 1;
+            }
+        }
         let events = Rc::new(events);
         let cursor = Rc::new(RefCell::new(0usize));
         let (trace, position) = (events.clone(), cursor.clone());
@@ -224,4 +230,24 @@ fn semantic_collision_helpers_match_original() {
     let m = abi_cases_with_calls(&format!("{dir}/add_point.json"), mtcore::semantic_s8_sweep::simplex_add_point);
     let k = abi_cases_with_calls(&format!("{dir}/segment.json"), mtcore::semantic_s8_sweep::simplex_segment_closest);
     eprintln!("{n} support, {m} add_point, {k} segment cases passed");
+}
+
+// verifies 0x00e10fc0 with the sequence built, expanded and hashed natively: vectors from the
+// original run with its real callees 0x00e0ec50 and 0x00e0e5e0 inline and the real CRC table
+// (research/native/record_intern_keys.py); both the cached-table and the per-lookup table path
+#[test]
+fn semantic_intern_keys_native_matches_original() {
+    ddnative_host::install();
+    let path = "E:/ddda-re/notes/native-L184/intern_keys.json";
+    let a = abi_cases_with_calls(path, |m, c| mtcore::semantic::intern_dependency_keys_table(m, c, false));
+    assert!(a >= 1000);
+    eprintln!("{a} native intern cases passed");
+}
+
+// verifies 0x00e0e5e0 (the key hash, stdcall `ret 0xc`)
+#[test]
+fn semantic_key_hash_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/key_hash.json", mtcore::semantic::hash_key_words);
+    eprintln!("{n} key hash cases passed");
 }
