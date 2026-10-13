@@ -35,4 +35,6 @@ pub mod property;
 pub mod shadow_traversal;
 pub mod shadow_pass;
 pub mod shadow_lanes;
+pub mod semantic_rt;
+pub mod shadow_primitive;
 pub mod tree;

@@ -30,6 +30,13 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_SHADOW_TRAVERSAL").as_deref() == Ok("1") {
         ports.push((0x00db63e0, mtcore::shadow_traversal::traverse));
     }
+    // L172 P2b: the sPrimitive begin/end methods and their dispatch thunks.
+    if std::env::var("DDRUNTIME_SHADOW_PRIMITIVE").as_deref() == Ok("1") {
+        ports.push((0x00e61010, mtcore::shadow_primitive::sprimitive_vf11));
+        ports.push((0x00e68390, mtcore::shadow_primitive::sprimitive_vf12));
+        ports.push((0x0107ff00, mtcore::shadow_primitive::dispatch_begin));
+        ports.push((0x0107ff30, mtcore::shadow_primitive::dispatch_end));
+    }
     if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
         ports.push((0x00efd240, mtcore::shadow_pass::setup));
     }
