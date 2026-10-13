@@ -33,7 +33,7 @@ impl DrawContext<'_> {
             self.write(self.cpu.esp, v);
         }
         self.cpu.ecx = this;
-        x86::call_ext(self.memory, self.cpu, target);
+        crate::semantic::call_guest(self.memory, self.cpu, target);
         self.cpu.eax
     }
     fn allocate_record(&mut self, size: u32, resume: u32) -> u32 {
@@ -279,12 +279,9 @@ fn shadow_draws_inner(draw: &mut DrawContext<'_>) {
             draw.mark_dirty(1);
             if out != 0 {
                 let len = draw.pages.u16(draw.memory, descriptor.wrapping_add(24)) as u32 * 4;
-                draw.call(
-                    0x12efea0,
-                    0xff1d25,
-                    0,
-                    &[out, draw.read(descriptor.wrapping_add(36)), len],
-                );
+                let source = draw.read(descriptor.wrapping_add(36));
+                crate::semantic::copy_guest(draw.memory, draw.pages, out, source, len);
+                draw.cpu.eax = out; // memcpy returns its destination
                 for (i, v) in [a, b, bias, reciprocal].into_iter().enumerate() {
                     draw.write(out.wrapping_add(i as u32 * 4), v);
                 }
@@ -596,7 +593,9 @@ fn bind_render_target_inner(draw: &mut DrawContext<'_>) {
         let size = (draw.pages.u16(draw.memory, descriptor.wrapping_add(24)) as u32 * 4 + 15) & !15;
         let out = draw.allocate_record(size, 0xfefdda);
         let len = draw.pages.u16(draw.memory, descriptor.wrapping_add(24)) as u32 * 4;
-        draw.call(0x12efea0, 0xfefe12, 0, &[out, draw.field(0xc90), len]);
+        let source = draw.field(0xc90);
+        crate::semantic::copy_guest(draw.memory, draw.pages, out, source, len);
+        draw.cpu.eax = out; // memcpy returns its destination
         draw.set(0xc90, out);
         draw.mark_dirty(1);
         if out != 0 {
@@ -633,12 +632,9 @@ fn bind_render_target_inner(draw: &mut DrawContext<'_>) {
         draw.mark_dirty(1);
         if out != 0 {
             let len = draw.pages.u16(draw.memory, descriptor.wrapping_add(24)) as u32 * 4;
-            draw.call(
-                0x12efea0,
-                0xfefff9,
-                0,
-                &[out, draw.read(descriptor.wrapping_add(36)), len],
-            );
+            let source = draw.read(descriptor.wrapping_add(36));
+            crate::semantic::copy_guest(draw.memory, draw.pages, out, source, len);
+            draw.cpu.eax = out;
             let sign = draw.read(0x161c280);
             let one = draw.read(0x1406ce0);
             draw.write(out, x86::addss(ox, one));

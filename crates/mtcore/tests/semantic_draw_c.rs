@@ -75,7 +75,14 @@ fn verify(path: &str, entry: u32, body: LiftFn) -> usize {
         let mut c = Cpu::default();
         [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] =
             std::array::from_fn(|i| n(&case["before"]["regs"][i]));
-        let calls = case["calls"].as_array().cloned().unwrap_or_default();
+        // the CRT memcpy is done natively: only the final memory comparison covers it
+        let calls: Vec<Value> = case["calls"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|call| n(&call["target"]) != 0x012e_fea0)
+            .collect();
         let total = calls.len();
         let cursor = Rc::new(Cell::new(0));
         let pos = cursor.clone();

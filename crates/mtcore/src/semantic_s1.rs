@@ -199,7 +199,7 @@ pub fn update_effect_timers(m: &mut dyn Mem, c: &mut Cpu) {
                             (c.ebx, c.ebp, c.esi, c.edi) = (offset, entry.wrapping_sub(4), record, unit);
                             c.edx = edx;
                             call_from(m, c, pg, frame, ecx, &[sink, effect, request], 0x005d_1d46, |m, c| {
-                                ddnative_base::x86::call_ext(m, c, 0x0042_9680)
+                                crate::semantic::call_guest(m, c, 0x0042_9680)
                             });
                         }
                         // fld / fstp: the slot's time becomes the last time seen
@@ -225,7 +225,7 @@ fn tuning_value(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, index: u32,
         return 0.0;
     }
     let method = pg.u32(m, pg.u32(m, object).wrapping_add(0x3c));
-    call_from(m, c, pg, frame, object, &[index], back, |m, c| ddnative_base::x86::call_ext(m, c, method));
+    call_from(m, c, pg, frame, object, &[index], back, |m, c| crate::semantic::call_guest(m, c, method));
     // fstp dword [frame + 0x1c]: the value leaves the x87 stack as a float
     c.st.real_memory::<0x18d9, 4, true>(m, frame.wrapping_add(0x1c));
     let bits = pg.u32(m, frame.wrapping_add(0x1c));
@@ -304,7 +304,7 @@ pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
         if !plain {
             c.esi = at(0x2a90);
             c.eax = 0;
-            call_from(m, c, pg, frame, 0, &[], 0x0084_c1b2, |m, c| ddnative_base::x86::call_ext(m, c, 0x0042_3b80));
+            call_from(m, c, pg, frame, 0, &[], 0x0084_c1b2, |m, c| crate::semantic::call_guest(m, c, 0x0042_3b80));
             plain = c.eax & 0x0c00_2000 == 0;
             if !plain {
                 let low = tuning_value(m, c, pg, frame, 10, 0x0084_c1da);
@@ -336,7 +336,7 @@ pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
     if pg.u8(m, at(0x206d)) & 1 != 0 {
         c.edx = 0x70;
         c.eax = 0;
-        call_from(m, c, pg, frame, this, &[], 0x0084_c343, |m, c| ddnative_base::x86::call_ext(m, c, 0x00b8_09d0));
+        call_from(m, c, pg, frame, this, &[], 0x0084_c343, |m, c| crate::semantic::call_guest(m, c, 0x00b8_09d0));
         if c.eax & 0xff != 0 {
             set_float(pg, m, at(0x29a8), one);
         }
@@ -352,15 +352,15 @@ pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
     set_float(pg, m, at(0x2db0), one);
     set_float(pg, m, at(0x2eec), time);
     set_float(pg, m, at(0x14), time);
-    call_from(m, c, pg, frame, this, &[], 0x0084_c391, |m, c| ddnative_base::x86::call_ext(m, c, 0x0088_6210));
+    call_from(m, c, pg, frame, this, &[], 0x0084_c391, |m, c| crate::semantic::call_guest(m, c, 0x0088_6210));
     let attachment = pg.u32(m, at(0x2e74));
     set_float(pg, m, at(0x14), dt);
     if attachment != 0 {
         c.eax = attachment;
-        call_from(m, c, pg, frame, this, &[], 0x0084_c3ab, |m, c| ddnative_base::x86::call_ext(m, c, 0x0081_f280));
+        call_from(m, c, pg, frame, this, &[], 0x0084_c3ab, |m, c| crate::semantic::call_guest(m, c, 0x0081_f280));
     }
     c.eax = at(0x2e40);
-    call_from(m, c, pg, frame, this, &[], 0x0084_c3b6, |m, c| ddnative_base::x86::call_ext(m, c, 0x0080_b450));
+    call_from(m, c, pg, frame, this, &[], 0x0084_c3b6, |m, c| crate::semantic::call_guest(m, c, 0x0080_b450));
     let (mut bit, mut word) = (0x80u32, 0xeu32);
     loop {
         if pg.u32(m, at(0x494)) & bit != 0 {
@@ -371,7 +371,7 @@ pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
             c.esi = word;
             c.eax = pg.u32(m, at(0x210c));
             call_from(m, c, pg, frame, id, &[instance, id, this, this], 0x0084_c3f2, |m, c| {
-                ddnative_base::x86::call_ext(m, c, 0x0042_19a0)
+                crate::semantic::call_guest(m, c, 0x0042_19a0)
             });
         }
         word += 2;
@@ -392,7 +392,7 @@ pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
             let instance = pg.u32(m, 0x018d_0b6c);
             set_float(pg, m, at(0x2ea8), v);
             c.eax = instance;
-            call_from(m, c, pg, frame, 0, &[id, this, 0], 0x0084_c43f, |m, c| ddnative_base::x86::call_ext(m, c, 0x0042_15e0));
+            call_from(m, c, pg, frame, 0, &[id, this, 0], 0x0084_c43f, |m, c| crate::semantic::call_guest(m, c, 0x0042_15e0));
         } else {
             set_float(pg, m, at(0x2ea8), 0.0);
         }
@@ -418,7 +418,7 @@ pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
             if locked(m) {
                 let enter = pg.u32(m, 0x0139_d160);
                 call_from(m, c, pg, frame, 0, &[instance.wrapping_add(4)], 0x0084_c4fe, |m, c| {
-                    ddnative_base::x86::call_ext(m, c, enter)
+                    crate::semantic::call_guest(m, c, enter)
                 });
             }
             if pg.u32(m, instance.wrapping_add(0xce0)) != 0 {
@@ -427,14 +427,14 @@ pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
                     let list = pg.u32(m, handlers.wrapping_add(0x70));
                     c.eax = pg.u32(m, list.wrapping_add(id.wrapping_mul(4)));
                     call_from(m, c, pg, frame, 0, &[slot.wrapping_sub(7), vector], 0x0084_c52e, |m, c| {
-                        ddnative_base::x86::call_ext(m, c, 0x00ca_de50)
+                        crate::semantic::call_guest(m, c, 0x00ca_de50)
                     });
                 }
             }
             if locked(m) {
                 let leave = pg.u32(m, 0x0139_d164);
                 call_from(m, c, pg, frame, 0, &[instance.wrapping_add(4)], 0x0084_c547, |m, c| {
-                    ddnative_base::x86::call_ext(m, c, leave)
+                    crate::semantic::call_guest(m, c, leave)
                 });
             }
         }
@@ -475,7 +475,7 @@ pub fn refresh_actor_slots(m: &mut dyn Mem, c: &mut Cpu) {
         return finish(c);
     }
     let method = pg.u32(m, pg.u32(m, controller).wrapping_add(0x10));
-    let mut node = call_from(m, c, pg, frame, controller, &[], 0x0076_f2f0, |m, c| ddnative_base::x86::call_ext(m, c, method));
+    let mut node = call_from(m, c, pg, frame, controller, &[], 0x0076_f2f0, |m, c| crate::semantic::call_guest(m, c, method));
     let class = pg.u32(m, 0x018d_2d10);
     while pg.u32(m, node.wrapping_add(4)) != class {
         node = pg.u32(m, node.wrapping_add(0x10));
@@ -485,10 +485,10 @@ pub fn refresh_actor_slots(m: &mut dyn Mem, c: &mut Cpu) {
     }
     let controller = pg.u32(m, actor.wrapping_add(0xcd0));
     let is_model = call_from(m, c, pg, frame, controller, &[0x018d_2108], 0x0076_f32c, |m, c| {
-        ddnative_base::x86::call_ext(m, c, 0x0041_9210)
+        crate::semantic::call_guest(m, c, 0x0041_9210)
     });
     if is_model != 0 {
-        call_from(m, c, pg, frame, 0, &[actor], 0x0076_f336, |m, c| ddnative_base::x86::call_ext(m, c, 0x0076_f430));
+        call_from(m, c, pg, frame, 0, &[actor], 0x0076_f336, |m, c| crate::semantic::call_guest(m, c, 0x0076_f430));
         return finish(c);
     }
     if pg.u8(m, actor.wrapping_add(0xd99)) == 0 {
@@ -516,11 +516,11 @@ pub fn refresh_actor_slots(m: &mut dyn Mem, c: &mut Cpu) {
                     if equipment != 0 && pg.u8(m, equipment.wrapping_add(0x50)) & 1 != 0 {
                         c.eax = actor;
                         let ok = call_from(m, c, pg, frame, 0, &[slot], 0x0076_f3e4, |m, c| {
-                            ddnative_base::x86::call_ext(m, c, 0x004c_9b80)
+                            crate::semantic::call_guest(m, c, 0x004c_9b80)
                         });
                         if ok != 0 {
                             call_from(m, c, pg, frame, 0, &[actor, slot], 0x0076_f3ef, |m, c| {
-                                ddnative_base::x86::call_ext(m, c, 0x0076_f660)
+                                crate::semantic::call_guest(m, c, 0x0076_f660)
                             });
                         }
                     }
@@ -645,7 +645,7 @@ impl RenderContext {
         let bytes = ((pg.u16(m, block.wrapping_add(0x18)) as u32) * 4 + 0xf) & 0xffff_fff0;
         if self.word(m, 0x24).wrapping_add(bytes) > self.word(m, 0x28) {
             c.ebx = bytes;
-            call_from(m, c, pg, frame, self.ctx, &[bytes], grow_back, |m, c| ddnative_base::x86::call_ext(m, c, 0x00fe_d890));
+            call_from(m, c, pg, frame, self.ctx, &[bytes], grow_back, |m, c| crate::semantic::call_guest(m, c, 0x00fe_d890));
         }
         let copy = self.word(m, 0x24);
         self.set_word(m, 0x24, copy.wrapping_add(bytes));
@@ -716,9 +716,9 @@ pub fn sync_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
     rc.release(m, 0x1ca8, 0x356);
 
     c.ebx = this;
-    let result = call_from(m, c, pg, frame, this, &[ctx, arg], 0x00c8_94ed, |m, c| ddnative_base::x86::call_ext(m, c, 0x0114_5bf0));
+    let result = call_from(m, c, pg, frame, this, &[ctx, arg], 0x00c8_94ed, |m, c| crate::semantic::call_guest(m, c, 0x0114_5bf0));
     let query = |m: &mut dyn Mem, c: &mut Cpu, id: u32, back: u32| {
-        call_from(m, c, pg, frame, this, &[id], back, |m, c| ddnative_base::x86::call_ext(m, c, 0x0106_6af0))
+        call_from(m, c, pg, frame, this, &[id], back, |m, c| crate::semantic::call_guest(m, c, 0x0106_6af0))
     };
     if mode(m) != 0 {
         const SAMPLER_KINDS: [u32; 5] = [0xe700_7000, 0x83b0_f000, 0x1295_9000, 0x93d3_a000, 0x999e_7000];
@@ -731,7 +731,7 @@ pub fn sync_standard_material(m: &mut dyn Mem, c: &mut Cpu) {
             for (parameter, value_back) in [(0x5440_8001u32, 0x00c8_98b4u32), (0x5440_9001, 0x00c8_98ce)] {
                 let value = if parameter == 0x5440_8001 { 0 } else { pg.u32(m, 0x0153_19b8) };
                 call_from(m, c, pg, frame, this, &[parameter, value], value_back, |m, c| {
-                    ddnative_base::x86::call_ext(m, c, 0x0106_71f0)
+                    crate::semantic::call_guest(m, c, 0x0106_71f0)
                 });
             }
         }
@@ -804,14 +804,14 @@ pub fn update_instancing(m: &mut dyn Mem, c: &mut Cpu) {
     // virtual call on the part: `part->method(args)`
     let part_call = |m: &mut dyn Mem, c: &mut Cpu, slot: u32, args: &[u32], back: u32| {
         let method = pg.u32(m, pg.u32(m, part).wrapping_add(slot));
-        call_from(m, c, pg, frame, part, args, back, |m, c| ddnative_base::x86::call_ext(m, c, method));
+        call_from(m, c, pg, frame, part, args, back, |m, c| crate::semantic::call_guest(m, c, method));
     };
     if active {
         if pg.u32(m, culling.wrapping_add(0x10)) == 0 {
             pg.set_u8(m, frame.wrapping_add(0x14), 1);
         } else {
             c.ebx = previous;
-            call_from(m, c, pg, frame, ctx, &[], 0x00c2_5f0f, |m, c| ddnative_base::x86::call_ext(m, c, 0x00fe_d1e0));
+            call_from(m, c, pg, frame, ctx, &[], 0x00c2_5f0f, |m, c| crate::semantic::call_guest(m, c, 0x00fe_d1e0));
             let f = |m: &dyn Mem, o: u32| float(pg, m, culling.wrapping_add(o));
             let (p3, p0) = (f(m, 0xc), f(m, 0));
             let block = pg.u32(m, pg.u32(m, ctx.wrapping_add(0x18)).wrapping_add(0x554));
@@ -835,7 +835,7 @@ pub fn update_instancing(m: &mut dyn Mem, c: &mut Cpu) {
             ];
             c.edi = size;
             if top.wrapping_add(size) > pg.u32(m, ctx.wrapping_add(0x28)) {
-                call_from(m, c, pg, frame, ctx, &[size], 0x00c2_606b, |m, c| ddnative_base::x86::call_ext(m, c, 0x00fe_d890));
+                call_from(m, c, pg, frame, ctx, &[size], 0x00c2_606b, |m, c| crate::semantic::call_guest(m, c, 0x00fe_d890));
             }
             let buffer = pg.u32(m, ctx.wrapping_add(0x24));
             pg.set_u32(m, ctx.wrapping_add(0x24), buffer.wrapping_add(size));
@@ -867,7 +867,7 @@ pub fn update_instancing(m: &mut dyn Mem, c: &mut Cpu) {
     c.ebx = previous;
     let accepted = {
         let method = pg.u32(m, pg.u32(m, part).wrapping_add(0x2c));
-        call_from(m, c, pg, frame, part, &[ctx, field, flag_a], 0x00c2_611f, |m, c| ddnative_base::x86::call_ext(m, c, method));
+        call_from(m, c, pg, frame, part, &[ctx, field, flag_a], 0x00c2_611f, |m, c| crate::semantic::call_guest(m, c, method));
         c.eax & 0xff != 0
     };
     // after planes are built: the clip binding goes back to `base`
@@ -894,7 +894,7 @@ pub fn update_instancing(m: &mut dyn Mem, c: &mut Cpu) {
         pg.set_u32(m, part.wrapping_add(0x20), flags);
         if pg.u8(m, this.wrapping_add(0x449)) == 1 {
             c.ecx = this;
-            call_from(m, c, pg, frame, this, &[ctx], 0x00c2_6152, |m, c| ddnative_base::x86::call_ext(m, c, 0x00fa_5860));
+            call_from(m, c, pg, frame, this, &[ctx], 0x00c2_6152, |m, c| crate::semantic::call_guest(m, c, 0x00fa_5860));
         }
         part_call(m, c, 0x3c, &[ctx], 0x00c2_615c);
         if built {
@@ -929,7 +929,7 @@ pub fn count_active_children(m: &mut dyn Mem, c: &mut Cpu) {
         if pg.u8(m, node.wrapping_add(0xc)) & 1 != 0 {
             let method = pg.u32(m, pg.u32(m, node).wrapping_add(0x44));
             c.esi = node;
-            call_from(m, c, pg, frame, node, &[], 0x00e6_d09e, |m, c| ddnative_base::x86::call_ext(m, c, method));
+            call_from(m, c, pg, frame, node, &[], 0x00e6_d09e, |m, c| crate::semantic::call_guest(m, c, method));
             if c.eax & 0xff != 0 {
                 let v = pg.u16(m, counter).wrapping_add(1);
                 pg.set_u16(m, counter, v);
@@ -1146,7 +1146,7 @@ pub fn cull_bounds(m: &mut dyn Mem, c: &mut Cpu) {
     let sphere = ((flags >> 1) | flags) & 0x40 != 0;
     // calls on the culler: thiscall with ECX = culler
     let culler_call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, args: &[u32], back: u32| -> u32 {
-        call_from(m, c, pg, frame, culler, args, back, |m, c| ddnative_base::x86::call_ext(m, c, target))
+        call_from(m, c, pg, frame, culler, args, back, |m, c| crate::semantic::call_guest(m, c, target))
     };
     if sphere {
         let shape = pg.u32(m, owner.wrapping_add(0x2c));
@@ -1173,7 +1173,7 @@ pub fn cull_bounds(m: &mut dyn Mem, c: &mut Cpu) {
             return finish(c, result);
         }
         // the shape's own matrix, then the combined matrix
-        call_from(m, c, pg, frame, matrix_at, &[shape.wrapping_add(0x40)], 0x00ea_44b7, |m, c| ddnative_base::x86::call_ext(m, c, 0x0043_3b00));
+        call_from(m, c, pg, frame, matrix_at, &[shape.wrapping_add(0x40)], 0x00ea_44b7, |m, c| crate::semantic::call_guest(m, c, 0x0043_3b00));
         let mm = read_matrix(pg, m, matrix_at);
         let (b0, b4, b8, bc) = (a[0][0], a[0][1], a[0][2], a[0][3]);
         let (c0, c4, c8, cc) = (a[1][0], a[1][1], a[1][2], a[1][3]);
@@ -1218,7 +1218,7 @@ pub fn cull_bounds(m: &mut dyn Mem, c: &mut Cpu) {
     if flags & 0x100 != 0 {
         // box corners shifted by the node's translation
         call_from(m, c, pg, frame, corners_at, &[shape.wrapping_add(0x20)], if transformed { 0x00ea_4a0a } else { 0x00ea_5254 }, |m, c| {
-            ddnative_base::x86::call_ext(m, c, 0x005b_19c0)
+            crate::semantic::call_guest(m, c, 0x005b_19c0)
         });
         let (ex, ey, ez) = (float(pg, m, n(0xe0)), float(pg, m, n(0xe4)), float(pg, m, n(0xe8)));
         for (offset, shift) in [(0x00, ex), (0x04, ey), (0x08, ez), (0x10, ex), (0x14, ey), (0x18, ez)] {
@@ -1229,7 +1229,7 @@ pub fn cull_bounds(m: &mut dyn Mem, c: &mut Cpu) {
         if !transformed || (result as i32) <= 0 || result == 0x3f {
             return finish(c, result);
         }
-        call_from(m, c, pg, frame, matrix_at, &[shape.wrapping_add(0x40)], 0x00ea_4ae0, |m, c| ddnative_base::x86::call_ext(m, c, 0x0043_3b00));
+        call_from(m, c, pg, frame, matrix_at, &[shape.wrapping_add(0x40)], 0x00ea_4ae0, |m, c| crate::semantic::call_guest(m, c, 0x0043_3b00));
         let a = read_matrix(pg, m, n(0xb0));
         let mm = read_matrix(pg, m, matrix_at);
         let (b0, b4, b8, bc) = (a[0][0], a[0][1], a[0][2], a[0][3]);
@@ -1319,7 +1319,7 @@ pub fn draw_attachment(m: &mut dyn Mem, c: &mut Cpu) {
     (c.esi, c.edi) = (ctx, this);
     let node_call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, args: &[u32], back: u32| -> u32 {
         let node = pg.u32(m, this.wrapping_add(0x1e0));
-        call_from(m, c, pg, frame, node, args, back, |m, c| ddnative_base::x86::call_ext(m, c, target))
+        call_from(m, c, pg, frame, node, args, back, |m, c| crate::semantic::call_guest(m, c, target))
     };
     let slot = node_call(m, c, 0x00ea_1ee0, &[ctx], 0x00f2_32bf);
     if (slot as i32) < 0 {
@@ -1330,13 +1330,13 @@ pub fn draw_attachment(m: &mut dyn Mem, c: &mut Cpu) {
     {
         let node = pg.u32(m, this.wrapping_add(0x1e0));
         let method = pg.u32(m, pg.u32(m, node).wrapping_add(0x64));
-        call_from(m, c, pg, frame, node, &[ctx], 0x00f2_32e7, |m, c| ddnative_base::x86::call_ext(m, c, method));
+        call_from(m, c, pg, frame, node, &[ctx], 0x00f2_32e7, |m, c| crate::semantic::call_guest(m, c, method));
     }
     let prepared = node_call(m, c, 0x00ea_1fd0, &[ctx], 0x00f2_32f3);
     let node = pg.u32(m, this.wrapping_add(0x1e0));
     let (data_b, data_a) = (pg.u32(m, node.wrapping_add(0xf8)), pg.u32(m, node.wrapping_add(0xf0)));
     call_from(m, c, pg, frame, this, &[ctx, data_a, data_b, scratch, slot, prepared], 0x00f2_3316, |m, c| {
-        ddnative_base::x86::call_ext(m, c, 0x00f1_fd30)
+        crate::semantic::call_guest(m, c, 0x00f1_fd30)
     });
     // update the draw context
     let rc = RenderContext { pg, ctx };
@@ -1355,4 +1355,114 @@ pub fn draw_attachment(m: &mut dyn Mem, c: &mut Cpu) {
     let v = rc.word(m, 0x5c) & 0xffff_fffd;
     rc.set_word(m, 0x5c, v);
     finish(c)
+}
+
+// Translated from 0x00fedb80 (DDDA.exe 2017-12-13 Steam).
+/// 0x00FEDB80, `context->save_recording_state(id, mark)` (thiscall,
+/// `ret 8`): begins a nested recording scope. The stack of saved scopes
+/// (`context[0x30874]` deep, 0x8144 bytes of saved state each from
+/// `context + 0x81F8`, a (mark, command count) pair each from
+/// `context + 0x3084C`) gets the current state (`context + 0xB4`, 0x144
+/// bytes plus 8 per sort entry `context[0x14]`), the scope counter
+/// advances, `context[0x16A]` takes `id` and the cursors
+/// `context[0x1D4 / 0x1D8 / 0x1DC / 0x180]` are cleared.
+pub fn save_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let at = |o: u32| this.wrapping_add(o);
+    let mark = pg.u32(m, entry.wrapping_add(8));
+    let depth = pg.u32(m, at(0x30874));
+    let slot = at(0x3084c).wrapping_add(depth.wrapping_mul(8));
+    pg.set_u32(m, slot, mark);
+    let commands = pg.u32(m, at(0x48));
+    pg.set_u32(m, slot.wrapping_add(4), commands);
+    let bytes = pg.u32(m, at(0x14)).wrapping_mul(8).wrapping_add(0x144);
+    let saved = at(0x81f8).wrapping_add(depth.wrapping_mul(0x8144));
+    crate::semantic::copy_guest(m, pg, saved, at(0xb4), bytes);
+    let id = pg.u16(m, entry.wrapping_add(4));
+    let depth = pg.u32(m, at(0x30874));
+    pg.set_u32(m, at(0x30874), depth.wrapping_add(1));
+    pg.set_u16(m, at(0x16a), id);
+    for offset in [0x1d4, 0x1d8, 0x1dc, 0x180] {
+        pg.set_u32(m, at(offset), 0);
+    }
+    c.eax = 0;
+    c.esp = entry.wrapping_add(12);
+}
+
+// Translated from 0x00fedc00 (DDDA.exe 2017-12-13 Steam).
+/// 0x00FEDC00, `context->restore_recording_state()` (fastcall, plain
+/// `ret`): ends the nested scope [`save_recording_state`] began. The scope
+/// counter drops, the saved state is copied back, the commands recorded in
+/// the scope (from the saved command count to `context[0x48]`) are moved to
+/// the end of the sort list `context[0x44]` (kept in `context[0x4C]`
+/// entries) and a 16-byte reference record for them is appended to the
+/// frame arena (`context[0x24]`, grown by 0x00DA7D70 `allocate(0x1000)`), as
+/// well as a sort entry for it and an entry in the record table at
+/// `context + 0x30878` (count `context[0x30C78]`).
+pub fn restore_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let at = |o: u32| this.wrapping_add(o);
+    // the original's frame after its four pushes
+    let frame = entry.wrapping_sub(16);
+    let depth = pg.u32(m, at(0x30874)).wrapping_sub(1);
+    pg.set_u32(m, at(0x30874), depth);
+    let bytes = pg.u32(m, at(0x14)).wrapping_mul(8).wrapping_add(0x144);
+    let scope = at(0x81f8).wrapping_add(depth.wrapping_mul(0x8144));
+    crate::semantic::copy_guest(m, pg, at(0xb4), scope, bytes);
+    let depth = pg.u32(m, at(0x30874));
+    let first = pg.u32(m, at(0x48)).wrapping_sub(pg.u32(m, at(0x30850).wrapping_add(depth.wrapping_mul(8))));
+    let list = pg.u32(m, at(0x44));
+    let slot = at(0x3084c).wrapping_add(depth.wrapping_mul(8));
+    let tail = pg.u32(m, at(0x4c)).wrapping_sub(first);
+    let moved_to = list.wrapping_add(tail.wrapping_mul(8));
+    pg.set_u32(m, at(0x4c), tail);
+    let from = list.wrapping_add(pg.u32(m, slot.wrapping_add(4)).wrapping_mul(8));
+    crate::semantic::copy_guest(m, pg, moved_to, from, first.wrapping_mul(8));
+    let commands = pg.u32(m, slot.wrapping_add(4));
+    pg.set_u32(m, at(0x48), commands);
+    if pg.u32(m, at(0x24)).wrapping_add(0x10) > pg.u32(m, at(0x28)) {
+        c.ebx = slot;
+        c.ebp = moved_to;
+        c.edi = first;
+        let allocator = pg.u32(m, 0x018d_08f4);
+        let chunk = call_from(m, c, pg, frame, allocator, &[0x1000], 0x00fe_dc95, |m, c| crate::semantic::call_guest(m, c, 0x00da_7d70));
+        pg.set_u32(m, at(0x24), chunk);
+        pg.set_u32(m, at(0x28), if chunk != 0 { chunk.wrapping_add(0x1000) } else { 0 });
+    }
+    let record = pg.u32(m, at(0x24));
+    pg.set_u32(m, at(0x24), record.wrapping_add(0x10));
+    let word = (pg.u32(m, record) & 0xfff6_ffff) | 0x6_0000;
+    pg.set_u32(m, record, word);
+    pg.set_u32(m, record.wrapping_add(8), moved_to);
+    let mark = pg.u32(m, slot);
+    pg.set_u32(m, record.wrapping_add(4), mark);
+    pg.set_u32(m, record.wrapping_add(12), first);
+    let word = (pg.u32(m, at(0x6c)) << 20) | (word & 0xf_ffff);
+    pg.set_u32(m, record, word);
+    let word = ((pg.u32(m, at(0x74)) ^ word) & 0x7fff) ^ word;
+    pg.set_u32(m, record, word);
+    // the sort entry
+    let index = pg.u32(m, at(0x48));
+    let entry_at = pg.u32(m, at(0x44)).wrapping_add(index.wrapping_mul(8));
+    pg.set_u32(m, at(0x48), index.wrapping_add(1));
+    let sequence = pg.u32(m, at(0x74)).wrapping_add(1);
+    pg.set_u32(m, at(0x74), sequence);
+    let key = (pg.u32(m, entry_at) & 0x7ff_ffff) | (pg.u32(m, at(0x164)) << 27);
+    pg.set_u32(m, entry_at, key);
+    let sort = pg.u32(m, at(0x178)).wrapping_add(pg.u32(m, at(0x164)) >> 5);
+    pg.set_u32(m, entry_at, ((sort ^ key) & 0x7ff_ffff) ^ key);
+    pg.set_u32(m, entry_at.wrapping_add(4), record);
+    // the record table
+    let count = pg.u32(m, at(0x30c78));
+    pg.set_u32(m, at(0x30878).wrapping_add(count.wrapping_mul(4)), record);
+    let count = pg.u32(m, at(0x30c78)).wrapping_add(1);
+    pg.set_u32(m, at(0x30c78), count);
+    c.eax = record;
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4);
 }
