@@ -1065,3 +1065,213 @@ pub fn load_triangle_vertices(m: &mut dyn Mem, c: &mut Cpu) {
     }
     c.esp = entry.wrapping_add(16);
 }
+
+/// Bit-exact `a*b + c*d`-style helper: the original adds left to right, so
+/// every sum below is written in the original's association order.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn dot4(a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, g: f32, h: f32) -> f32 {
+    a * b + c * d + e * f + g * h
+}
+
+/// The 4x4 float matrix of an object (row-major): its 16 floats from `base`.
+fn read_matrix(pg: Pages, m: &dyn Mem, base: u32) -> [[f32; 4]; 4] {
+    let mut v = [[0.0f32; 4]; 4];
+    for (i, row) in v.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = float(pg, m, base.wrapping_add(16 * i as u32 + 4 * j as u32));
+        }
+    }
+    v
+}
+
+fn write_matrix(pg: Pages, m: &mut dyn Mem, base: u32, v: &[[f32; 4]; 4]) {
+    for (i, row) in v.iter().enumerate() {
+        for (j, cell) in row.iter().enumerate() {
+            set_float(pg, m, base.wrapping_add(16 * i as u32 + 4 * j as u32), *cell);
+        }
+    }
+}
+
+// Translated from 0x00ea42e0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA42E0, `node->cull_bounds(culler, owner, planes) -> planes`
+/// (thiscall, `ret 0xC`): tests the node's bounding volume against a
+/// frustum culler and returns the culler's plane mask (`0x3F` = nothing left
+/// to test, returned at once). `culler` is the callee object (ECX of the
+/// culler methods), `owner[0x2C]` the shape data, the node's flags
+/// `this[0x108]`, its world matrix the 16 floats at `this + 0xB0`
+/// (rows = x axis, y axis, z axis, translation).
+///
+/// Shape kind (flags & 0x3F == 3: shape data transformed by the matrix):
+/// - a sphere (`((flags >> 1) | flags) & 0x40`): centre = shape (x, y, z)
+///   (`shape[0x10..0x18]`) transformed by the matrix, radius =
+///   `sqrt(largest squared axis length) * shape[0x1C]`; 0x00FF0800
+///   `culler.test_sphere(&centre_radius, planes)`; if some planes remain,
+///   the shape's own matrix (0x00433B00 `build(shape + 0x40)`) is combined
+///   with the node's and handed to 0x00FF0AD0 `culler.test_oriented(matrix,
+///   planes)`;
+/// - a box (`flags & 0x100`): 0x005B19C0 fills the box corners from
+///   `shape + 0x20`, which are shifted by the translation, tested with
+///   0x00FF0D20 `culler.test_box(corners, planes)` and, when some planes
+///   remain, as above (the product's association order differs);
+/// - else the plain box `shape + 0x20` through 0x00FF0D20 and the oriented
+///   box `shape + 0x40` through 0x00FF0AD0.
+/// For any other kind the same sphere and box tests run without the
+/// transform step: only 0x00FF0800, the shifted-corner 0x00FF0D20, or the
+/// plain 0x00FF0D20.
+pub fn cull_bounds(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let node = c.ecx;
+    let culler = pg.u32(m, entry.wrapping_add(4));
+    let owner = pg.u32(m, entry.wrapping_add(8));
+    let planes = pg.u32(m, entry.wrapping_add(12));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let finish = |c: &mut Cpu, result: u32| {
+        c.eax = result;
+        (c.ebx, c.ebp, c.esi, c.edi) = saved;
+        c.esp = entry.wrapping_add(16);
+    };
+    if planes == 0x3f {
+        return finish(c, 0x3f);
+    }
+    // the original's frame after its prologue and three pushes
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0xd4 + 12);
+    let matrix_at = frame.wrapping_add(0x30);
+    let sphere_at = frame.wrapping_add(0xc0);
+    let corners_at = frame.wrapping_add(0x90);
+    let flags = pg.u32(m, node.wrapping_add(0x108));
+    let n = |o: u32| node.wrapping_add(o);
+    let transformed = flags & 0x3f == 3;
+    let sphere = ((flags >> 1) | flags) & 0x40 != 0;
+    // calls on the culler: thiscall with ECX = culler
+    let culler_call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, args: &[u32], back: u32| -> u32 {
+        call_from(m, c, pg, frame, culler, args, back, |m, c| ddnative_base::x86::call_ext(m, c, target))
+    };
+    if sphere {
+        let shape = pg.u32(m, owner.wrapping_add(0x2c));
+        let a = read_matrix(pg, m, n(0xb0));
+        // squared axis lengths and the largest of them
+        let sq = |r: &[f32; 4]| ((r[0] * r[0] + r[1] * r[1]) + r[2] * r[2]) + r[3] * r[3];
+        let (n0, n1, n2) = (sq(&a[0]), sq(&a[1]), sq(&a[2]));
+        let largest = if n0 > n1 {
+            if n0 > n2 { n0 } else { n2 }
+        } else if n1 > n2 {
+            n1
+        } else {
+            n2
+        };
+        let (x, y, z) = (float(pg, m, shape.wrapping_add(0x10)), float(pg, m, shape.wrapping_add(0x14)), float(pg, m, shape.wrapping_add(0x18)));
+        // centre = ((y * row1 + x * row0) + z * row2) + row3, per lane
+        let lane = |k: usize| ((y * a[1][k] + x * a[0][k]) + z * a[2][k]) + a[3][k];
+        let radius = largest.sqrt() * float(pg, m, shape.wrapping_add(0x1c));
+        for (k, v) in [lane(0), lane(1), lane(2), radius].into_iter().enumerate() {
+            set_float(pg, m, sphere_at.wrapping_add(4 * k as u32), v);
+        }
+        let result = culler_call(m, c, 0x00ff_0800, &[sphere_at, planes], if transformed { 0x00ea_4497 } else { 0x00ea_5218 });
+        if !transformed || (result as i32) <= 0 || result == 0x3f {
+            return finish(c, result);
+        }
+        // the shape's own matrix, then the combined matrix
+        call_from(m, c, pg, frame, matrix_at, &[shape.wrapping_add(0x40)], 0x00ea_44b7, |m, c| ddnative_base::x86::call_ext(m, c, 0x0043_3b00));
+        let mm = read_matrix(pg, m, matrix_at);
+        let (b0, b4, b8, bc) = (a[0][0], a[0][1], a[0][2], a[0][3]);
+        let (c0, c4, c8, cc) = (a[1][0], a[1][1], a[1][2], a[1][3]);
+        let (d0, d4, d8, dc) = (a[2][0], a[2][1], a[2][2], a[2][3]);
+        let (e0, e4, e8, ec) = (a[3][0], a[3][1], a[3][2], a[3][3]);
+        let [[m00, m01, m02, m03], [m10, m11, m12, m13], [m20, m21, m22, m23], [m30, m31, m32, m33]] = mm;
+        // partial products the original computes first (from the old matrix)
+        let (f13, f14, f15, f7) = (b4 * m00, b8 * m00, m01 * c8, m01 * cc);
+        let (f16, f17, f18, f19) = (bc * m00, m02 * dc, m10 * b4, m10 * b8);
+        let (f9, f20, f10, f21, f22) = (m11 * c8, m10 * bc, m11 * cc, m12 * dc, m20 * b4);
+        let p22 = dot4(m21, c8, m20, b8, m22, d8, m23, e8);
+        let p23 = dot4(m21, cc, m20, bc, m22, dc, m23, ec);
+        let p31 = dot4(m31, c4, m30, b4, m32, d4, m33, e4);
+        let p32 = dot4(m31, c8, m30, b8, m32, d8, m33, e8);
+        let p33 = dot4(m31, cc, m30, bc, m32, dc, m33, ec);
+        let product = [
+            [
+                dot4(c0, m01, b0, m00, d0, m02, e0, m03),
+                m01 * c4 + f13 + m02 * d4 + m03 * e4,
+                f14 + f15 + m02 * d8 + m03 * e8,
+                f7 + f16 + f17 + m03 * ec,
+            ],
+            [
+                dot4(m11, c0, b0, m10, m12, d0, e0, m13),
+                m11 * c4 + f18 + m12 * d4 + m13 * e4,
+                f9 + f19 + m12 * d8 + m13 * e8,
+                f10 + f20 + f21 + m13 * ec,
+            ],
+            [
+                dot4(m21, c0, b0, m20, m22, d0, e0, m23),
+                m21 * c4 + f22 + m22 * d4 + m23 * e4,
+                p22,
+                p23,
+            ],
+            [dot4(m31, c0, b0, m30, m32, d0, e0, m33), p31, p32, p33],
+        ];
+        write_matrix(pg, m, matrix_at, &product);
+        let result = culler_call(m, c, 0x00ff_0ad0, &[matrix_at, result], 0x00ea_49c3);
+        return finish(c, result);
+    }
+    let shape = pg.u32(m, owner.wrapping_add(0x2c));
+    if flags & 0x100 != 0 {
+        // box corners shifted by the node's translation
+        call_from(m, c, pg, frame, corners_at, &[shape.wrapping_add(0x20)], if transformed { 0x00ea_4a0a } else { 0x00ea_5254 }, |m, c| {
+            ddnative_base::x86::call_ext(m, c, 0x005b_19c0)
+        });
+        let (ex, ey, ez) = (float(pg, m, n(0xe0)), float(pg, m, n(0xe4)), float(pg, m, n(0xe8)));
+        for (offset, shift) in [(0x00, ex), (0x04, ey), (0x08, ez), (0x10, ex), (0x14, ey), (0x18, ez)] {
+            let v = float(pg, m, corners_at.wrapping_add(offset)) + shift;
+            set_float(pg, m, corners_at.wrapping_add(offset), v);
+        }
+        let result = culler_call(m, c, 0x00ff_0d20, &[corners_at, planes], if transformed { 0x00ea_4ab9 } else { 0x00ea_5301 });
+        if !transformed || (result as i32) <= 0 || result == 0x3f {
+            return finish(c, result);
+        }
+        call_from(m, c, pg, frame, matrix_at, &[shape.wrapping_add(0x40)], 0x00ea_4ae0, |m, c| ddnative_base::x86::call_ext(m, c, 0x0043_3b00));
+        let a = read_matrix(pg, m, n(0xb0));
+        let mm = read_matrix(pg, m, matrix_at);
+        let (b0, b4, b8, bc) = (a[0][0], a[0][1], a[0][2], a[0][3]);
+        let (c0, c4, c8, cc) = (a[1][0], a[1][1], a[1][2], a[1][3]);
+        let (d0, d4, d8, dc) = (a[2][0], a[2][1], a[2][2], a[2][3]);
+        let (e0, e4, e8, ec) = (a[3][0], a[3][1], a[3][2], a[3][3]);
+        let [[m00, m01, m02, m03], [m10, m11, m12, m13], [m20, m21, m22, m23], [m30, m31, m32, m33]] = mm;
+        let product = [
+            [
+                dot4(b0, m00, m01, c0, m02, d0, m03, e0),
+                dot4(b4, m00, c4, m01, d4, m02, e4, m03),
+                dot4(c8, m01, b8, m00, d8, m02, e8, m03),
+                dot4(cc, m01, bc, m00, dc, m02, ec, m03),
+            ],
+            [
+                dot4(b0, m10, m11, c0, m12, d0, m13, e0),
+                dot4(c4, m11, b4, m10, d4, m12, e4, m13),
+                dot4(c8, m11, b8, m10, d8, m12, e8, m13),
+                dot4(cc, m11, bc, m10, dc, m12, ec, m13),
+            ],
+            [
+                dot4(b0, m20, m21, c0, m22, d0, m23, e0),
+                dot4(c4, m21, b4, m20, d4, m22, e4, m23),
+                dot4(c8, m21, b8, m20, d8, m22, e8, m23),
+                cc * m21 + bc * m20 + dc * m22 + ec * m23,
+            ],
+            [
+                dot4(b0, m30, m31, c0, m32, d0, m33, e0),
+                dot4(c4, m31, b4, m30, d4, m32, e4, m33),
+                c8 * m31 + b8 * m30 + d8 * m32 + e8 * m33,
+                cc * m31 + bc * m30 + dc * m32 + ec * m33,
+            ],
+        ];
+        write_matrix(pg, m, matrix_at, &product);
+        let result = culler_call(m, c, 0x00ff_0ad0, &[matrix_at, result], 0x00ea_5052);
+        return finish(c, result);
+    }
+    // plain box, and for the transformed kind the oriented box after it
+    let result = culler_call(m, c, 0x00ff_0d20, &[shape.wrapping_add(0x20), planes], if transformed { 0x00ea_5074 } else { 0x00ea_5314 });
+    if !transformed || (result as i32) <= 0 || result == 0x3f {
+        return finish(c, result);
+    }
+    let result = culler_call(m, c, 0x00ff_0ad0, &[shape.wrapping_add(0x40), result], 0x00ea_5091);
+    finish(c, result)
+}
