@@ -9,6 +9,8 @@
 use crate::cache::{FxMap, PS_BLOCK, VS_BLOCK};
 #[path = "native_uniforms.rs"]
 mod native_uniforms;
+#[path = "native_vk.rs"]
+mod native_vk;
 use native_uniforms::Uniforms;
 use std::{
     num::NonZeroU64,
@@ -194,9 +196,13 @@ struct ShaderObject {
 struct SamplerObject {
     gpu: wgpu::Sampler,
     lod_bias: f32,
+    desc: Option<wgpu::SamplerDescriptor<'static>>,
+    raw: Option<std::sync::Arc<crate::vk::Object<wgpu::hal::vulkan::Sampler>>>,
 }
 struct Module {
     gpu: wgpu::ShaderModule,
+    source: String,
+    raw_key: crate::cache::ModuleKey,
     interface: d3d9wgsl::Interface,
 }
 struct PipelineObject {
@@ -213,12 +219,14 @@ pub struct TextureBinding {
     pub sampler: Sampler,
 }
 struct TextureSetObject {
+    bindings: Vec<TextureBinding>,
     gpu: wgpu::BindGroup,
     layout: wgpu::BindGroupLayout,
     stage: Stage,
     bias: [u32; 16],
 }
 struct ViewObject {
+    desc: wgpu::TextureViewDescriptor<'static>,
     gpu: wgpu::TextureView,
     format: wgpu::TextureFormat,
     size: [u32; 2],
@@ -228,6 +236,9 @@ struct ViewObject {
 /// Immutable device objects can be read by several independently owned
 /// recorders. No implicit global player, encoder, pass, or constant state.
 pub struct Device {
+    raw_enabled: bool,
+    raw_chunk_draws: usize,
+    raw_pipelines: std::sync::Mutex<FxMap<Pipeline, crate::vk::PipelineTemplate>>,
     id: u32,
     gpu: wgpu::Device,
     queue: wgpu::Queue,
@@ -267,10 +278,16 @@ macro_rules! insert {
 impl Device {
     pub fn from_backend(backend: &mut crate::WgpuBackend) -> Self {
         backend.flush();
-        Self::new_cached(backend)
+        let mut device = Self::new_cached(backend);
+        // The public native API remains the wgpu oracle (including bundles).
+        // The NativeJob worker opts into the bridge through new_cached.
+        device.raw_enabled = false;
+        device
     }
     pub(crate) fn new_cached(backend: &crate::WgpuBackend) -> Self {
         let mut device = Self::new(backend.device.clone(), backend.queue.clone());
+        device.raw_enabled = backend.vk.is_some();
+        device.raw_chunk_draws = backend.draws_per_submit.max(1).div_ceil(backend.encode_threads as u32) as usize;
         if std::env::var("DDGPU_NATIVE_PIPELINE_CACHE").as_deref() == Ok("1") {
             device.disk_cache = backend.pipeline_cache.clone();
         }
@@ -295,6 +312,9 @@ impl Device {
             ],
         });
         Self {
+            raw_enabled: false,
+            raw_chunk_draws: crate::cache::DRAWS_PER_SUBMIT as usize,
+            raw_pipelines: Default::default(),
             id: owner(),
             gpu,
             queue,
@@ -344,7 +364,7 @@ impl Device {
             return Err("non-finite sampler LOD bias".into());
         }
         let scope = self.gpu.push_error_scope(wgpu::ErrorFilter::Validation);
-        let sampler = self.gpu.create_sampler(&wgpu::SamplerDescriptor {
+        let sampler_desc = wgpu::SamplerDescriptor {
             label: Some("native sampler"),
             address_mode_u: desc.address[0],
             address_mode_v: desc.address[1],
@@ -357,7 +377,8 @@ impl Device {
             anisotropy_clamp: desc.max_anisotropy,
             border_color: desc.border,
             ..Default::default()
-        });
+        };
+        let sampler = self.gpu.create_sampler(&sampler_desc);
         if let Some(e) = crate::block_on(scope.pop()) {
             return Err(e.to_string());
         }
@@ -367,7 +388,8 @@ impl Device {
             Sampler,
             SamplerObject {
                 gpu: sampler,
-                lod_bias: desc.lod_bias
+                lod_bias: desc.lod_bias,
+                desc: Some(sampler_desc), raw: None,
             }
         ))
     }
@@ -457,12 +479,14 @@ impl Device {
         format: wgpu::TextureFormat,
         size: [u32; 2],
         samples: u32,
+        desc: wgpu::TextureViewDescriptor<'static>,
     ) -> View {
         insert!(
             self,
             views,
             View,
             ViewObject {
+                desc,
                 gpu,
                 format,
                 size,
@@ -470,8 +494,8 @@ impl Device {
             }
         )
     }
-    pub(crate) fn retain_sampler(&mut self, gpu: wgpu::Sampler, lod_bias: f32) -> Sampler {
-        insert!(self, samplers, Sampler, SamplerObject { gpu, lod_bias })
+    pub(crate) fn retain_sampler(&mut self, gpu: wgpu::Sampler, lod_bias: f32, raw: Option<std::sync::Arc<crate::vk::Object<wgpu::hal::vulkan::Sampler>>>) -> Sampler {
+        insert!(self, samplers, Sampler, SamplerObject { gpu, lod_bias, raw, desc: None })
     }
     pub fn create_buffer(&mut self, bytes: &[u8], usage: wgpu::BufferUsages) -> Buffer {
         use wgpu::util::DeviceExt;
@@ -506,6 +530,7 @@ impl Device {
         self.check(texture.owner);
         let t = &self.textures[texture.index as usize];
         let v = ViewObject {
+            desc: wgpu::TextureViewDescriptor { label: None, ..desc.clone() },
             gpu: t.create_view(desc),
             format: desc.format.unwrap_or(t.format()),
             size: [
@@ -529,7 +554,11 @@ impl Device {
         }
         backend.flush();
         let (gpu, format) = backend.target_view(target, srgb).ok_or("target unavailable")?;
+        let texture = gpu.texture();
+        let level = if target.texture.is_some() { target.level % texture.mip_level_count() } else { 0 };
+        let layer = if target.texture.is_some() && texture.depth_or_array_layers() > 1 { target.level / texture.mip_level_count() } else { 0 };
         let v = ViewObject {
+            desc: wgpu::TextureViewDescriptor { format: Some(format), dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: level, mip_level_count: Some(1), base_array_layer: layer, array_layer_count: Some(1), ..Default::default() },
             gpu,
             format,
             size: [target.width, target.height],
@@ -605,6 +634,7 @@ impl Device {
             );
         }
         let translation = d3d9wgsl::translate_with(&parsed, options).map_err(|e| e.to_string())?;
+        let raw_source = if self.raw_enabled { translation.wgsl.clone() } else { String::new() };
         let source = crate::shader_cache::source(translation.wgsl)?;
         crate::pipelines::translated(translation_started);
         let module_started = std::time::Instant::now();
@@ -617,9 +647,11 @@ impl Device {
         if let Some(e) = crate::block_on(scope.pop()) {
             return Err(e.to_string());
         }
+        let raw_key = (self.modules.len() as u64, 0, false, 0);
         self.modules.insert(
             key,
             Module {
+                source: raw_source, raw_key,
                 gpu,
                 interface: translation.interface,
             },
@@ -903,6 +935,7 @@ impl Device {
             sets,
             TextureSet,
             TextureSetObject {
+                bindings: key.1.clone(),
                 gpu,
                 layout: p.layouts[n].clone(),
                 stage,
@@ -1036,7 +1069,7 @@ struct LastState {
     blend: Option<[f64; 4]>,
 }
 struct Pass {
-    gpu: wgpu::RenderPass<'static>,
+    gpu: Option<wgpu::RenderPass<'static>>,
     desc: PassDesc,
     size: [u32; 2],
     last: LastState,
@@ -1064,6 +1097,7 @@ struct CachedBundle {
 /// Instancing is explicit in both draw methods and input stream step modes.
 pub struct Recorder<'a> {
     device: &'a Device,
+    raw: Option<native_vk::Raw>,
     // Drop order is significant after forget_lifetime: pass before encoder.
     pass: Option<Pass>,
     encoder: Option<wgpu::CommandEncoder>,
@@ -1090,6 +1124,7 @@ pub struct Recorder<'a> {
 /// mutate/prewarm Device objects, then resume without reallocating uniform
 /// storage, constant handles or cached bundles. It belongs to one Device.
 pub struct RecorderState {
+    raw: Option<native_vk::Raw>,
     device_id: u32,
     id: u32,
     ring: Uniforms,
@@ -1111,6 +1146,10 @@ pub struct RecorderState {
     pub stats: RecorderStats,
 }
 impl RecorderState {
+    /// See Uniforms::tag.
+    pub(crate) fn tag_upload(&mut self, ticket: u64) {
+        self.ring.tag(ticket);
+    }
     pub fn uniform_capacity(&self) -> u64 {
         self.ring.capacity()
     }
@@ -1121,7 +1160,10 @@ impl<'a> Recorder<'a> {
             self.pass.is_none() && self.encoder.is_none() && self.pending_bundle.is_empty(),
             "submit or finish the recorder before detaching"
         );
+        assert!(self.raw.as_ref().is_none_or(|r| r.pass.is_none() && r.chunks.is_empty()),
+            "finish raw chunks before detaching");
         RecorderState {
+            raw: self.raw,
             device_id: self.device.id,
             id: self.id,
             ring: self.ring,
@@ -1147,6 +1189,7 @@ impl<'a> Recorder<'a> {
         device.check(state.device_id);
         Self {
             device,
+            raw: state.raw,
             pass: None,
             encoder: None,
             id: state.id,
@@ -1191,8 +1234,11 @@ impl<'a> Recorder<'a> {
             layout: &device.uniform_layout,
             entries: &[binding(0, PS_BLOCK), binding(2, VS_BLOCK)],
         });
+        let raw = device.raw_enabled.then(|| native_vk::Raw::new(device, &ring.buffer)
+            .map_err(|e| eprintln!("native Vulkan recorder fallback: {e}"))).and_then(Result::ok);
         Self {
             device,
+            raw,
             id: owner(),
             ring,
             group,
@@ -1221,8 +1267,8 @@ impl<'a> Recorder<'a> {
     /// Cache retains only the preceding submission's sequence slots.
     pub fn enable_bundles(&mut self, enabled: bool) {
         self.flush_bundle();
-        self.bundles = enabled;
-        if !enabled {
+        self.bundles = enabled && self.raw.is_none();
+        if !self.bundles {
             self.bundle_cache.clear();
             self.bundle_cursor = 0;
         }
@@ -1336,7 +1382,7 @@ impl<'a> Recorder<'a> {
             }
             self.stats.bundle_builds += 1;
         }
-        pass.gpu
+        pass.gpu.as_mut().unwrap()
             .execute_bundles([&self.bundle_cache[self.bundle_cursor].gpu]);
         // execute_bundles clears the pass's pipeline/buffer/bind-group state.
         pass.last.pipeline = None;
@@ -1444,14 +1490,31 @@ impl<'a> Recorder<'a> {
         let c = &mut self.constants[handle.index as usize];
         let end = words.len().checked_mul(4).and_then(|n| n.checked_add(offset)).ok_or("constant range overflow")?;
         let dst = c.bytes.get_mut(offset..end).ok_or("constant range outside block")?;
-        let mut changed = false;
-        for (d, w) in dst.chunks_exact_mut(4).zip(words) {
-            let w = w.to_le_bytes();
-            if *d != w {
-                d.copy_from_slice(&w);
-                changed = true;
+        // the words' little-endian bytes: compared and copied as one range
+        #[cfg(target_endian = "little")]
+        let changed = {
+            // SAFETY: any u32 slice is readable as bytes (alignment 1, the
+            // same length in bytes); on a little-endian target those bytes
+            // are each word's to_le_bytes
+            let src = unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 4) };
+            let changed = dst != src;
+            if changed {
+                dst.copy_from_slice(src);
             }
-        }
+            changed
+        };
+        #[cfg(not(target_endian = "little"))]
+        let changed = {
+            let mut changed = false;
+            for (d, w) in dst.chunks_exact_mut(4).zip(words) {
+                let w = w.to_le_bytes();
+                if *d != w {
+                    d.copy_from_slice(&w);
+                    changed = true;
+                }
+            }
+            changed
+        };
         if changed {
             c.offset = None;
         }
@@ -1535,6 +1598,31 @@ impl<'a> Recorder<'a> {
         }
         self.blend = colour;
     }
+    /// End the pass and copy every mip level of `src` into `dst` (the same
+    /// size and format), recorded in order on this recorder's encoder.
+    pub fn copy_texture(&mut self, src: &wgpu::Texture, dst: &wgpu::Texture) {
+        self.end_pass();
+        let device = self.device;
+        let copy = |encoder: &mut wgpu::CommandEncoder| {
+            for level in 0..src.mip_level_count() {
+                let size = src.size().mip_level_size(level, src.dimension());
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo { texture: src, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyTextureInfo { texture: dst, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    size,
+                );
+            }
+        };
+        match &mut self.raw {
+            // raw passes are chunks: the copy is a wgpu chunk in their order
+            Some(raw) => {
+                let mut encoder = device.gpu.create_command_encoder(&Default::default());
+                copy(&mut encoder);
+                raw.chunks.push(crate::vk::Chunk::Wgpu(encoder));
+            }
+            None => copy(self.encoder.get_or_insert_with(|| device.gpu.create_command_encoder(&Default::default()))),
+        }
+    }
     pub fn begin_pass(&mut self, desc: PassDesc) -> Result<(), &'static str> {
         self.end_pass();
         let device = self.device;
@@ -1555,6 +1643,11 @@ impl<'a> Recorder<'a> {
             if other.size != size || other.samples != v.samples {
                 return Err("native attachments differ in size/sample count");
             }
+        }
+        if let Some(raw) = &mut self.raw {
+            raw.begin(device, desc, size);
+            self.pass = Some(Pass { gpu: None, desc, size, last: Default::default() });
+            return Ok(());
         }
         let colours = desc.colours.map(|h| {
             h.map(|h| wgpu::RenderPassColorAttachment {
@@ -1596,7 +1689,7 @@ impl<'a> Recorder<'a> {
             })
             .forget_lifetime();
         self.pass = Some(Pass {
-            gpu,
+            gpu: Some(gpu),
             desc,
             size,
             last: Default::default(),
@@ -1665,19 +1758,37 @@ impl<'a> Recorder<'a> {
         if self.vertex[..streams].iter().any(Option::is_none) || (indexed && self.index.is_none()) {
             return Err("native vertex/index buffer not bound");
         }
+        if self.raw.is_some() {
+            if pass.last.pipeline != Some(pipeline) {
+                self.stats.pipeline_sets += 1;
+                pass.last.pipeline = Some(pipeline);
+            }
+            for n in 0..2 {
+                if pass.last.sets[n] != self.sets[n] {
+                    self.stats.texture_sets += 1;
+                    pass.last.sets[n] = self.sets[n];
+                }
+            }
+            pass.last.offsets = Some(offsets);
+            pass.last.viewport = Some(self.viewport.unwrap_or([0.0, 0.0, pass.size[0] as f32, pass.size[1] as f32, 0.0, 1.0]));
+            pass.last.scissor = Some(if self.device.rasters[p.desc.rasterizer.index as usize].scissor_enable {
+                self.scissor.ok_or("scissor-enabled pipeline needs a rectangle")?
+            } else { [0, 0, pass.size[0], pass.size[1]] });
+            return Ok(());
+        }
         if !self.bundles {
             if pass.last.pipeline != Some(pipeline) {
-                pass.gpu.set_pipeline(&p.gpu);
+                pass.gpu.as_mut().unwrap().set_pipeline(&p.gpu);
                 pass.last.pipeline = Some(pipeline);
                 self.stats.pipeline_sets += 1;
             }
             if pass.last.offsets != Some(offsets) {
-                pass.gpu.set_bind_group(0, &self.group, &offsets);
+                pass.gpu.as_mut().unwrap().set_bind_group(0, &self.group, &offsets);
                 pass.last.offsets = Some(offsets);
             }
             for n in 0..2 {
                 if pass.last.sets[n] != self.sets[n] {
-                    pass.gpu.set_bind_group(
+                    pass.gpu.as_mut().unwrap().set_bind_group(
                         n as u32 + 1,
                         &self.device.sets[self.sets[n].unwrap().index as usize].gpu,
                         &[],
@@ -1689,7 +1800,7 @@ impl<'a> Recorder<'a> {
             for n in 0..streams {
                 if pass.last.vertex[n] != self.vertex[n] {
                     let s = self.vertex[n].unwrap();
-                    pass.gpu.set_vertex_buffer(
+                    pass.gpu.as_mut().unwrap().set_vertex_buffer(
                         n as u32,
                         self.device.buffers[s.buffer.index as usize].slice(s.offset..s.offset + s.size),
                     );
@@ -1698,7 +1809,7 @@ impl<'a> Recorder<'a> {
             }
             if indexed && pass.last.index != self.index {
                 let (s, f) = self.index.unwrap();
-                pass.gpu.set_index_buffer(
+                pass.gpu.as_mut().unwrap().set_index_buffer(
                     self.device.buffers[s.buffer.index as usize].slice(s.offset..s.offset + s.size),
                     f,
                 );
@@ -1711,7 +1822,7 @@ impl<'a> Recorder<'a> {
             self.viewport
                 .unwrap_or([0.0, 0.0, pass.size[0] as f32, pass.size[1] as f32, 0.0, 1.0]);
         if pass.last.viewport != Some(viewport) {
-            pass.gpu.set_viewport(
+            pass.gpu.as_mut().unwrap().set_viewport(
                 viewport[0],
                 viewport[1],
                 viewport[2],
@@ -1727,27 +1838,29 @@ impl<'a> Recorder<'a> {
             [0, 0, pass.size[0], pass.size[1]]
         };
         if pass.last.scissor != Some(scissor) {
-            pass.gpu
+            pass.gpu.as_mut().unwrap()
                 .set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
             pass.last.scissor = Some(scissor);
         }
         if pass.last.stencil != Some(self.stencil) {
-            pass.gpu.set_stencil_reference(self.stencil);
+            pass.gpu.as_mut().unwrap().set_stencil_reference(self.stencil);
             pass.last.stencil = Some(self.stencil);
         }
         if pass.last.blend != Some(self.blend) {
             let [r, g, b, a] = self.blend;
-            pass.gpu.set_blend_constant(wgpu::Color { r, g, b, a });
+            pass.gpu.as_mut().unwrap().set_blend_constant(wgpu::Color { r, g, b, a });
             pass.last.blend = Some(self.blend);
         }
         Ok(())
     }
     pub fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) -> Result<(), &'static str> {
         self.prepare(false)?;
-        if self.bundles {
+        if self.raw.is_some() {
+            self.raw_draw(vertices, None, instances);
+        } else if self.bundles {
             self.bundle_draw(vertices, None, instances);
         } else {
-            self.pass.as_mut().unwrap().gpu.draw(vertices, instances);
+            self.pass.as_mut().unwrap().gpu.as_mut().unwrap().draw(vertices, instances);
         }
         self.stats.draws += 1;
         Ok(())
@@ -1759,19 +1872,26 @@ impl<'a> Recorder<'a> {
         instances: Range<u32>,
     ) -> Result<(), &'static str> {
         self.prepare(true)?;
-        if self.bundles {
+        if self.raw.is_some() {
+            self.raw_draw(indices, Some(base_vertex), instances);
+        } else if self.bundles {
             self.bundle_draw(indices, Some(base_vertex), instances);
         } else {
             self.pass
                 .as_mut()
                 .unwrap()
-                .gpu
+                .gpu.as_mut().unwrap()
                 .draw_indexed(indices, base_vertex, instances);
         }
         self.stats.draws += 1;
         Ok(())
     }
+    /// See Uniforms::gate.
+    pub(crate) fn upload_gate(&self) -> Option<u64> {
+        self.ring.gate()
+    }
     pub fn end_pass(&mut self) {
+        if let Some(raw) = &mut self.raw { raw.end(self.device); }
         self.flush_bundle();
         self.pass.take();
     }
@@ -1794,6 +1914,11 @@ impl<'a> Recorder<'a> {
         (upload, Some(encoder))
     }
     pub fn submit(&mut self) -> Option<wgpu::SubmissionIndex> {
+        if self.raw.is_some() {
+            let (upload, chunks) = self.finish_chunks();
+            if let Some(upload) = upload { self.device.queue.submit([upload]); }
+            return (!chunks.is_empty()).then(|| crate::vk::submit(&self.device.queue, chunks.into_iter().flat_map(crate::vk::finish).collect()));
+        }
         let (upload, encoder) = self.finish_parts();
         encoder.map(|encoder| {
             self.device

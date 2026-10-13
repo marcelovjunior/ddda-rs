@@ -22,7 +22,7 @@
 //! Anything outside that (another code page, locale or character, or a
 //! documented flag whose transformation is not modelled) stops the session
 //! with a report naming it instead of answering something invented.
-use crate::services::{arg, ret, with_state};
+use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 
@@ -67,7 +67,7 @@ pub(crate) struct Char {
 }
 
 fn set_error(e: u32) {
-    with_state(|s| s.last_error = e);
+    crate::runtime::set_last_error(e);
 }
 
 /// Stop the session: the guest asked for something this model does not

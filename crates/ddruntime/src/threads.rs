@@ -13,10 +13,9 @@
 //! point the guest can observe is a service call. A loop that spins
 //! without calling any service would keep the lock; none is known yet.
 //!
-//! Per-thread runtime state (the last error, TLS values) is swapped when a
-//! thread takes the lock after another thread had it (the state stays with
-//! its owner while nobody else runs), so the services that use it are
-//! unchanged.
+//! Last-error and TLS values live in the caller's cached host-thread record,
+//! keyed by runtime identity and guest thread id. They require no service lock
+//! or save/restore at a hand-off (L153).
 //!
 //! Parallel mode (brief L42, `DDRUNTIME_PARALLEL=1`, off by default):
 //! translated code runs without the guest lock, so guest threads execute
@@ -39,7 +38,7 @@
 use crate::dispatch::Registry;
 use crate::memory::GuestMemory;
 use crate::runtime::{self, Runtime};
-use crate::services::{arg, ret, with_state, MAIN_THREAD_ID};
+use crate::services::{arg, ret, MAIN_THREAD_ID};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 use std::cell::Cell;
@@ -90,8 +89,6 @@ struct LockState {
     holder_host: Option<std::thread::ThreadId>,
     /// Nested service entries of the holder (parallel mode; 1 otherwise).
     depth: u32,
-    /// The thread whose per-thread state (last error, TLS) is loaded.
-    state_owner: u32,
     /// Threads ready to take the lock.
     waiting: u32,
     /// Incremented on every acquisition (a yielding thread waits for another).
@@ -134,6 +131,8 @@ pub struct GuestLock {
     events: std::sync::RwLock<crate::fasthash::FxMap<u32, (u32, Arc<EventCell>)>>,
     event_cache_id: u64,
     event_epoch: std::sync::atomic::AtomicU64,
+    semaphores: std::sync::RwLock<crate::fasthash::FxMap<u32, (u32, Arc<SemaphoreCell>)>>,
+    semaphore_gate: Arc<Mutex<()>>,
 }
 
 impl Default for GuestLock {
@@ -152,7 +151,6 @@ impl Default for GuestLock {
                 holder: current_tid(),
                 holder_host: None,
                 depth: 1,
-                state_owner: current_tid(),
                 ..LockState::default()
             }),
             cv: Condvar::new(),
@@ -161,6 +159,7 @@ impl Default for GuestLock {
             events: Default::default(),
             event_cache_id: NEXT_EVENT_CACHE_ID.fetch_add(1, SeqCst),
             event_epoch: 0.into(),
+            semaphores: Default::default(), semaphore_gate: Default::default(),
         }
     }
 }
@@ -182,26 +181,27 @@ pub fn set_parallel(on: bool) {
         ANY_PARALLEL.store(true, std::sync::atomic::Ordering::Relaxed);
         ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::SeqCst);
     }
-    runtime::current().lock.parallel.store(on, std::sync::atomic::Ordering::Relaxed);
+    runtime::pin().lock.parallel.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 thread_local! {
-    static CURRENT_TID: Cell<u32> = const { Cell::new(MAIN_THREAD_ID) };
     static SLICE_START: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 /// Make this host thread guest thread `tid` (tests of other modules).
 #[cfg(test)]
 pub(crate) fn set_test_tid(tid: u32) {
-    CURRENT_TID.with(|c| c.set(tid));
+    runtime::local(|l| l.guest_tid.set(tid));
 }
 
 /// The running guest thread's id.
 pub fn current_tid() -> u32 {
-    CURRENT_TID.with(Cell::get)
+    runtime::local(|l| l.guest_tid.get())
 }
 
 impl GuestLock {
+    pub(crate) fn identity(&self) -> u64 { self.event_cache_id }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, LockState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -276,7 +276,7 @@ pub(crate) fn unlocked<R>(f: impl FnOnce() -> R) -> R {
     if SERVICE_TAIL_ALLOWED.with(Cell::get) && release_service_tail() {
         return f();
     }
-    let rt = runtime::current();
+    let rt = runtime::pin();
     if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
         return f();
     }
@@ -289,12 +289,11 @@ pub(crate) fn unlocked<R>(f: impl FnOnce() -> R) -> R {
         s.depth = 0;
         rt.lock.release_locked(&mut s);
     }
-    struct Again(Arc<Runtime>);
+    struct Again(runtime::Pinned);
     impl Drop for Again {
         fn drop(&mut self) {
             let s = self.0.lock.lock();
             self.0.lock.acquire_locked(s, 1);
-            adopt_context(&self.0);
         }
     }
     let _again = Again(rt);
@@ -312,10 +311,10 @@ thread_local! {
 /// their caller's lock. The backend mutex must already be held to preserve
 /// submission order, exactly as for `unlocked`.
 fn release_service_tail() -> bool {
-    if IN_SERVICE.with(Cell::get) != 1 {
+    if runtime::local(|l| l.service_depth.get()) != 1 {
         return false;
     }
-    let rt = runtime::current();
+    let rt = runtime::pin();
     if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
         return false;
     }
@@ -333,12 +332,12 @@ fn release_service_tail() -> bool {
 /// mode) it takes the lock for `f` only; where the thread holds it already
 /// (or in the serial mode) `f` just runs. No time slice ends here.
 pub(crate) fn with_lock<R>(f: impl FnOnce() -> R) -> R {
-    let rt = runtime::current();
+    let rt = runtime::pin();
     if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
         return f();
     }
     enter(&rt);
-    struct Leave(Arc<Runtime>);
+    struct Leave(runtime::Pinned);
     impl Drop for Leave {
         fn drop(&mut self) {
             leave(&self.0);
@@ -604,7 +603,7 @@ pub fn holds_guest_lock() -> bool {
 
 /// Whether this host thread holds the guest lock.
 pub(crate) fn holds_lock() -> bool {
-    let rt = runtime::current();
+    let rt = runtime::pin();
     let s = rt.lock.lock();
     s.held && s.holder == current_tid()
 }
@@ -612,20 +611,20 @@ pub(crate) fn holds_lock() -> bool {
 /// Whether this thread is running a service (crate::dispatch).
 #[cfg(test)]
 pub(crate) fn in_service() -> bool {
-    IN_SERVICE.with(Cell::get) > 0
+    runtime::local(|l| l.service_depth.get()) > 0
 }
 
 /// Holds the guest lock for one service call (parallel mode); in the
 /// serial mode the caller already holds it, and only the time slice is
 /// checked.
-pub(crate) struct ServiceLock(Option<Arc<Runtime>>);
+pub(crate) struct ServiceLock(Option<runtime::Pinned>);
 
 pub(crate) fn service() -> ServiceLock {
     if !ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) {
         maybe_yield();
         return ServiceLock(None);
     }
-    let rt = runtime::current();
+    let rt = runtime::pin();
     if !rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) {
         // an API call: where a guest thread's time slice may end
         maybe_yield();
@@ -666,7 +665,6 @@ fn enter(rt: &Runtime) {
         return;
     }
     rt.lock.acquire_locked(s, 1);
-    adopt_context(rt);
 }
 
 /// Undo one [`enter`]; the outermost gives the lock up.
@@ -685,7 +683,7 @@ fn leave(rt: &Runtime) {
 /// (a session's top-level call): in parallel mode without the lock, so
 /// the other threads' services can run meanwhile.
 pub fn without_lock<R>(f: impl FnOnce() -> R) -> R {
-    let rt = runtime::current();
+    let rt = runtime::pin();
     let release = rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed) && {
         let s = rt.lock.lock();
         s.held && s.holder == current_tid()
@@ -699,15 +697,14 @@ pub fn without_lock<R>(f: impl FnOnce() -> R) -> R {
         rt.lock.release_locked(&mut s);
         d
     };
-    struct Reacquire(Arc<Runtime>, u32);
+    struct Reacquire(runtime::Pinned, u32);
     impl Drop for Reacquire {
         fn drop(&mut self) {
             let s = self.0.lock.lock();
             self.0.lock.acquire_locked(s, self.1);
-            adopt_context(&self.0);
         }
     }
-    let _again = Reacquire(rt.clone(), depth);
+    let _again = Reacquire(rt, depth);
     f()
 }
 
@@ -739,7 +736,7 @@ pub(crate) mod key {
 /// Note that the state behind `key` changed: the threads waiting for it
 /// recheck.
 pub(crate) fn signal_key(key: u64) {
-    let rt = runtime::current();
+    let rt = runtime::pin();
     wake(&mut rt.lock.lock(), Some(key));
 }
 
@@ -776,7 +773,7 @@ pub(crate) fn block_on(keys: &[u64], deadline: Option<Instant>) {
 pub(crate) fn wait_until(keys: &[u64], deadline: Option<Instant>, cond: impl Fn() -> bool) {
     sync_profile::blocking();
     let keys: Box<[u64]> = keys.into();
-    let rt = runtime::current();
+    let rt = runtime::pin();
     let mut s = rt.lock.lock();
     let held = s.held && s.holder == current_tid();
     let depth = s.depth;
@@ -806,14 +803,13 @@ pub(crate) fn wait_until(keys: &[u64], deadline: Option<Instant>, cond: impl Fn(
     s.sleepers.remove(&id);
     if held {
         rt.lock.acquire_locked(s, depth);
-        adopt_context(&rt);
     }
 }
 
 /// Let another ready thread run first (Sleep(0), SwitchToThread, the end
 /// of a time slice).
 pub(crate) fn yield_now() {
-    let rt = runtime::current();
+    let rt = runtime::pin();
     let mut s = rt.lock.lock();
     if s.waiting == 0 {
         SLICE_START.with(|t| t.set(Some(Instant::now())));
@@ -826,7 +822,6 @@ pub(crate) fn yield_now() {
         s = rt.lock.cv.wait(s).unwrap_or_else(|e| e.into_inner());
     }
     rt.lock.acquire_locked(s, depth);
-    adopt_context(&rt);
 }
 
 /// Lifted calls become preemption points while a runnable guest thread
@@ -838,15 +833,6 @@ fn signal_preempt(s: &LockState) {
     let runnable = !ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed)
         && s.waiting as usize > s.suspended.values().filter(|n| **n > 0).count();
     ddnative_host::PREEMPT.store(runnable, std::sync::atomic::Ordering::Relaxed);
-}
-
-thread_local! {
-    /// Services running on this thread (dispatch.rs): lifted code a service
-    /// calls back into (an IStream read inside the movie service, a WndProc)
-    /// runs while the service may hold runtime state borrowed, so it is no
-    /// preemption point (L57c: a yield there borrowed that state again and
-    /// panicked, and the dying thread left the guest lock held).
-    static IN_SERVICE: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Marks this thread as running a service until dropped.
@@ -861,14 +847,14 @@ impl ServiceScope {
     }
 
     pub(crate) fn enter_with_tail(tail: bool) -> Self {
-        IN_SERVICE.with(|n| n.set(n.get() + 1));
+        runtime::local(|l| l.service_depth.set(l.service_depth.get() + 1));
         Self { previous_tail: SERVICE_TAIL_ALLOWED.with(|v| v.replace(tail)) }
     }
 }
 
 impl Drop for ServiceScope {
     fn drop(&mut self) {
-        IN_SERVICE.with(|n| n.set(n.get() - 1));
+        runtime::local(|l| l.service_depth.set(l.service_depth.get() - 1));
         SERVICE_TAIL_ALLOWED.with(|v| v.set(self.previous_tail));
     }
 }
@@ -888,10 +874,10 @@ pub(crate) fn preempt() {
         c.set(n);
         n % 1024 == 0
     });
-    if !due || ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) || IN_SERVICE.with(Cell::get) > 0 {
+    if !due || ANY_PARALLEL.load(std::sync::atomic::Ordering::Relaxed) || runtime::local(|l| l.service_depth.get()) > 0 {
         return;
     }
-    let rt = runtime::current();
+    let rt = runtime::pin();
     {
         let s = rt.lock.lock();
         if !(s.held && s.holder == current_tid()) {
@@ -929,7 +915,7 @@ pub(crate) fn maybe_yield() {
 
 /// Sleep for `duration` without the lock.
 fn sleep_unlocked(duration: Duration) {
-    let rt = runtime::current();
+    let rt = runtime::pin();
     let depth = {
         let mut s = rt.lock.lock();
         let d = s.depth;
@@ -939,54 +925,6 @@ fn sleep_unlocked(duration: Duration) {
     std::thread::sleep(duration);
     let s = rt.lock.lock();
     rt.lock.acquire_locked(s, depth);
-    adopt_context(&rt);
-}
-
-// --- per-thread context -------------------------------------------------------
-
-#[derive(Default, Clone)]
-struct Context {
-    last_error: u32,
-    /// (allocation epoch, value) per TLS index
-    tls: Vec<(u32, Option<u32>)>,
-}
-
-/// Load this thread's per-thread state if another thread's is loaded
-/// (the caller has just taken the lock).
-fn adopt_context(rt: &Runtime) {
-    let me = current_tid();
-    let previous = std::mem::replace(&mut rt.lock.lock().state_owner, me);
-    if previous != me {
-        save_context(rt, previous);
-        load_context(rt);
-    }
-}
-
-fn save_context(rt: &Runtime, tid: u32) {
-    let ctx = rt.state.with(|s| Context {
-        last_error: s.last_error,
-        tls: s.tls.iter().enumerate().map(|(i, v)| (s.tls_epoch.get(i).copied().unwrap_or(0), *v)).collect(),
-    });
-    rt.kernel.with(|k| k.contexts.insert(tid, ctx));
-}
-
-fn load_context(rt: &Runtime) {
-    let tid = current_tid();
-    let ctx = rt.kernel.with(|k| k.contexts.get(&tid).cloned()).unwrap_or_default();
-    rt.state.with(|s| {
-        s.last_error = ctx.last_error;
-        for i in 0..s.tls.len() {
-            if s.tls[i].is_some() {
-                // an allocated index: this thread's value if it set one since
-                // the index was (re)allocated, else 0
-                let epoch = s.tls_epoch.get(i).copied().unwrap_or(0);
-                s.tls[i] = Some(match ctx.tls.get(i) {
-                    Some(&(e, Some(v))) if e == epoch => v,
-                    _ => 0,
-                });
-            }
-        }
-    });
 }
 
 // --- kernel objects -----------------------------------------------------------
@@ -1036,10 +974,48 @@ impl EventCell {
     }
 }
 
+/// Semaphore counts can change outside the service lock. One narrow gate
+/// covers count mutations, including a multiwait's readiness/commit phase;
+/// therefore a competing single wait cannot partially consume a wait-all.
+#[derive(Debug)]
+pub struct SemaphoreCell {
+    count: std::sync::atomic::AtomicU32,
+    max: u32,
+    gate: Arc<Mutex<()>>,
+}
+impl SemaphoreCell {
+    fn new(count: u32, max: u32) -> Arc<Self> {
+        Arc::new(Self { count: count.into(), max, gate: runtime::with(|rt| rt.lock.semaphore_gate.clone()) })
+    }
+    fn ready(&self) -> bool { self.count.load(SeqCst) != 0 }
+    fn take_locked(&self) -> bool {
+        let count = self.count.load(SeqCst);
+        if count == 0 { return false; }
+        self.count.store(count - 1, SeqCst);
+        true
+    }
+    fn take(&self) -> bool {
+        let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
+        self.take_locked()
+    }
+    fn release(&self, n: u32) -> Result<u32, u32> {
+        if (n as i32) <= 0 { return Err(87); } // ERROR_INVALID_PARAMETER
+        let _gate = self.gate.lock().unwrap_or_else(|e| e.into_inner());
+        let count = self.count.load(SeqCst);
+        let next = count.checked_add(n).filter(|c| *c <= self.max)
+            .ok_or(ERROR_TOO_MANY_POSTS)?;
+        self.count.store(next, SeqCst);
+        Ok(count)
+    }
+}
+fn semaphore_of(h: u32) -> Option<(u32, Arc<SemaphoreCell>)> {
+    runtime::with(|rt| rt.lock.semaphores.read().unwrap_or_else(|e| e.into_inner()).get(&h).cloned())
+}
+
 #[derive(Debug)]
 pub enum Object {
     Event(Arc<EventCell>),
-    Semaphore { count: u32, max: u32 },
+    Semaphore(Arc<SemaphoreCell>),
     Mutex { owner: u32, recursion: u32, abandoned: bool },
     Thread { tid: u32, exit: Option<u32> },
 }
@@ -1053,7 +1029,6 @@ pub(crate) struct Kernel {
     next_object: u32,
     next_tid: u32,
     next_stack: u32,
-    contexts: HashMap<u32, Context>,
     /// thread id -> its object
     threads: HashMap<u32, u32>,
     /// Queued asynchronous procedure calls per thread: (routine, three
@@ -1100,8 +1075,9 @@ pub fn faults() -> Vec<(u32, String)> {
 pub(crate) fn close(h: u32) -> bool {
     let closed = kernel(|k| k.handles.remove(&h).is_some());
     if closed {
-        runtime::current().lock.events.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
-        runtime::current().lock.event_epoch.fetch_add(1, SeqCst);
+        runtime::pin().lock.events.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+        runtime::pin().lock.event_epoch.fetch_add(1, SeqCst);
+        runtime::with(|rt| rt.lock.semaphores.write().unwrap_or_else(|e| e.into_inner()).remove(&h));
     }
     closed
 }
@@ -1110,7 +1086,7 @@ pub(crate) fn close(h: u32) -> bool {
 fn event_of(h: u32) -> Option<(u32, Arc<EventCell>)> {
     static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let cached = *CACHE.get_or_init(|| std::env::var("DDRUNTIME_SYNC_CACHE").is_ok_and(|v| v == "1"));
-    event_lookup(&runtime::current().lock, h, cached)
+    event_lookup(&runtime::pin().lock, h, cached)
 }
 
 type CachedEvent = (u32, u32, Arc<EventCell>);
@@ -1151,7 +1127,7 @@ fn event_lookup(lock: &GuestLock, h: u32, cached: bool) -> Option<(u32, Arc<Even
 }
 
 fn set_error(e: u32) {
-    with_state(|s| s.last_error = e);
+    crate::runtime::set_last_error(e);
 }
 
 /// A named object: the existing one (ERROR_ALREADY_EXISTS) or a new one.
@@ -1159,10 +1135,10 @@ fn create_named(m: &dyn Mem, name: u32, make: impl FnOnce() -> Object) -> u32 {
     let name = (name != 0).then(|| crate::user32::guest_str_a(m, name));
     let (h, o) = kernel(|k| {
         if let Some(&o) = name.as_ref().and_then(|n| k.names.get(n)) {
-            with_state(|s| s.last_error = ERROR_ALREADY_EXISTS);
+            crate::runtime::set_last_error(ERROR_ALREADY_EXISTS);
             return (k.handle(o), o);
         }
-        with_state(|s| s.last_error = 0);
+        crate::runtime::set_last_error(0);
         let o = k.add(make());
         if let Some(n) = name {
             k.names.insert(n, o);
@@ -1173,7 +1149,10 @@ fn create_named(m: &dyn Mem, name: u32, make: impl FnOnce() -> Object) -> u32 {
         Object::Event(e) => Object::Event(e.clone()),
         _ => Object::Thread { tid: 0, exit: None },
     })) {
-        runtime::current().lock.events.write().unwrap_or_else(|e| e.into_inner()).insert(h, (o, e));
+        runtime::pin().lock.events.write().unwrap_or_else(|e| e.into_inner()).insert(h, (o, e));
+    }
+    if let Some(e) = kernel(|k| match &k.objects[&o] { Object::Semaphore(e) => Some(e.clone()), _ => None }) {
+        runtime::with(|rt| rt.lock.semaphores.write().unwrap_or_else(|e| e.into_inner()).insert(h, (o, e)));
     }
     h
 }
@@ -1214,7 +1193,7 @@ pub fn create_semaphore(m: &mut dyn Mem, cpu: &mut Cpu) {
         set_error(87); // ERROR_INVALID_PARAMETER
         0
     } else {
-        create_named(m, name, || Object::Semaphore { count, max })
+        create_named(m, name, || Object::Semaphore(SemaphoreCell::new(count, max)))
     };
     ret(m, cpu, 16);
 }
@@ -1222,16 +1201,11 @@ pub fn create_semaphore(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// ReleaseSemaphore(handle, count, previous*).
 pub fn release_semaphore(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, n, prev) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
-    let r = kernel(|k| {
-        let o = k.object_of(h).ok_or(ERROR_INVALID_HANDLE)?;
-        match k.objects.get_mut(&o) {
-            Some(Object::Semaphore { count, max }) => match count.checked_add(n).filter(|c| c <= max && n > 0) {
-                Some(c) => Ok((o, std::mem::replace(count, c))),
-                None => Err(ERROR_TOO_MANY_POSTS),
-            },
-            _ => Err(ERROR_INVALID_HANDLE),
-        }
-    });
+    // Host Win32 validates signed ReleaseCount before looking up the handle.
+    let r = if (n as i32) <= 0 { Err(87) } else {
+        semaphore_of(h).ok_or(ERROR_INVALID_HANDLE)
+            .and_then(|(o, e)| e.release(n).map(|old| (o, old)))
+    };
     cpu.eax = match r {
         Ok((o, old)) => {
             if prev != 0 {
@@ -1291,18 +1265,18 @@ pub fn release_mutex(m: &mut dyn Mem, cpu: &mut Cpu) {
 fn signalled(o: &Object, me: u32) -> bool {
     match o {
         Object::Event(e) => e.is_set(),
-        Object::Semaphore { count, .. } => *count > 0,
+        Object::Semaphore(e) => e.ready(),
         Object::Mutex { owner, .. } => *owner == 0 || *owner == me,
         Object::Thread { exit, .. } => exit.is_some(),
     }
 }
 
-/// The effect of a satisfied wait; false if an event was taken meanwhile
-/// by a wait that holds no guest lock (the others change under it only).
+/// The effect of a satisfied wait; false if an event was taken meanwhile.
+/// Callers that consume semaphores hold their narrow count gate.
 fn consume(o: &mut Object, me: u32) -> bool {
     match o {
         Object::Event(e) => return e.take(),
-        Object::Semaphore { count, .. } => *count -= 1,
+        Object::Semaphore(e) => return e.take_locked(),
         Object::Mutex { owner, recursion, abandoned } => {
             *owner = me;
             *recursion += 1;
@@ -1333,20 +1307,23 @@ fn abandon_mutexes(k: &mut Kernel, tid: u32) {
 }
 
 /// Wait for `handles` (all of them, or any), up to `ms` milliseconds.
-/// The caller holds the guest lock (semaphores, mutexes and threads change
-/// only under it); events change without it (L86), so this thread counts
-/// itself a waiter of each event before it checks them, and blocks unless
-/// one is set (`wait_until`).
+/// The caller holds the guest lock for mutexes and thread objects. Events
+/// and semaphore counts may change without it: readiness is rechecked after
+/// sleeper registration, and semaphore wait-all commits hold the count gate.
 pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
     let me = current_tid();
     // The common single-object success/poll requires no temporary vectors or
-    // host clock. Other objects remain serialized by the existing guest lock.
+    // host clock. Semaphore count mutations use their own narrow gate.
     if handles.len() == 1 {
         let ready = kernel(|k| {
             let object = k.object_of(handles[0])?;
             let value = k.objects.get_mut(&object)?;
             let result = if abandoned(value) { WAIT_ABANDONED_0 } else { WAIT_OBJECT_0 };
-            Some((signalled(value, me) && consume(value, me), result))
+            let taken = match value {
+                Object::Semaphore(e) => e.take(),
+                _ => signalled(value, me) && consume(value, me),
+            };
+            Some((taken, result))
         });
         match ready {
             None => { set_error(ERROR_INVALID_HANDLE); return WAIT_FAILED; }
@@ -1362,6 +1339,11 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
             _ => None,
         }).collect()
     });
+    let semaphores: Vec<(u32, Arc<SemaphoreCell>)> = kernel(|k| handles.iter()
+        .filter_map(|&h| k.object_of(h)).filter_map(|o| match &k.objects[&o] {
+            Object::Semaphore(e) => Some((o, e.clone())), _ => None,
+        }).collect());
+    let semaphore_gate = semaphores.first().map(|(_, e)| e.gate.clone());
     for (_, e) in &events {
         e.waiters.fetch_add(1, SeqCst);
     }
@@ -1374,6 +1356,7 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
         // rechecked forever holding the guest lock: the deadlock at the
         // game's logos)
         let r = kernel(|k| {
+            let _gate = semaphore_gate.as_ref().map(|g| g.lock().unwrap_or_else(|e| e.into_inner()));
             let objs: Option<Vec<u32>> = handles.iter().map(|&h| k.object_of(h)).collect();
             let Some(objs) = objs else { return Ok(WAIT_FAILED) };
             let states: Vec<bool> = objs.iter().map(|o| signalled(&k.objects[o], me)).collect();
@@ -1401,9 +1384,9 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
                     }
                     return Ok(result);
                 }
-                // not all signalled: the events that are set do not wake
-                // this thread again; the others, and the locked objects, do
-                seen_set = objs.iter().zip(&states).filter(|&(o, &s)| s && matches!(k.objects[o], Object::Event(_))).map(|(&o, _)| o).collect();
+                // Already-ready events/semaphores do not force a busy recheck;
+                // the missing independent objects, and locked objects, do.
+                seen_set = objs.iter().zip(&states).filter(|&(o, &s)| s && matches!(k.objects[o], Object::Event(_) | Object::Semaphore(_))).map(|(&o, _)| o).collect();
             } else {
                 for (i, o) in objs.iter().enumerate() {
                     let result = if abandoned(&k.objects[o]) { WAIT_ABANDONED_0 } else { WAIT_OBJECT_0 };
@@ -1432,9 +1415,10 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
                     break WAIT_TIMEOUT;
                 }
                 let keys: Vec<u64> = kernel(|k| handles.iter().filter_map(|&h| k.object_of(h)).map(key::object).collect());
-                // the guest lock is given up unless an event the check found
-                // not set is set by now (then the check runs again)
-                wait_until(&keys, deadline, || events.iter().any(|(o, e)| !seen_set.contains(o) && e.is_set()));
+                // Recheck independent events/semaphores after registration:
+                // releases between the snapshot and parking cannot be lost.
+                wait_until(&keys, deadline, || events.iter().any(|(o, e)| !seen_set.contains(o) && e.is_set())
+                    || semaphores.iter().any(|(o, e)| !seen_set.contains(o) && e.ready()));
             }
         }
     };
@@ -1489,6 +1473,20 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
     r
 }
 
+/// The sleeper protocol rechecks after registration; count releases notify
+/// outside the narrow gate, so neither a lost wake nor a lock inversion occurs.
+fn wait_semaphore(object: u32, e: &SemaphoreCell, ms: u32) -> u32 {
+    if e.take() { return WAIT_OBJECT_0; }
+    sync_profile::contention();
+    if ms == 0 { return WAIT_TIMEOUT; }
+    let deadline = (ms != INFINITE).then(|| Instant::now() + Duration::from_millis(ms as u64));
+    loop {
+        if e.take() { return WAIT_OBJECT_0; }
+        if deadline.is_some_and(|d| Instant::now() >= d) { return WAIT_TIMEOUT; }
+        wait_until(&[key::object(object)], deadline, || e.ready());
+    }
+}
+
 /// Windows address waits compare the value before parking and may wake
 /// spuriously. Always recheck/take, using the original absolute deadline.
 /// https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-waitonaddress
@@ -1533,15 +1531,15 @@ mod address_wait {
 }
 
 /// WaitForSingleObject(handle, ms).
-/// A lock-free service (L86): an event is waited for without the guest
-/// lock; any other object as before, under it.
+/// Events and semaphores wait without the service lock; mutexes and thread
+/// objects retain the service-locked path.
 pub fn wait_for_single_object(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, ms) = (arg(m, cpu, 0), arg(m, cpu, 1));
     cpu.eax = match event_of(h) {
         Some((o, e)) => wait_event(o, &e, ms),
-        None => {
-            let _lock = service();
-            wait(&[h], false, ms)
+        None => match semaphore_of(h) {
+            Some((o, e)) => wait_semaphore(o, &e, ms),
+            None => { let _lock = service(); wait(&[h], false, ms) }
         }
     };
     ret(m, cpu, 8);
@@ -1819,7 +1817,7 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>, tid: u32, start: u32, param: u32, stack_top: u32, stack_size: u32) {
     runtime::enter(rt.clone());
-    CURRENT_TID.with(|c| c.set(tid));
+    runtime::local(|l| l.guest_tid.set(tid));
     crate::load_log::timeline::guest_thread(start);
     registry.install();
     ddnative_base::platform::redirect(&crate::session::REDIRECTED_MODELS);
@@ -1827,7 +1825,6 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
     if !parallel {
         let s = rt.lock.lock();
         rt.lock.acquire_locked(s, 1);
-        adopt_context(&rt);
     } else {
         // wait while created suspended (the serial mode waits in acquire)
         enter(&rt);
@@ -1887,7 +1884,7 @@ pub fn resume_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
     let h = arg(m, cpu, 0);
     cpu.eax = match thread_object(h) {
         Some((_, tid)) => {
-            let rt = runtime::current();
+            let rt = runtime::pin();
             let mut s = rt.lock.lock();
             let n = s.suspended.get(&tid).copied().unwrap_or(0);
             if n > 0 {
@@ -1914,7 +1911,7 @@ pub fn suspend_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = match thread_object(h) {
         Some((_, tid)) => {
             assert_ne!(tid, current_tid(), "a guest thread suspending itself is not modelled");
-            let rt = runtime::current();
+            let rt = runtime::pin();
             let mut s = rt.lock.lock();
             let n = s.suspended.get(&tid).copied().unwrap_or(0);
             s.suspended.insert(tid, n + 1);
@@ -1991,6 +1988,8 @@ mod tests {
     use crate::memory::{GuestMemory, READ, WRITE};
     use d3d9cmd::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+    include!("sync_followup.rs");
+    include!("sync_bench.rs");
 
     #[test]
     fn event_cache_invalidates_closed_handles_and_runtime_identity() {
@@ -2034,7 +2033,7 @@ mod tests {
     #[test]
     fn single_wait_polls_and_abandoned_mutex_results() {
         let (_, m) = sync_runtime();
-        let sem = create_named(&m, 0, || Object::Semaphore { count: 1, max: 2 });
+        let sem = create_named(&m, 0, || Object::Semaphore(SemaphoreCell::new(1, 2)));
         assert_eq!(wait(&[sem], false, 0), WAIT_OBJECT_0);
         assert_eq!(wait(&[sem], false, 0), WAIT_TIMEOUT);
         assert_eq!(wait(&[0xdead], false, 0), WAIT_FAILED);
@@ -2063,7 +2062,7 @@ mod tests {
             }
             wait_for_multiple_objects(&mut m, &mut cpu);
             assert_eq!(cpu.eax, WAIT_FAILED);
-            assert_eq!(with_state(|s| s.last_error), 87);
+            assert_eq!(crate::runtime::last_error(), 87);
             assert_eq!(cpu.esp, DATA + 0x814);
         }
     }
@@ -2252,7 +2251,7 @@ mod tests {
             let worker_r = r.clone();
             let worker = std::thread::spawn(move || {
                 runtime::enter(worker_rt);
-                CURRENT_TID.with(|t| t.set(0x3082));
+                runtime::local(|l| l.guest_tid.set(0x3082));
                 let (_, unused) = channel();
                 TAIL_SYNC.with(|s| *s.borrow_mut() = Some((held_tx, unused)));
                 let mut m = GuestMemory::new();
@@ -2389,7 +2388,7 @@ mod tests {
                        done: Arc<AtomicBool>, pause: Duration) -> std::thread::JoinHandle<Vec<Duration>> {
         std::thread::spawn(move || {
             runtime::enter(rt);
-            CURRENT_TID.with(|c| c.set(tid));
+            runtime::local(|l| l.guest_tid.set(tid));
             let stack = 0x0100_0000 + tid * 0x1_0000;
             let _ = m.map(stack, 0x1_0000, READ | WRITE);
             let top = stack + 0xF000;
@@ -2616,7 +2615,7 @@ mod tests {
                     std::thread::spawn(move || {
                         runtime::enter(rt);
                         let tid = 0x4000 + 4 * k as u32;
-                        CURRENT_TID.with(|c| c.set(tid));
+                        runtime::local(|l| l.guest_tid.set(tid));
                         let stack = 0x0100_0000 + k as u32 * 0x1_0000;
                         m.map(stack, 0x1_0000, READ | WRITE).unwrap();
                         let mut c = Cpu::default();
@@ -2628,7 +2627,7 @@ mod tests {
             let (rt2, r2, mut m2) = (rt.clone(), r.clone(), m.share());
             let worker = std::thread::spawn(move || {
                 runtime::enter(rt2);
-                CURRENT_TID.with(|c| c.set(0x3000));
+                runtime::local(|l| l.guest_tid.set(0x3000));
                 let stack = 0x0200_0000;
                 m2.map(stack, 0x1_0000, READ | WRITE).unwrap();
                 let mut c = Cpu::default();
@@ -2698,7 +2697,7 @@ mod tests {
             (S_WAIT1, wait_for_single_object, "KERNEL32.dll!WaitForSingleObject", true),
             (S_WAITN, wait_for_multiple_objects, "KERNEL32.dll!WaitForMultipleObjects", false),
             (S_NOOP, noop, "TEST.dll!Noop", false),
-            (S_RELEASE_SEM, release_semaphore, "KERNEL32.dll!ReleaseSemaphore", false),
+            (S_RELEASE_SEM, release_semaphore, "KERNEL32.dll!ReleaseSemaphore", true),
         ] {
             r.insert(a, if free && lock_free { Binding::LockFree(f) } else { Binding::Service(f) }).unwrap();
             r.name(a, name);
@@ -2741,7 +2740,7 @@ mod tests {
                 let (rt, r, mut m, body) = (rt.clone(), r.clone(), m.share(), body.clone());
                 std::thread::spawn(move || {
                     runtime::enter(rt);
-                    CURRENT_TID.with(|c| c.set(0x5000 + 4 * k as u32));
+                    runtime::local(|l| l.guest_tid.set(0x5000 + 4 * k as u32));
                     let stack = 0x0300_0000 + k as u32 * 0x1_0000;
                     // mapped by an earlier run in the same memory, or now
                     let _ = m.map(stack, 0x1_0000, READ | WRITE);
@@ -2945,7 +2944,7 @@ mod tests {
     fn a_locked_wait_lets_signallers_that_need_the_lock_run() {
         let (rt, m) = sync_runtime();
         let ev = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
-        let sem = create_named(&m, 0, || Object::Semaphore { count: 0, max: 1 });
+        let sem = create_named(&m, 0, || Object::Semaphore(SemaphoreCell::new(0, 1)));
         let ack = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
         let mut mm = m.share();
         mm.set_u32(DATA + 0x200, ev);
@@ -3005,7 +3004,7 @@ mod tests {
     fn a_wait_for_all_gives_the_lock_up_while_an_event_is_already_set() {
         let (rt, m) = sync_runtime();
         let ev = create_named(&m, 0, || Object::Event(EventCell::new(true, true)));
-        let sem = create_named(&m, 0, || Object::Semaphore { count: 0, max: 1 });
+        let sem = create_named(&m, 0, || Object::Semaphore(SemaphoreCell::new(0, 1)));
         let ack = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
         let mut mm = m.share();
         mm.set_u32(DATA + 0x200, ev);

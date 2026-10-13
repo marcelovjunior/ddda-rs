@@ -672,7 +672,11 @@ fn create_shader(m: &mut dyn Mem, cpu: &mut Cpu, iface: &'static str, stage_bits
     let parsed = d3d9shader::parse(&tokens);
     cpu.eax = if tokens[0] >> 16 == stage_bits && parsed.is_ok() {
         let float_constants = parsed.unwrap().float_constant_count();
-        let o = new_object(m, iface, Kind::Shader { device: dev, tokens: tokens.into(), float_constants });
+        let tokens: std::sync::Arc<[u32]> = tokens.into();
+        let o = new_object(m, iface, Kind::Shader { device: dev, tokens: tokens.clone(), float_constants });
+        if std::env::var("DDGPU_SHADER_PREFETCH").as_deref() == Ok("1") {
+            crate::d3d9draw::backend(|b| b.shader_created(tokens));
+        }
         m.set_u32(out, o);
         D3D_OK
     } else {

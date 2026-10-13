@@ -43,9 +43,9 @@ class Flow(unittest.TestCase):
         self.assertIn('(cpu.eax) < (cpu.ecx)', out)
         self.assertNotIn('cpu.fl', out)
         arms[2] = '0x1020 => { return; }'
-        self.assertEqual(le.function_flags(arms)[0], branch)
+        self.assertIn(CMP, le.function_flags(arms)[0]); self.assertIn("(cpu.fl.a < cpu.fl.b)", le.function_flags(arms)[0])
         arms[2] = '0x1020 => { pc = 0x1020; continue; }'
-        self.assertEqual(le.function_flags(arms)[0], branch)
+        self.assertIn(CMP, le.function_flags(arms)[0]); self.assertIn("(cpu.fl.a < cpu.fl.b)", le.function_flags(arms)[0])
 
     def test_setcc_cmovcc_and_memory_operands(self):
         compare = '{ let r = cpu.fl.alu_sub(m.fast_u32(pt, cpu.eax), cpu.ecx, 32); }'
@@ -56,7 +56,7 @@ class Flow(unittest.TestCase):
             self.assertIn('((m.fast_u32(pt, cpu.eax)) as i32) <= ((cpu.ecx) as i32)', out)
             self.assertEqual(out.count('m.fast_u32(pt, cpu.eax)'), 1)
             live = arm.replace(ADD, 'cpu.ebx = cpu.fl.lahf() as u32;')
-            self.assertEqual(le.function_flags([live])[0], live)
+            self.assertIn(compare, le.function_flags([live])[0]); self.assertIn("(cpu.fl.a as i32) <= (cpu.fl.b as i32)", le.function_flags([live])[0])
 
     def test_predicate_forms_and_unknown_cc(self):
         for cc in le.PREDICATE:
@@ -90,12 +90,12 @@ class Flow(unittest.TestCase):
             f'0x1010 => {{ {CMP} cpu.edx = cpu.fl.cond("b") as u32; {ADD} pc = 0x1030; continue; }}',
             '0x1020 => { { let r = cpu.fl.alu_and(m.fast_u32(pt, cpu.esp), cpu.ecx, 16); } '
             '{ let v = m.fast_u32(pt, cpu.esi); if cpu.fl.cond("ne") { cpu.edx = v; } } '
-            + ADD + ' pc = 0x1030; continue; }',
+            + ' cpu.ebx = cpu.fl.lahf() as u32; pc = 0x1030; continue; }',
             '0x1030 => { cpu.fl.alu_sub(cpu.edx, cpu.eax, 32); m.fast_set_u32(pt, cpu.esp, cpu.edx); '
             'x86::call_ext(m, cpu, 42); return; }',
         ]
         optimized = le.function_flags([le.lean(a) for a in arms])
-        self.assertEqual(sum(a.count('let l129_condition') for a in optimized), 3)
+        self.assertEqual(sum(a.count('let l129_condition') for a in optimized), 2)
         source = '\n'.join(f'#[path="{(base / (m + ".rs")).as_posix()}"] mod {m};' for m in ('mem', 'x86', 'x87', 'emit', 'hooks'))
         source += '\nuse mem::Mem; use x86::{Cpu,Flags};'
         for module, body in [('plain', arms), ('lean', optimized), ('split', optimized)]:
@@ -112,9 +112,10 @@ class Flow(unittest.TestCase):
             path = Path(tmp) / 'check.rs'
             exe = Path(tmp) / 'check.exe'
             path.write_text(source)
-            for command in (['rustc', '--edition=2021', '-Awarnings', str(path), '-o', str(exe)], [str(exe)]):
-                run = subprocess.run(command, capture_output=True, text=True, timeout=60)
-                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            for opt in (0, 1):
+                for command in (['rustc', '--edition=2021', '-Awarnings', f'-Copt-level={opt}', str(path), '-o', str(exe)], [str(exe)]):
+                    run = subprocess.run(command, capture_output=True, text=True, timeout=60)
+                    self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
 
 if __name__ == '__main__':

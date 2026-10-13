@@ -2,9 +2,10 @@
 
 ### L153 game-thread synchronization (2026-10-13)
 
-- Opt-in service/site/handle census and scheduler job histograms; fan-out
-  join identified at return 0x00DBE66D. Initialization creates seven workers
-  plus main; actual participation and residual join time await head capture.
+- Head combo26 late-game census: main plus six joined workers, about 69
+  joins/frame at 0x00DBE66D, **18.644 / 17.813 ms/frame** inclusive with
+  cache/futex 0/0 versus 1/1. Long-join tails dominate; main Sleep is absent
+  in this interval. Render request waiting overlaps main work.
 - Opt-in event cache and address waits; shared-table microbench 5.64–7.34x,
   event ping-pong mixed. No game/FPS gain claimed. Default single-object
   polls avoid vectors; abandoned mutex and invalid multiwait-count handling
@@ -14,6 +15,111 @@
   Four parser tests pass. Details: `docs/tasks/L153-sync.md`.
 - Next: head profile-on same-route census, then profile-off matched
   cache/futex A/B and image acceptance before changing defaults.
+### L155 combo25 save-load ranking (2026-10-13)
+
+- Head FAST=0/1: stage-200 request to first stage update **8.176676 ->
+  7.429188 s** (-9.14%), same **1,739 reads / 207.6 MB / 8,544 inflates**.
+  Inclusive zlib **6.097 -> 5.101 s**; read services **0.279 -> 0.297 s**;
+  zero pipeline creations in that interval. Keep exact FAST=1 selected,
+  PORT=0; no new speculative archive scheduling or default change.
+- Menu-exit callback to first gameplay Present **15.504909 -> 14.583692 s**
+  (-0.921217 s), not confirmed input/display readiness. Neither run enters
+  old `00532110`; raw title chain verifies the PC bypass. L151 preparation
+  remains a boot candidate, not the dominant warm-cache save-load cost.
+- **15 parser tests pass**, both 39-interval logs ranked with hashes and
+  nested/parallel costs kept distinct. Light suite **212 reported passes /
+  inherited gamma failure / five ignored**; required vectors **632 fast
+  cases x3 + 12 outer cases pass**. Next: head repeat/logging-off FAST
+  acceptance and resource-worker profiling. `docs/tasks/L155-saveload.md`.
+
+### L155 save-load source map (2026-10-13)
+
+- One resource FIFO worker already overlaps reads with up to three entry
+  decode workers. Shared archive workspace and ordered finalizers block a
+  simple parallel-archive change (`00DB9C30`/`00DB9C80`/`00DB9F40`).
+- Added base/append shader gates and stage list/barrier order. The historical
+  `00532110` marker is not proven PC Continue: PC storage ignores its kind 9,
+  and `00531E60` has direct GameMain paths. Raw callback IDs and head input
+  observations must establish the actual load interval.
+- Static evidence only; no measured speedup. Next: completed combo25 FAST
+  timeline ranking and exact intervention. `docs/tasks/L155-saveload.md`.
+
+### L155 ddgpu example build repair (2026-10-13)
+
+- `module_cost` now declares the existing pipeline logger required by its
+  example-local shader cache module. `cargo build -p ddgpu --examples`
+  **passes**, 3m14s in a fresh L155 target, four jobs, no incremental build.
+- No GPU/game execution or renderer behavior change. Next: save-load source
+  map and head's combo25 interval ranking; L151 preparation merged on L155.
+
+### L151 parallel pipeline preparation (2026-10-13)
+
+- Opt-in 2-4 creator threads precompile L116 exact recipes with L140 driver
+  cache; shared module cells avoid duplicate background compilation. Shader
+  creation events prioritize recorded variants and drop on a full draw FIFO.
+- Draws never wait for creators; source checks and normal miss creation stay.
+  Cold unknown variants still need first-use state. Native/raw-Vulkan objects
+  are outside this recipe path. Default creator count remains one.
+- 7 warmup CPU + 22 command/capture + 6 bounded GPU checks pass; identical
+  two-target image hashes for N=1/2/4, including in-flight fallback. Runtime
+  211 reported passes / 2 failures / 5 ignored; timing retry passes, inherited
+  gamma failure remains. No game loading gain established.
+- Next: head supplies c25 FAST timeline, seeds candidate recipe namespace,
+  then matched N=1/2 loading/image A/B. `docs/tasks/L151-load-parallel.md`.
+- Frozen production `006dcd96`: **104 passed / zero failed / nine ignored**
+  in the expanded required-vector play gate. Store128 `7eddfd1d` and L130
+  `a2d0407e` / `0ce6de79` are GREEN. Inventory retains five existing gaps.
+- Combined L143/L141 renderer: **38 distinct GPU tests pass / three ignored**;
+  all 150 state and 200 target cases run. A 60-second cache-test timeout
+  passes its isolated retry in 53.12 s. CPU **37 pass**; runtime light
+  **202 pass / inherited gamma failure / five ignored**. L143 `e04b76ce`
+  and L141 `784f5a9c` / `83f9ad22` are GREEN for these tested contracts.
+- All 33 shards rebuilt, artifact wall span **225.51 s**, rlibs **434.81 MiB**.
+  No game/FPS/image acceptance claim. Details: `docs/tasks/L146-gate-c24.md`.
+- Separate L142 flat exactness **106 pass / zero failures / nine ignored**;
+  runtime flat-memory **five pass**. Head rejected its gameplay performance
+  (board #12797); opt-in generated output stays private.
+- Final typed x87/live CMP/TEST predicate codegen: base **39 pass**, Python
+  **33 pass**, including 13,824 state/access comparisons plus 64 fault
+  positions. Default native gates at all-shard opt0 **and** opt1 each pass
+  **107 / zero failures / nine ignored**. Default gen **730 s**; 62,511 x87
+  sites retargeted. Shard wall spans opt0 **613.43 s** (includes pauses),
+  opt1 **558.42 s**; libraries **432.52 / 356.06 MiB** respectively.
+- Synthetic x87 opt0 improves all 198 paired samples; opt1 is mixed,
+  including regressions. Live predicate measurements improve at both
+  levels. No gameplay FPS/image improvement claimed from these tests.
+- Next: head integrates the separate helper/codegen and default-generated
+  commits together and profiles gameplay, especially guest thread 0x1038.
+### L152 native-job raw Vulkan bridge (2026-10-13)
+
+- `DDGPU_VK=1` routes accepted native jobs through raw pass/draw caches;
+  device-owned pipelines survive resource resets. Public native API stays
+  the wgpu oracle; fallback, comparison and submission ordering remain.
+- Dirty constant scatter and rendering share one ordered queue batch/job;
+  identical resident snapshots skip the dirty-register scan.
+- **27 CPU + 53 GPU cases pass**, zero GPU failures/timeouts; 96-job replay
+  is byte-exact. Runtime light **212 pass / inherited gamma failure / 5 ignored**.
+- Minimal-shader native wgpu/raw medians: changing 5,000-draw jobs
+  **1.249/1.197 us per draw**; 64-draw jobs **2.495/2.505**; other fixtures
+  regress. Split/combined submission timings are also mixed despite one
+  queue batch/job. Remains opt-in, no native-game FPS claim.
+- Next: head native VK=0/1 image/FPS/profile and VK=1 compare (zero mismatches).
+  Evidence and remaining timing isolation: `docs/tasks/L152-native-vk.md`.
+  Evidence and submission timings: `docs/tasks/L152-native-vk.md`.
+  corrected. Part 2 caches runtime/thread state in one const TLS record;
+  TLS Get/Set and semaphore release/single waits bypass the service lock.
+  Host Win32 and concurrency regressions cover errors, reuse and abandonment.
+- Final paired CPU microbench: TLS 1/4 threads **1.28x/18.87x**, semaphore
+  release/poll **1.69x**; local bookkeeping and DeviceLock medians regress ~6%.
+  No measured gain is established for the render worker's own TLS bookkeeping.
+- Part 2 light: **229 pass / inherited fullscreen-gamma failure / 7 ignored**;
+  Present timing passes; all-opt-ins library **84 pass**. Nine parser tests
+  pass. Corrected census adds the
+  missing worker callbacks, suppresses tail redispatch and emits sparse rows.
+  Detailed measurements/limits: `docs/tasks/L153-sync.md`.
+- Next: head adopts corrected census alongside L158's correlated batch trace,
+  identifies long-join worker jobs, and performs profile-off matched image/FPS
+  acceptance. Event cache/futex remain opt-in; no part 2 game gain claimed.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)

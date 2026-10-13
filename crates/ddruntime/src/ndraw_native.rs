@@ -195,14 +195,17 @@ pub enum Refusal {
     Device,
     /// a primitive count the D3D9 path refuses (INVALIDCALL)
     Primitive,
+    /// inside a span of type-7 commands (a query begun and not ended): the
+    /// D3D9 path draws it, so the backend counts its samples
+    Query,
 }
 
 impl Refusal {
-    const ALL: [Refusal; 17] = [
+    const ALL: [Refusal; 18] = [
         Refusal::Instanced, Refusal::NotScene, Refusal::NullBinding, Refusal::Decode, Refusal::ViewportGlobals,
         Refusal::BlendFactor, Refusal::NoColourTarget, Refusal::NoIndices, Refusal::ZeroStride, Refusal::Missing,
         Refusal::Shader, Refusal::FloatsUncovered, Refusal::IntsUncovered, Refusal::BoolsUncovered,
-        Refusal::SamplersUncovered, Refusal::Device, Refusal::Primitive,
+        Refusal::SamplersUncovered, Refusal::Device, Refusal::Primitive, Refusal::Query,
     ];
 }
 
@@ -762,17 +765,21 @@ impl Shadow {
             },
             None => true,
         });
-        // the last write of each word, where it changes the word
-        let mut last: Vec<(u32, u32)> = Vec::new();
-        for &(a, v) in &self.ctx {
-            match last.iter_mut().find(|w| w.0 == a) {
+        // the last write of each word, where it changes the word (in place:
+        // the first occurrence of a word takes its last value)
+        let mut kept = 0;
+        for i in 0..self.ctx.len() {
+            let (a, v) = self.ctx[i];
+            match self.ctx[..kept].iter_mut().find(|w| w.0 == a) {
                 Some(w) => w.1 = v,
-                None => last.push((a, v)),
+                None => {
+                    self.ctx[kept] = (a, v);
+                    kept += 1;
+                }
             }
         }
-        last.retain(|&(a, v)| g.u32(a) != v);
-        self.ctx.clear();
-        self.ctx.extend(last);
+        self.ctx.truncate(kept);
+        self.ctx.retain(|&(a, v)| g.u32(a) != v);
     }
 }
 
@@ -1657,6 +1664,8 @@ struct Inner {
     /// taken draws not sent yet (`drawcall`): one backend command a run
     batch: Vec<DrawCall>,
     comparison: comparison::Comparison,
+    /// the objects of type-7 spans begun and not ended this frame
+    spans: FxSet<u32>,
     /// the backend takes native jobs (`1`; otherwise those draws go as
     /// DrawCalls, as `drawcall`)
     native: bool,
@@ -1677,6 +1686,7 @@ impl Native {
                 info: FrameInfo::default(), scene: (0, 0), caches: Caches::default(), pending: Pending::default(), native: false,
                 handled: false, uploads: Uploads::default(), batch: Vec::new(),
                 comparison: comparison::Comparison::default(),
+                spans: FxSet::default(),
             }),
             every,
         }
@@ -1704,6 +1714,7 @@ impl CommandSink for Native {
         let g = &mut *g;
         g.info = FrameInfo::read(m, render);
         g.handled = false;
+        g.spans.clear();
         if self.mode != Mode::Off {
             let _lock = crate::d3d9dev::device_lock();
             g.caches.begin_frame(&g.info);
@@ -1769,6 +1780,18 @@ impl Native {
     fn decide(&self, g: &mut Inner, m: &mut dyn Mem, context: u32, record: u32, kind: u32) -> Taken {
         let f = &mut g.frame;
         f.kinds[kind as usize & 15] += 1;
+        if kind == 7 {
+            // 0x00DAB480's type 7: the object at +8 (none: nothing), begun
+            // (0x011481B0) when +4 is 0, else ended (0x011481F0)
+            let object = m.u32(record.wrapping_add(8));
+            if object != 0 {
+                if m.u32(record.wrapping_add(4)) == 0 {
+                    g.spans.insert(object);
+                } else {
+                    g.spans.remove(&object);
+                }
+            }
+        }
         if kind > 3 {
             return Taken::Default;
         }
@@ -1784,6 +1807,11 @@ impl Native {
             return Taken::Default;
         }
         let t = &mut g.totals;
+        // native jobs do not count samples for queries (a DrawCall does)
+        if matches!(self.mode, Mode::Native | Mode::Compare) && g.native && !g.spans.is_empty() {
+            *t.refused.entry(Refusal::Query).or_default() += 1;
+            return Taken::Default;
+        }
         if kind >= 2 {
             *t.refused.entry(Refusal::Instanced).or_default() += 1;
             return Taken::Default;
@@ -1965,6 +1993,38 @@ mod tests {
         m.set_u16(view + 0x18, w);
         m.set_u16(view + 0x1A, h | 0x8000);
         at
+    }
+
+    /// Native jobs leave draws made inside a type-7 span (a query begun,
+    /// not ended) to the D3D9 path, which counts their samples; drawcall
+    /// takes them (a DrawCall is counted by the backend).
+    #[test]
+    fn draws_inside_a_query_span_stay_on_the_d3d9_path_for_native_jobs() {
+        let mut m = TestMem::default();
+        let scene = record(&mut m, 0x1000, (1920, 1080), 0x50);
+        let (begin, end) = (0x5000, 0x5100);
+        m.set_u32(begin + 8, 0x7777);
+        m.set_u32(end + 4, 1);
+        m.set_u32(end + 8, 0x7777);
+        for (mode, inside) in [(Mode::Native, Some(Refusal::Query)), (Mode::DrawCall, None)] {
+            let sink = Native::new(mode, Duration::from_secs(3600));
+            {
+                let mut g = sink.inner.lock().unwrap();
+                g.scene = (1920, 1080);
+                g.native = true;
+            }
+            let refused = |sink: &Native, r: Refusal| sink.inner.lock().unwrap().totals.refused.get(&r).copied().unwrap_or(0);
+            assert_eq!(sink.decide(&mut sink.inner.lock().unwrap(), &mut m, 0, begin, 7), Taken::Default);
+            assert_eq!(sink.decide(&mut sink.inner.lock().unwrap(), &mut m, 0, scene, 1), Taken::Default);
+            // native: refused for the span; drawcall: decided (no device here)
+            match inside {
+                Some(r) => assert_eq!((refused(&sink, r), refused(&sink, Refusal::Device)), (1, 0)),
+                None => assert_eq!((refused(&sink, Refusal::Query), refused(&sink, Refusal::Device)), (0, 1)),
+            }
+            assert_eq!(sink.decide(&mut sink.inner.lock().unwrap(), &mut m, 0, end, 7), Taken::Default);
+            assert_eq!(sink.decide(&mut sink.inner.lock().unwrap(), &mut m, 0, scene, 1), Taken::Default);
+            assert_eq!(refused(&sink, Refusal::Query), inside.is_some() as u64);
+        }
     }
 
     #[test]

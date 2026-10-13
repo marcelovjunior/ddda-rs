@@ -1,5 +1,5 @@
 //! Optional, local-only pipeline recipes. All disk I/O and speculative GPU
-//! compilation run on one background thread. The draw consumer never waits for
+//! compilation run on background creator threads. The draw consumer never waits for
 //! a recipe: missing/unfinished/invalid entries use normal validated creation.
 use crate::cache::{FxMap, ModuleKey, PipelineKey, SamplerKinds};
 use bincode::Options;
@@ -69,6 +69,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 enum Record {
+    Shader(u64),
     Source(Digest, String),
     Pipeline(Recipe),
     Flush(mpsc::Sender<()>),
@@ -124,6 +125,10 @@ impl Warmup {
         }).ok()?;
         OPEN.lock().unwrap_or_else(|e| e.into_inner()).push(sender.clone());
         Some(Self { sender, ready, sources: Default::default(), modules: Default::default(), pipelines: Default::default(), stop, finished })
+    }
+
+    pub fn shader_created(&self, tokens: &[u32]) {
+        let _ = self.sender.send(Record::Shader(crate::cache::token_hash(tokens)));
     }
 
     pub fn finished(&self) -> bool { self.finished.load(Ordering::Acquire) }
@@ -196,6 +201,7 @@ struct Store {
 impl Store {
     fn record(&mut self, record: Record) {
         match record {
+            Record::Shader(_) => {},
             Record::Source(hash, source) => { let _ = atomic_write(&source_path(&self.dir, &hash), source.as_bytes()); }
             Record::Pipeline(recipe) => {
                 if let Some(old) = self.recipes.iter_mut().find(|r| r.key == recipe.key) {
@@ -234,41 +240,61 @@ fn worker(device: wgpu::Device, layout0: wgpu::BindGroupLayout, ps_compute: bool
         .and_then(|_| std::fs::read(&path).ok()).and_then(|b| decode(&identity, &b)).unwrap_or_default();
     let pending = if std::env::var("DDGPU_PIPELINE_WARMUP").as_deref() == Ok("0") { Vec::new() } else { recipes.clone() };
     let mut store = Store { path, dir: dir.to_owned(), identity, recipes, dirty: false, saved: std::time::Instant::now() };
-    let mut modules = FxMap::default();
-    for recipe in pending {
-        for record in records.try_iter() { store.record(record); }
-        if store.saved.elapsed().as_secs() >= 1 { store.save(); }
-        if stop.load(Ordering::Relaxed) { store.save(); return Ok(()); }
-        let built = (|| {
-            for hash in [recipe.vs, recipe.ps] {
-                if modules.contains_key(&hash) { continue; }
-                let started = std::time::Instant::now();
-                let path = source_path(dir, &hash);
-                if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 4 << 20 { return Err("source too large".into()); }
-                let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-                if blake3::hash(source.as_bytes()).as_bytes() != &hash { return Err("source checksum".into()); }
-                let source = crate::shader_cache::source(source)?;
-                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-                let module = crate::pipeline_log::timed("module", "warmup", || device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("warmup"), source }));
-                if let Some(e) = crate::block_on(scope.pop()) { return Err(e.to_string()); }
-                crate::pipelines::module_created(started);
-                let _ = ready.send(Ready::Module(hash, module.clone()));
-                modules.insert(hash, module);
+    let queue = Arc::new(Mutex::new(RecipeQueue(pending.into())));
+    let creators = creator_count(std::env::var("DDGPU_PIPELINE_THREADS").ok().as_deref());
+    // Only creator threads wait on these cells, never the draw consumer.
+    let modules: ModuleCells = Arc::new(Mutex::new(FxMap::default()));
+    let started = std::time::Instant::now();
+    let compiled = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recipe_count = queue.lock().unwrap().0.len();
+    let mut shader_events = 0usize;
+    let mut workers = Vec::new();
+    for id in 0..creators {
+        let (device, layout0, cache, ready, stop, queue, modules, dir, compiled) =
+            (device.clone(), layout0.clone(), cache.clone(), ready.clone(), stop.clone(), queue.clone(), modules.clone(), dir.to_owned(), compiled.clone());
+        match std::thread::Builder::new().name(format!("pipeline-creator-{id}")).spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let Some(recipe) = queue.lock().unwrap_or_else(|e| e.into_inner()).0.pop_front() else { break };
+                let built = (|| {
+                    let vs_module = cached_module(&modules, recipe.vs, || load_module(&device, &dir, recipe.vs, &ready))?;
+                    let ps_module = cached_module(&modules, recipe.ps, || load_module(&device, &dir, recipe.ps, &ready))?;
+                    let ps = texture_layout(&device, false, &recipe.ps_kinds, ps_compute);
+                    let vs = texture_layout(&device, true, &recipe.vs_kinds, ps_compute);
+                    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("warmup"), bind_group_layouts: &[Some(&layout0), Some(&ps), Some(&vs)], immediate_size: 0,
+                    });
+                    let started = std::time::Instant::now();
+                    let pipeline = create_pipeline(&device, &layout, &vs_module, &ps_module, &recipe.key, Some(&cache.cache), "warmup")?;
+                    cache.created();
+                    crate::pipelines::pipeline_created(started);
+                    let _ = ready.send(Ready::Pipeline(recipe, pipeline));
+                    compiled.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, String>(())
+                })();
+                if let Err(e) = built { eprintln!("pipeline warmup entry ignored: {e}"); }
             }
-            let ps = texture_layout(&device, false, &recipe.ps_kinds, ps_compute);
-            let vs = texture_layout(&device, true, &recipe.vs_kinds, ps_compute);
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("warmup"), bind_group_layouts: &[Some(&layout0), Some(&ps), Some(&vs)], immediate_size: 0,
-            });
-            let started = std::time::Instant::now();
-            let pipeline = create_pipeline(&device, &layout, &modules[&recipe.vs], &modules[&recipe.ps], &recipe.key, Some(&cache.cache), "warmup")?;
-            cache.created();
-            crate::pipelines::pipeline_created(started);
-            let _ = ready.send(Ready::Pipeline(recipe, pipeline));
-            Ok::<_, String>(())
-        })();
-        if let Err(e) = built { eprintln!("pipeline warmup entry ignored: {e}"); }
+        }) {
+            Ok(worker) => workers.push(worker),
+            Err(e) => eprintln!("pipeline creator unavailable: {e}"),
+        }
     }
+    // Persistence and advisory shader events stay responsive during compilation.
+    // Queue locks cover only pop/reordering, never GPU calls or module waits.
+    while workers.iter().any(|w| !w.is_finished()) {
+        if store.saved.elapsed().as_secs() >= 1 { store.save(); }
+        match records.recv_timeout(std::time::Duration::from_millis(10)) {
+            Ok(Record::Shader(hash)) => {
+                shader_events += 1;
+                queue.lock().unwrap_or_else(|e| e.into_inner()).prioritize(hash);
+            },
+            Ok(record) => store.record(record),
+            Err(mpsc::RecvTimeoutError::Disconnected) => { stop.store(true, Ordering::Relaxed); },
+            Err(mpsc::RecvTimeoutError::Timeout) => {},
+        }
+    }
+    for worker in workers { if worker.join().is_err() { eprintln!("pipeline creator panicked; draw fallback retained"); } }
+    eprintln!("DDGPU_WARMUP creators={creators} recipes={recipe_count} compiled={} shader_events={shader_events} elapsed_ms={:.3} pending={} cancelled={}",
+        compiled.load(Ordering::Relaxed), started.elapsed().as_secs_f64() * 1000.0, queue.lock().unwrap_or_else(|e| e.into_inner()).0.len(), stop.load(Ordering::Relaxed));
     done.store(true, Ordering::Release);
     while !stop.load(Ordering::Relaxed) {
         if store.saved.elapsed().as_secs() >= 1 { store.save(); }
@@ -281,6 +307,49 @@ fn worker(device: wgpu::Device, layout0: wgpu::BindGroupLayout, ps_compute: bool
     for record in records.try_iter() { store.record(record); }
     store.save();
     Ok(())
+}
+
+// Invalid values retain the previous one-creator policy; explicit N is capped
+// to four to bound speculative CPU contention on shared hosts.
+fn creator_count(value: Option<&str>) -> usize {
+    value.and_then(|v| v.parse::<usize>().ok()).filter(|&n| n > 0).unwrap_or(1).min(4)
+}
+
+struct RecipeQueue(std::collections::VecDeque<Recipe>);
+impl RecipeQueue {
+    fn prioritize(&mut self, hash: u64) {
+        // Stable partition: retain observed first-use order within each class.
+        let mut matching = std::collections::VecDeque::new();
+        let mut rest = std::collections::VecDeque::new();
+        for recipe in self.0.drain(..) {
+            if recipe.key.vs.0 == hash || recipe.key.ps.0 == hash { matching.push_back(recipe); }
+            else { rest.push_back(recipe); }
+        }
+        matching.append(&mut rest);
+        self.0 = matching;
+    }
+}
+
+type ModuleCells = Arc<Mutex<FxMap<Digest, Arc<std::sync::OnceLock<Result<wgpu::ShaderModule, String>>>>>>;
+fn cached_module(cells: &ModuleCells, hash: Digest, load: impl FnOnce() -> Result<wgpu::ShaderModule, String>) -> Result<wgpu::ShaderModule, String> {
+    let cell = cells.lock().unwrap_or_else(|e| e.into_inner()).entry(hash).or_default().clone();
+    cell.get_or_init(load).clone()
+}
+
+fn load_module(device: &wgpu::Device, dir: &Path, hash: Digest, ready: &mpsc::Sender<Ready>) -> Result<wgpu::ShaderModule, String> {
+    let started = std::time::Instant::now();
+    let path = source_path(dir, &hash);
+    if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 4 << 20 { return Err("source too large".into()); }
+    let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    if blake3::hash(source.as_bytes()).as_bytes() != &hash { return Err("source checksum".into()); }
+    let source = crate::shader_cache::source(source)?;
+    // wgpu 29 std error scopes are thread-local (api/device.rs).
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let module = crate::pipeline_log::timed("module", "warmup", || device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("warmup"), source }));
+    if let Some(e) = crate::block_on(scope.pop()) { return Err(e.to_string()); }
+    crate::pipelines::module_created(started);
+    let _ = ready.send(Ready::Module(hash, module.clone()));
+    Ok(module)
 }
 
 /// A stage's texture and sampler layout; `ps_compute`: the pixel stage's
@@ -326,6 +395,59 @@ pub(crate) fn create_pipeline(device: &wgpu::Device, layout: &wgpu::PipelineLayo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn creator_policy_is_opt_in_and_bounded() {
+        for value in [None, Some("0"), Some("bad"), Some("-1")] { assert_eq!(creator_count(value), 1); }
+        assert_eq!(creator_count(Some("2")), 2);
+        assert_eq!(creator_count(Some("4")), 4);
+        assert_eq!(creator_count(Some("99")), 4);
+    }
+
+    #[test]
+    fn shader_events_prioritize_exact_recipes_without_duplicates() {
+        let mut entries = Vec::new();
+        for i in 0..6 { let mut r = recipe(); r.key.vs.0 = i; r.key.ps.0 = 100 + i % 2; entries.push(r); }
+        let mut queue = RecipeQueue(entries.into());
+        queue.prioritize(101);
+        assert_eq!(queue.0.iter().map(|r| r.key.vs.0).collect::<Vec<_>>(), [1, 3, 5, 0, 2, 4]);
+        queue.prioritize(2);
+        assert_eq!(queue.0.iter().map(|r| r.key.vs.0).collect::<Vec<_>>(), [2, 1, 3, 5, 0, 4]);
+        queue.prioritize(999);
+        assert_eq!(queue.0.len(), 6);
+        // Concurrent consumers take each recipe exactly once.
+        let queue = Arc::new(Mutex::new(queue));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let (queue, seen) = (queue.clone(), seen.clone());
+                scope.spawn(move || loop {
+                    let Some(r) = queue.lock().unwrap().0.pop_front() else { break };
+                    seen.lock().unwrap().push(r.key.vs.0);
+                });
+            }
+        });
+        let mut seen = seen.lock().unwrap().clone(); seen.sort();
+        assert_eq!(seen, [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn failed_module_is_attempted_once_across_creators() {
+        let cells = ModuleCells::default();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let (cells, calls) = (&cells, &calls);
+                scope.spawn(move || {
+                    assert!(cached_module(cells, [7; 32], || {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        Err("invalid source".into())
+                    }).is_err());
+                });
+            }
+        });
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
     fn recipe() -> Recipe {
         Recipe {
             key: PipelineKey { vs: (1, 2, true, 3), ps: (4, 5, false, 6),

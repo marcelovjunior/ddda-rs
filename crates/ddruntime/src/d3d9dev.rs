@@ -256,25 +256,23 @@ impl<T: Default> Default for D3dCell<T> {
     }
 }
 
-/// This thread's key for D3dCell::owner, and the D3D locks it holds.
-struct ThreadKey {
-    key: u64,
-    held: std::cell::Cell<u32>,
-}
-
-thread_local! {
-    static THREAD_KEY: ThreadKey = {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        ThreadKey { key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), held: std::cell::Cell::new(0) }
-    };
+/// Unique host-thread key, initialized once in the shared hot TLS record.
+fn thread_key() -> u64 {
+    crate::runtime::local(|l| {
+        if l.d3d_key.get() == 0 {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            l.d3d_key.set(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        }
+        l.d3d_key.get()
+    })
 }
 
 impl<T> D3dCell<T> {
     fn acquire(&self) {
         use std::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
-        let me = THREAD_KEY.with(|k| {
-            k.held.set(k.held.get() + 1);
-            k.key
+        let me = crate::runtime::local(|l| {
+            l.d3d_held.set(l.d3d_held.get() + 1);
+            thread_key()
         });
         if self.owner.load(Relaxed) != me && self.owner.compare_exchange(0, me, Acquire, Relaxed).is_err() {
             // contended: wait for a release (which notifies while anyone waits)
@@ -291,7 +289,7 @@ impl<T> D3dCell<T> {
 
     fn release(&self) {
         use std::sync::atomic::Ordering::SeqCst;
-        THREAD_KEY.with(|k| k.held.set(k.held.get() - 1));
+        crate::runtime::local(|l| l.d3d_held.set(l.d3d_held.get() - 1));
         let d = self.depth.get() - 1;
         self.depth.set(d);
         if d == 0 {
@@ -309,7 +307,7 @@ impl<T> D3dCell<T> {
         // A surrounding DeviceLock already keeps this cell alive and locked.
         // Borrow checking remains active; no depth/HELD bookkeeping is needed
         // for a borrow whose lifetime ends before that surrounding guard.
-        if self.owner.load(std::sync::atomic::Ordering::Acquire) == THREAD_KEY.with(|k| k.key) {
+        if self.owner.load(std::sync::atomic::Ordering::Acquire) == thread_key() {
             return f(&mut self.cell.borrow_mut());
         }
         struct Release<'a, T>(&'a D3dCell<T>);
@@ -330,7 +328,7 @@ impl<T> D3dCell<T> {
 
 /// Whether this thread holds the D3D lock.
 pub(crate) fn holds_device_lock() -> bool {
-    THREAD_KEY.with(|k| k.held.get()) > 0
+    crate::runtime::local(|l| l.d3d_held.get()) > 0
 }
 
 /// The D3D lock for one D3D method (dispatch::Binding::Device). With the
@@ -1334,10 +1332,10 @@ mod tests {
         let cell = D3dCell::<u32>::default();
         cell.acquire();
         let depth = cell.depth.get();
-        let held = THREAD_KEY.with(|k| k.held.get());
+        let held = crate::runtime::local(|l| l.d3d_held.get());
         cell.with(|value| *value = 7);
         assert_eq!(cell.depth.get(), depth);
-        assert_eq!(THREAD_KEY.with(|k| k.held.get()), held);
+        assert_eq!(crate::runtime::local(|l| l.d3d_held.get()), held);
         let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             cell.with(|_| cell.with(|_| ()));
         }));
@@ -1346,7 +1344,7 @@ mod tests {
         assert_eq!(cell.depth.get(), depth);
         cell.release();
         assert_eq!(cell.owner.load(Ordering::Acquire), 0);
-        assert_eq!(THREAD_KEY.with(|k| k.held.get()), held - 1);
+        assert_eq!(crate::runtime::local(|l| l.d3d_held.get()), held - 1);
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             cell.with(|_| panic!("unwind an outer borrow"));
         })).is_err());

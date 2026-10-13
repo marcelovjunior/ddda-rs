@@ -46,7 +46,7 @@ fn with_system<R>(f: impl FnOnce(&mut System) -> R) -> R {
 }
 
 fn set_error(e: u32) {
-    with_state(|s| s.last_error = e);
+    crate::runtime::set_last_error(e);
 }
 
 // --- time ---------------------------------------------------------------

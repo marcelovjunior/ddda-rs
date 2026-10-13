@@ -185,5 +185,25 @@ class X87Tests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
 
+    def test_real_operands_only_lower_in_whole_functions(self):
+        le = lift.lean_emission
+        for op, size, write in sorted(le.X87_REAL):
+            template = f'st.memory::<0x{op:04x}, {size}, {str(write).lower()}>(m, eax);'
+            with patch.object(lift, "LEAN", True):
+                whole = lift.cpu_arm('0x1000 => { ' + template + ' }')
+                step = lift.cpu_arm('0x1000 => { ' + template + ' }', fast=False)
+            self.assertIn('cpu.st.real_memory::<', whole)
+            self.assertNotIn('cpu.st.memory::<', whole)
+            self.assertIn('cpu.st.memory::<', step)
+            self.assertNotIn('real_memory', step)
+        for op, size, write in [(0x28d9, 2, False), (0x00db, 4, False),
+                                (0x38db, 10, True), (0x00d9, 8, False),
+                                (0x18d9, 4, False)]:
+            arm = f'cpu.st.memory::<0x{op:04x}, {size}, {str(write).lower()}>(m, cpu.eax);'
+            self.assertEqual(le.x87_operands(arm), arm)
+        quoted = chr(34) + 'cpu.st.memory::<0x00d9, 4, false>(m, cpu.eax);' + chr(34)
+        self.assertEqual(le.x87_operands(quoted), quoted)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1181,7 +1181,7 @@ pub fn f_013830a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x13830A0 => { cpu.eax = cpu.eax ^ cpu.eax; pc = 0x13830A2; continue; }
-            0x13830A2 => { cpu.ecx = (cpu.ecx & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.eax.wrapping_add(0x15583E0)) as u32)) & 0xFF) << 0); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x18D2A80), (((cpu.ecx >> 0) & 0xFF)) as u8); cpu.eax = cpu.eax.wrapping_add(1); cpu.fl.alu_and(((cpu.ecx >> 0) & 0xFF), ((cpu.ecx >> 0) & 0xFF), 8); pc = if (!cpu.fl.zf()) { 0x13830A2 } else { 0x13830B3 }; continue; }
+            0x13830A2 => { cpu.ecx = (cpu.ecx & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.eax.wrapping_add(0x15583E0)) as u32)) & 0xFF) << 0); m.fast_set_u8(pt, cpu.eax.wrapping_add(0x18D2A80), (((cpu.ecx >> 0) & 0xFF)) as u8); cpu.eax = cpu.eax.wrapping_add(1); cpu.fl.alu_and(((cpu.ecx >> 0) & 0xFF), ((cpu.ecx >> 0) & 0xFF), 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) != 0) { 0x13830A2 } else { 0x13830B3 }; continue; }
             0x13830B3 => { emit::push(0x139ADD0u32, m, pt, cpu); emit::push(0x13830BD, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }
@@ -1270,10 +1270,4 @@ pub fn f_013833c0(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn f_01383400(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     emit::push(0x0u32, m, pt, cpu); emit::push(0x1u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x1A0u32, m, pt, cpu); emit::push(0x18D0DB0u32, m, pt, cpu); emit::push(0x158BB28u32, m, pt, cpu); cpu.ecx = 0x18D2C60u32; emit::push(0x138341F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x139AEE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x18D2C60u32, 0x15D6E34u32); emit::push(0x1383433, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01383440 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01383440.
-pub fn f_01383440(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x10u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x143A7A0u32, m, pt, cpu); cpu.ecx = 0x18D2CA4u32; emit::push(0x138345C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x139AEF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x18D2CA4u32, 0x143A030u32); emit::push(0x1383470, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

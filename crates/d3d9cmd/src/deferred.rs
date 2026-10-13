@@ -19,6 +19,7 @@ enum Command {
     Draw(DrawCall),
     Draws(Vec<DrawCall>),
     Upload(Upload),
+    ShaderCreated(Arc<[u32]>),
     Clear(ClearCall),
     Copy(CopyCall),
     Fill(FillCall),
@@ -36,6 +37,7 @@ impl Command {
             Self::Draw(draw) => backend.draw(&draw),
             Self::Draws(draws) => backend.draws(draws),
             Self::Upload(upload) => backend.upload(upload),
+            Self::ShaderCreated(tokens) => backend.shader_created(tokens),
             Self::Clear(clear) => backend.clear(&clear),
             Self::Copy(copy) => backend.copy(&copy),
             Self::Fill(fill) => backend.fill(&fill),
@@ -218,6 +220,12 @@ impl GraphicsBackend for DeferredBackend {
     fn native_compare_end(&mut self, id: u64, job: NativeJob) -> Result<(), NativeJob> {
         self.result(move |b| b.native_compare_end(id, job))
     }
+    fn shader_created(&mut self, tokens: Arc<[u32]>) {
+        // Speculation must not backpressure the guest when the draw FIFO is full.
+        if let Some(sender) = &self.sender {
+            if sender.try_send(Command::ShaderCreated(tokens)).is_ok() { self.recorded += 1; }
+        }
+    }
     fn upload(&mut self, upload: Upload) { self.command(Command::Upload(upload)); }
     fn draw(&mut self, draw: &DrawCall) {
         self.push_draw(draw.clone());
@@ -303,6 +311,7 @@ mod tests {
         fn add(&self, text: String) { self.0.lock().unwrap().push(text); }
     }
     impl GraphicsBackend for Log {
+        fn shader_created(&mut self, tokens: Arc<[u32]>) { self.add(format!("shader:{tokens:?}")); }
         fn upload(&mut self, u: Upload) { self.add(format!("upload:{u:?}")); }
         fn draw(&mut self, d: &DrawCall) { self.add(format!("draw:{d:?}")); }
         fn clear(&mut self, c: &ClearCall) { self.add(format!("clear:{c:?}")); }
@@ -322,6 +331,38 @@ mod tests {
     fn queue(capacity: usize) -> (DeferredBackend, Arc<Mutex<Vec<String>>>) {
         let log = Arc::new(Mutex::new(Vec::new()));
         (DeferredBackend::with_capacity(Box::new(Log(log.clone())), capacity), log)
+    }
+
+    #[test]
+    fn shader_prefetch_forwards_owned_tokens_and_marks_only_accepted_events() {
+        let (mut backend, log) = queue(1);
+        backend.shader_created(vec![1, 2, 3].into());
+        let mark = backend.mark();
+        assert_eq!(mark, 1);
+        backend.fence();
+        assert!(backend.passed(mark));
+        assert_eq!(*log.lock().unwrap(), ["shader:[1, 2, 3]"]);
+    }
+
+    #[test]
+    fn shader_prefetch_drops_on_full_queue_without_waiting() {
+        let (mut backend, log) = queue(1);
+        let (entered, wait_entered) = mpsc::channel();
+        let (release, wait_release) = mpsc::channel();
+        backend.command(Command::Hook(Box::new(move |_| {
+            entered.send(()).unwrap();
+            // Bound this test even if a regression changes try_send to send.
+            wait_release.recv_timeout(Duration::from_secs(2)).unwrap();
+        })));
+        wait_entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        backend.release(7); // fill the sole queue slot
+        let mark = backend.mark();
+        backend.shader_created(vec![9].into());
+        assert_eq!(backend.mark(), mark, "dropped speculation cannot advance a fence");
+        release.send(()).unwrap();
+        backend.fence();
+        assert!(backend.passed(mark));
+        assert_eq!(*log.lock().unwrap(), ["release:7"]);
     }
 
     #[test]

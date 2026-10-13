@@ -337,7 +337,7 @@ def sse(arm):
 
 def lean(arm):
     """All lean passes, in order, for one lowered whole-function arm."""
-    return idioms(tidy(fold_results(dead_flags(const_shifts(arm)))))
+    return x87_operands(idioms(tidy(fold_results(dead_flags(const_shifts(arm))))))
 
 
 # L129: successor proofs are deliberately limited to literal dispatcher edges.
@@ -457,6 +457,11 @@ def _fuse_compare(arm, exit_dead):
         _, successors = _flow(arm)
         suffix = arm[ce:arm.rfind('continue;')] if successors else arm[ce:]
         if not _kills_before_read(suffix, exit_dead and bool(successors)):
+            # The defining CMP/TEST remains, including its complete lazy
+            # flag representation. Its masked operands give the immediately
+            # following predicate without re-reading operands or helper calls.
+            expression = re.sub(r'\b[ab]\b', lambda m: 'cpu.fl.' + m[0], expression)
+            arm = arm[:cs] + '(' + expression + ')' + arm[ce:]
             continue
         # Each supported comparison uses a and b exactly once, in order.
         # Inline the operands without a temporary Flags or duplicate loads.
@@ -539,3 +544,20 @@ def split_function(addr, arms, limit=None):
                   "            _ => unreachable!(),", "        }", "    }", "}"]
     dispatch += ["            _ => unreachable!(),", "        };", "    }"]
     return dispatch, parts
+
+
+# Only real operand triples measured/tested by L146. Integer, control-word,
+# extended-real operands and restartable instruction templates stay literal.
+X87_REAL = {(0x00d9, 4, False), (0x10d9, 4, True), (0x18d9, 4, True),
+            (0x00dd, 8, False), (0x10dd, 8, True), (0x18dd, 8, True),
+            (0x00d8, 4, False), (0x08d8, 4, False)}
+X87_MEMORY = re.compile(STRING + r"|\bcpu\.st\.memory::<0x([0-9a-fA-F]+), (4|8), (true|false)>")
+
+
+def x87_operands(arm):
+    """Keep each hardware instruction/access boundary; only retarget its helper."""
+    def replace(m):
+        if m[1] is None or (int(m[1], 16), int(m[2]), m[3] == 'true') not in X87_REAL:
+            return m[0]
+        return m[0].replace('.memory::', '.real_memory::')
+    return X87_MEMORY.sub(replace, arm)

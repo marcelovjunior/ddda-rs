@@ -1391,3 +1391,79 @@ WAIT_ABANDONED on the next successful acquisition.
 Tests, measured ranges, Win32 references and inherited semantic limits are
 in `docs/tasks/L153-sync.md`. Implemented/tested is distinct from game
 comparison; no L153 game run has yet been performed by the agent.
+## L151 parallel pipeline preparation
+
+`DDGPU_PIPELINE_THREADS=2..4` opts into parallel creation of L116's recorded
+exact pipeline variants (default one; invalid/zero one; larger values cap at
+four). Modules are created once per source digest across background creators;
+they share the persistent driver cache. `DDGPU_SHADER_PREFETCH=1` sends
+successful shader-object creation events through a nonblocking advisory command,
+forwarded by capture, to prioritize matching saved recipes. A full draw FIFO
+drops the hint. No new capture format or guest-visible rendering state.
+
+Current WGSL must still match a saved pipeline's source digests. Draws never
+wait for speculative work and retain normal creation on misses or failures.
+Unknown cold variants require draw state; native/raw-Vulkan objects are not
+covered. Existing startup hook is after device/runtime initialization, before
+guest game execution. Changed source invalidates the recipe namespace, so seed
+the candidate before measuring warm-cache runs. `DDGPU_WARMUP` reports counts
+and background elapsed time; it is not critical-path loading duration.
+
+Seven warmup CPU, 22 command/capture and six bounded GPU checks pass, including
+N=1/2/4 exact two-target images during and after warmup. Full light suite has
+inherited gamma and load-sensitive timing failures (timing passes alone).
+No original-game comparison or loading gain established; c25 timeline awaited.
+See [L151 evidence, controls and receipts](tasks/L151-load-parallel.md).
+## L152 native-job Vulkan bridge (2026-10-13)
+
+`DDGPU_VK=1` also selects the raw encoder for accepted `NativeJob`s.
+Native validation and compact constant snapshots feed the same `vk::Pass`
+and `Draw` representation as the D3D9 raw path. Device-owned raw pipeline
+templates survive guest resource releases without retaining old uniform
+arenas/textures; per-recorder bindings and submitted-pass keepalives retain
+resources through completion. First-use/unsupported raw passes fall back
+to wgpu-native encoding. The public `native::Device::from_backend` API
+stays the wgpu oracle, including bundles.
+
+Native scatter uploads and rendering now share one ordered queue batch,
+with prior-finisher submission still required before queue writes. The
+`native-worker` `submit_batches` counter counts these handoffs, not GPU
+completion. L150's late pending-upload flush must remain before the native
+wait/upload boundary when integrating that lane. Unchanged complete
+resident snapshots skip the dirty scan; changed snapshots keep the original
+scalar record order. Native constants still use resident scatter/staging.
+
+27 CPU and 53 GPU cases pass, including raw/wgpu images, D3D9-driver cases,
+comparison jobs, rejection recovery and resource release. Synthetic raw
+versus wgpu-native speed is mixed; no native gameplay/FPS acceptance yet.
+Full counts, hashes, timings and head's requested game A/B are in
+[tasks/L152-native-vk.md](tasks/L152-native-vk.md).
+
+
+### L153 part 2: cached thread state and semaphore services
+
+The follow-up stores TLS values and last-error in thread-owned boxes, indexed by
+runtime identity and guest thread id. A const-initialized host TLS record caches
+the runtime/context pointers and hosts D3D lock identity/depth and service nesting.
+Warm runtime pins avoid reference-count updates, RefCell borrowing and a second
+TLS lookup on drop. Reentrant runtime replacement retains old owners through the
+last pin; a host thread still owns exactly one executing guest thread.
+
+TLS Get/Set and GetLastError/SetLastError run outside the guest service lock.
+Allocation generations clear reused slots across threads; error behavior and
+abandonment are checked against host Win32. Semaphore release/single waits use
+independent count synchronization; mixed waits recheck independent changes after
+registration, and wait-all holds a narrow count gate through semaphore commit.
+General mutex/thread waits still require the service lock. The prior auto-event
+multiwait rollback limitation remains explicit.
+
+This supersedes the part 1 TLS/semaphore serialization note above. Tests, exact
+microbenchmark definitions/hashes and head-run status: `docs/tasks/L153-sync.md`.
+No part 2 gameplay/image/FPS acceptance is claimed from CPU tests.
+
+Head's combo26 late-game census identifies about 69 main scheduler joins per
+frame, totaling 17.8–18.6 ms/frame inclusive. Render request waiting overlaps
+main work in the double-buffered handoff. The first census omitted worker job
+callbacks and counted tail redispatch twice; the follow-up fixes both, preserves
+MXCSR, and writes sparse cumulative reports. L158 owns the subsequent correlated
+batch trace; aggregate c26 rows cannot identify the last worker in a long join.

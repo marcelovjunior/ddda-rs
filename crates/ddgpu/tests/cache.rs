@@ -268,11 +268,20 @@ fn draws_sharing_a_render_pass_draw_what_a_pass_each_draws() {
 /// persistence/warmup must reuse actual objects and preserve both target images.
 #[test]
 fn persisted_warmup_reuses_pipelines_and_preserves_pixels() {
+    warmup_frame(false);
+}
+
+#[test]
+fn persisted_warmup_in_flight_draws_preserve_pixels() {
+    warmup_frame(true);
+}
+
+fn warmup_frame(in_flight: bool) {
     let Some(mut cold) = ddgpu::WgpuBackend::headless() else {
         eprintln!("skipped: no adapter");
         return;
     };
-    let dir = std::env::temp_dir().join(format!("ddgpu-warmup-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("ddgpu-warmup-{}-{in_flight}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let exe = dir.join("synthetic-exe");
     std::fs::write(&exe, b"synthetic test identity; no game data").unwrap();
@@ -289,19 +298,28 @@ fn persisted_warmup_reuses_pipelines_and_preserves_pixels() {
     let mut warm = ddgpu::WgpuBackend::headless().unwrap();
     assert!(warm.enable_pipeline_cache(&dir));
     assert!(warm.enable_pipeline_warmup(&dir, &exe));
+    for draw in &draws {
+        warm.shader_created(draw.vertex_shader.as_ref().unwrap().clone());
+        warm.shader_created(draw.pixel_shader.as_ref().unwrap().clone());
+    }
+    if in_flight {
+        let actual = run(&mut warm, &uploads, &clears, &draws, &second);
+        assert_eq!(expected, actual, "fallback during creation must preserve pixels");
+    }
     let start = std::time::Instant::now();
     while !warm.pipeline_warmup_status().unwrap().0 {
         assert!(start.elapsed().as_secs() < 30, "background warmup did not finish");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    let (_, ready, _) = warm.pipeline_warmup_status().unwrap();
-    assert!(ready > 0, "no persisted pipeline was compiled");
+    let (_, ready, already_used) = warm.pipeline_warmup_status().unwrap();
+    assert!(ready as u64 + already_used > 0, "no persisted pipeline was compiled");
     let before = warm.pipeline_creation_counts();
     let actual = run(&mut warm, &uploads, &clears, &draws, &second);
     let after = warm.pipeline_creation_counts();
     let (_, _, used) = warm.pipeline_warmup_status().unwrap();
     assert_eq!(expected, actual);
-    assert_eq!(used, ready as u64, "every recipe is used by this identical frame");
+    eprintln!("L151 image hashes {} {}", blake3::hash(&actual.0), blake3::hash(&actual.1));
+    if !in_flight { assert_eq!(used, ready as u64, "every recipe is used by this identical frame"); }
     assert_eq!(after, before, "draws must create no cold modules or pipelines");
     ddgpu::save_pipeline_caches();
     drop(warm);

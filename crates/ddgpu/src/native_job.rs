@@ -366,6 +366,8 @@ pub struct NativeJobStats {
     pub draws: u64,
     pub passes: u64,
     pub upload_bytes: u64,
+    /// Ordered queue batches handed to the finisher (not GPU completion).
+    pub submit_batches: u64,
     pub dirty_registers: u64,
     pub bundle_builds: u64,
     pub bundle_hits: u64,
@@ -434,10 +436,15 @@ pub(crate) struct Worker {
     /// view cache is cleared at every release)
     targets: FxMap<(u32, bool), (n::View, wgpu::TextureFormat)>,
     sampled: FxMap<(wgpu::Texture, bool), n::View>,
+    /// a copy of each texture drawn into and sampled by the same draw
+    snapshots: FxMap<wgpu::Texture, wgpu::Texture>,
     samplers: FxMap<[u32; 14], n::Sampler>,
     texture_sets: FxMap<(n::Pipeline, usize), (Arc<[TextureBinding]>, [n::TextureSet; 2])>,
 }
 struct PreparedDraw {
+    /// textures the draw samples while rendering into them: copied into
+    /// their snapshots just before it (the D3D9 path's L59 snapshot)
+    copies: Vec<(wgpu::Texture, wgpu::Texture)>,
     pipeline: n::Pipeline,
     shaders: [n::Shader; 2],
     sets: [n::TextureSet; 2],
@@ -464,9 +471,9 @@ impl WgpuBackend {
                 .unwrap_or_default();
             // These are worker outcomes, unlike the producer's enqueue totals.
             // Submitted does not mean GPU-complete or image-verified.
-            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} worker_instances={} resource_resets={} pipelines={pipelines} texture_sets={texture_sets}",
+            eprintln!("native-worker: attempted_jobs={attempted} native_jobs={} rejected_jobs={} rejected_draws={} rejected_passes={} submitted_draws={} submitted_passes={} upload_bytes={} dirty_registers={} bundle_builds={} bundle_hits={} worker_instances={} resource_resets={} pipelines={pipelines} texture_sets={texture_sets} submit_batches={}",
                 s.accepted, s.rejected, s.rejected_draws, s.rejected_passes, s.draws, s.passes, s.upload_bytes,
-                s.dirty_registers, s.bundle_builds, s.bundle_hits, s.worker_instances, s.resource_resets);
+                s.dirty_registers, s.bundle_builds, s.bundle_hits, s.worker_instances, s.resource_resets, s.submit_batches);
             if !s.rejection_reasons.is_empty() {
                 eprintln!("native-worker refusal histogram: {:?}", s.rejection_reasons);
             }
@@ -532,6 +539,7 @@ impl Worker {
             views: Default::default(),
             targets: Default::default(),
             sampled: Default::default(),
+            snapshots: Default::default(),
             samplers: Default::default(),
             texture_sets: Default::default(),
         }
@@ -595,13 +603,35 @@ impl Worker {
                 .ok_or("native target unavailable")?
         };
         let handle = *self.views.entry(view.clone()).or_insert_with(|| {
-            self.device
-                .retain_view(view, format, [target.width, target.height], 1)
+            let texture = view.texture();
+            let level = if shadow.is_none() && target.texture.is_some() { target.level % texture.mip_level_count() } else { 0 };
+            let layer = if shadow.is_none() && target.texture.is_some() && texture.depth_or_array_layers() > 1 { target.level / texture.mip_level_count() } else { 0 };
+            let desc = wgpu::TextureViewDescriptor { format:Some(format), dimension:Some(wgpu::TextureViewDimension::D2), base_mip_level:level, mip_level_count:Some(1), base_array_layer:layer, array_layer_count:Some(1), ..Default::default() };
+            self.device.retain_view(view, format, [target.width, target.height], 1, desc)
         });
         if shadow.is_none() {
             self.targets.insert((target.surface, srgb), (handle, format));
         }
         Ok((handle, format))
+    }
+    /// The snapshot texture of `src` (made once, reused: each feedback draw
+    /// copies into it in order, after earlier draws sampled it).
+    fn snapshot(&mut self, device: &wgpu::Device, src: &wgpu::Texture) -> wgpu::Texture {
+        self.snapshots
+            .entry(src.clone())
+            .or_insert_with(|| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("native feedback snapshot"),
+                    size: src.size(),
+                    mip_level_count: src.mip_level_count(),
+                    sample_count: 1,
+                    dimension: src.dimension(),
+                    format: src.format(),
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[src.format().add_srgb_suffix(), src.format().remove_srgb_suffix()],
+                })
+            })
+            .clone()
     }
     /// Whether the worker holds `buffer` or a view of `texture`.
     pub(crate) fn holds(&self, buffer: Option<&wgpu::Buffer>, texture: Option<&wgpu::Texture>) -> bool {
@@ -612,6 +642,7 @@ impl Worker {
     /// that may still name them; keep shaders, states and pipelines.
     pub(crate) fn reset_resources(&mut self) {
         self.device.reset_resources();
+        self.snapshots.clear();
         self.recording = None;
         self.constants.clear();
         self.applied.clear();
@@ -817,15 +848,7 @@ impl Worker {
                 .iter()
                 .find(|t| t.sampler == base + slot)
                 .ok_or("native sampler not covered")?;
-            if pass
-                .colours
-                .iter()
-                .chain([&pass.depth])
-                .flatten()
-                .any(|target| target.texture.is_some_and(|x| x.resource == t.resource))
-            {
-                return Err("native sampled attachment feedback unsupported".into());
-            }
+            let attached = attached(pass, t.resource);
             if !f32::from_bits(t.states[8]).is_finite()
                 || (stage == n::Stage::Vertex && f32::from_bits(t.states[8]) != 0.0)
             {
@@ -843,16 +866,24 @@ impl Worker {
                 .texture_for(t)
                 .ok_or("native sampled texture unavailable")?;
             let srgb = t.states[11] != 0;
-            let key = (tx.texture.clone(), srgb);
+            let gpu_format = tx.gpu_format;
+            // a texture the draw renders into is sampled from its snapshot
+            let source = if attached {
+                let src = tx.texture.clone();
+                self.snapshot(&backend.device, &src)
+            } else {
+                tx.texture.clone()
+            };
+            let key = (source.clone(), srgb);
             let view = if let Some(&view) = self.sampled.get(&key) {
                 view
             } else {
                 let format = if srgb {
-                    tx.gpu_format.add_srgb_suffix()
+                    gpu_format.add_srgb_suffix()
                 } else {
-                    tx.gpu_format
+                    gpu_format
                 };
-                let view = tx.texture.create_view(&wgpu::TextureViewDescriptor {
+                let desc = wgpu::TextureViewDescriptor {
                     format: Some(format),
                     dimension: Some(match expected {
                         TexKind::Flat => wgpu::TextureViewDimension::D2,
@@ -860,8 +891,9 @@ impl Worker {
                         TexKind::Volume => wgpu::TextureViewDimension::D3,
                     }),
                     ..Default::default()
-                });
-                let view = self.device.retain_view(view, format, [t.width, t.height], 1);
+                };
+                let view = source.create_view(&desc);
+                let view = self.device.retain_view(view, format, [t.width, t.height], 1, desc);
                 self.sampled.insert(key, view);
                 view
             };
@@ -869,7 +901,8 @@ impl Worker {
                 s
             } else {
                 let gpu = backend.sampler(&t.states)?;
-                let s = self.device.retain_sampler(gpu, f32::from_bits(t.states[8]));
+                let raw = backend.vk.as_ref().and_then(|vk| vk.samplers.get(&gpu)).cloned();
+                let s = self.device.retain_sampler(gpu, f32::from_bits(t.states[8]), raw);
                 self.samplers.insert(t.states, s);
                 s
             };
@@ -998,15 +1031,23 @@ impl Worker {
                 })?;
                 // Texture allocations only change after release, which drops
                 // this worker. Retained Arc identities cannot be recycled.
-                for texture in d.textures.iter() {
-                    if pass
-                        .colours
-                        .iter()
-                        .chain([&pass.depth])
-                        .flatten()
-                        .any(|t| t.texture.is_some_and(|x| x.resource == texture.resource))
-                    {
-                        return Err("native sampled attachment feedback unsupported".into());
+                // textures sampled while rendered into: copied before the draw
+                let mut copies = vec![];
+                for t in d.textures.iter() {
+                    let sampled = pi.samplers.iter().any(|&(s, _)| s == t.sampler)
+                        || vi.samplers.iter().any(|&(s, _)| 257 + s == t.sampler);
+                    if sampled && attached(pass, t.resource) {
+                        let src = backend
+                            .texture_for(t)
+                            .ok_or("native sampled texture unavailable")?
+                            .texture
+                            .clone();
+                        // depth-stencil textures cannot be copied whole
+                        if src.format().is_depth_stencil_format() {
+                            return Err("native sampled depth attachment feedback unsupported".into());
+                        }
+                        let snapshot = self.snapshot(&backend.device, &src);
+                        copies.push((src, snapshot));
                     }
                 }
                 let set_key = (pipeline, d.textures.as_ptr() as usize);
@@ -1047,6 +1088,7 @@ impl Worker {
                     })
                     .transpose()?;
                 prepared.draws.push(PreparedDraw {
+                    copies,
                     pipeline,
                     shaders: [ps, vs],
                     sets,
@@ -1110,6 +1152,19 @@ impl Worker {
         for (pass, prepared) in job.passes.iter().zip(&prepared) {
             recorder.begin_pass(prepared.desc)?;
             for (d, p) in pass.draws.iter().zip(&prepared.draws) {
+                if !p.copies.is_empty() {
+                    // as the D3D9 path: what the pass drew so far, copied,
+                    // then the pass goes on loading its attachments
+                    for (src, dst) in &p.copies {
+                        recorder.copy_texture(src, dst);
+                    }
+                    recorder.begin_pass(n::PassDesc {
+                        clear_colour: None,
+                        clear_depth: None,
+                        clear_stencil: None,
+                        ..prepared.desc
+                    })?;
+                }
                 recorder.set_pipeline(p.pipeline);
                 for set in p.sets {
                     recorder.set_texture_set(set);
@@ -1177,9 +1232,14 @@ impl Worker {
             recorder.end_pass();
         }
         // L124 finisher owns the expensive encoder finish. Queue writes may
-        // only follow submission of the previous arena users. No GPU wait.
-        backend.wait_finisher();
-        let (scatter, encoder) = recorder.finish_parts();
+        // only follow submission of the batches that read what they write:
+        // with resident constants that is only the batch that last used the
+        // next scatter source (L141); otherwise every earlier batch.
+        match recorder.upload_gate() {
+            Some(ticket) => backend.wait_finisher_until(ticket),
+            None => backend.wait_finisher(),
+        }
+        let (scatter, mut chunks) = recorder.finish_chunks();
         let after = recorder.stats;
         self.recording = Some(recorder.into_state());
         backend.native_stats.upload_bytes += after.upload_bytes - before.upload_bytes;
@@ -1187,16 +1247,24 @@ impl Worker {
         backend.native_stats.bundle_builds += after.bundle_builds - before.bundle_builds;
         backend.native_stats.bundle_hits += after.bundle_hits - before.bundle_hits;
         if let Some(scatter) = scatter {
-            backend.queue.submit([scatter]);
-            backend.submissions.set(backend.submissions.get() + 1);
+            // The ordered finisher submits the scatter and its consumers in
+            // one batch. This removes a queue submit per dirty job without
+            // changing the wait-before-write or scatter-before-draw boundary.
+            chunks.insert(0, crate::vk::Chunk::Buffer(scatter));
         }
-        if let Some(encoder) = encoder {
+        if !chunks.is_empty() {
+            backend.native_stats.submit_batches += 1;
             if let Some(finisher) = &backend.finisher {
-                finisher.submit(encoder);
+                finisher.submit_batch(chunks);
             } else {
-                backend.queue.submit([encoder.finish()]);
+                crate::vk::submit(&backend.queue, chunks.into_iter().flat_map(crate::vk::finish).collect());
             }
             backend.submissions.set(backend.submissions.get() + 1);
+        }
+        // the scatter source this job wrote is free once its batch is in
+        let ticket = backend.finisher_ticket();
+        if let Some(state) = self.recording.as_mut() {
+            state.tag_upload(ticket);
         }
         Ok(())
     }
@@ -1215,6 +1283,14 @@ fn depth_bias(d: &NativeDraw, pass: &NativePass) -> bool {
     pass.depth.is_some()
         && state_value(&d.state, 7) != 0
         && (state_value(&d.state, 195) != 0 || state_value(&d.state, 175) != 0)
+}
+/// Whether the pass renders into texture `resource`.
+fn attached(pass: &NativePass, resource: u32) -> bool {
+    pass.colours
+        .iter()
+        .chain([&pass.depth])
+        .flatten()
+        .any(|t| t.texture.is_some_and(|x| x.resource == resource))
 }
 fn state_value(state: &NativeFixedState, key: u32) -> u32 {
     state
@@ -1244,16 +1320,17 @@ fn native_strip_index(
     if primitive == 3 {
         return Err("native indexed line strip unsupported".into());
     }
-    let (format, restart) = match format {
-        101 => (wgpu::IndexFormat::Uint16, u16::MAX as u64),
-        102 => (wgpu::IndexFormat::Uint32, u32::MAX as u64),
-        _ => return Err("native index format unsupported".into()),
-    };
-    let end = u64::from(min_index) + u64::from(vertex_count);
-    if vertex_count == 0 || end > restart {
-        return Err("native indexed strip range may include restart index".into());
+    // As the D3D9 path (crates/ddgpu derive): the strip's index format on
+    // the pipeline whatever DrawIndexedPrimitive's MinIndex/NumVertices hint
+    // says (L141: refusing on the hint, 750 jobs in c24nat, drew the same
+    // strips through the D3D9 path anyway). wgpu restarts a strip at index
+    // 0xFFFF (0xFFFFFFFF) where D3D9 does not: a limit both paths share.
+    let _ = (min_index, vertex_count);
+    match format {
+        101 => Ok(Some(wgpu::IndexFormat::Uint16)),
+        102 => Ok(Some(wgpu::IndexFormat::Uint32)),
+        _ => Err("native index format unsupported".into()),
     }
-    Ok(Some(format))
 }
 fn validate_fixed(state: &NativeFixedState) -> Result<(), String> {
     if state.render_states.windows(2).any(|p| p[0].0 >= p[1].0) {
