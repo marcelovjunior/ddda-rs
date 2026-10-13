@@ -155,6 +155,12 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Nonempty-work gate now requires appended commands, not merely a nonempty
+pre-existing stream. The real capture goes from2 to6 roots (four appended).
+Fifteen focused replay tests pass, including refusal when an unchanged
+nonempty prefix would otherwise look like successful shadow work.
+
+
 Real v3 capture shadow-44100-300.ddshadow:6,759,804 bytes,1,632 pages,
 13,226 written bytes; SHA256
 4193551ef5af0d3a409f85f5ee5375a6b60dff89552ce91b12c1fcfe2a4fadef.

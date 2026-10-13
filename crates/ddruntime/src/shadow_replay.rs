@@ -928,8 +928,8 @@ fn compare_replays(
     }
     compare_control_state(&results[0].0, results[0].3, &results[1].0, results[1].3)
         .map_err(|field| format!("serial/parallel {field} mismatch"))?;
-    if observed.entries.is_empty() {
-        return Err("empty stream is not shadow acceptance".into());
+    if observed.entries.len() <= input.u32(context + 0x48) as usize {
+        return Err("traversal appended no commands; existing stream is not shadow acceptance".into());
     }
     Ok(observed.entries.len())
 }
@@ -1336,6 +1336,21 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "original serial replay ABI differs from live serial");
+    }
+
+    #[test]
+    fn unchanged_existing_commands_do_not_count_as_shadow_work() {
+        let mut fixture = synthetic_fixture(0);
+        fixture.input = Arc::new(fixture.input.with_writes(&BTreeMap::from([(0x1048, 4)])));
+        let error = replay_fixture(
+            fixture,
+            Arc::new(BTreeMap::from([
+                (TRAVERSE, synthetic_traverse as LiftFn),
+                (0x400010, synthetic_job as LiftFn),
+            ])),
+        )
+        .unwrap_err();
+        assert!(error.contains("traversal appended no commands"));
     }
 
     #[test]

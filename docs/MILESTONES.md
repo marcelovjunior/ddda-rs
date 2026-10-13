@@ -10,7 +10,9 @@
   FED200 renderer header. Source-backed preseed added; head recapture next.
   Serial/live proof is reported before trying parallel. Capture v3 retains
   rejected diagnostic fixtures but can never accept them as proof.
-- 31 focused shadow tests pass. Earlier complete default light with one
+- Proof requires appended commands, not a pre-existing nonempty prefix;
+  actual capture adds4 roots to2. Final replay15 tests pass (prior full
+  focused shadow31 pass before this extra guard). Earlier complete default light with one
   test thread:281 passed/0 failed/7 ignored; inherited concurrent timing
   failures passed the full serial-test rerun, with no skipped checks.
   Private recursive lock model is differential-tested against runtime;
