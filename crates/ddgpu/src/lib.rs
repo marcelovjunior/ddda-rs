@@ -537,6 +537,21 @@ impl Finisher {
         self.send.as_ref().unwrap().send(encoders).expect("the finisher thread stopped");
     }
 
+    /// The batches handed over so far: the ticket of the last one.
+    fn ticket(&self) -> u64 {
+        self.sent.get()
+    }
+
+    /// Wait until batch `ticket` (and every earlier one) is submitted.
+    fn wait_until(&self, ticket: u64) {
+        let (m, c) = &*self.done;
+        let mut submitted = m.lock().unwrap();
+        while submitted.0 < ticket.min(self.sent.get()) && !submitted.1 {
+            submitted = c.wait(submitted).unwrap();
+        }
+        assert!(!submitted.1, "the finisher thread failed during encoding/submission");
+    }
+
     fn wait(&self) {
         let (m, c) = &*self.done;
         let mut submitted = m.lock().unwrap();
@@ -879,6 +894,19 @@ impl WgpuBackend {
         if let Some(f) = &self.finisher {
             f.wait();
         }
+    }
+
+    /// Wait until finisher batch `ticket` is submitted (L141).
+    pub(crate) fn wait_finisher_until(&self, ticket: u64) {
+        if let Some(f) = &self.finisher {
+            f.wait_until(ticket);
+        }
+    }
+
+    /// The finisher's last batch ticket (0 without a finisher: submitted
+    /// as made).
+    pub(crate) fn finisher_ticket(&self) -> u64 {
+        self.finisher.as_ref().map_or(0, |f| f.ticket())
     }
 
     /// L124: finish and submit draw batches on a second thread (ddplay turns

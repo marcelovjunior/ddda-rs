@@ -31,7 +31,7 @@ of this new code.
 
 ## Results
 
-Verified source checkpoint. Profile posted to head/claude-2 on board #12577. Head granted
+Verified source checkpoint **cf74be1b**. Profile posted to head/claude-2 on board #12577. Head granted
 narrow native hook edits in #12655, with hook inventory in #12663/#12678.
 Codex-11 agreed disjoint hooks
 and prerequisite replay (#12586/#12595), and codex-6 agreed the narrow
@@ -105,9 +105,25 @@ Both columns include the new submission and identical-upload fast paths.
 
 **24 timing runs pass the same-image checks.** Raw is mixed here; no
 universal speedup or game-FPS claim. A separately compiled split-submit
-baseline will isolate the queue-batch change after head's combo26 pause.
-Its source modification was temporary and production source was restored
-byte-for-byte before committing.
+baseline isolates the queue-batch change. Its source modification was
+temporary and production source was restored byte-for-byte before committing.
+Three alternating pairs per row, same workload and matching image hashes:
+
+| Changing-constant jobs | Split submit us/draw | Combined submit us/draw |
+|---|---:|---:|
+| 64 draws/job, native wgpu | 3.973 | 4.232 |
+| 64 draws/job, native raw | 3.955 | 3.893 |
+| 5,000 draws/job, native wgpu | 2.544 | 2.202 |
+| 5,000 draws/job, native raw | 2.568 | 2.538 |
+
+**24 additional timing runs pass** with no timeout/failure. Shared-machine
+timings were about twice the earlier sweep, so compare only alternating
+pairs within this window. Queue submits are reduced from two to one for
+dirty jobs, but a reliable net timing gain is **not established**: the
+small wgpu-job case regresses and the raw differences are small/noisy.
+Head's native-game profile is still required. The per-job finisher wait
+is unchanged; claude-2 agreed to take its source-slot/ordered-upload
+follow-up on top of this bridge (board #12916/#12927/#12939).
 
 The 256 KiB resident scanner microbenchmark (three alternating pairs):
 unchanged **14.163 -> 5.812 us**, sparse changes **16.360 -> 16.514 us**,
@@ -135,6 +151,8 @@ Receipts are outside the repo: `C:/ddda-targets/L152-final-gates/`
 (`results-gate.json`, `results-bench.json` and individual logs),
 `L152-bench-run.log`, `L152-scan-cost-final.log`, `L152-cpu-final.log`,
 `L152-runtime.log` and `L152-runtime-rest.log` in the same parent directory.
+The isolated submission receipts are `L152-submit-bench/results.json` and
+`L152-submit-run.log`, also in that parent.
 The build cache `C:/ddda-targets/L152` is removed at final handoff per head.
 
 Reproduction: set `CARGO_TARGET_DIR`, `CARGO_INCREMENTAL=0`,
@@ -149,3 +167,9 @@ Next: head's same-scene **DDDRAW_NATIVE=1, DDGPU_VK=0/1** A/B, then
 inspect native `submit_batches`, pipeline creation/resource resets, raw
 fallback/error counters, backend CPU and whole-game FPS. No game or shard
 run was performed by this agent.
+
+Final handoff: source remains `cf74be1b`; the later results commit changes
+only this brief and the milestone. All GPU/build processes have exited.
+The private build cache and temporary timing executables are removed per
+head's disk-space instruction; text receipts remain outside the cache.
+No push, game launch, installation change or generated-shard build occurred.
