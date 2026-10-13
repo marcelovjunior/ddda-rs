@@ -189,3 +189,135 @@ Opt-0 improvement and remapped-slot cost remain explicit performance blockers.
 - [Vectored exception handling](https://learn.microsoft.com/en-us/windows/win32/debug/using-a-vectored-exception-handler)
 
 Only public Windows ABI bindings/host code and synthetic tests are committed.
+
+## Follow-up: game build and opt-0 experiments (2026-10-13)
+
+Merged `task/fps-line` at `4233e4ed` into this branch as `49764236`.
+This is the frozen inline build/gate source pin, including L140, L113,
+L137 and the two-encode-thread default. Codex-7 owns the separately queued
+L146 native gate3; the earlier L139 gates do not cover flat emission.
+The requested `play-o1` profile was absent at that pin: the first Cargo
+invocation stopped before compiling anything. `ad299d65` adds this profile,
+inheriting `play` and explicitly setting all 32 address shards to opt 1
+(the generated hot shard inherits opt 1). This matters because hot-list
+generation sets ordinary `play` address shards to opt 0. Accessor and
+emitter sources remain identical to `49764236`.
+
+The private build driver is `C:/ddda-targets/L142o1/build.sh`, run through
+`heavy.py codex-10` with `HEAVY_BIG=1`. It runs full `lift.py gen` with
+`LIFT_DATA=E:/ddda-re/notes/native`, `LIFT_WORKERS=6`,
+`LIFT_FLAT_MEMORY=1`, `--hot-functions E:/ddda-re/notes/L66/profile-text-hot.txt`
+and the default scoped instruction steps. Cargo uses `CARGO_INCREMENTAL=0`,
+`CARGO_TARGET_DIR=C:/ddda-targets/L142o1`, `RUSTC_BOOTSTRAP=1`,
+`RUSTFLAGS=-Zthreads=4`, and
+`cargo build --profile play-o1 -p ddplay --features emu,ddruntime/flat-memory
+--timings --message-format=json-render-diagnostics`. The slot controls jobs.
+Build output, Cargo timings and receipts stay outside the repository.
+Generation ran 11:17:10–11:28:15 UTC (**665 s**), producing **59,734
+functions / 1,535 modules / 33 crates**, with **44 scoped step functions**.
+The compilation-only retry driver is `C:/ddda-targets/L142o1/compile.sh`;
+it reuses this completed generation. `generated-receipt.json` in the same
+directory records input/source SHA-256 values and 1,572 emitted Rust files
+(279,819,064 bytes; **+5.10%** against the pin's tracked generated source).
+Its aggregate file-manifest SHA-256 is
+`0a519745df752d6b51ae7322e5c057ab893a6184371fde6b12677a9ef35ad64b`.
+Codex-7 independently checked all 1,572 files and both private-input hashes
+before adopting them for L146 gate3 (`dd1c0002`, combo24 plus `49764236`;
+board 12485). That gate uses `ddnative-base/flat-memory` and includes the
+base VEH tests; its result remains separate from the prior green gates.
+Head confirmed on board 12260 that flat-generated shards remain local;
+only documentation/results are committed until gameplay decides adoption.
+
+Merged-pin checks: **36 base tests pass** with the feature in `play`,
+**5 focused runtime tests pass**, and **28 Python emitter/lean tests pass**.
+Default light suite: **202 pass / 1 inherited fullscreen-gamma failure /
+5 ignored**. Feature plus `DDRUNTIME_FLAT_MEMORY=1`: **207 pass / the same
+1 failure / 5 ignored**. Counts exclude duplicate filtered child-process
+summaries. The timing-sensitive Present test passes in both merged runs.
+Logs are `base-merged.log`, `flat-merged.log`, `python-merged.log`,
+`light-merged.log` and `light-flat-merged.log` under `C:/ddda-targets/L142`.
+
+### Build handoff
+
+Build succeeded at **12:20:04 UTC**. Head-only game artifacts:
+
+- `C:/ddda-targets/L142o1/run/ddplay.exe`, 296,527,872 bytes,
+  SHA-256 `4647232d101f4ac214f0ed7158832c7b7da967692ac3bbcf24e843cae7b48639`.
+- `C:/ddda-targets/L142o1/run/ddplay.pdb`, 35,151,872 bytes,
+  SHA-256 `60cf7a52eef4896295a341009a02bb93d28ea0102e13a5e034bed5df2dc52d2b`.
+
+The **build code pin is `ad299d65`**, with the local flat emission receipt
+above. Cargo JSON confirms **all 33 shards have `opt_level=1` and
+`fresh=false`**. Their rlibs total **525,330,570 bytes / 500.99 MiB**.
+The final Cargo timing report gives first shard start 706.18 s, last shard
+end 1,557.31 s, hence **851.13 s cold shard wall span**. This is about
+**2.6–3.4 times** the supplied normal-o1 250–330 s baseline. Summed shard
+durations are 6,882.49 s; this is overlapping elapsed time, not CPU time.
+
+Whole-build elapsed time is **1,596.5 s** (219 dirty units, jobs=9,
+maximum reported concurrency 10). Head's combo24 runs repeatedly suspended
+the build during dependencies, so total elapsed time includes those holds.
+This shared-machine run is not a controlled paired compiler benchmark;
+nevertheless it does not establish compile-speed improvement. Detailed
+Cargo unit timings are in `C:/ddda-targets/L142o1/cargo-timings/`, artifact
+hashes in `build-receipt.json`, and stdout/stderr in `compile.log` and
+`compile.err`. The heavy slot was released after the successful copy.
+
+Required flat runtime switch: **`DDRUNTIME_FLAT_MEMORY=1`**. For head's
+parallel/emulator game route also set `DDRUNTIME_PARALLEL=1` and
+`DDRUNTIME_EMU_FALLBACK=1`; `DDGPU_ENCODE_THREADS=2` makes the inherited
+default explicit. For a matched combo23 comparison retain
+`DDDRAW_NATIVE=drawcall`, `DDRUNTIME_ZLIB_ADLER=1`,
+`DDRUNTIME_CRT_SCRATCH=1`, and leave `DDGPU_NATIVE_SIM` unset. Use the same
+`--no-vsync`, original exe/save/cache/scene configuration as the baseline.
+Only the flat switch selects the new backing; no `LIFT_*` variable is
+needed when running the already generated/compiled executable.
+
+Board 12564 requests head's image/loading/FPS comparison and posts the
+artifact path, hashes, environment and timings. Board 12566 informs
+codex-7 that the slot is free for gate3. **No game was launched here, and
+no game/image/FPS acceptance is claimed.** Gate3 and head's comparison
+remain pending at this handoff. Flat-generated files stay local and
+uncommitted as head requested; the committed changes are the profile and
+these results, not the private performance probes.
+
+### Opt-0 experiments, not promoted
+
+A separate copy of the base source under
+`C:/ddda-targets/L142/experiment` was compiled at opt 3, with standalone
+callers at opt 0 and opt 1. The queued game source was not edited.
+Two variants were measured in addition to table, inline and outlined:
+
+- Thin-reference outlined accessor: pass `&mut &mut dyn Mem` for stores
+  (shared reference to the receiver for loads), reducing the Win64 argument
+  count; retain the existing inline accessor body and all its checks.
+- Raw scalar experiment: cache the base integer once at function entry;
+  do base-plus-address and the same cross-page/parallel-unaligned admission
+  in assembly, preserving the marked MOV/VEH recovery and trait fallback.
+  This removes nested opt-0 Rust helper calls. It was a private u32-only
+  performance probe, not an accepted/tested replacement backend.
+
+The existing outlined accessor already provides one optimized base-crate
+call with no table lookup on its admitted flat path. The raw experiment
+and outlining remove most of the opt-0 inline regression, but neither
+establishes a consistent improvement over the table path. No experiment
+was promoted, and the game build keeps the requested `LIFT_FLAT_MEMORY=1`.
+
+One five-way rotating run (2M accesses/sample, nine samples, median ns):
+
+| Caller opt | Operation | Table | Inline | Outline | Thin reference | Raw |
+|---|---|---:|---:|---:|---:|---:|
+| 0 | aligned read32 | 16.223 | 20.899 | 15.640 | 16.284 | 15.959 |
+| 0 | aligned write32 | 16.043 | 19.219 | 15.962 | 15.850 | 15.929 |
+| 0 | unaligned read32 | 16.217 | 22.785 | 15.839 | 15.859 | 16.160 |
+| 0 | unaligned write32 | 16.697 | 20.873 | 16.569 | 16.584 | 15.970 |
+| 1 | aligned read32 | 2.985 | 3.317 | 3.478 | 3.580 | 3.113 |
+| 1 | aligned write32 | 3.679 | 2.143 | 3.769 | 3.765 | 2.935 |
+| 1 | unaligned read32 | 3.483 | 3.489 | 3.726 | 3.947 | 2.505 |
+| 1 | unaligned write32 | 2.163 | 1.798 | 2.494 | 2.275 | 1.784 |
+
+Shared-machine timings vary substantially, including within this run.
+Loop/black-box overhead is included. Private source, binaries and outputs:
+`C:/ddda-targets/L142/experiment-cost.rs`, `experiment/src/mem.rs`,
+`raw-o0.txt`, `raw-o1.txt`, `thinref-o0.txt`, `thinref-o1.txt`.
+Gameplay, not these microbenchmarks, determines acceptance.

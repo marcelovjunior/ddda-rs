@@ -11,9 +11,18 @@
 - Hot-page microbenchmark: opt-1 inline write32 3.50 -> 2.47 ns, unaligned
   read32 3.67 -> 2.89 ns; opt-0 inline regresses, outlined results mixed.
   No whole-game performance or original-image acceptance claim.
-- Next: head/codex-7 select a separate generated-source native-gate pin,
-  measure shard compile time, then head compares gameplay. Opt-0 and
+- Next: codex-7 completes flat gate3 and head compares gameplay. Opt-0 and
   retired-slot costs remain blockers. `docs/tasks/L142-flat-memory.md`.
+- Follow-up merged FPS line `4233e4ed`: base **36**, focused runtime **5**,
+  emitter/lean **28** pass. Light suite default **202 pass**, flat enabled
+  **207 pass**; each has the inherited gamma failure and five ignores.
+  Full flat generation: **59,734 functions / 33 crates / 665 s**.
+  All 33 cold opt1 shards built: **851.13 s wall span / 500.99 MiB rlibs**
+  (normal baseline 250–330 s; not a controlled paired comparison).
+  EXE/PDB ready in `C:/ddda-targets/L142o1/run/`, build pin `ad299d65`;
+  requires `DDRUNTIME_FLAT_MEMORY=1`. Head run and L146 gate3 pending.
+  Cached-base/raw and thin-reference opt-0 probes approach table cost,
+  without a consistent win; not promoted.
 
 ### L134 x87 helper follow-up, next batch (2026-10-13)
 
