@@ -919,3 +919,25 @@ round-trip tests pass; full light tests retain the independently reproduced
 fullscreen-gamma Reset failure. GPU tests/examples compile; execution gate
 is pending head's exclusive run. See the L90 brief for details and L97/L98
 merge notes.
+
+
+## L121 StretchRect recording (2026-10-13)
+
+Colour blits (scaling, format conversion and multisampled destinations), MSAA
+colour resolves and depth/stencil copies share the open command encoder.
+Matching single-sample depth/stencil targets use a whole-subresource copy with
+both aspects; multisampled depth retains the existing sample-selection shader.
+Copies end a live draw pass but do not force a submission. Both texture targets
+join upload-hazard tracking; Present, readback/query, ring capacity and the
+existing 4,096-command batch limit still submit when required. ColorFill shares
+the recorded blit helper and retains its pre-fill flush.
+
+Driver-equivalence suites and ordering/upload regressions pass (35 distinct GPU
+tests; all four target-format shards). Runtime light: 171 passed, 3 ignored.
+Synthetic eight-copy frames reduce scaled/conversion/depth submissions 9 -> 1
+and resolves 17 -> 1; median copy CPU costs 138.2 -> 17.6 / 146.0 -> 26.8 /
+990.5 -> 2.7 / 186.2 -> 12.1 us respectively.
+`WgpuBackend::submission_count()` measures backend queue submissions (excluding
+external Present sinks); `ddgpu --example copy_cost` provides the comparison.
+These are synthetic backend results, not a gameplay FPS claim. See
+[scope, complete timings and verification](tasks/L121-copy-no-flush.md).

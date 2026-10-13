@@ -725,6 +725,26 @@ impl WgpuBackend {
         self.pass.borrow_mut().take();
     }
 
+    /// Take the shared encoder after ending any live draw pass. Copy helpers
+    /// put it back rather than finishing/submitting it; wgpu retains all
+    /// referenced textures, views, bind groups and temporary buffers.
+    fn copy_encoder(&self) -> wgpu::CommandEncoder {
+        self.end_pass();
+        self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()))
+    }
+
+    fn track_copy_targets(&self, targets: &[&Target]) {
+        self.open_uses.borrow_mut().extend(targets.iter().filter_map(|t| t.texture.map(|x| x.resource)));
+    }
+
+    fn copy_recorded(&self) {
+        // Keep the existing bounded batch policy, including copy-only streams.
+        self.open_draws.set(self.open_draws.get() + 1);
+        if self.open_draws.get() >= DRAWS_PER_SUBMIT {
+            self.flush();
+        }
+    }
+
     /// Draws recorded and render passes begun for them so far.
     pub fn pass_counts(&self) -> (u64, u64) {
         (self.draws_recorded.get(), self.passes_begun.get())
@@ -1166,7 +1186,7 @@ impl WgpuBackend {
         let view_format = Some(if gamma { format.add_srgb_suffix() } else { format });
         let sview = src.create_view(&wgpu::TextureViewDescriptor { format: view_format, ..Default::default() });
         let dview = dst.create_view(&wgpu::TextureViewDescriptor { format: view_format, ..Default::default() });
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = self.copy_encoder();
         {
             let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("resolve"),
@@ -1177,15 +1197,15 @@ impl WgpuBackend {
                 depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
             });
         }
-        self.submit_encoder(enc);
+        *self.open.borrow_mut() = Some(enc);
         Ok(dst)
     }
 
-    /// StretchRect between depth-stencil surfaces: the source's depth
-    /// written as frag_depth (stencil cleared to 0 in the same pass), then
-    /// one pass per stencil bit setting the bits the source has (wgpu has
-    /// no stencil export). Between equal sample counts every sample is
-    /// copied; to one sample, the sample `depth_copy_sample` names.
+    /// StretchRect between depth-stencil surfaces: single-sample copies
+    /// transfer all aspects directly. Multisample copies write frag_depth,
+    /// then draw once per stencil bit (wgpu has no stencil export). Equal
+    /// sample counts copy every sample; to one sample, use the sample
+    /// `depth_copy_sample` names. All commands stay in the open encoder.
     fn copy_depth(&mut self, src: &Target, dst: &Target) -> Result<(), String> {
         if !(is_depth_format(src.format) && is_depth_format(dst.format)) {
             return Err("between a depth-stencil and a colour surface".into());
@@ -1193,9 +1213,24 @@ impl WgpuBackend {
         if (src.width, src.height) != (dst.width, dst.height) || src.format != dst.format {
             return Err("surfaces of different sizes or formats".into());
         }
-        let (stex, _, _, sformat, _, _) = self.target_texture(src).ok_or("unknown source")?;
-        let (dtex, _, _, dformat, _, _) = self.target_texture(dst).ok_or("unknown destination")?;
+        let (stex, slevel, slayer, sformat, sw, sh) = self.target_texture(src).ok_or("unknown source")?;
+        let (dtex, dlevel, dlayer, dformat, _, _) = self.target_texture(dst).ok_or("unknown destination")?;
         let (ssamples, dsamples) = (stex.sample_count(), dtex.sample_count());
+        // wgpu texture-to-texture copies allow equal depth/stencil formats
+        // when the whole subresource and all aspects are copied. The backend
+        // gives single-sample targets COPY_SRC/DST usage; multisample targets
+        // retain the sample-selection shader below. This preserves both
+        // depth bits and stencil without constructing nine draw pipelines.
+        if ssamples == 1 && dsamples == 1 && sformat == dformat {
+            let mut enc = self.copy_encoder();
+            enc.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo { texture: &stex, mip_level: slevel, origin: wgpu::Origin3d { x: 0, y: 0, z: slayer }, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: &dtex, mip_level: dlevel, origin: wgpu::Origin3d { x: 0, y: 0, z: dlayer }, aspect: wgpu::TextureAspect::All },
+                wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 },
+            );
+            *self.open.borrow_mut() = Some(enc);
+            return Ok(());
+        }
         let stencil = sformat.has_stencil_aspect() && dformat.has_stencil_aspect();
         let ms = ssamples > 1;
         let depth_ty = if ms { "texture_depth_multisampled_2d" } else { "texture_depth_2d" };
@@ -1281,7 +1316,7 @@ impl WgpuBackend {
             })
         }).collect();
         let target = dtex.create_view(&Default::default());
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = self.copy_encoder();
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("depth copy"),
@@ -1304,7 +1339,7 @@ impl WgpuBackend {
                 pass.draw(0..3, 0..1);
             }
         }
-        self.submit_encoder(enc);
+        *self.open.borrow_mut() = Some(enc);
         Ok(())
     }
 
@@ -1342,6 +1377,7 @@ impl WgpuBackend {
     #[allow(clippy::too_many_arguments)]
     fn blit(&mut self, dst: &Target, rect: [i32; 4], src: Option<(&wgpu::TextureView, [f32; 4], bool)>, colour: [f32; 4]) -> Result<(), String> {
         let (dtex, level, layer, format, w, h) = self.target_texture(dst).ok_or("unknown destination")?;
+        self.track_copy_targets(&[dst]);
         let (pipeline, layout) = self.blit_pipeline(format, sample_count(dst)?);
         let view = dtex.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: level, mip_level_count: Some(1),
@@ -1382,7 +1418,7 @@ impl WgpuBackend {
         if r <= l || b <= t {
             return Ok(());
         }
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = self.copy_encoder();
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
@@ -1394,7 +1430,7 @@ impl WgpuBackend {
             pass.set_viewport(l as f32, t as f32, (r - l) as f32, (b - t) as f32, 0.0, 1.0);
             pass.draw(0..3, 0..1);
         }
-        self.submit_encoder(enc);
+        *self.open.borrow_mut() = Some(enc);
         Ok(())
     }
 
@@ -2424,13 +2460,16 @@ fn rect_or_full(r: [i32; 4], w: u32, h: u32) -> [i32; 4] {
 
 impl GraphicsBackend for WgpuBackend {
     fn copy(&mut self, c: &CopyCall) {
-        // depth-stencil to depth-stencil (D3D9: whole surfaces, outside a
-        // scene): drawn, since WebGPU cannot copy depth-stencil textures
+        // All paths stay ordered with preceding/following draws in the
+        // open encoder. Uploads to either target must submit these uses first.
+        self.end_pass();
+        self.track_copy_targets(&[&c.src, &c.dst]);
+        // Depth-stencil copies cover whole surfaces outside a D3D9 scene.
         if is_depth_format(c.src.format) || is_depth_format(c.dst.format) {
-            self.flush();
             if let Err(e) = self.copy_depth(&c.src, &c.dst) {
                 self.errors.push(format!("StretchRect (depth-stencil): {e}"));
             }
+            self.copy_recorded();
             return;
         }
         let Some((mut stex, slevel, slayer, sformat, sw, sh)) = self.target_texture(&c.src) else {
@@ -2441,7 +2480,6 @@ impl GraphicsBackend for WgpuBackend {
         // averaged by the GPU's resolve) into a single-sampled texture of
         // its size, which is then copied like any other source
         if stex.sample_count() > 1 {
-            self.flush();
             match self.resolve_texture(&stex, sformat, sw, sh) {
                 Ok(t) => stex = t,
                 Err(e) => {
@@ -2461,25 +2499,16 @@ impl GraphicsBackend for WgpuBackend {
             // L95: recorded into the open encoder after the draws before it
             // (the GPU runs them in that order), not a flush plus a
             // submission of its own; it counts toward the submit limit
-            self.end_pass();
-            {
-                let mut uses = self.open_uses.borrow_mut();
-                uses.extend([&c.src, &c.dst].into_iter().filter_map(|t| t.texture.map(|x| x.resource)));
-            }
-            let mut enc = self.open.borrow_mut().take().unwrap_or_else(|| self.device.create_command_encoder(&Default::default()));
+            let mut enc = self.copy_encoder();
             enc.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo { texture: &stex, mip_level: slevel, origin: wgpu::Origin3d { x: sr[0] as u32, y: sr[1] as u32, z: slayer }, aspect: wgpu::TextureAspect::All },
                 wgpu::TexelCopyTextureInfo { texture: &dtex, mip_level: dlevel, origin: wgpu::Origin3d { x: dr[0] as u32, y: dr[1] as u32, z: dlayer }, aspect: wgpu::TextureAspect::All },
                 wgpu::Extent3d { width: (sr[2] - sr[0]) as u32, height: (sr[3] - sr[1]) as u32, depth_or_array_layers: 1 },
             );
             *self.open.borrow_mut() = Some(enc);
-            self.open_draws.set(self.open_draws.get() + 1);
-            if self.open_draws.get() >= DRAWS_PER_SUBMIT {
-                self.flush();
-            }
+            self.copy_recorded();
             return;
         }
-        self.flush();
         let view = stex.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2), base_mip_level: slevel, mip_level_count: Some(1),
             base_array_layer: slayer, array_layer_count: Some(1), ..Default::default()
@@ -2489,6 +2518,7 @@ impl GraphicsBackend for WgpuBackend {
         if let Err(e) = self.blit(&c.dst, dr, Some((&view, uv, c.filter >= 2)), [0.0; 4]) {
             self.errors.push(format!("StretchRect: {e}"));
         }
+        self.copy_recorded();
     }
 
     fn fill(&mut self, f: &FillCall) {

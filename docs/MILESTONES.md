@@ -2091,3 +2091,18 @@ opening (codex-31), route perf (codex-29).
 - Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+
+### L121 copy submission boundaries (2026-10-13)
+
+- All StretchRect paths record into the open encoder; matching single-sample
+  depth/stencil surfaces copy both aspects directly. MSAA sample selection,
+  sRGB resolves and blit filtering remain unchanged; upload hazards tracked.
+- Vulkan: **35 distinct GPU tests pass** (38 invocations with all four target
+  shards), three existing exploratory tests ignored; **9 CPU units pass**.
+  Final expanded copy regressions pass; runtime light **171 pass / 3 ignored**.
+- Paired synthetic eight-copy frames: scaled/conversion/depth **9 -> 1**
+  submits, resolves **17 -> 1**. Median CPU us/copy: **138.2 -> 17.6** scaled,
+  **146.0 -> 26.8** conversion, **990.5 -> 2.7** D24S8, **186.2 -> 12.1** resolve.
+- No game or shard run. Next: head integrates and compares gameplay image,
+  submit count and copy/FPS profile. Details: `docs/tasks/L121-copy-no-flush.md`.
