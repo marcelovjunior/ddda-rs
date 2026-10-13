@@ -292,7 +292,10 @@ fn semantic_base_model_draw_unit_matches_original() {
     let callees = [
         c(0x00ff_0780, 1),
         c(0x00ff_0ad0, 2),
-        c(0x00ea_1fd0, 1),
+        c(0x00fe_d480, 1),
+        c(0x3000_0003, 2),
+        c(0x00fe_d8d0, 0),
+        c(0x00fe_d5d0, 1),
         c(0x3000_0064, 1),
         c(0x3000_0068, 6),
         c(0x3000_0030, 1),
@@ -300,4 +303,21 @@ fn semantic_base_model_draw_unit_matches_original() {
     ];
     let (cases, made) = run_cases(&vectors("unit_draw.json"), mtcore::semantic_p2c::base_model_draw_unit, false, &callees, &[0x012e_fea0]);
     eprintln!("{cases} ABI-level unit_draw cases passed; calls {made:x?}");
+}
+
+// verifies 0x00ea1fd0 (ABI level) with 0x00EA1EE0 folded in
+#[test]
+fn semantic_select_shadow_state_matches_original() {
+    let c = |target, stack_args| Callee { target, reads: &[ECX], stack_args };
+    let callees = [
+        c(0x00ff_0780, 1),
+        c(0x00ff_0ad0, 2),
+        c(0x00fe_d480, 1),
+        c(0x3000_0003, 2),
+        c(0x00fe_d890, 1),
+        c(0x00fe_d8d0, 0),
+        c(0x00fe_d5d0, 1),
+    ];
+    let (cases, made) = run_cases(&vectors("shadow_state.json"), mtcore::semantic_p2c::select_shadow_state_abi, true, &callees, &[]);
+    eprintln!("{cases} ABI-level shadow_state cases passed; calls {made:x?}");
 }

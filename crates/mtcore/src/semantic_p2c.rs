@@ -65,7 +65,7 @@ pub fn base_model_draw_unit(m: &mut dyn Mem, c: &mut Cpu) {
         call_from(m, c, pg, frame, this, args, resume, guest(method))
     };
     virtual_call(m, c, 0x64, &[context], 0x00ea_318d);
-    let state = call_from(m, c, pg, frame, this, &[context], 0x00ea_3195, guest(0x00ea_1fd0));
+    let state = select_shadow_state(m, c, pg, this, context, frame);
     let mesh_bank = pg.u32(m, this.wrapping_add(0xf8));
     let mesh = pg.u32(m, this.wrapping_add(0xf0));
     virtual_call(m, c, 0x68, &[context, mesh, mesh_bank, bounds, mask as u32, state], 0x00ea_31b4);
@@ -159,4 +159,88 @@ fn fresh_parameter_block(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, co
     pg.set_u32(m, block.wrapping_add(8), 0);
     let flags = context.field(m, 0x5c);
     context.set_field(m, 0x5c, flags & !2);
+}
+
+// Translated from 0x00ea1fd0 (DDDA.exe 2017-12-13 Steam).
+/// 0x00EA1FD0, `model->select_shadow_state(context) -> mask` (thiscall,
+/// `ret 4`): choose the context's shadow/depth state for drawing `model`
+/// and return its visibility mask (negative: not visible, or -1 when the
+/// shadow path was not taken).
+///
+/// The context's state slot 0x33a0 is bound to the device constant at
+/// +0x31b0 (model flags `this[8]` bits 2 and 3, or 8 and 9) or +0x31c0.
+/// With a bound pass object (+0x1d4, flag 4 of its +0x10 clear), a
+/// context that has bit 0 of +0x16a and a model with flags 0x104:
+/// 0x00FED480(0) prepares, the manager (0x018D2C80) virtual +0x3c(context,
+/// flag) decides, and then the visibility mask (0x00EA1EE0) and a fresh
+/// 24-float constants block (copied from 0x00FED8D0's record into +0x1430)
+/// are produced; 0x00FED5D0(0) closes the group. A non-negative mask is
+/// the result; otherwise the slot falls back to +0x31a8.
+pub fn select_shadow_state_abi(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let context = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    c.eax = select_shadow_state(m, c, pg, this, context, entry.wrapping_add(8));
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(8);
+}
+
+/// [`select_shadow_state_abi`] called directly: `frame` is the caller's ESP
+/// at its call (before the argument and return address are pushed).
+pub(crate) fn select_shadow_state(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, context: u32, frame: u32) -> u32 {
+    // the original pushes EBX, EBP, ESI, EDI after its entry
+    let inner = frame.wrapping_sub(8 + 16);
+    let slots = StateSlots { pg, model: context };
+    let flags = pg.u32(m, this.wrapping_add(8));
+    if (flags & 4 != 0 && flags & 8 != 0) || (flags & 0x100 != 0 && flags & 0x200 != 0) {
+        slots.set_value(m, 0x33a0, 0x31b0, 0x635, 0xc922_f636);
+    } else {
+        slots.set_value(m, 0x33a0, 0x31c0, 0x635, 0x7aac_d638);
+    }
+    let mut result = u32::MAX;
+    let pass_object = slots.field(m, 0x1d4);
+    if pass_object != 0 && pg.u8(m, pass_object.wrapping_add(0x10)) & 4 == 0 {
+        if pg.u8(m, context.wrapping_add(0x16a)) & 1 != 0 && pg.u32(m, this.wrapping_add(8)) & 0x104 != 0 {
+            call_from(m, c, pg, inner, context, &[0], 0x00ea_21bd, guest(0x00fe_d480));
+            let manager = pg.u32(m, 0x018d_2c80);
+            let method = pg.u32(m, pg.u32(m, manager).wrapping_add(0x3c));
+            let plain = pg.u8(m, this.wrapping_add(8)) & 4 == 0;
+            let accepted = call_from(m, c, pg, inner, manager, &[context, u32::from(plain)], 0x00ea_21d6, guest(method)) & 0xff != 0;
+            if accepted {
+                let mask = visibility_mask(m, c, pg, inner, this, context) as u32;
+                result = mask;
+                if (mask as i32) >= 0 {
+                    let flag_word = slots.field(m, 0x5c);
+                    slots.set_field(m, 0x5c, flag_word | 2);
+                    slots.log_old(m, 0x1430, 0x247);
+                    let descriptor = pg.u32(m, slots.field(m, 0x18).wrapping_add(0x91c));
+                    let size = (u32::from(pg.u16(m, descriptor.wrapping_add(0x18))).wrapping_mul(4).wrapping_add(0xf)) & !0xf;
+                    if slots.field(m, 0x24).wrapping_add(size) > slots.field(m, 0x28) {
+                        call_from(m, c, pg, inner, context, &[size], 0x00ea_2282, guest(0x00fe_d890));
+                    }
+                    let block = slots.field(m, 0x24);
+                    slots.set_field(m, 0x24, block.wrapping_add(size));
+                    slots.set_field(m, 0x1430, block);
+                    slots.mark_dirty(m, 1);
+                    if block != 0 {
+                        let source = call_from(m, c, pg, inner, context, &[], 0x00ea_22a5, guest(0x00fe_d8d0));
+                        for k in 0..24u32 {
+                            let bits = x87_copy_f32(pg.u32(m, source.wrapping_add(4 * k)));
+                            pg.set_u32(m, block.wrapping_add(4 * k), bits);
+                        }
+                    }
+                    let flag_word = slots.field(m, 0x5c);
+                    slots.set_field(m, 0x5c, flag_word & !2);
+                }
+            }
+            call_from(m, c, pg, inner, context, &[0], 0x00ea_2344, guest(0x00fe_d5d0));
+            if (result as i32) >= 0 {
+                return result;
+            }
+        }
+        slots.set_value(m, 0x33a0, 0x31a8, 0x635, 0x635);
+    }
+    result
 }

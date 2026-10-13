@@ -17,7 +17,9 @@ ENTRY, LENGTH = 0x00EA3130, 0x34C
 THIS, VT, L1, L2, VTL, CTX, DT, MODEL2, SKEL, HEAP = (
     0x20000000, 0x20001000, 0x20002000, 0x20003000, 0x20004000, 0x20100000, 0x20200000, 0x20300000, 0x20301000, 0x20400000)
 SP = 0x0F008000
-S64, S68, S30 = 0x30000064, 0x30000068, 0x30000030
+S64, S68, S30, MGR3C = 0x30000064, 0x30000068, 0x30000030, 0x30000003
+PASS, MGR, MVT, REC = 0x20500000, 0x20600000, 0x20601000, 0x20700000
+FED480, FED8D0, FED5D0 = 0x00FED480, 0x00FED8D0, 0x00FED5D0
 FF0780, FF0AD0, EA1FD0, FED890, MEMCPY = 0x00FF0780, 0x00FF0AD0, 0x00EA1FD0, 0x00FED890, 0x012EFEA0
 
 
@@ -46,6 +48,15 @@ def main():
         o.poke(dst, b''.join(struct.pack('<I', 0x3F800000 + r.randrange(1 << 20)) for _ in range(3)))
         return r.choice((0, 1, 0x100, 0xFF, r.randrange(1 << 32)))
 
+    def manager(o, regs, esp):
+        common(o, regs, esp)
+        return o.rng.choice((0, 1, 0x100, 0xFF01))
+
+    def record(o, regs, esp):
+        r = o.rng
+        o.poke(REC, b''.join(struct.pack('<I', r.choice((0x3F800000, 0x7FC00001, r.randrange(1 << 32) & 0xFF7FFFFF))) for _ in range(24)))
+        return REC
+
     def grow(o, regs, esp):
         r = o.rng
         size = o.u32(esp + 4)
@@ -60,12 +71,12 @@ def main():
         o.poke(dst, bytes(o.uc.mem_read(src, n)))
         return dst
 
-    stubs = {FF0780: (1, mask), FF0AD0: (2, mask), EA1FD0: (1, common), S64: (1, common), S68: (6, common), S30: (1, link),
-             FED890: (1, grow), MEMCPY: (0, memcpy, 3)}
+    stubs = {FF0780: (1, mask), FF0AD0: (2, mask), S64: (1, common), S68: (6, common), S30: (1, link),
+             FED890: (1, grow), FED480: (1, common), MGR3C: (2, manager), FED8D0: (0, record), FED5D0: (1, common), MEMCPY: (0, memcpy, 3)}
     oracle = Oracle(ENTRY, LENGTH, stubs,
                     [(THIS, 0x1000), (VT, 0x1000), (L1, 0x1000), (L2, 0x1000), (VTL, 0x1000), (CTX, 0x40000), (DT, 0x4000), (MODEL2, 0x2000),
-                     (HEAP, 0x20000), (0x0F000000, 0x10000), (0x01561000, 0x1000)],
-                    extra_code=[(0x00EA1EE0, 0x5C), (0x00EA1F40, 0x8B)])
+                     (HEAP, 0x20000), (0x0F000000, 0x10000), (0x01561000, 0x1000), (PASS, 0x1000), (MGR, 0x1000), (MVT, 0x1000), (REC, 0x1000), (0x018D2000, 0x1000)],
+                    extra_code=[(0x00EA1EE0, 0x5C), (0x00EA1F40, 0x8B), (0x00EA1FD0, 0x41D)])
     oracle.uc.mem_write(0x01561738, h.code(0x01561738, 4))
     cases = []
     for seed in range(count):
@@ -81,6 +92,16 @@ def main():
         oracle.values = [rng.randrange(1 << 32) for _ in range(3)]
         w(THIS, VT)
         w(VT + 0x64, S64); w(VT + 0x68, S68)
+        w(THIS + 8, rng.choice((0, 4, 8, 0xC, 0x100, 0x300, 0x104, 0x10C, 0x304, rng.randrange(1 << 12))))
+        w(CTX + 0x33A0, rng.choice(oracle.values)); w(CTX + 0x33A4, rng.randrange(1 << 32))
+        w(CTX + 0x1D4, rng.choice((0, PASS, PASS)))
+        uc.mem_write(PASS + 0x10, bytes([rng.choice((0, 0, 4, 1))]))
+        uc.mem_write(CTX + 0x16A, struct.pack('<H', rng.choice((0, 1, 3, 0x101, rng.randrange(1 << 16)))))
+        w(0x018D2C80, MGR); w(MGR, MVT); w(MVT + 0x3C, MGR3C)
+        w(CTX + 0x1430, rng.randrange(1 << 32)); w(CTX + 0x1434, rng.randrange(1 << 32))
+        w(MODEL2 + 0x91C, SKEL)
+        for off in (0x31B0, 0x31C0, 0x31A8):
+            w(DT + off, rng.choice(oracle.values))
         w(THIS + 0xF0, rng.choice((0x1234, 0x5000, 0x1234, 0)))
         w(THIS + 0xF8, rng.randrange(1 << 32))
         w(THIS + 0x108, rng.choice((0, 1, 2, 0x3F, 0x40000000, 0x40000001, 0x40000003, 0x40000002, 0x4000003F, rng.randrange(1 << 32))))
