@@ -2421,11 +2421,12 @@ opening (codex-31), route perf (codex-29).
   allocations **12.910 -> 0.162/draw**; deferred frame incl GPU wait
   **5.30 -> 3.82 ms**. Queue transport **4,200,003 -> 2** allocations over
   4.2 million draws. Shared-host fixture, no gameplay FPS claim.
-- **13 command + 24 CPU + 29 distinct GPU tests pass**, including all
+- **13 command + 24 ddgpu unit + 65 integration tests pass**, including all
   150 render-state and 200 target-format cases. Light runtime **199 distinct
   pass / inherited gamma failure / 5 ignored** after two isolated timing
-  retries. Additional cross-path GPU checks compile but await head's pause.
+  retries. Copy/MSAA/presentation/frame/native cross-path checks also pass;
+  four existing integration tests/benchmark remain ignored.
 - `_NLG_Return2` is not proven to be unwind cost: no per-command catch exists,
-  and the old profiler discards symbol displacement. Next: finish paused
-  checks; head integrates and measures gameplay plus raw-PC attribution.
+  and the old profiler discards symbol displacement. Source `e04b76ce` is in
+  the L146 integration gate. Next: head measures gameplay and raw-PC attribution.
   Details: `docs/tasks/L143-backend-thread.md`.

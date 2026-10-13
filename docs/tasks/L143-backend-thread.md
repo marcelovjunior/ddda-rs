@@ -95,9 +95,14 @@ Source baseline: `4933e05846242b46a8a372db7400fffe39e2fdad`.
   throughput and parallel concurrency) passed immediate isolated reruns:
   **199 distinct pass**, with only the inherited fullscreen-gamma Reset
   failure outstanding. No assertion/threshold changes.
-- Copy, MSAA, presentation, synthetic frame and native-path test binaries
-  compile in release; execution held by head's combo23 pause (#12170).
-  These additional cross-path checks are pending, not counted as passing.
+- After the combo23 pause cleared, **36 additional integration tests pass**:
+  copy 3, MSAA 3, presentation 5, synthetic frame 3, native 6, native jobs 7,
+  native comparison 4 and native comparison jobs 5. One existing exploratory
+  MSAA test is ignored. No failure, timeout or unavailable-adapter skip in
+  this cross-path gate. Total ddgpu: **24 unit + 65 distinct integration
+  tests pass**, four existing ignored integration tests/benchmark. All 13
+  integration test binaries were covered; GPU invocations were individually
+  bounded to 60 seconds.
 
 Three alternating baseline/candidate release pairs, 1000 prebuilt draws and
 five measured frames per process, after warm-up. The other renderer agent
@@ -130,5 +135,8 @@ that directory or the player's installation is committed. SHA-256 receipts:
 - Candidate queue benchmark: `27c1ea0b5c55cf2ec33a84efab1d5d17bd9c39b2b1137d682b81a3c734ac9b20`
 
 No game/shard execution, game data edits, push, or gameplay FPS/image claim.
-Next: finish the held cross-path GPU checks when pause clears; head integrates
-with L138 and runs the same-scene image/FPS and symbol-displacement profile.
+Source commit: `e04b76ceeef0cb413de0d5931678b621644362d2`. The integration
+agent has adopted it for L146; this final cross-path gate changes only docs.
+Next: head runs the same-scene image/FPS and symbol-displacement profile,
+then integrates with L138 (preserve its metadata/recorder hooks and unwrap
+`Hashed<PipelineKey>.key` where it needs the full pipeline descriptor).
