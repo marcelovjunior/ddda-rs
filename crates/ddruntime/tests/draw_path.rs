@@ -175,6 +175,7 @@ fn a_draw_costs_the_services() {
     assert_eq!(com(&mut s, dev, 41, &[]), 0); // BeginScene
 
     let n = 2000;
+    let dirty_samplers = std::env::var_os("DDRUNTIME_BENCH_DIRTY_SAMPLERS").is_some();
     // the calls alone: GetRenderState
     let t = Instant::now();
     for _ in 0..n {
@@ -188,7 +189,8 @@ fn a_draw_costs_the_services() {
     let constants = t.elapsed().as_secs_f64() * 1e6 / n as f64;
     let t = Instant::now();
     let allocations = ALLOCS.load(Ordering::Relaxed);
-    for _ in 0..n {
+    for k in 0..n {
+        if dirty_samplers { assert_eq!(com(&mut s, dev, 69, &[0, 1, 1 + k % 3]), 0); }
         assert_eq!(com(&mut s, dev, 82, &[4, 0, 0, 1000, 0, 300]), 0);
     }
     let draw = t.elapsed().as_secs_f64() * 1e6 / n as f64;
@@ -232,6 +234,8 @@ fn draws_share_immutable_payloads_and_detach_changed_constants() {
     ddruntime::d3d9draw::recorded(|r| {
         let (a, b, c) = (&r.draws[0], &r.draws[1], &r.draws[2]);
         assert_eq!(a, b);
+        assert_eq!(a.vs_constants.f.len(), 8);
+        assert_eq!(a.ps_constants.f.len(), 8);
         assert!(Arc::ptr_eq(a.vertex_shader.as_ref().unwrap(), c.vertex_shader.as_ref().unwrap()));
         assert!(Arc::ptr_eq(a.pixel_shader.as_ref().unwrap(), c.pixel_shader.as_ref().unwrap()));
         assert_eq!(a.vertex_shader.as_deref().unwrap(), vertex_shader(8));
@@ -248,5 +252,102 @@ fn draws_share_immutable_payloads_and_detach_changed_constants() {
         assert_eq!(d.ps_constants.i[0], [5, 6, 7, 8]);
         assert_eq!(d.ps_constants.b[0], 5);
         assert!(Arc::ptr_eq(&c.vs_constants, &d.vs_constants));
+    }).unwrap();
+}
+
+#[test]
+fn shader_rebinding_preserves_registers_outside_the_previous_extent() {
+    use std::sync::Arc;
+    let Some((mut s, dev)) = device_session() else { return; };
+    put(&mut s, DATA, &vertex_shader(8));
+    let short = out(&mut s, dev, 91, &[DATA, OUT]);
+    put(&mut s, DATA, &vertex_shader(201));
+    let long = out(&mut s, dev, 91, &[DATA, OUT]);
+    put(&mut s, DATA, &[7; 4]);
+    assert_eq!(com(&mut s, dev, 94, &[200, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 41, &[]), 0);
+    for shader in [short, long, short] {
+        assert_eq!(com(&mut s, dev, 92, &[shader]), 0);
+        assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    }
+    put(&mut s, DATA, &[8; 4]);
+    assert_eq!(com(&mut s, dev, 94, &[200, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    assert_eq!(com(&mut s, dev, 92, &[long]), 0);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    ddruntime::d3d9draw::recorded(|r| {
+        assert_eq!(r.draws[0].vs_constants.f.len(), 8);
+        assert_eq!(r.draws[1].vs_constants.f.len(), 201);
+        assert_eq!(r.draws[1].vs_constants.f[200], [7; 4]);
+        assert!(Arc::ptr_eq(&r.draws[2].vs_constants, &r.draws[3].vs_constants));
+        assert_eq!(r.draws[4].vs_constants.f[200], [8; 4]);
+    }).unwrap();
+}
+
+#[test]
+fn dirty_groups_share_unchanged_lists_and_preserve_prior_draws() {
+    use d3d9cmd::{Indices, Vertices};
+    use std::sync::Arc;
+    let Some((mut s, dev)) = device_session() else { return; };
+    let tex_a = out(&mut s, dev, 23, &[4, 4, 1, 0, 21, 1, OUT, 0]);
+    let tex_b = out(&mut s, dev, 23, &[8, 8, 1, 0, 21, 1, OUT, 0]);
+    let vb = out(&mut s, dev, 26, &[1024, 8, 0, 1, OUT, 0]);
+    let ib_a = out(&mut s, dev, 27, &[128, 8, 101, 1, OUT, 0]);
+    let ib_b = out(&mut s, dev, 27, &[128, 8, 102, 1, OUT, 0]);
+    let rt = out(&mut s, dev, 28, &[8, 8, 21, 0, 0, 0, OUT, 0]);
+    assert_eq!(com(&mut s, dev, 65, &[0, tex_a]), 0);
+    assert_eq!(com(&mut s, dev, 69, &[0, 5, 1]), 0);
+    assert_eq!(com(&mut s, dev, 100, &[0, vb, 0, 16]), 0);
+    assert_eq!(com(&mut s, dev, 104, &[ib_a]), 0);
+    assert_eq!(com(&mut s, dev, 41, &[]), 0);
+    let indexed = |s: &mut Session| assert_eq!(com(s, dev, 82, &[4, 0, 0, 3, 0, 1]), 0);
+    indexed(&mut s);
+    // Redundant setters do not invalidate the immutable lists.
+    assert_eq!(com(&mut s, dev, 65, &[0, tex_a]), 0);
+    assert_eq!(com(&mut s, dev, 69, &[0, 5, 1]), 0);
+    assert_eq!(com(&mut s, dev, 100, &[0, vb, 0, 16]), 0);
+    assert_eq!(com(&mut s, dev, 102, &[0, 1]), 0);
+    indexed(&mut s);
+    assert_eq!(com(&mut s, dev, 69, &[0, 5, 2]), 0);
+    indexed(&mut s);
+    assert_eq!(com(&mut s, dev, 65, &[0, tex_b]), 0);
+    assert_eq!(com(&mut s, dev, 100, &[0, vb, 16, 32]), 0);
+    assert_eq!(com(&mut s, dev, 102, &[0, 0x4000_0002]), 0);
+    assert_eq!(com(&mut s, dev, 104, &[ib_b]), 0);
+    assert_eq!(com(&mut s, dev, 37, &[0, rt]), 0);
+    assert_eq!(com(&mut s, dev, 39, &[0]), 0);
+    indexed(&mut s);
+    // A nonindexed draw must not inherit the cached index buffer.
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    // UP resets stream zero even though it never called SetStreamSource.
+    assert_eq!(com(&mut s, dev, 83, &[4, 1, DATA, 16]), 0);
+    indexed(&mut s);
+    ddruntime::d3d9draw::recorded(|r| {
+        let (a, b, c, d) = (&r.draws[0], &r.draws[1], &r.draws[2], &r.draws[3]);
+        let streams = |d: &d3d9cmd::DrawCall| match &d.vertices {
+            Vertices::Streams(v) => v.clone(), _ => panic!("expected streams"),
+        };
+        assert_eq!(a, b);
+        assert!(Arc::ptr_eq(&a.textures, &b.textures));
+        assert!(Arc::ptr_eq(&streams(a), &streams(c)));
+        assert!(!Arc::ptr_eq(&a.textures, &c.textures));
+        assert_eq!(a.textures[0].states[5], 1);
+        assert_eq!(c.textures[0].states[5], 2);
+        assert_eq!(a.textures[0].resource, tex_a);
+        assert_eq!(d.textures[0].resource, tex_b);
+        assert_eq!(d.textures[0].width, 8);
+        assert_eq!(streams(a).as_ref(), &[(0, vb, 0, 16, 1)]);
+        assert_eq!(streams(d).as_ref(), &[(0, vb, 16, 32, 0x4000_0002)]);
+        assert_eq!(a.indices, Indices::Buffer(ib_a, 101));
+        assert_eq!(d.indices, Indices::Buffer(ib_b, 102));
+        assert_ne!(a.targets[0].as_ref().unwrap().surface, rt);
+        assert_eq!(d.targets[0].as_ref().unwrap().surface, rt);
+        assert_eq!(d.viewport[2..4], [8, 8]);
+        assert!(a.depth.is_some());
+        assert!(d.depth.is_none());
+        assert_eq!(r.draws[4].indices, Indices::None);
+        assert!(matches!(r.draws[5].vertices, Vertices::Inline { .. }));
+        assert!(streams(&r.draws[6]).is_empty());
+        assert_eq!(r.draws[6].indices, Indices::Buffer(ib_b, 102));
     }).unwrap();
 }

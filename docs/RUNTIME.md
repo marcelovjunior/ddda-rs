@@ -1,5 +1,18 @@
 # Phase 1 runtime proposal (R01)
 
+## L109 loading telemetry
+
+`DDRUNTIME_LOAD_LOG=1` adds process-relative startup/movie/file/archive/GPU
+timing and frame counters. `scripts/load_timeline.py` produces a timeline;
+UI milestones require explicit head-observed timestamps. Service totals
+are inclusive across threads, not additive wall-time phases. Archive
+wrappers retain original code and registered overrides. See
+[timing boundaries and validation](tasks/L109-loading.md). ReadFile and
+ReadFileEx reuse bounded per-thread host scratch for requests up to 128 KiB;
+they still read the file every time. Synthetic warm 128 KiB service time
+was 11.569 -> 9.643 us/call, allocations 1 -> 0. Whole-game phase timings
+remain pending head runs.
+
 ## L82 render service tails (2026-10-13)
 
 **Input convoy follow-up:** GetAsyncKeyState/GetKeyState and the stateless
@@ -860,3 +873,45 @@ The wgpu/ash interop readback probe passes using separate ordered command
 encoders and explicit resource transitions; raw and normal commands cannot
 share one encoder in wgpu 29.0.4. See `docs/tasks/L110-native-device.md` for
 ownership limits, benchmark conditions and the next compact-constant step.
+
+
+
+### L90 compact shader constants (2026-10-13)
+
+The runtime retains complete VS/PS register banks but draws share immutable
+prefixes sized from bytecode reads. Matrix opcodes include implicit rows;
+relative addressing conservatively retains all registers. Setters preserve
+prior draws and update the full bank for a later shader with a larger extent.
+The backend translates matching compact WGSL uniform layouts and bulk-copies
+float bits into the ring. Integer/bool/extra offsets follow the compact float
+array. Dynamic offsets stay aligned to 256 bytes and fixed maximum binding
+ranges fit in the buffer even near rollover; a two-stage preflight prevents
+restarting between the pixel and vertex allocations.
+
+The synthetic VS150/PS32 float payload falls from 7,680 to 2,912 bytes.
+CPU-only repeated-draw timings are unchanged within noise. A 4,096-draw
+ring-rollover driver regression and the full 150-case texture/state matrix
+pass; the remaining GPU gate/timings await the shared slot and L96 driver
+teardown fix. See the L90 brief for the light-suite result and independently
+reproduced fullscreen-gamma failure.
+
+
+### L90 dirty draw groups (2026-10-13)
+
+Device setters mark texture/sampler, stream, shader, declaration, index or
+render-target groups dirty. The snapshot refreshes only those groups;
+unchanged texture and stream Arc slices also make command cloning cheap.
+Target/index invalidation is setter-driven, preserving correct metadata
+when guest addresses are later reused. UP draws invalidate the bindings
+they reset. Resource shadow flushing remains independent of these flags.
+The snapshot uses fixed resource-ID scratch space, indexed draws use stack
+arguments, and constant setters reuse staging words. Production queue and
+worker plumbing are unchanged.
+
+The synthetic runtime draw path falls from 10 to 3 allocations per draw
+(including test COM arguments), with paired debug medians 39.19 to 23.05 us
+under variable shared load. The runtime snapshot regression and frame
+round-trip tests pass; full light tests retain the independently reproduced
+fullscreen-gamma Reset failure. GPU tests/examples compile; execution gate
+is pending head's exclusive run. See the L90 brief for details and L97/L98
+merge notes.

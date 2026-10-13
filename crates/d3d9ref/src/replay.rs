@@ -243,7 +243,7 @@ impl Session {
         for k in 1..4u32 {
             com!(d, SET_RENDER_TARGET, (u32, Obj), k, std::ptr::null_mut::<c_void>());
         }
-        for b in draws.iter().flat_map(|d| &d.textures) {
+        for b in draws.iter().flat_map(|d| d.textures.iter()) {
             self.texture(b)?;
         }
         for c in clears {
@@ -669,7 +669,7 @@ impl Session {
         com!(d, SET_VIEWPORT, (*const u32), vp.as_ptr());
         com!(d, SET_SCISSOR_RECT, (*const i32), draw.scissor.as_ptr());
         // textures
-        for b in &draw.textures {
+        for b in draw.textures.iter() {
             let tex = self.texture(b)?;
             com!(d, SET_TEXTURE, (u32, Obj), b.sampler, tex);
             for (k, &v) in b.states.iter().enumerate().skip(1) {
@@ -686,7 +686,7 @@ impl Session {
                      draw.primitive, draw.min_index, draw.vertex_count, draw.primitives, ib.as_ptr(), *format, bytes.as_ptr(), *stride)
             }
             (Vertices::Streams(streams), indices) => {
-                for &(n, res, off, stride, freq) in streams {
+                for &(n, res, off, stride, freq) in streams.iter() {
                     let vb = self.vertex_buffer(res)?;
                     com!(d, SET_STREAM_SOURCE, (u32, Obj, u32, u32), n, vb, off, stride);
                     com!(d, SET_STREAM_SOURCE_FREQ, (u32, u32), n, freq.max(1));

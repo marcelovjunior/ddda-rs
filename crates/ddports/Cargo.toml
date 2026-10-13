@@ -13,3 +13,5 @@ ddnative-base = { path = "../ddnative-base" }
 mtmath = { path = "../mtmath" }
 mtcore = { path = "../mtcore" }
 mtframe = { path = "../mtframe" }
+# L112: the nDraw command executor (0x00DAB480)
+mtdraw = { path = "../mtdraw" }

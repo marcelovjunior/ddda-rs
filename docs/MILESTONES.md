@@ -16,6 +16,40 @@
   ignored**. Next: L90 compact native constant layouts and repeat timings.
   Details and limitations: `docs/tasks/L110-native-device.md`.
 
+### L111 nDraw executor observer (2026-10-13)
+
+- Opt-in read-only executor wrapper plus Present-selected frame counters;
+  off registers no new execution/Present hooks. Nested command decoder,
+  state/shader/sampler/buffer identities and ordered surface target runs
+  sourced to DAB480/DA6DA0 and apply helpers. Counts are raw records.
+- Seven synthetic regressions pass; enabled light unit suite 35 pass /
+  1 existing ignored. Full suite 158 pass / 2 existing timing failures /
+  1 ignored; both failures pass isolated reruns (160 verified across runs).
+  Fullscreen gamma fails with switch off too on current desktop; recorded
+  L34 display resolves it. No tests/checks weakened.
+- cap1 last20 analytical extraction preserves 108,502 command payloads
+  and 50,507 referenced blobs (284 MB raw vs 19.79 GB whole-capture blobs).
+  Unchanged frame_stats completed: 107,544 draws / 19,704 passes.
+- Mean 5,377.2 draws / 985.2 passes per frame, including 898.2 single-draw
+  tiny float32 target passes. Constants change 248,722 bytes/frame;
+  fixed-state lists differ for 4.898% of predecessor comparisons.
+- Next: head-run DDRUNTIME_NDRAW_STATS=1, EVERY=1 for executor/capture
+  correlation; no game, image-equivalence or FPS claim from this batch.
+  Details: docs/tasks/L111-executor-stats.md.
+### L109 loading instrumentation and read scratch (2026-10-13)
+
+- Opt-in process-relative init/movie/file/archive/GPU/frame telemetry;
+  original archive read/inflate bodies retained. Timeline parser keeps
+  unobserved title/menu/loading phases explicitly unmeasured.
+- Synthetic optimized warm 128 KiB ReadFile: **11.569 -> 9.643 us/call**,
+  **1 -> 0 allocations** (three alternating pairs, five samples each).
+  Small reads have no reliable timing win; no game loading speedup claim.
+- Light runtime serial suite: **153 passed, 1 existing gamma failure,
+  2 ignored**. Parser **8 pass**, ddports **1 pass**. Details:
+  `docs/tasks/L109-loading.md`.
+- Next: head-run unskipped boot/menu/save baseline using
+  `DDRUNTIME_LOAD_LOG=1`, then same-save before/after phase comparison.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants
@@ -1994,6 +2028,45 @@ opening (codex-31), route perf (codex-29).
 - Next: head integrates with the relocated L90 snapshot and compares FPS;
   full-suite green also requires resolving the existing gamma/Reset failure.
   Details: `docs/tasks/L98-clean-flush.md`.
+
+### L96 headless encoder-hang investigation (2026-10-13)
+
+- Concurrent cache tests reproduced a driver deadlock: the WGL instance
+  thread spins during shutdown while Vulkan device/pipeline creation waits.
+  No encoder/readback loop was observed; L88/L95 batching remains intact.
+- Headless initialization now selects primary backends by default, keeping
+  `WGPU_BACKEND` overrides. Focused regression checks clear/copy submit
+  limits, resource tracking and upload ordering.
+- Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
+  comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
+- Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+### L90 compact constants (2026-10-13)
+
+- Implemented bytecode-bounded constant snapshots and matching WGSL uniform
+  layouts, little-endian bulk float copying, and valid dynamic binding
+  ranges across ring rollover. Relative addressing retains full banks.
+- Fixture float bytes: **7,680 -> 2,912**. Light suite **151 pass / 1 fail /
+  1 ignored**; failure is the baseline fullscreen-gamma Reset issue also
+  reproduced by L98. Prefix/rebinding and byte-packing regressions pass.
+- GPU compact-layout/ring-rollover regression: **4,096 draws, exact driver
+  pixel match**. Full 150-case texture/state matrix and completed draw
+  comparisons pass. Next: remaining serialized GPU gate/timings after
+  L96's independent WGL teardown fix; snapshot groups stay separate.
+
+
+### L90 dirty snapshot groups (2026-10-13)
+
+- Implemented setter-driven immutable draw groups, shared texture/stream
+  lists, stack draw/read arguments, and reused constant-setter staging.
+  Resource flushing and backend worker ordering are unchanged.
+- Runtime allocations **10 -> 3/draw**; paired median **39.19 -> 23.05 us**
+  (shared-machine load). **152 runtime + 5 frame tests pass**, one baseline
+  fullscreen-gamma failure and one existing ignored test remain. New
+  binding-transition/UP/old-snapshot regression passes. GPU targets compile.
+- Next: complete serialized GPU gate/timings after head's gameplay run;
+  integrate snapshot module with L97 render sharing and L98 flush_reads.
+
 
 ### L96 headless encoder-hang investigation (2026-10-13)
 

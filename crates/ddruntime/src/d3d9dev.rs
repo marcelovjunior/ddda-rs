@@ -53,7 +53,7 @@ pub struct SurfaceDesc {
 pub enum Kind {
     Device(Box<DeviceData>),
     /// IDirect3DVertexShader9 / IDirect3DPixelShader9: the bytecode
-    Shader { device: u32, tokens: std::sync::Arc<[u32]> },
+    Shader { device: u32, tokens: std::sync::Arc<[u32]>, float_constants: usize },
     /// IDirect3DVertexDeclaration9: the elements (8 bytes each, END excluded)
     Declaration { device: u32, elements: std::sync::Arc<[[u8; 8]]> },
     /// `gamma`: the ramp SetGammaRamp gave this chain (None: identity)
@@ -475,6 +475,7 @@ pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
             with_device(device, |d| d.swap_chains.push(chain));
             bind_implicit(m, device, chain, pp);
             m.set_u32(out, device);
+            crate::load_log::event("d3d_device_created", format_args!("device={device:#x}"));
             D3D_OK
         }
     };
@@ -772,6 +773,19 @@ fn present(m: &mut dyn Mem, cpu: &mut Cpu) {
     let chain = with_device(arg(m, cpu, 0), |d| d.swap_chains[0]);
     cpu.eax = present_chain(m, chain);
     ret(m, cpu, 20);
+}
+
+// Selected at registration only. The disabled path has no per-Present check.
+fn present_ndraw_stats(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let device = arg(m, cpu, 0);
+    present(m, cpu);
+    if cpu.eax == D3D_OK { crate::ndraw_stats::present(device); }
+}
+
+fn chain_present_ndraw_stats(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let device = with_chain(arg(m, cpu, 0), |d, _, _, _| d);
+    chain_present(m, cpu);
+    if cpu.eax == D3D_OK { crate::ndraw_stats::present(device); }
 }
 
 /// SetGammaRamp(this, swap chain, flags, D3DGAMMARAMP*): returns nothing.
@@ -1137,6 +1151,13 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
         // L93: every D3D method holds the D3D lock; the hot device methods
         // that touch only the D3D objects and the backend take no guest lock
         for &(slot, f) in spec.methods {
+            let f = if crate::ndraw_stats::enabled() {
+                match (spec.name, slot) {
+                    ("IDirect3DDevice9", 17) => present_ndraw_stats as ddnative_base::x86::LiftFn,
+                    ("IDirect3DSwapChain9", 3) => chain_present_ndraw_stats as ddnative_base::x86::LiftFn,
+                    _ => f,
+                }
+            } else { f };
             let only_d3d = spec.name == "IDirect3DDevice9" && DEVICE_ONLY_SLOTS.contains(&slot)
                 || spec.name == "IDirect3DSwapChain9" && slot == 3;
             registry.replace(m.u32(v + 4 * slot), crate::dispatch::Binding::Device(f, !only_d3d));

@@ -17,6 +17,7 @@ use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 use crate::fasthash::FxMap as HashMap;
 use std::sync::Arc;
+use crate::d3d9draw::snapshot_groups as groups;
 
 const RS_ZENABLE: u32 = 7;
 const TSS_TEXCOORDINDEX: u32 = 11;
@@ -25,13 +26,125 @@ pub const PS_FLOATS: u32 = 224;
 
 pub use d3d9cmd::Constants;
 
+/// A compact immutable draw view of the device's complete register bank.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ConstantSnapshot {
+    pub dirty: bool,
+    value: Option<Arc<Constants>>,
+}
+
+impl ConstantSnapshot {
+    fn get(&mut self, source: &Arc<Constants>, count: usize) -> Arc<Constants> {
+        let count = count.min(source.f.len());
+        if count == source.f.len() { return source.clone(); }
+        if let Some(value) = &self.value {
+            if value.f.len() == count && (!self.dirty ||
+                (value.f == source.f[..count] && value.i == source.i && value.b == source.b)) {
+                self.dirty = false;
+                return value.clone();
+            }
+        }
+        let value = self.value.get_or_insert_with(|| Arc::new(Constants::default()));
+        if let Some(dst) = Arc::get_mut(value) {
+            dst.f.clear();
+            dst.f.extend_from_slice(&source.f[..count]);
+            dst.i = source.i;
+            dst.b = source.b;
+        } else {
+            *value = Arc::new(Constants { f: source.f[..count].to_vec(), i: source.i, b: source.b });
+        }
+        self.dirty = false;
+        value.clone()
+    }
+}
+
+#[cfg(test)]
+mod compact_constant_tests {
+    use super::*;
+
+    #[test]
+    fn prefixes_preserve_old_draws_and_reuse_unread_changes() {
+        let mut source = Arc::new(Constants { f: vec![[0; 4]; 256], ..Default::default() });
+        let mut cache = ConstantSnapshot::default();
+        let first = cache.get(&source, 8);
+        Arc::make_mut(&mut source).f[200] = [7; 4];
+        cache.dirty = true;
+        assert!(Arc::ptr_eq(&first, &cache.get(&source, 8)));
+        let full = cache.get(&source, 256);
+        assert_eq!(full.f[200], [7; 4]);
+        Arc::make_mut(&mut source).f[7] = [9; 4];
+        cache.dirty = true;
+        let changed = cache.get(&source, 8);
+        assert_eq!(first.f[7], [0; 4]);
+        assert_eq!(full.f[7], [0; 4]);
+        assert_eq!(changed.f[7], [9; 4]);
+        assert_eq!(cache.get(&source, 201).f[200], [7; 4]);
+        assert!(cache.get(&source, 0).f.is_empty());
+    }
+}
+
+/// Dense D3D9 state banks. Presence is separate from value: an unset state
+/// still returns INVALIDCALL, while a stored zero is present. The spill map
+/// preserves the service's existing behavior for out-of-range state numbers.
+#[derive(Clone, Debug)]
+pub struct DenseStates<const N: usize, const M: usize> {
+    values: [[u32; M]; N],
+    present: [[bool; M]; N],
+    spill: HashMap<(u32, u32), u32>,
+}
+
+impl<const N: usize, const M: usize> Default for DenseStates<N, M> {
+    fn default() -> Self {
+        Self { values: [[0; M]; N], present: [[false; M]; N], spill: HashMap::default() }
+    }
+}
+
+impl<const N: usize, const M: usize> DenseStates<N, M> {
+    fn slot(slot: u32) -> Option<usize> {
+        // D3DDMAPSAMPLER and the four vertex samplers follow pixel slots.
+        if N == 21 && (256..261).contains(&slot) { return Some((slot - 240) as usize); }
+        (slot < N as u32 && !(N == 21 && (16..21).contains(&slot))).then_some(slot as usize)
+    }
+
+    pub fn get(&self, &(slot, state): &(u32, u32)) -> Option<&u32> {
+        if let Some(slot) = Self::slot(slot).filter(|_| state < M as u32) {
+            self.present[slot][state as usize].then_some(&self.values[slot][state as usize])
+        } else {
+            self.spill.get(&(slot, state))
+        }
+    }
+
+    pub fn insert(&mut self, (slot, state): (u32, u32), value: u32) -> Option<u32> {
+        if let Some(slot) = Self::slot(slot).filter(|_| state < M as u32) {
+            let state = state as usize;
+            let old = self.present[slot][state].then_some(self.values[slot][state]);
+            self.values[slot][state] = value;
+            self.present[slot][state] = true;
+            old
+        } else {
+            self.spill.insert((slot, state), value)
+        }
+    }
+
+    pub(crate) fn row(&self, slot: u32) -> [u32; M] {
+        if let Some(slot) = Self::slot(slot) { self.values[slot] }
+        else { std::array::from_fn(|state| self.get(&(slot, state as u32)).copied().unwrap_or(0)) }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DeviceState {
+    pub(crate) draw_groups: Option<Box<groups::Groups>>,
+    pub(crate) draw_dirty: u8,
+    /// Reused staging for Set*ShaderConstant; commands own immutable banks.
+    constant_words: Vec<u32>,
+    pub(crate) constant_snapshots: [ConstantSnapshot; 2],
+    pub(crate) shader_float_counts: [usize; 2],
     pub render: RenderStates,
     /// (sampler, type) -> value; samplers 0..15 and vertex samplers 257..260
-    pub sampler: HashMap<(u32, u32), u32>,
+    pub sampler: DenseStates<21, 14>,
     /// (stage, type) -> value
-    pub stage: HashMap<(u32, u32), u32>,
+    pub stage: DenseStates<8, 33>,
     /// stage or vertex sampler -> texture object
     pub textures: HashMap<u32, u32>,
     /// X, Y, Width, Height, MinZ, MaxZ (the floats as bits)
@@ -54,39 +167,59 @@ pub struct DeviceState {
 /// The render states by number, kept sorted: a draw carries them in order
 /// as they are (L78: a hash map was collected and sorted for every draw, a
 /// BTreeMap walked node by node).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RenderStates(d3d9cmd::RenderStateList);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderStates {
+    list: d3d9cmd::RenderStateList,
+    // Index + 1, with zero meaning absent. Unusual state IDs use binary search.
+    positions: [u8; 256],
+}
+
+impl Default for RenderStates {
+    fn default() -> Self { Self { list: Default::default(), positions: [0; 256] } }
+}
 
 impl RenderStates {
+    fn position(&self, state: u32) -> Option<usize> {
+        if let Some(&index) = self.positions.get(state as usize) {
+            if index == 255 { return self.list.binary_search_by_key(&state, |e| e.0).ok(); }
+            return (index != 0).then(|| index as usize - 1);
+        }
+        self.list.binary_search_by_key(&state, |e| e.0).ok()
+    }
+
     pub fn get(&self, state: &u32) -> Option<&u32> {
-        self.0.binary_search_by_key(state, |e| e.0).ok().map(|i| &self.0[i].1)
+        self.position(*state).map(|i| &self.list[i].1)
     }
 
     /// Set a state; the value it had.
     pub fn insert(&mut self, state: u32, value: u32) -> Option<u32> {
-        match self.0.binary_search_by_key(&state, |e| e.0) {
+        match self.position(state) {
             // the same value: no copy of a list draws still share
-            Ok(i) if self.0[i].1 == value => Some(value),
-            Ok(i) => Some(std::mem::replace(&mut self.0[i].1, value)),
-            Err(i) => {
-                self.0.insert(i, (state, value));
+            Some(i) if self.list[i].1 == value => Some(value),
+            Some(i) => Some(std::mem::replace(&mut self.list[i].1, value)),
+            None => {
+                let i = self.list.binary_search_by_key(&state, |e| e.0).unwrap_err();
+                self.list.insert(i, (state, value));
+                for (i, &(key, _)) in self.list.iter().enumerate() {
+                    if let Some(pos) = self.positions.get_mut(key as usize) { *pos = (i + 1).min(255) as u8; }
+                }
                 None
             }
         }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&u32, &u32)> {
-        self.0.iter().map(|(k, v)| (k, v))
+        self.list.iter().map(|(k, v)| (k, v))
     }
 
     /// (state, value) in state order.
     pub fn as_slice(&self) -> &[(u32, u32)] {
-        &self.0
+        &self.list
     }
 
     /// The list itself, shared (a draw keeps it; L97).
     pub fn shared(&self) -> d3d9cmd::RenderStateList {
-        self.0.clone()
+        self.list.clone()
     }
 }
 
@@ -102,12 +235,16 @@ impl FromIterator<(u32, u32)> for RenderStates {
 }
 
 impl DeviceState {
+    pub(crate) fn draw_constants(&mut self, counts: [usize; 2]) -> [Arc<Constants>; 2] {
+        [self.constant_snapshots[0].get(&self.vs, counts[0]),
+         self.constant_snapshots[1].get(&self.ps, counts[1])]
+    }
     /// A fresh device's state for a back buffer of `w` x `h`.
     pub fn new(auto_depth: bool, w: u32, h: u32) -> DeviceState {
         let p = profile();
         let mut render: RenderStates = p.render_states.iter().copied().collect();
         render.insert(RS_ZENABLE, auto_depth as u32);
-        let mut sampler = HashMap::default();
+        let mut sampler = DenseStates::default();
         for &(s, t, v) in &p.sampler_states {
             // the displacement-map sampler 256 starts like the vertex samplers
             let range: Vec<u32> = if s == 0 { (0..16).collect() } else { (256..261).collect() };
@@ -115,7 +252,7 @@ impl DeviceState {
                 sampler.insert((k, t), v);
             }
         }
-        let mut stage = HashMap::default();
+        let mut stage = DenseStates::default();
         for &(st, t, v) in &p.stage_states {
             let range: Vec<u32> = if st == 0 { vec![0] } else { (1..8).collect() };
             for k in range {
@@ -123,6 +260,11 @@ impl DeviceState {
             }
         }
         DeviceState {
+            draw_groups: None,
+            draw_dirty: u8::MAX,
+            constant_words: Vec::new(),
+            constant_snapshots: Default::default(),
+            shader_float_counts: [VS_FLOATS as usize, PS_FLOATS as usize],
             render,
             sampler,
             stage,
@@ -195,7 +337,9 @@ pub fn get_render_state(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetSamplerState(this, sampler, type, value).
 pub fn set_sampler_state(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, smp, t, v) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
-    state(dev, |s| s.sampler.insert((smp, t), v));
+    state(dev, |s| {
+        if s.sampler.insert((smp, t), v) != Some(v) { s.draw_dirty |= groups::TEXTURES; }
+    });
     cpu.eax = D3D_OK;
     ret(m, cpu, 16);
 }
@@ -239,7 +383,11 @@ pub fn get_texture_stage_state(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn set_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, st, tex) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     cpu.eax = if st < 16 || (256..261).contains(&st) {
-        let old = state(dev, |s| if tex == 0 { s.textures.remove(&st) } else { s.textures.insert(st, tex) }).unwrap_or(0);
+        let old = state(dev, |s| {
+            let old = if tex == 0 { s.textures.remove(&st) } else { s.textures.insert(st, tex) }.unwrap_or(0);
+            if old != tex { s.draw_dirty |= groups::TEXTURES; }
+            old
+        });
         rebind(old, tex);
         D3D_OK
     } else {
@@ -324,7 +472,10 @@ pub fn set_render_target(m: &mut dyn Mem, cpu: &mut Cpu) {
             Some(Kind::Surface { desc, .. }) => Some((desc.width, desc.height)),
             _ => None,
         });
-        let old = with_device(dev, |d| std::mem::replace(&mut d.render_targets[index as usize], surf));
+        let old = with_device(dev, |d| {
+            d.state.draw_dirty |= groups::TARGETS;
+            std::mem::replace(&mut d.render_targets[index as usize], surf)
+        });
         rebind(old, surf);
         if index == 0 {
             if let Some((w, h)) = size {
@@ -341,7 +492,10 @@ pub fn set_render_target(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetDepthStencilSurface(this, surface or NULL).
 pub fn set_depth_stencil_surface(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, surf) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    let old = with_device(dev, |d| std::mem::replace(&mut d.depth_stencil, surf));
+    let old = with_device(dev, |d| {
+        d.state.draw_dirty |= groups::TARGETS;
+        std::mem::replace(&mut d.depth_stencil, surf)
+    });
     rebind(old, surf);
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
@@ -387,8 +541,10 @@ fn read_tokens(m: &dyn Mem, p: u32) -> Vec<u32> {
 fn create_shader(m: &mut dyn Mem, cpu: &mut Cpu, iface: &'static str, stage_bits: u32) {
     let (dev, p, out) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     let tokens = read_tokens(m, p);
-    cpu.eax = if tokens[0] >> 16 == stage_bits && d3d9shader::parse(&tokens).is_ok() {
-        let o = new_object(m, iface, Kind::Shader { device: dev, tokens: tokens.into() });
+    let parsed = d3d9shader::parse(&tokens);
+    cpu.eax = if tokens[0] >> 16 == stage_bits && parsed.is_ok() {
+        let float_constants = parsed.unwrap().float_constant_count();
+        let o = new_object(m, iface, Kind::Shader { device: dev, tokens: tokens.into(), float_constants });
         m.set_u32(out, o);
         D3D_OK
     } else {
@@ -404,7 +560,30 @@ pub fn create_pixel_shader(m: &mut dyn Mem, cpu: &mut Cpu) { create_shader(m, cp
 fn set_bound(m: &mut dyn Mem, cpu: &mut Cpu, iface: &str, slot: fn(&mut DeviceState) -> &mut u32) {
     let (dev, o) = (arg(m, cpu, 0), arg(m, cpu, 1));
     cpu.eax = if o == 0 || is(o, iface) {
-        let old = state(dev, |s| std::mem::replace(slot(s), o));
+        let stage = match iface {
+            "IDirect3DVertexShader9" => Some((0, VS_FLOATS as usize)),
+            "IDirect3DPixelShader9" => Some((1, PS_FLOATS as usize)),
+            _ => None,
+        };
+        let count = stage.map(|(stage, fallback)| (stage, objects(|objects| {
+            match objects.live.get(&o).map(|object| &object.kind) {
+                Some(Kind::Shader { float_constants, .. }) => *float_constants,
+                _ => fallback,
+            }
+        })));
+        let old = state(dev, |s| {
+            if let Some((stage, count)) = count { s.shader_float_counts[stage] = count; }
+            let old = std::mem::replace(slot(s), o);
+            if old != o {
+                s.draw_dirty |= match iface {
+                    "IDirect3DVertexShader9" | "IDirect3DPixelShader9" => groups::SHADERS,
+                    "IDirect3DVertexDeclaration9" => groups::DECLARATION,
+                    "IDirect3DIndexBuffer9" => groups::INDICES,
+                    _ => 0,
+                };
+            }
+            old
+        });
         rebind(old, o);
         D3D_OK
     } else {
@@ -454,8 +633,10 @@ fn set_constants(m: &mut dyn Mem, cpu: &mut Cpu, vertex: bool, kind: char) {
     cpu.eax = if start.checked_add(count).is_none_or(|end| end > limit) {
         D3DERR_INVALIDCALL
     } else {
-        let words: Vec<u32> = (0..count * if kind == 'b' { 1 } else { 4 }).map(|k| m.u32(p + 4 * k)).collect();
         state(dev, |s| {
+            let words = &mut s.constant_words;
+            words.clear();
+            words.extend((0..count * if kind == 'b' { 1 } else { 4 }).map(|k| m.u32(p + 4 * k)));
             let c = if vertex { &mut s.vs } else { &mut s.ps };
             // A queued or recorded draw owns the old block. Only detach it
             // when an update changes bits; repeated setters keep sharing.
@@ -477,6 +658,7 @@ fn set_constants(m: &mut dyn Mem, cpu: &mut Cpu, vertex: bool, kind: char) {
                     _ => c.b[r] = words[k],
                 }
             }
+            s.constant_snapshots[if vertex { 0 } else { 1 }].dirty = true;
         });
         D3D_OK
     };
@@ -589,7 +771,11 @@ pub fn declaration_get(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn set_stream_source(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, n, vb, off, stride) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     cpu.eax = if n < 16 {
-        let old = state(dev, |s| std::mem::replace(&mut s.streams[n as usize], (vb, off, stride)).0);
+        let old = state(dev, |s| {
+            let old = std::mem::replace(&mut s.streams[n as usize], (vb, off, stride));
+            if old != (vb, off, stride) { s.draw_dirty |= groups::STREAMS; }
+            old.0
+        });
         rebind(old, vb);
         D3D_OK
     } else {
@@ -615,7 +801,9 @@ pub fn get_stream_source(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn set_stream_source_freq(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, n, v) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     cpu.eax = if n < 16 {
-        state(dev, |s| s.stream_freq[n as usize] = v);
+        state(dev, |s| {
+            if std::mem::replace(&mut s.stream_freq[n as usize], v) != v { s.draw_dirty |= groups::STREAMS; }
+        });
         D3D_OK
     } else {
         D3DERR_INVALIDCALL
@@ -632,4 +820,50 @@ pub fn get_stream_source_freq(m: &mut dyn Mem, cpu: &mut Cpu) {
         D3DERR_INVALIDCALL
     };
     ret(m, cpu, 12);
+}
+
+#[cfg(test)]
+mod dense_state_tests {
+    use super::*;
+
+    fn compare<const N: usize, const M: usize>() {
+        let mut dense = DenseStates::<N, M>::default();
+        let mut old = HashMap::default();
+        let slots = [0, 7, 8, 15, 16, 20, 21, 255, 256, 257, 260, 261, u32::MAX];
+        let states = [0, 1, 13, 14, 32, 33, u32::MAX];
+        for pass in 0..3 {
+            for slot in slots {
+                for state in states {
+                    let key = (slot, state);
+                    assert_eq!(dense.get(&key), old.get(&key));
+                    let value = if pass == 0 { 0 } else { slot.wrapping_mul(state).wrapping_add(pass) };
+                    assert_eq!(dense.insert(key, value), old.insert(key, value));
+                    assert_eq!(dense.get(&key), old.get(&key));
+                }
+                assert_eq!(dense.row(slot), std::array::from_fn(|state| old.get(&(slot, state as u32)).copied().unwrap_or(0)));
+            }
+        }
+        let copy = dense.clone();
+        for (key, value) in old { assert_eq!(copy.get(&key), Some(&value)); }
+    }
+
+    #[test]
+    fn render_index_matches_sorted_map_and_keeps_old_snapshots() {
+        let mut states = RenderStates::default();
+        let mut old = std::collections::BTreeMap::new();
+        for key in (0..300).rev().chain([u32::MAX, 0, 7, 255, 299]) {
+            let saved = states.shared();
+            let expected: Vec<_> = old.iter().map(|(&k, &v)| (k, v)).collect();
+            assert_eq!(states.insert(key, key.wrapping_add(17)), old.insert(key, key.wrapping_add(17)));
+            assert_eq!(&*saved, &expected);
+            for key in 0..302 { assert_eq!(states.get(&key), old.get(&key)); }
+            assert_eq!(states.as_slice(), old.iter().map(|(&k, &v)| (k, v)).collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn dense_banks_match_maps_including_absent_zero_and_out_of_range_keys() {
+        compare::<21, 14>();
+        compare::<8, 33>();
+    }
 }
