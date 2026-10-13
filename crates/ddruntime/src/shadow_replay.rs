@@ -1148,11 +1148,16 @@ fn compare_replays(
     // that are compared, then the poisoned (normalized) serial runs
     let mut runs: Vec<(bool, Option<u8>, bool)> = vec![(false, None, false), (false, None, true), (true, None, true)];
     if definedness {
-        runs.extend([(false, Some(0x00), true), (false, Some(0xff), true)]);
+        // serial 0x00 / 0xFF, then parallel 0x00 / 0xFF (the parallel runs
+        // also fill the lanes' fresh private memory)
+        runs.extend([(false, Some(0x00), true), (false, Some(0xff), true), (true, Some(0x00), true), (true, Some(0xff), true)]);
     }
     let mut results = Vec::new();
+    // the poisoned runs (None: the run refused, so it classifies nothing)
+    let mut poisoned_results: Vec<Option<ReplayResult>> = Vec::new();
     for (parallel, poison, normalized) in runs {
         NORMALIZE.store(normalized, std::sync::atomic::Ordering::Relaxed);
+        crate::parallel_shadow::PRIVATE_FILL.store(poison.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
         let input = poison.map_or_else(|| input.clone(), |fill| poisoned(&input, fill));
         let (input, raw, mut cpu, stack) = (input, raw.clone(), incoming.clone(), stack.clone());
         let handle = std::thread::Builder::new()
@@ -1283,7 +1288,20 @@ fn compare_replays(
                 || "replay panic".to_string(),
                 |e| format!("replay rejected: {e:?}"),
             )
-        })??;
+        });
+        let result = match result {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) | Err(e) if poison.is_some() => {
+                eprintln!("parallel-shadow definedness run (parallel={parallel}, fill {poison:x?}) refused, classifies nothing: {e}");
+                poisoned_results.push(None);
+                continue;
+            }
+            Ok(Err(e)) | Err(e) => return Err(e),
+        };
+        if poison.is_some() {
+            poisoned_results.push(Some(result));
+            continue;
+        }
         if !parallel && poison.is_none() && !normalized {
             if let Err(e) = verify_serial(&result) {
                 if !zero_arena {
@@ -1299,8 +1317,9 @@ fn compare_replays(
         results.push(result);
     }
     NORMALIZE.store(false, std::sync::atomic::Ordering::Relaxed);
+    crate::parallel_shadow::PRIVATE_FILL.store(0, std::sync::atomic::Ordering::Relaxed);
     // the plain serial run only served the live check: compare the normalized
-    // runs (serial, parallel, then the poisoned serial runs)
+    // runs (serial, parallel)
     results.remove(0);
     // Diagnose the independent state gate even when a stream difference stops
     // acceptance first. These categories never exempt bytes from comparison.
@@ -1452,19 +1471,26 @@ fn compare_replays(
         }
         None
     }
-    // Residue-dependent bytes: the serial runs with poisoned residue sources
-    // (results 2 and 3) disagree with the plain serial run there.
-    let residue_dependent = |path: &[usize], a: &mtcore::shadow_lanes::Binding, offset: usize| -> bool {
-        if results.len() < 4 {
-            return false;
-        }
-        let Some(serial) = entry_at(&results[0].1, path) else { return false };
-        let Some(index) = serial.record.bindings.iter().position(|x| std::ptr::eq(x, a)) else { return false };
-        results[2..4].iter().any(|run| {
-            entry_at(&run.1, path)
+    // Undefined bytes (definedness, head #14516): a byte is undefined in an
+    // execution when its poisoned runs (residue sources filled 0x00 / 0xFF)
+    // disagree with its plain run there. A differing byte is accepted only
+    // when it is undefined in BOTH executions: a defined serial value lost in
+    // the parallel run is a real difference. A refused or misshapen poisoned
+    // run classifies nothing, so misclassification can only refuse.
+    let undefined_in = |runs: &[Option<ReplayResult>], plain: &mtcore::shadow_lanes::StreamSnapshot, path: &[usize], x: &mtcore::shadow_lanes::Binding, offset: usize| -> bool {
+        let Some(entry) = entry_at(plain, path) else { return false };
+        let Some(index) = entry.record.bindings.iter().position(|y| std::ptr::eq(y, x)) else { return false };
+        runs.iter().any(|run| {
+            run.as_ref()
+                .and_then(|run| entry_at(&run.1, path))
                 .and_then(|e| e.record.bindings.get(index))
-                .is_some_and(|x| x.bytes.len() == a.bytes.len() && x.bytes[offset] != a.bytes[offset])
+                .is_some_and(|y| y.bytes.len() == x.bytes.len() && y.bytes[offset] != x.bytes[offset])
         })
+    };
+    let residue_dependent = |path: &[usize], a: &mtcore::shadow_lanes::Binding, b: &mtcore::shadow_lanes::Binding, offset: usize| -> bool {
+        poisoned_results.len() == 4
+            && undefined_in(&poisoned_results[0..2], &results[0].1, path, a, offset)
+            && undefined_in(&poisoned_results[2..4], &results[1].1, path, b, offset)
     };
     let mut poison_allowed = 0usize;
     // A pointer to the recording context that ran the unit: the root context
@@ -1489,7 +1515,7 @@ fn compare_replays(
                                b: &mtcore::shadow_lanes::Binding,
                                offset: usize|
      -> Result<(), String> {
-        if residue_dependent(path, a, offset) {
+        if residue_dependent(path, a, b, offset) {
             poison_allowed += 1;
             return Ok(());
         }
@@ -1619,7 +1645,7 @@ fn compare_replays(
     let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
     eprintln!(
         "parallel-shadow residue-dependent bytes allowed={poison_allowed} (definedness runs: {}); relocated context pointer bytes allowed={relocated_allowed}",
-        results.len() > 3
+        poisoned_results.iter().filter(|r| r.is_some()).count()
     );
     if !residue.is_empty() {
         let first = &residue[0];
