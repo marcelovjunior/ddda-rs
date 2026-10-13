@@ -1,5 +1,20 @@
 # Milestones
 
+### L175 semantic material and package leaves (2026-10-13)
+
+- Opt-in EA23F0/FED190/E0F3C0/01008200 native semantic ports: **2,226
+  original returns** pass ABI replay; EA23F0 reaches **712/712 decoded
+  instructions**, both growth sites, NaNs and unaligned/aliased inputs.
+- Six isolated tests pass, including opt2 lifted bodies and serial/atomic
+  Pages. Runtime light **255 pass / zero failures / seven ignored**.
+- Median paired synthetic gains EA23F0 **1.512x**, E0F3C0 **2.734x**,
+  01008200 **1.141x**; some individual samples regress, FED190 mixed
+  across runs. mtcore/ddports **26 pass / zero failures / nine ignored**.
+  No game/image/FPS claim. Details: `docs/tasks/L175-semantic-draw-c.md`.
+- Next: head accumulated train with `DDRUNTIME_SEMANTIC=1`, then real
+  job/image acceptance. Virtual/growth callees remain recorded mock seams
+  in isolated tests; full gameplay comparison remains open.
+
 ### L162c job distribution and host scheduling (2026-10-13)
 
 - c31 h0 150-frame census: main 65,186 callbacks, six workers
