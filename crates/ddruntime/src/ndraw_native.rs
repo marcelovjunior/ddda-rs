@@ -924,6 +924,7 @@ fn shadow_samplers(g: &G, ctx: u32, binding: u32, meta: &MetaPart, info: &FrameI
 }
 
 /// A stream binding of this frame (0x00DAA7C0 with nothing applied).
+#[derive(PartialEq)]
 pub struct StreamPart {
     streams: Arc<[(u32, u32, u32, u32, u32)]>,
     indices: u32,
@@ -957,6 +958,7 @@ fn stream_part(g: &G, binding: u32) -> Result<StreamPart, Refusal> {
 }
 
 /// A target binding of this frame (0x00DA6FE0 with nothing applied).
+#[derive(PartialEq)]
 pub struct TargetPart {
     targets: [Option<Target>; 4],
     depth: Option<Target>,
@@ -1063,8 +1065,10 @@ pub struct Caches {
     bindings: FxMap<u32, (u64, Result<Arc<BindingPart>, Refusal>)>,
     /// the banks a binding's constants are read into
     banks: [Constants; 2],
-    streams: FxMap<u32, Result<Arc<StreamPart>, Refusal>>,
-    target_bindings: FxMap<u32, Result<Arc<TargetPart>, Refusal>>,
+    /// stream and target bindings by address, with the frame they were last
+    /// built in (kept across frames: `kept_part`)
+    streams: FxMap<u32, (u64, Result<Arc<StreamPart>, Refusal>)>,
+    target_bindings: FxMap<u32, (u64, Result<Arc<TargetPart>, Refusal>)>,
     targets: FxMap<u32, Option<Target>>,
     textures: FxMap<u32, Option<TextureBinding>>,
     index_formats: FxMap<u32, Option<u32>>,
@@ -1084,8 +1088,12 @@ impl Caches {
         if self.bindings.len() > 16384 {
             self.bindings.clear();
         }
-        self.streams.clear();
-        self.target_bindings.clear();
+        if self.streams.len() > 16384 {
+            self.streams.clear();
+        }
+        if self.target_bindings.len() > 16384 {
+            self.target_bindings.clear();
+        }
         self.targets.clear();
         self.textures.clear();
         self.index_formats.clear();
@@ -1169,13 +1177,31 @@ impl FrameInfo {
 }
 
 /// Look up `key` in a per-frame map, building it on a miss.
-fn part<T>(map: &mut FxMap<u32, Result<Arc<T>, Refusal>>, key: u32, build: impl FnOnce() -> Result<T, Refusal>) -> Result<Arc<T>, Refusal> {
-    if let Some(r) = map.get(&key) {
-        return r.clone();
+/// A part kept across frames (L180): built again the first time
+/// a frame uses them, and the earlier part kept if it is the same (no
+/// allocation, and no drop at the frame's start, for an unchanged binding).
+fn kept_part<T: PartialEq>(
+    map: &mut FxMap<u32, (u64, Result<Arc<T>, Refusal>)>,
+    frame: u64,
+    key: u32,
+    build: impl FnOnce() -> Result<T, Refusal>,
+) -> Result<Arc<T>, Refusal> {
+    match map.get_mut(&key) {
+        Some((built, r)) if *built == frame => r.clone(),
+        Some((built, r)) => {
+            *built = frame;
+            match (build(), &*r) {
+                (Ok(new), Ok(old)) if **old == new => {}
+                (new, _) => *r = new.map(Arc::new),
+            }
+            r.clone()
+        }
+        None => {
+            let r = build().map(Arc::new);
+            map.insert(key, (frame, r.clone()));
+            r
+        }
     }
-    let r = build().map(Arc::new);
-    map.insert(key, r.clone());
-    r
 }
 
 /// The DrawCall the D3D9 path makes for draw record `record` (type 0 or
@@ -1194,11 +1220,11 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     }
     let t = {
         let mut map = std::mem::take(&mut c.target_bindings);
-        let r = part(&mut map, targets, || target_part(&g, c, info, targets));
+        let r = kept_part(&mut map, c.frame, targets, || target_part(&g, c, info, targets));
         c.target_bindings = map;
         r?
     };
-    let s = part(&mut c.streams, streams, || stream_part(&g, streams))?;
+    let s = kept_part(&mut c.streams, c.frame, streams, || stream_part(&g, streams))?;
     let b = match c.bindings.get(&shader) {
         Some((frame, r)) if *frame == c.frame => r.clone()?,
         other => {
@@ -1527,6 +1553,14 @@ fn draw_params_of(g: &G, record: u32, kind: u32, extent: u32) -> Result<(u32, u3
     })
 }
 
+/// `DDDRAW_ALL_TARGETS=1` (L180, opt-in until verified in game): the
+/// DrawCall, verify and census modes decide draws into every colour
+/// target, not only the frame's largest (the scene).
+fn all_targets() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDDRAW_ALL_TARGETS").as_deref() == Ok("1"))
+}
+
 /// The fixed-state objects of a draw record: address and hash (+0xC), and
 /// the rasterizer variant (fixed binding +4 bit 8).
 pub fn identity(m: &dyn Mem, record: u32) -> NativeStateIdentity {
@@ -1826,7 +1860,10 @@ impl Native {
             f.shaders.insert(m.u32(record.wrapping_add(0xC)));
             f.streams.insert(m.u32(record.wrapping_add(0x10)));
         }
-        if size != g.scene || size == (0, 0) {
+        // L180: DDDRAW_ALL_TARGETS=1 lets the DrawCall modes take draws
+        // into every target, not only the scene's (native jobs: the scene)
+        let any_target = all_targets() && matches!(self.mode, Mode::DrawCall | Mode::Verify | Mode::Census);
+        if size == (0, 0) || (size != g.scene && !any_target) {
             return Taken::Default;
         }
         let t = &mut g.totals;
@@ -2048,6 +2085,29 @@ mod tests {
             assert_eq!(sink.decide(&mut sink.inner.lock().unwrap(), &mut m, 0, scene, 1), Taken::Default);
             assert_eq!(refused(&sink, Refusal::Query), inside.is_some() as u64);
         }
+    }
+
+    /// Parts kept across frames: the same frame's part from the map; a new
+    /// frame builds again and keeps the earlier part (the same Arc) when
+    /// equal, a new one when changed; refusals are kept too.
+    #[test]
+    fn kept_parts_are_rebuilt_each_frame_and_reused_when_unchanged() {
+        let mut map: FxMap<u32, (u64, Result<Arc<u32>, Refusal>)> = FxMap::default();
+        let first = kept_part(&mut map, 1, 7, || Ok(5)).unwrap();
+        let mut built = false;
+        let same = kept_part(&mut map, 1, 7, || {
+            built = true;
+            Ok(6)
+        })
+        .unwrap();
+        assert!(!built && Arc::ptr_eq(&first, &same));
+        let unchanged = kept_part(&mut map, 2, 7, || Ok(5)).unwrap();
+        assert!(Arc::ptr_eq(&first, &unchanged));
+        let changed = kept_part(&mut map, 3, 7, || Ok(6)).unwrap();
+        assert_eq!(*changed, 6);
+        assert!(matches!(kept_part(&mut map, 4, 7, || Err(Refusal::Missing)), Err(Refusal::Missing)));
+        assert!(matches!(kept_part(&mut map, 4, 7, || Ok(1)), Err(Refusal::Missing)));
+        assert_eq!(*kept_part(&mut map, 5, 7, || Ok(1)).unwrap(), 1);
     }
 
     #[test]
