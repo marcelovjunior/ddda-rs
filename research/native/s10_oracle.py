@@ -84,9 +84,11 @@ class Oracle:
         stub = self.stubs.get(address)
         if stub is None:
             return
-        nargs, behaviour = stub
+        nargs, behaviour = stub[:2]
+        # a cdecl callee (the caller pops) has stub[2] more argument words in its window only
+        extra = stub[2] if len(stub) > 2 else 0
         esp = uc.reg_read(x.UC_X86_REG_ESP)
-        window = [(esp + i, b) for i, b in enumerate(uc.mem_read(esp, 4 * (1 + nargs)))]
+        window = [(esp + i, b) for i, b in enumerate(uc.mem_read(esp, 4 * (1 + nargs + extra)))]
         before = dict(regs=self.regs(), memory=window)
         self._stub_writes = set()
         eax = behaviour(self, self.regs(), esp) & M32

@@ -59,7 +59,7 @@ type Body = fn(&mut dyn Mem, &mut Cpu);
 
 /// Run `body` on every case of `path`; `returns`: EAX is part of the ABI.
 /// Returns (cases, calls made per target).
-fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee]) -> (usize, BTreeMap<u32, usize>) {
+fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: &[u32]) -> (usize, BTreeMap<u32, usize>) {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
@@ -75,7 +75,16 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee]) -> (usiz
         let after = regs(&case["after"]);
         let mut c = Cpu::default();
         [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = before;
-        let events = Rc::new(case["events"].as_array().unwrap().clone());
+        // recorded calls the port does natively (a CRT memcpy): their effects
+        // are covered by the final memory comparison
+        let events: Vec<Value> = case["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| !native.contains(&n(&e["target"])))
+            .cloned()
+            .collect();
+        let events = Rc::new(events);
         let cursor = Rc::new(RefCell::new(0usize));
         let (trace, position) = (events.clone(), cursor.clone());
         let log = Rc::new(RefCell::new(Vec::<u32>::new()));
@@ -160,7 +169,7 @@ fn semantic_apply_param_block_matches_original() {
         c(0x3000_0020, &[ECX, EBX, EBP, ESI, EDI], 0),
         c(0x3000_0030, &[ECX, EBX, EBP, ESI, EDI], 0),
     ];
-    let (cases, made) = run_cases(&vectors("param_block.json"), mtcore::semantic_s10::apply_param_block, false, &callees);
+    let (cases, made) = run_cases(&vectors("param_block.json"), mtcore::semantic_s10::apply_param_block, false, &callees, &[]);
     eprintln!("{cases} ABI-level param_block cases passed; calls {made:x?}");
 }
 
@@ -177,6 +186,29 @@ fn semantic_submit_pass_records_matches_original() {
         c(0x3000_001c, 4),
         c(0x3000_0020, 3),
     ];
-    let (cases, made) = run_cases(&vectors("pass_records.json"), mtcore::semantic_s10::submit_pass_records, true, &callees);
+    let (cases, made) = run_cases(&vectors("pass_records.json"), mtcore::semantic_s10::submit_pass_records, true, &callees, &[]);
     eprintln!("{cases} ABI-level pass_records cases passed; calls {made:x?}");
+}
+
+// verifies 0x00b8a7f0 (ABI level; void; the CRT memcpy 0x012efea0 is done natively)
+#[test]
+fn semantic_player_prepare_draw_matches_original() {
+    let c = |target, stack_args| Callee { target, reads: &[ECX], stack_args };
+    let callees = [
+        c(0x00ff_c9f0, 1),
+        c(0x00ea_5b50, 1),
+        c(0x00fe_46c0, 1),
+        c(0x00bf_c7d0, 1),
+        c(0x00fe_4780, 2),
+        c(0x00fe_d890, 1),
+        c(0x3000_0198, 1),
+    ];
+    let (cases, made) = run_cases(
+        &vectors("player_draw.json"),
+        mtcore::semantic_s10::player_prepare_draw,
+        false,
+        &callees,
+        &[0x012e_fea0],
+    );
+    eprintln!("{cases} ABI-level player_draw cases passed; calls {made:x?}");
 }
