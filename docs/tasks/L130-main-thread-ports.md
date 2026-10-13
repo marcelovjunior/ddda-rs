@@ -179,3 +179,59 @@ including the existing core original-edge and lifted-vector suites. Strict
 Logs are `C:/ddda-targets/L130/geometry-{core,clippy,final-differential,final-bench}.log`.
 No shard, game or GPU build/run. Next: head's combined gate/gameplay check
 and the corrected profile, then port the largest exclusive main/job costs.
+
+## Corrected c17 profile and CD8760 port
+
+Head's `profile_c17draw.json/.txt` contains 1,756 rounds over 60.024 s.
+Main: 1,064 busy samples / 31.1 CPU seconds. Worker busy samples are
+346/973/182 and CPU seconds 24.7/22.3/21.8; the markedly different busy
+fractions are sampling/classification observations, not CPU utilization.
+
+Retained stacks expose two important limits of nearest-*lifted* ownership:
+
+- E10FC0's 122 main/job samples include **91 inside the readable E0EC50**
+  port (main25, workers9/41/16). Only 31 remain wrapper/helper samples.
+  Reported to head and L131/L132 owner in board #11592.
+- 112D970's 73 main/job samples include substantial emulator/x87 state
+  overhead. `run_c17draw.log` confirms unbound duration callees BB40/60/
+  80/A0/C0/E0, called at 112DA14. These six entries are the next worker
+  target, not an unmeasured rewrite of the animation wrapper (#11631).
+- 11787C0 has **two** nearest samples (main1, worker1074 one). Its expected
+  benefit is correspondingly tiny in this scene; old inclusive19.1% was
+  never a removable-share estimate. The exploratory 5D0F50 source/recipe
+  was stashed when c17 arrived and is neither registered nor committed.
+
+`resolve_identifier` ports **CD8760**, the main thread's largest
+non-scheduler nearest-lifted function: **40/1,064 = 3.76% busy samples**.
+It preserves EAX/ESI input convention, signed/range guards, the count and
+indexed-entry virtual calls, changing vtables/counts, partial identifiers,
+INC carry and exact stack/flags at every boundary. The unreachable
+FFFFFFFF equality arm remains excluded by the original negative guard.
+
+- **216 original Unicorn + extracted lifted cases pass**, with **3,640
+  callee entry/return boundaries**. Every feasible conditional edge is
+  covered (only CD876C -> CD878A is unreachable). Includes null entries,
+  type and id mismatches in both ordering directions, first/last matches,
+  count growth/truncation, vtable replacement, 0/1/8/32-entry scans,
+  high-bit identifiers, randomized registers/XMM and x87 sentinels.
+- All three isolated function suites pass. ddports registry test and
+  strict own-crate clippy pass. No full shard/game/GPU run.
+- Five alternating 5,000-call opt1/opt3 atomic-page medians on the second
+  pass (ns): rejected id **54.5 -> 43.2**, one miss **413.2 -> 330.7**,
+  one hit **364.5 -> 291.8**, eight-entry hit **1,792.1 -> 1,688.6**,
+  32-entry miss **6,618.1 -> 6,300.7**, 32-entry hit **6,758.7 -> 6,540.7**.
+  First pass eight-entry results regressed (1,254.9 -> 1,725.3), and
+  32-entry hit gained more (6,445.7 -> 5,010.9). Shared-machine noise and
+  common synthetic callback replay cost mean no reliable large-loop gain.
+- **Expected share:** the latest 3..21% synthetic reduction applied to
+  the 3.76% sampled main busy share would suggest roughly **0.1..0.8
+  percentage points**, conditional on a matching call mix. This is a
+  planning estimate only; the first-pass regression means **no positive
+  gameplay saving is yet established**. Do not use total frame time or
+  worker CPU utilization as the denominator for this estimate.
+
+Private vectors/logs: `native-L130/identifiers.json` and
+`C:/ddda-targets/L130/identifiers-{record,differential,bench,bench2,clippy,ddports}.log`.
+Record with `--identifiers`, benchmark with `--bench --identifiers`.
+Next: exact ports for six emulated animation-duration decoders; head owns
+combined native gate and same-scene gameplay comparison.

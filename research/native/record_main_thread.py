@@ -221,11 +221,109 @@ class GeometryOracle(Oracle):
                     after=self.snapshot(),visited=sorted(self.visited),edges=sorted(self.edges))
 
 
+class IdentifierOracle(Oracle):
+    def __init__(self):
+        self.uc=Uc(UC_ARCH_X86,UC_MODE_32)
+        self.uc.ctl_set_tcg_buffer_size(16*1024*1024)
+        for address,size in ((0xcd8000,0x1000),(BASE,SIZE),(STACK,STACK_SIZE),(h.RET,0x1000)):
+            self.uc.mem_map(address,size)
+        self.uc.mem_write(0xcd8760,h.code(0xcd8760,0x72))
+        self.active=False
+        self.uc.hook_add(UC_HOOK_MEM_READ,self.read)
+        self.uc.hook_add(UC_HOOK_MEM_WRITE,self.write)
+        self.uc.hook_add(UC_HOOK_CODE,self.code)
+
+    def code(self,uc,address,size,data):
+        if address==h.RET: uc.emu_stop(); return
+        if BASE+0x38000 <= address < BASE+0x38100:
+            assert address in (BASE+0x38000,BASE+0x38010,BASE+0x38020,BASE+0x38030)
+            self.events.append(dict(kind='call',target=address,**self.snapshot()))
+            sp=uc.reg_read(x.UC_X86_REG_ESP)
+            return_to=struct.unpack('<I',uc.mem_read(sp,4))[0]
+            is_count=address in (BASE+0x38000,BASE+0x38020)
+            if is_count:
+                value=self.count
+                if self.count_calls and self.mode==4: value=0
+                if self.count_calls and self.mode==5: value=self.count+3
+                self.count_calls+=1
+            else:
+                index=struct.unpack('<I',uc.mem_read(sp+4,4))[0]
+                assert index<40
+                value=0 if self.mode==0 else BASE+0xa000+index*0x40
+            uc.reg_write(x.UC_X86_REG_EAX,value)
+            for reg in (x.UC_X86_REG_ECX,x.UC_X86_REG_EDX): uc.reg_write(reg,self.rng.getrandbits(32))
+            for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,self.rng.getrandbits(128))
+            uc.reg_write(x.UC_X86_REG_EFLAGS,0x202 | (self.rng.getrandbits(12)&0xcd5))
+            # Changing the vtable tests the original reload before every call.
+            self.remember(OWNER,4); self.written.update(range(OWNER,OWNER+4))
+            bits=struct.pack('<I',BANK+0x100 if len(self.events)%4==1 else BANK)
+            uc.mem_write(OWNER,bits)
+            uc.reg_write(x.UC_X86_REG_ESP,sp+(4 if is_count else 8))
+            self.events.append(dict(kind='return',effects=[(OWNER+i,b) for i,b in enumerate(bits)],**self.snapshot()))
+            uc.reg_write(x.UC_X86_REG_EIP,return_to)
+            return
+        assert 0xcd8760 <= address <= 0xcd87d1,hex(address)
+        self.visited.add(address)
+        if self.last is not None: self.edges.add((self.last,address))
+        self.last=address
+
+    def run(self,seed,identifier,count,mode):
+        uc=self.uc; self.active=False; self.rng=rng=random.Random(seed)
+        self.count,self.mode,self.count_calls=count,mode,0
+        uc.mem_write(BASE,rng.randbytes(SIZE)); uc.mem_write(STACK,rng.randbytes(STACK_SIZE))
+        def word(a,v): uc.mem_write(a,struct.pack('<I',v))
+        word(OWNER,BANK)
+        for delta in (0,0x100):
+            word(BANK+delta+0x40,BASE+0x38000+(0x20 if delta else 0))
+            word(BANK+delta+0x3c,BASE+0x38010+(0x20 if delta else 0))
+        for i in range(40):
+            hi,lo=identifier>>16,identifier&0xffff
+            if i != count-1 or mode in (0,1,2,4,5):
+                if mode%2: hi=(hi+(-1 if i%2 else 1))&0xffff
+                else: lo=(lo+(-1 if i%2 else 1))&0xffff
+            uc.mem_write(BASE+0xa000+i*0x40+0x10,struct.pack('<HH',hi,lo))
+        word(SP,h.RET)
+        for reg in REGS: uc.reg_write(reg,rng.getrandbits(32))
+        uc.reg_write(x.UC_X86_REG_ESP,SP); uc.reg_write(x.UC_X86_REG_EAX,identifier)
+        uc.reg_write(x.UC_X86_REG_ESI,OWNER)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,rng.getrandbits(128))
+        uc.reg_write(x.UC_X86_REG_FPCW,0x37f); uc.reg_write(x.UC_X86_REG_FPSW,0); uc.reg_write(x.UC_X86_REG_FPTAG,0)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_FP0+i,((1<<63)|rng.getrandbits(63),0x3fff))
+        uc.reg_write(x.UC_X86_REG_MXCSR,0x1f80)
+        uc.reg_write(x.UC_X86_REG_EFLAGS,0x202 | (rng.getrandbits(12)&0xcd5))
+        self.initial,self.written,self.events,self.visited={},set(),[],set()
+        self.edges,self.last=set(),None; before=self.snapshot(False); self.active=True
+        uc.emu_start(0xcd8760,h.RET,count=10000)
+        assert uc.reg_read(x.UC_X86_REG_EIP)==h.RET,'instruction limit'
+        self.active=False
+        return dict(seed=seed,identifier=identifier,count=count,mode=mode,
+                    before=before,initial=sorted(self.initial.items()),events=self.events,
+                    after=self.snapshot(),visited=sorted(self.visited),edges=sorted(self.edges))
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out')
     p.add_argument('--geometry',action='store_true')
+    p.add_argument('--identifiers',action='store_true')
     a=p.parse_args()
+    if a.identifiers:
+        oracle=IdentifierOracle()
+        cases=[oracle.run(i+1,*recipe) for i,recipe in enumerate(
+            ((identifier,count,mode) for identifier in (0,0xffffffff,0x80000000,0x610001,0x620000,0x620001,0x70ffff,0x7affff,0x7b0000)
+             for count in (0,1,8,32) for mode in range(6)))]
+        out=Path(a.out or 'E:/ddda-re/notes/native-L130/identifiers.json'); out.parent.mkdir(parents=True,exist_ok=True)
+        edges={tuple(e) for c in cases for e in c['edges']}
+        branches=[i for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(h.code(0xcd8760,0x72),0xcd8760)
+                  if i.mnemonic.startswith('j') and i.mnemonic!='jmp']
+        missing=[(hex(i.address),hex(t)) for i in branches for t in (i.address+i.size,int(i.op_str,16)) if (i.address,t) not in edges]
+        # EAX == FFFFFFFF cannot survive the preceding negative-input return.
+        assert missing==[('0xcd876c','0xcd878a')],missing
+        out.write_text(json.dumps(dict(source='DDDA.exe 2017-12-13 Steam',address=0xcd8760,
+                       exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+                       uncovered_edges=missing,cases=cases),separators=(',',':')))
+        print(f'{len(cases)} identifier cases, {sum(len(c["events"]) for c in cases)} boundaries -> {out}')
+        return
     if a.geometry:
         oracle=GeometryOracle()
         cases=[oracle.run(i+1,shape,alt,align) for i,(shape,alt,align) in enumerate(

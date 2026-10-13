@@ -161,6 +161,94 @@ fn geometry_vectors() -> Option<Value> {
     }
 }
 
+fn identifier_vectors() -> Option<Value> {
+    let path = "E:/ddda-re/notes/native-L130/identifiers.json";
+    match std::fs::read_to_string(path) {
+        Ok(s) => Some(serde_json::from_str(&s).unwrap()),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => None,
+    }
+}
+
+// verifies 0x00cd8760
+#[test]
+fn identifiers_match_original_and_lifted() {
+    ddnative_host::install();
+    let Some(data) = identifier_vectors() else {
+        return;
+    };
+    for case in data["cases"].as_array().unwrap() {
+        run_geometry(mtcore::hot::resolve_identifier, case);
+        // L130_IDENTIFIER_REFERENCE
+    }
+    eprintln!(
+        "{} exact identifier cases passed",
+        data["cases"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+#[ignore = "paired identifier microbenchmark"]
+fn identifiers_cost() {
+    ddnative_host::install();
+    ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::Relaxed);
+    let data = identifier_vectors().unwrap();
+    let bodies: Vec<(&str, LiftFn)> = vec![("port", mtcore::hot::resolve_identifier)]; // L130_IDENTIFIER_COST
+    let mut m = Paged::default();
+    for index in [0, 104, 105, 111, 116, 117] {
+        let case = &data["cases"][index];
+        let initial = pairs(&case["initial"]);
+        let initial_cpu = cpu(&case["before"]);
+        let effects: Vec<_> = case["events"]
+            .as_array()
+            .unwrap()
+            .chunks(2)
+            .map(|e| (cpu(&e[1]), pairs(&e[1]["effects"])))
+            .collect();
+        for round in 0..5 {
+            for offset in 0..bodies.len() {
+                let (name, body) = bodies[(round + offset) % bodies.len()];
+                let effects = effects.clone();
+                let cursor = Rc::new(RefCell::new(0usize));
+                let position = cursor.clone();
+                x86::set_ext_calls(Some(Box::new(move |m, c, _| {
+                    let mut i = position.borrow_mut();
+                    let (state, writes) = &effects[*i];
+                    for (&a, &b) in writes {
+                        m.set_u8(a, b);
+                    }
+                    *c = state.clone();
+                    *i += 1;
+                })));
+                let mut elapsed = std::time::Duration::ZERO;
+                for iteration in 0..5020 {
+                    for (&a, &b) in &initial {
+                        m.set_u8(a, b);
+                    }
+                    let mut c = initial_cpu.clone();
+                    *cursor.borrow_mut() = 0;
+                    let start = std::time::Instant::now();
+                    body(std::hint::black_box(&mut m), std::hint::black_box(&mut c));
+                    let time = start.elapsed();
+                    if iteration >= 20 {
+                        elapsed += time;
+                    }
+                    if iteration == 0 {
+                        check(&m, &c, &case["after"], "identifier bench gate");
+                    }
+                }
+                eprintln!(
+                    "identifier count={} mode={} round={round} {name} ns/call={:.1}",
+                    case["count"],
+                    case["mode"],
+                    elapsed.as_nanos() as f64 / 5000.0
+                );
+                x86::set_ext_calls(None);
+            }
+        }
+    }
+}
+
 // verifies 0x011787c0
 #[test]
 fn geometry_matches_original_and_lifted() {

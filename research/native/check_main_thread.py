@@ -11,6 +11,7 @@ def main():
     p.add_argument('--out',default='E:/ddda-re/notes/native-L130/check')
     p.add_argument('--bench',action='store_true')
     p.add_argument('--geometry',action='store_true')
+    p.add_argument('--identifiers',action='store_true')
     a=p.parse_args()
     repo=Path(__file__).resolve().parents[2]
     out=Path(a.out)
@@ -23,7 +24,10 @@ def main():
     geometry=(repo/'crates/ddlift/lift_02/src/generated/lifted_047.rs').read_text()
     geometry_match=re.search(r'pub fn f_011787c0\(.*?\n\}',geometry,re.S)
     assert geometry_match
-    (out/'src/lib.rs').write_text(prelude+match.group()+'\n'+geometry_match.group())
+    identifiers=(repo/'crates/ddlift/lift_25/src/generated/lifted_033.rs').read_text()
+    identifier_match=re.search(r'pub fn f_00cd8760\(.*?\n\}',identifiers,re.S)
+    assert identifier_match
+    (out/'src/lib.rs').write_text(prelude+match.group()+'\n'+geometry_match.group()+'\n'+identifier_match.group())
     deps='\n'.join(f'{n}={{path="{(repo/"crates"/n).as_posix()}"}}' for n in ('mtcore','ddnative-base','ddnative-host'))
     (out/'Cargo.toml').write_text('[package]\nname="main-thread-check"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[dependencies]\n'+deps+'\nserde_json="1"\n[profile.release]\nopt-level=1\n[profile.release.package.mtcore]\nopt-level=3\n[profile.release.package.ddnative-base]\nopt-level=3\n[profile.release.package.ddnative-host]\nopt-level=3\n')
     test=(repo/'crates/mtcore/tests/hot.rs').read_text().replace('// L130_REFERENCE_RUN','run(main_thread_check::f_00e0ec50,case);')
@@ -32,10 +36,14 @@ def main():
     test=test.replace('// L130_GEOMETRY_REFERENCE','run_geometry(main_thread_check::f_011787c0,case);')
     test,count=re.subn(r'vec!\[\("port",\s*mtcore::hot::dispatch_geometry\)\]; // L130_GEOMETRY_COST', 'vec![("lifted",main_thread_check::f_011787c0),("port",mtcore::hot::dispatch_geometry)];',test)
     assert count==1,'geometry cost marker missing'
+    test=test.replace('// L130_IDENTIFIER_REFERENCE','run_geometry(main_thread_check::f_00cd8760,case);')
+    test,count=re.subn(r'vec!\[\("port",\s*mtcore::hot::resolve_identifier\)\]; // L130_IDENTIFIER_COST', 'vec![("lifted",main_thread_check::f_00cd8760),("port",mtcore::hot::resolve_identifier)];',test)
+    assert count==1,'identifier cost marker missing'
     (out/'tests/hot.rs').write_text(test)
     env=dict(os.environ,CARGO_TARGET_DIR='C:/ddda-targets/L130',CARGO_BUILD_JOBS='4',CARGO_INCREMENTAL='0',DDNATIVE_REQUIRE_VECTORS='1')
     command=['cargo','test','--manifest-path',str(out/'Cargo.toml'),'--test','hot']
-    command+=['--release','geometry_cost' if a.geometry else 'dependencies_cost','--','--ignored','--nocapture'] if a.bench else ['--','--nocapture']
+    benchmark='identifiers_cost' if a.identifiers else 'geometry_cost' if a.geometry else 'dependencies_cost'
+    command+=['--release',benchmark,'--','--ignored','--nocapture'] if a.bench else ['--','--nocapture']
     raise SystemExit(subprocess.call(command,env=env))
 
 

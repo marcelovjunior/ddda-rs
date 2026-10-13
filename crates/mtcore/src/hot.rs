@@ -14,6 +14,7 @@ use ddnative_base::{
 pub const PORTS: &[(u32, x86::LiftFn, u8)] = &[
     (0x00e0_ec50, expand_dependencies, 0xff),
     (0x0117_87c0, dispatch_geometry, 0xff),
+    (0x00cd_8760, resolve_identifier, 0xff),
 ];
 
 // Translated from 0x011787c0 (DDDA.exe 2017-12-13 Steam).
@@ -167,6 +168,93 @@ pub fn dispatch_geometry(m: &mut dyn Mem, c: &mut Cpu) {
     c.esp = c.ebp;
     c.ebp = ddnative_base::emit::pop(m, pt, c);
     ret(c, 0x18);
+}
+
+// Translated from 0x00cd8760 (DDDA.exe 2017-12-13 Steam).
+/// Resolve a packed two-u16 identifier using the owner's virtual count and
+/// indexed-entry methods. EAX supplies the identifier and ESI the owner.
+pub fn resolve_identifier(m: &mut dyn Mem, c: &mut Cpu) {
+    let pt = m.page_table();
+    macro_rules! r {
+        ($a:expr) => {
+            m.fast_u32(pt, $a)
+        };
+    }
+    macro_rules! push_fast {
+        ($v:expr) => {
+            ddnative_base::emit::push($v, m, pt, c)
+        };
+    }
+    macro_rules! call {
+        ($return_to:expr) => {{
+            let target = c.edx;
+            push_fast!($return_to);
+            x86::call_ext(m, c, target);
+        }};
+    }
+    if (c.eax as i32) < 0 {
+        c.eax = c.fl.alu_xor(c.eax, c.eax, 32);
+        ret(c, 0);
+        return;
+    }
+    push_fast!(c.ebx);
+    push_fast!(c.ebp);
+    c.ebx = c.eax >> 16;
+    c.eax &= 0xffff;
+    c.ebp = c.eax;
+    if (0x62..=0x7a).contains(&c.ebx) {
+        c.eax = r!(c.esi);
+        c.edx = r!(c.eax.wrapping_add(0x40));
+        push_fast!(c.edi);
+        c.ecx = c.esi;
+        c.edi = c.fl.alu_xor(c.edi, c.edi, 32);
+        call!(0xcd879b);
+        c.fl.alu_and(c.eax, c.eax, 32);
+        if c.eax != 0 {
+            loop {
+                c.eax = r!(c.esi);
+                c.edx = r!(c.eax.wrapping_add(0x3c));
+                push_fast!(c.edi);
+                c.ecx = c.esi;
+                call!(0xcd87aa);
+                c.fl.alu_and(c.eax, c.eax, 32);
+                if c.eax != 0 {
+                    c.ecx = m.fast_u16(pt, c.eax.wrapping_add(0x10)) as u32;
+                    c.fl.alu_sub(c.ecx, c.ebx, 32);
+                    if c.ecx == c.ebx {
+                        c.edx = m.fast_u16(pt, c.eax.wrapping_add(0x12)) as u32;
+                        c.fl.alu_sub(c.edx, c.ebp, 32);
+                        if c.edx == c.ebp {
+                            c.edi = ddnative_base::emit::pop(m, pt, c);
+                            c.ebp = ddnative_base::emit::pop(m, pt, c);
+                            c.ebx = ddnative_base::emit::pop(m, pt, c);
+                            ret(c, 0);
+                            return;
+                        }
+                    }
+                }
+                c.eax = r!(c.esi);
+                c.edx = r!(c.eax.wrapping_add(0x40));
+                c.ecx = c.esi;
+                // INC preserves CF from the entry/type/id comparison.
+                let next = c.edi.wrapping_add(1);
+                c.fl.inc_dec(x86::INC, c.edi, next, 32);
+                c.edi = next;
+                call!(0xcd87c8);
+                c.fl.alu_sub(c.edi, c.eax, 32);
+                if c.edi >= c.eax {
+                    break;
+                }
+            }
+        }
+        c.eax = c.fl.alu_xor(c.eax, c.eax, 32);
+        c.edi = ddnative_base::emit::pop(m, pt, c);
+    } else {
+        c.eax = c.fl.alu_xor(c.eax, c.eax, 32);
+    }
+    c.ebp = ddnative_base::emit::pop(m, pt, c);
+    c.ebx = ddnative_base::emit::pop(m, pt, c);
+    ret(c, 0);
 }
 
 // Translated from 0x00e0ec50 (DDDA.exe 2017-12-13 Steam).
