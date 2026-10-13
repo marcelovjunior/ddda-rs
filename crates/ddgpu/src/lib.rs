@@ -27,6 +27,7 @@ mod cache;
 mod pipelines;
 mod shader_cache;
 mod pipeline_log;
+mod warmup;
 pub mod present;
 pub use pipelines::{default_cache_dir, pipeline_stats, report_pipeline_stats_every, save_pipeline_caches, PipelineStats};
 use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
@@ -419,6 +420,10 @@ pub struct WgpuBackend {
     /// the draws' pipelines are created through this cache, kept on disk
     /// ([`enable_pipeline_cache`](Self::enable_pipeline_cache))
     pipeline_cache: Option<std::sync::Arc<pipelines::Persistent>>,
+    warmup: Option<warmup::Warmup>,
+    warm_hits: u64,
+    created_modules: u64,
+    created_pipelines: u64,
 }
 
 /// Where a host shows presented frames without reading them back: called
@@ -637,6 +642,10 @@ impl WgpuBackend {
             group_key: Default::default(),
             target_views: Default::default(),
             pipeline_cache: None,
+            warmup: None,
+            warm_hits: 0,
+            created_modules: 0,
+            created_pipelines: 0,
         }
     }
 
@@ -648,6 +657,32 @@ impl WgpuBackend {
     pub fn enable_pipeline_cache(&mut self, dir: &std::path::Path) -> bool {
         self.pipeline_cache = pipelines::Persistent::open(&self.device, &self.adapter, dir);
         self.pipeline_cache.is_some()
+    }
+
+    /// Record observed recipes and precompile a previous run's pipelines on a
+    /// background thread. The executable is read only, hashed off-thread.
+    /// DDGPU_PIPELINE_WARMUP=0 records recipes without speculative compilation.
+    pub fn enable_pipeline_warmup(&mut self, dir: &std::path::Path, exe: &std::path::Path) -> bool {
+        let Some(cache) = self.pipeline_cache.clone() else { return false };
+        self.warmup = warmup::Warmup::start(self.device.clone(), self.adapter.clone(), self.layout0.clone(), cache, dir.to_owned(), exe.to_owned());
+        self.warmup.is_some()
+    }
+
+    /// Draw shader modules and pipelines created on demand by this backend,
+    /// excluding background warmup and fixed helper pipelines.
+    pub fn pipeline_creation_counts(&self) -> (u64, u64) {
+        (self.created_modules, self.created_pipelines)
+    }
+
+    /// Diagnostic snapshot: startup compilation finished, ready but unused
+    /// pipelines, and unique warmed pipelines used by draws. Never waits.
+    pub fn pipeline_warmup_status(&mut self) -> Option<(bool, usize, u64)> {
+        self.poll_warmup();
+        self.warmup.as_ref().map(|w| (w.finished(), w.ready_count(), self.warm_hits))
+    }
+
+    fn poll_warmup(&mut self) {
+        if let Some(warmup) = self.warmup.as_mut() { warmup.drain(); }
     }
 
     /// Submit the recorded draws, after writing the ring bytes they use.
@@ -1455,15 +1490,21 @@ impl WgpuBackend {
         pipelines::translated(started);
         // Resolve parse/cache errors before opening the device error scope.
         // wgpu still validates the exact cached IR against this device.
-        let source = shader_cache::source(t.wgsl)?;
-        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = crate::pipeline_log::timed("module", "object-miss", || self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source }));
-        if let Some(e) = block_on(scope.pop()) {
-            return Err(format!("{e}"));
-        }
+        let warmed = self.warmup.as_mut().and_then(|w| w.source(key, &t.wgsl));
+        let module = match warmed {
+            Some(module) => pipeline_log::timed("module-reuse", "warm-hit", || module),
+            None => {
+                let source = shader_cache::source(t.wgsl)?;
+                let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let module = pipeline_log::timed("module", "object-miss", || self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source }));
+                if let Some(e) = block_on(scope.pop()) { return Err(format!("{e}")); }
+                pipelines::module_created(started);
+                self.created_modules += 1;
+                module
+            }
+        };
         let interface = std::sync::Arc::new(t.interface);
         self.modules.insert(key, (module.clone(), interface.clone()));
-        pipelines::module_created(started);
         Ok((module, interface))
     }
 
@@ -1517,6 +1558,7 @@ impl WgpuBackend {
     /// targets and streams: the shader modules, target views, the pipeline
     /// and its layouts (L99: kept in the draw memo).
     fn derive(&mut self, d: &DrawCall, instanced: &[u32]) -> Result<Derived, String> {
+        self.poll_warmup();
         let state = |s: u32| d.render_states.binary_search_by_key(&s, |&(k, _)| k).ok().map(|i| d.render_states[i].1).unwrap_or(0);
         let vs_tokens = d.vertex_shader.as_ref().ok_or("draws without a vertex shader (fixed function) are not implemented")?;
         let ps_tokens = d.pixel_shader.as_ref().ok_or("draws without a pixel shader (fixed function) are not implemented")?;
@@ -1726,6 +1768,13 @@ impl WgpuBackend {
             // D3DRS_MULTISAMPLEMASK: the samples a draw may write
             sample_mask: if samples > 1 { state(162) } else { !0 },
         };
+        if let Some(pipeline) = self.warmup.as_mut().and_then(|w| w.pipeline(&key)) {
+            if let std::collections::hash_map::Entry::Vacant(entry) = self.pipelines.entry(key.clone()) {
+                entry.insert(pipeline);
+                self.warm_hits += 1;
+                pipeline_log::timed("pipeline-reuse", "warm-hit", || ());
+            }
+        }
         let pipeline = match self.pipelines.get(&key) {
             Some(p) => {
                 pipelines::pipeline_reused();
@@ -1742,31 +1791,14 @@ impl WgpuBackend {
                     });
                     self.pipeline_layouts.insert(layout_key.clone(), layout);
                 }
-                let attrs: Vec<Vec<wgpu::VertexAttribute>> = key.buffers.iter()
-                    .map(|b| b.2.iter().map(|&(format, offset, shader_location)| wgpu::VertexAttribute { format, offset, shader_location }).collect())
-                    .collect();
-                let layouts: Vec<wgpu::VertexBufferLayout> = key.buffers.iter().zip(&attrs)
-                    .map(|(b, a)| wgpu::VertexBufferLayout { array_stride: b.0, step_mode: b.1, attributes: a })
-                    .collect();
-                let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-                let pipeline = crate::pipeline_log::timed("pipeline", "object-miss", || self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: None,
-                    layout: Some(&self.pipeline_layouts[&layout_key]),
-                    vertex: wgpu::VertexState { module: &vs_module, entry_point: Some("main"), compilation_options: Default::default(), buffers: &layouts },
-                    primitive: wgpu::PrimitiveState { topology, strip_index_format: key.strip_index, front_face: wgpu::FrontFace::Cw, cull_mode: cull, polygon_mode, ..Default::default() },
-                    depth_stencil: key.depth.clone(),
-                    multisample: wgpu::MultisampleState { count: key.samples, mask: key.sample_mask as u64, alpha_to_coverage_enabled: false },
-                    fragment: Some(wgpu::FragmentState { module: &ps_module, entry_point: Some("main"), compilation_options: Default::default(), targets: &key.targets }),
-                    multiview_mask: None,
-                    cache: self.pipeline_cache.as_ref().map(|p| &p.cache),
-                }));
-                if let Some(e) = block_on(scope.pop()) {
-                    return Err(format!("pipeline: {e}"));
-                }
+                let pipeline = warmup::create_pipeline(&self.device, &self.pipeline_layouts[&layout_key], &vs_module, &ps_module,
+                    &key, self.pipeline_cache.as_ref().map(|p| &p.cache), "object-miss")?;
+                if let Some(warmup) = &self.warmup { warmup.record(&key, &ps_kinds, &vs_kinds); }
                 if let Some(p) = &self.pipeline_cache {
                     p.created();
                 }
                 pipelines::pipeline_created(started);
+                self.created_pipelines += 1;
                 self.pipelines.insert(key, pipeline.clone());
                 pipeline
             }
@@ -2133,18 +2165,7 @@ impl WgpuBackend {
         if let Some(l) = self.tex_layouts.get(&key) {
             return l.clone();
         }
-        let visibility = if vs { wgpu::ShaderStages::VERTEX } else { wgpu::ShaderStages::FRAGMENT };
-        let mut entries = Vec::new();
-        for &(n, kind) in kinds {
-            let view_dimension = match kind {
-                0 => wgpu::TextureViewDimension::D2,
-                1 => wgpu::TextureViewDimension::Cube,
-                _ => wgpu::TextureViewDimension::D3,
-            };
-            entries.push(wgpu::BindGroupLayoutEntry { binding: 2 * n, visibility, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension, multisampled: false }, count: None });
-            entries.push(wgpu::BindGroupLayoutEntry { binding: 2 * n + 1, visibility, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None });
-        }
-        let l = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &entries });
+        let l = warmup::texture_layout(&self.device, vs, kinds);
         self.tex_layouts.insert(key, l.clone());
         l
     }

@@ -165,6 +165,8 @@ impl App {
                         if let Some(dir) = cache_dir {
                             if !backend.enable_pipeline_cache(&dir) {
                                 eprintln!("no pipeline cache (the device has none)");
+                            } else {
+                                backend.enable_pipeline_warmup(&dir, std::path::Path::new(&exe));
                             }
                         }
                         // DDPLAY_PIPELINE_STATS=<s>: shader modules and

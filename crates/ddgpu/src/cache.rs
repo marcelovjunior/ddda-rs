@@ -140,7 +140,7 @@ pub(crate) type BufferLayout = (u64, wgpu::VertexStepMode, Vec<(wgpu::VertexForm
 pub(crate) type SamplerKinds = Vec<(u32, u8)>;
 
 /// Everything a render pipeline is built from.
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PipelineKey {
     /// the vertex and pixel shader module keys
     pub vs: ModuleKey,
