@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 mod cache;
 pub mod native;
+pub mod native_compare;
 mod pipelines;
 mod shader_cache;
 mod pipeline_log;

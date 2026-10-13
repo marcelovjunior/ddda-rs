@@ -2148,3 +2148,10 @@ opening (codex-31), route perf (codex-29).
 - Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+### L127 asynchronous native comparison reduction (2026-10-13)
+
+- GPU color/depth/stencil summaries retain pass and target identity; exact loaded-channel comparisons, differing pixels and maximum difference. Bounded async MAP_READ returns 16 bytes per target without a GPU wait.
+- Four focused Vulkan tests and one CPU summary test pass. Scale fixture: 128 pending targets, 16,650,240 pixels, 2,048 readback bytes; 58.73 ms synthetic diagnostic (no gameplay/FPS claim).
+- Next: integrate L119 compare sink and L126 pre-oracle shadow lifecycle, run light runtime suite, then head-run in-game comparison. Details: docs/tasks/L127-native-compare.md.
+
