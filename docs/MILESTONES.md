@@ -1,5 +1,18 @@
 # Milestones
 
+### L170 game-thread service-call overhead (2026-10-13)
+
+- Sizing (c31def, game threads): out-of-line guest memory accessors ~40%
+  of busy samples (Team A), `call_ext` dispatch ~6%, real service work ~4%
+  (`run_service_as` 11.2%, of which waits 7.1%).
+- Implemented and tested, not yet run in game: `call_ext` without an Rc
+  clone per call; an opt-in service census (`DDRUNTIME_SERVICE_CENSUS=1`);
+  memcpy/memset without a heap buffer up to 256 bytes; the CRT memory and
+  string routines and TLS/last-error imports on the Integer service path.
+  memcpy 32 B through the dispatch: 100.8 -> 48.1 ns.
+- Next: a census run in game to rank the remaining services and call sites.
+  Details: docs/tasks/L170-service-calls.md.
+
 ### L162c job distribution and host scheduling (2026-10-13)
 
 - c31 h0 150-frame census: main 65,186 callbacks, six workers
