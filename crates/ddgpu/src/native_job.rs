@@ -826,11 +826,6 @@ impl Worker {
             {
                 return Err("native sampled attachment feedback unsupported".into());
             }
-            if t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0
-                && crate::missing_channels(t.format) != 0
-            {
-                return Err("native render-target sampler channel fill unsupported".into());
-            }
             if !f32::from_bits(t.states[8]).is_finite()
                 || (stage == n::Stage::Vertex && f32::from_bits(t.states[8]) != 0.0)
             {
@@ -998,6 +993,8 @@ impl Worker {
                     sample_mask: !0,
                     topology,
                     strip_index,
+                    sampler_ones: sampler_ones(d),
+                    depth_bias: depth_bias(d, pass),
                 })?;
                 // Texture allocations only change after release, which drops
                 // this worker. Retained Arc identities cannot be recycled.
@@ -1137,6 +1134,15 @@ impl Worker {
                     }
                     recorder.set_constants(c);
                 }
+                if depth_bias(d, pass) {
+                    // PS extra slot 5, as the D3D9 path's ps_extra[5]
+                    let shader = p.shaders[0];
+                    recorder.update_constant_words(
+                        constants[&shader],
+                        self.device.shader_constant_layout(shader).extra_offset + 5 * 16,
+                        &[state_value(&d.state, 195), state_value(&d.state, 175), 0, 0],
+                    )?;
+                }
                 let v = d.viewport;
                 let extra = [1.0 / v[2] as f32, -1.0 / v[3] as f32, 0.0, 0.0].map(f32::to_bits);
                 let shader = p.shaders[1];
@@ -1195,6 +1201,21 @@ impl Worker {
         Ok(())
     }
 }
+/// The channels render-target textures sampled by pixel samplers lack (4
+/// bits a sampler), as the D3D9 path's sampler_ones.
+fn sampler_ones(d: &NativeDraw) -> u64 {
+    d.textures
+        .iter()
+        .filter(|t| t.sampler < 16 && t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0)
+        .fold(0u64, |m, t| m | (crate::missing_channels(t.format) as u64) << (4 * t.sampler))
+}
+/// D3D9's depth bias applies (the D3D9 path's condition): a depth target,
+/// ZENABLE, and DEPTHBIAS or SLOPESCALEDEPTHBIAS set.
+fn depth_bias(d: &NativeDraw, pass: &NativePass) -> bool {
+    pass.depth.is_some()
+        && state_value(&d.state, 7) != 0
+        && (state_value(&d.state, 195) != 0 || state_value(&d.state, 175) != 0)
+}
 fn state_value(state: &NativeFixedState, key: u32) -> u32 {
     state
         .render_states
@@ -1238,7 +1259,9 @@ fn validate_fixed(state: &NativeFixedState) -> Result<(), String> {
     if state.render_states.windows(2).any(|p| p[0].0 >= p[1].0) {
         return Err("native states must be sorted and unique".into());
     }
-    for key in [15, 175, 195, 176, 152] {
+    // DEPTHBIAS (195) and SLOPESCALEDEPTHBIAS (175): in the pixel shader
+    // as the D3D9 path does (PipelineDesc::depth_bias)
+    for key in [15, 176, 152] {
         if state_value(state, key) != 0 {
             return Err(format!("native state {key} unsupported"));
         }

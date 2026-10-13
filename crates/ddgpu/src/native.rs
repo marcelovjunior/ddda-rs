@@ -177,6 +177,12 @@ pub struct PipelineDesc {
     pub sample_mask: u64,
     pub topology: wgpu::PrimitiveTopology,
     pub strip_index: Option<wgpu::IndexFormat>,
+    /// The pixel shader's translation, as the D3D9 path's (crates/ddgpu
+    /// derive): the channels (4 bits per pixel sampler) render-target
+    /// textures lack, which D3D9 samples as 1; and D3D9's depth bias in the
+    /// pixel shader (DEPTHBIAS / SLOPESCALEDEPTHBIAS in PS extra slot 5).
+    pub sampler_ones: u64,
+    pub depth_bias: bool,
 }
 
 struct ShaderObject {
@@ -232,7 +238,7 @@ pub struct Device {
     samplers: Vec<SamplerObject>,
     inputs: Vec<InputLayoutDesc>,
     shaders: Vec<ShaderObject>,
-    modules: FxMap<(Shader, InputLayout, Option<Shader>), Module>,
+    modules: FxMap<(Shader, InputLayout, Option<Shader>, u64, bool), Module>,
     textures: Vec<wgpu::Texture>,
     views: Vec<ViewObject>,
     buffers: Vec<wgpu::Buffer>,
@@ -522,8 +528,15 @@ impl Device {
         };
         Ok(insert!(self, views, View, v))
     }
-    fn module(&mut self, shader: Shader, input: InputLayout, vertex: Option<Shader>) -> Result<(), String> {
-        let key = (shader, input, vertex);
+    fn module(
+        &mut self,
+        shader: Shader,
+        input: InputLayout,
+        vertex: Option<Shader>,
+        ones: u64,
+        depth_bias: bool,
+    ) -> Result<(), String> {
+        let key = (shader, input, vertex, ones, depth_bias);
         if self.modules.contains_key(&key) {
             return Ok(());
         }
@@ -557,10 +570,14 @@ impl Device {
             options.vs_input_types = Some(types);
         } else {
             options.lod_bias = true;
+            options.sampler_ones = ones;
+            options.depth_bias = depth_bias;
             let vs = &self.modules[&(
                 vertex.ok_or("pixel shader requires a linked vertex shader")?,
                 input,
                 None,
+                0,
+                false,
             )]
                 .interface;
             options.ps_input_locations = Some(
@@ -615,10 +632,10 @@ impl Device {
         {
             return Err("pipeline shader stage mismatch".into());
         }
-        self.module(desc.vertex_shader, desc.input, None)?;
-        self.module(desc.pixel_shader, desc.input, Some(desc.vertex_shader))?;
-        let vs = &self.modules[&(desc.vertex_shader, desc.input, None)];
-        let ps = &self.modules[&(desc.pixel_shader, desc.input, Some(desc.vertex_shader))];
+        self.module(desc.vertex_shader, desc.input, None, 0, false)?;
+        self.module(desc.pixel_shader, desc.input, Some(desc.vertex_shader), desc.sampler_ones, desc.depth_bias)?;
+        let vs = &self.modules[&(desc.vertex_shader, desc.input, None, 0, false)];
+        let ps = &self.modules[&(desc.pixel_shader, desc.input, Some(desc.vertex_shader), desc.sampler_ones, desc.depth_bias)];
         let kinds = [ps.interface.samplers.clone(), vs.interface.samplers.clone()];
         let mut make_layout = |stage: usize| {
             let key = (

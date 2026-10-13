@@ -177,6 +177,8 @@ fn compare_constant_draws(compact: bool, resident: bool) {
                 sample_mask: !0,
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index: None,
+                sampler_ones: 0,
+                depth_bias: false,
             };
             let p = device.create_pipeline(desc).unwrap();
             assert_eq!(device.create_pipeline(desc).unwrap(), p, "handle tuple cache hit");
@@ -487,6 +489,8 @@ fn compare_texture_constants(compact: bool, resident: bool) {
             sample_mask: !0,
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index: None,
+            sampler_ones: 0,
+            depth_bias: false,
         })
         .unwrap();
     let bindings = [ddgpu::native::TextureBinding {
