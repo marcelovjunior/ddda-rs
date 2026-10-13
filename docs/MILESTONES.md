@@ -1,5 +1,21 @@
 # Milestones
 
+### L134 combined native gate, first integration (2026-10-13)
+
+- FPS line `941f5d2c` plus final L132 `ff98640d`: expanded play-profile
+  required-vector gate **88 passed / 0 failed / 1 benchmark ignored**;
+  **178,130 lifted cases** and inventory checks pass. Original apply and
+  state oracles include 1,568 ABI cases, 811 decodes and 3,584 state cases.
+- Found a process-wide sink race in parallel mtdraw tests; shared test lock
+  fixes it without changing the executor or weakening comparisons. Adopted
+  owner's `4bcef3fa`. Standard gate now includes base, draw, registry and
+  state suites. Existing five inventory verification gaps remain.
+- L131 c17 profile identifies remaining memory cost and x87 helper cost;
+  a private x87 flag-capture experiment is promising, not integrated here.
+  No game/image/FPS claim. Details: `docs/tasks/L134-combined-gate.md`.
+- Next: head's second combined pin `7aa2d159` (L132b plus newer ports and
+  worker fixes), then the next helper batch.
+
 ### L129 combined integer/float flag fusion gate (2026-10-13)
 
 - Merged FPS-line `05b35e35` with both lifter emitters and regenerated

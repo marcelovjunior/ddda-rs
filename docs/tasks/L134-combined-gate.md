@@ -18,18 +18,41 @@ helper-heavy lifter pattern; coordinate ownership before implementation.
   `b2df481f`. The integration initially contained only L132 `9665cda8`.
   The final merge adds two private flag-evaluator inline annotations and
   L132's results; memory helpers remain unchanged from their baseline.
-- Combined gate queued through the heavy slot. Dedicated target and logs:
+- Combined gate ran through the heavy slot. Dedicated target and logs:
   `C:/ddda-targets/L134/{combined-gate.sh,gate.out.log,gate.err.log}`.
   `NATIVE_PROFILE=play`, `DDNATIVE_REQUIRE_VECTORS=1`,
   `CARGO_INCREMENTAL=0`, `CARGO_BUILD_JOBS=4`.
-- The existing script covers ddnative, mtmath, mtcore, mtframe and inventory.
-  The wrapper additionally runs ddnative-base, mtdraw, ddports and mtstate,
+- The initial script covered ddnative, mtmath, mtcore, mtframe and inventory.
+  The supplemental check additionally ran ddnative-base, mtdraw, ddports and mtstate,
   with `MTDRAW_REQUIRE_APPLY=1` and `MTSTATE_REQUIRE_VECTORS=1` so absent
   original fixtures cannot silently skip those checks.
-- No test result, image match, load-time or FPS claim yet. L131's requested
-  profile files are not present at task start; requested them on the board.
+- Original script: **50 passed, one benchmark ignored**, inventory passed.
+  Required lifted replay completed in **33.65 s**. Its 15m33s wall duration
+  includes long suspensions for head game runs and is not a speed benchmark.
+- Supplemental tests exposed a process-wide sink race between the two
+  mtdraw differential tests: the sink test consumed type-0/type-2 commands
+  from the other test's port execution. The same binaries pass serially;
+  isolated old/current lifted bodies reproduce alternating failures under
+  the parallel runner. This was not evidence of a port/lifter defect.
+  A common test mutex fixes the interference without removing any assertions.
+  The owner independently committed the shared fix as `4bcef3fa`.
+- Supplemental recheck with test isolation: **38 passed**, including both
+  400-frame mtdraw checks (38,865 ordinary calls; 7,876 commands offered and
+  1,787 draws taken), 1,568 original apply ABI cases, 811 pure decoder cases,
+  and 3,584 mtstate cases / 17,928 original calls. Base helpers: 28 tests;
+  registration: one test. The original wrapper first misplaced `--timings`
+  after libtest's argument separator; fixed privately before this recheck.
+- Expanded `scripts/native_gate.sh` to retain those supplemental checks and
+  require their original fixtures. Full expanded-script recheck passed at
+  06:46:04: **88 passed, zero failed, one benchmark ignored**, inventory
+  59,450 verified / 59,469 non-platform functions; existing five gaps remain.
+  Adopted the owner's equivalent test fix as `b2a1355b` to avoid duplicate
+  fixes when merging. The next combined gate also checks that exact fixture.
+- No game/GPU run, image match, load-time or FPS claim by this agent.
 
-Next: finish the pinned gate and report each suite before changing emission.
+Next: head assigned a second combined pin, `7aa2d159`, in board #11769,
+adding L132b packed memory entries, eight L130 ports and native-worker fixes.
+Merge and gate that tree separately; it requires another shard rebuild.
 
 ### Follow-up selection from L131 capture
 
