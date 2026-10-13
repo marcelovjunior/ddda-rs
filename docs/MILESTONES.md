@@ -1,5 +1,14 @@
 # Milestones
 
+### L126 native job transport checkpoint (2026-10-13)
+
+- Owned NativeJob/Pass/Draw transport with effective D3D9 values, identity
+  keys, resource IDs and register ranges; same DeferredBackend FIFO.
+  Rejection returns the intact job before native target writes.
+- **7 transport tests pass**, including upload/native/query ordering and
+  unsupported-job ownership. Worker and game comparison pending.
+- Next: ddgpu native worker adapter; `docs/tasks/L126-native-worker.md`.
+
 ### L122 gameplay pass map (2026-10-13)
 
 - Frame7539: **951 target runs / 5,295 draws**, including **864 SoftBody
