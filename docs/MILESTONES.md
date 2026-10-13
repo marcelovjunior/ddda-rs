@@ -1932,6 +1932,10 @@ opening (codex-31), route perf (codex-29).
 - Headless initialization now selects primary backends by default, keeping
   `WGPU_BACKEND` overrides. Focused regression checks clear/copy submit
   limits, resource tracking and upload ordering.
-- Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
-  comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
-- Next: finish the serialized GPU gate and hand the minimal fix to head.
+- Minimal fix `df6ae57c` merged by head. Light runtime suite and focused
+  batching/order regression pass (0.81 s; 2,048 commands across two limits).
+  Full cache acceptance remains unverified: one run interrupted at 92.12 s;
+  final process exit 1 at 9.51 s without a test-result diagnostic.
+- Head #10593 ordered wrap-up/no new runs. No game/FPS comparison by this
+  agent. Evidence and limits: `docs/tasks/L96-encoder-hang.md`.
+- Next: head's uninterrupted cache gate, then L88/L95 gameplay/FPS comparison.

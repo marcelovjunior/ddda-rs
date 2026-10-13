@@ -2423,3 +2423,64 @@ impl GraphicsBackend for WgpuBackend {
         }
     }
 }
+
+#[cfg(test)]
+mod encoder_tests {
+    use super::*;
+
+    #[test]
+    fn clears_and_copies_stay_batched_and_preserve_upload_order() {
+        let Some(mut gpu) = WgpuBackend::headless() else {
+            eprintln!("skipped: no adapter");
+            return;
+        };
+        let target = |resource| Target {
+            surface: resource + 1, format: 21, width: 4, height: 4,
+            texture: Some(TargetTexture {
+                resource, kind: TexKind::Flat, width: 4, height: 4,
+                depth: 1, levels: 1, usage: USAGE_RENDERTARGET,
+            }),
+            level: 0, samples: 0, quality: 0,
+        };
+        let src = target(0x100);
+        let dst = target(0x200);
+        let clear = |colour| ClearCall {
+            rects: vec![], flags: 1, colour, z: 1.0, stencil: 0,
+            targets: [Some(src.clone()), None, None, None], depth: None,
+            viewport: [0, 0, 4, 4, 0, 0], scissor: None, srgb: false,
+        };
+        let copy = CopyCall {
+            src: src.clone(), src_rect: [0; 4], dst: dst.clone(),
+            dst_rect: [0; 4], filter: 0,
+        };
+        // Cross the command limit twice without a Present or readback.
+        // A fix that submits each clear/copy fails these batching checks.
+        for command in 1..=DRAWS_PER_SUBMIT * 2 {
+            if command % 2 == 1 {
+                gpu.clear(&clear(0xFF11_2233));
+            } else {
+                gpu.copy(&copy);
+            }
+            let pending = command % DRAWS_PER_SUBMIT;
+            assert_eq!(gpu.open_draws.get(), pending);
+            assert_eq!(gpu.open.borrow().is_some(), pending != 0);
+            assert!(gpu.pass.borrow().is_none());
+        }
+        gpu.clear(&clear(0xFF44_5566));
+        gpu.copy(&copy);
+        assert_eq!(gpu.open_draws.get(), 2);
+        assert!(gpu.open_uses.borrow().contains(&0x100));
+        assert!(gpu.open_uses.borrow().contains(&0x200));
+        // This write must follow the pending copy, not precede it at the
+        // beginning of the copy's submission (wgpu Queue::write_texture).
+        gpu.upload(Upload::Image {
+            resource: 0x100, index: 0, format: 21, width: 4, height: 4,
+            depth: 1, pitch: 16, slice: 64, bytes: [0x99, 0x88, 0x77, 0xFF].repeat(16),
+        });
+        assert_eq!(gpu.open_draws.get(), 0);
+        assert!(gpu.open_uses.borrow().is_empty());
+        assert_eq!(gpu.read_back(&dst).unwrap(), [0x66, 0x55, 0x44, 0xFF].repeat(16));
+        assert_eq!(gpu.read_back(&src).unwrap(), [0x99, 0x88, 0x77, 0xFF].repeat(16));
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    }
+}
