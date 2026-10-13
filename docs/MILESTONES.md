@@ -9,7 +9,8 @@
   command-arena preseed. Consumed output must not reference private storage.
 - Shared command cursor dependency modeled with a transaction-local atomic
   counter. Actual replay now rejects ordinary cursor access64306CB8:
-  ownership is NOT assumed. Refusal moved to access site for caller evidence.
+  caller confirmed as DA7DB0 capacity helper on both lanes. Original helper
+  now runs with narrowly scoped synchronized u32 cursor read permission.
   All other dependencies, stream/resource/ABI/FP checks remain strict.
 - Latest focused shadow:35 passed/0 failed. Latest full default light at
   661bdb1a:288 passed/0 failed/7 ignored. Synthetic tests are not original
@@ -17,7 +18,7 @@
   1704 uploads (29 conservative refusals).
 - Live output remains serial; publication and FPS/job-time acceptance are
   OPEN. No TRAIN READY. One next action: head offline-example rebuild and
-  replay48124 to identify ordinary command-counter access.
+  replay48124 to continue dependency/output equality closure.
   Details: docs/tasks/L172-parallel-shadow.md.
 
 ### L162e whole FEE320 capture prerequisite (2026-10-13)

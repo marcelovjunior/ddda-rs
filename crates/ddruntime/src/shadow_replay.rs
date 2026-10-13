@@ -38,6 +38,7 @@ thread_local! {
     static IN_SHADOW: Cell<bool> = const { Cell::new(false) };
     static REPLAY: RefCell<Option<Rc<Replay>>> = const { RefCell::new(None) };
     static UNRESOLVED: Cell<u32> = const { Cell::new(0) };
+    static COUNTER_CAPACITY_READ: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(crate) fn enabled() -> bool {
@@ -317,6 +318,17 @@ impl Mem for PrivateMemory {
         reject_unsynchronized_counter_access(a);
         self.0.borrow().u8(a)
     }
+    fn u32(&self, address: u32) -> u32 {
+        if COUNTER_CAPACITY_READ.with(Cell::get) {
+            let counter = current().command_counter.clone();
+            if let Some(counter) = counter.filter(|counter| counter.address == address) {
+                return *counter.value.lock().unwrap();
+            }
+        }
+        u32::from_le_bytes(std::array::from_fn(|offset| {
+            self.u8(address.wrapping_add(offset as u32))
+        }))
+    }
     fn set_u8(&mut self, a: u32, v: u8) {
         reject_unsynchronized_counter_access(a);
         self.0.borrow_mut().set_u8(a, v);
@@ -386,9 +398,27 @@ fn private_exchange_add(m: &mut dyn Mem, cpu: &mut Cpu) {
 fn current() -> Rc<Replay> {
     REPLAY.with(|v| v.borrow().as_ref().expect("private replay scope").clone())
 }
+fn private_command_capacity(m: &mut dyn Mem, cpu: &mut Cpu) {
+    // Original DA7DB0 (DDDA.exe 2017-12-13 Steam), called by DB7620,
+    // checks capacity against cursor+headroom. Run the original body so all
+    // flags/registers remain exact; only its aligned counter load is shared.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            COUNTER_CAPACITY_READ.with(|permit| permit.set(self.0));
+        }
+    }
+    let _restore = Restore(COUNTER_CAPACITY_READ.with(|permit| permit.replace(true)));
+    let original = *current()
+        .raw
+        .get(&0x00da7db0)
+        .expect("original command capacity helper");
+    original(m, cpu);
+}
 fn resolve(target: u32) -> LiftFn {
     match target {
         SCHEDULE => private_schedule,
+        0x00da7db0 => private_command_capacity,
         crate::fastmem::MEMCPY => crate::fastmem::memcpy,
         crate::fastmem::MEMSET => crate::fastmem::memset,
         _ => {
@@ -1755,17 +1785,30 @@ mod tests {
 
     #[test]
     fn shared_command_counter_claims_disjoint_bytes_and_rejects_ordinary_access() {
+        fn capacity_body(m: &mut dyn Mem, cpu: &mut Cpu) {
+            cpu.eax = m.u32(cpu.ecx + 0x33dc8);
+            cpu.esp += 4;
+        }
         fn allocate(m: &mut dyn Mem, cpu: &mut Cpu) {
             let job = (cpu.ecx - 0x3000) / 0x10;
             let address = m.u32(0x018d08f4) + 0x33dc8;
-            if m.u32(0x1010) != 0 {
-                let _ = m.u32(address);
-            }
             push(m, cpu, 16);
             push(m, cpu, address);
             push(m, cpu, 0xda7d86);
             private_exchange_add(m, cpu);
-            m.set_u32(0x1400 + job * 4, cpu.eax);
+            let allocated = cpu.eax;
+            cpu.ecx = m.u32(0x018d08f4);
+            push(m, cpu, 0xdb762e);
+            resolve(0x00da7db0)(m, cpu);
+            assert_ne!(
+                cpu.eax,
+                m.u32(0x1020),
+                "capacity reads the updated shared counter"
+            );
+            if m.u32(0x1010) != 0 {
+                let _ = m.u32(address); // The helper's read permission has ended.
+            }
+            m.set_u32(0x1400 + job * 4, allocated);
             cpu.esp += 8;
         }
         for (direct_access, initial) in [(false, 0x100u32), (true, 0x100), (false, u32::MAX - 31)] {
@@ -1776,6 +1819,7 @@ mod tests {
             setup.set_u32(0x018d08f4, render.start);
             setup.set_u32(address, initial);
             setup.set_u32(0x1010, u32::from(direct_access));
+            setup.set_u32(0x1020, initial);
             setup.set_u32(0x81004, 1);
             let input = Arc::new(setup.frozen());
             let private = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(
@@ -1783,7 +1827,10 @@ mod tests {
                 ACCESS_LIMIT,
             ))));
             let replay = Replay {
-                raw: Arc::new(BTreeMap::from([(0x400010, allocate as LiftFn)])),
+                raw: Arc::new(BTreeMap::from([
+                    (0x400010, allocate as LiftFn),
+                    (0x00da7db0, capacity_body as LiftFn),
+                ])),
                 memory: private.clone(),
                 stack: fixture.stack,
                 lane_count: 2,

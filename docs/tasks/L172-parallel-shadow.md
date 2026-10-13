@@ -339,3 +339,13 @@ access exists, so the atomic-only ownership assumption is not accepted.
 Moved refusal to PrivateMemory read/write site to preserve its caller
 backtrace; end-of-batch ownership check remains.35 focused tests pass.
 Next: offline rebuild/replay identifies the exact ordinary access.
+
+2026-10-13 pinned749097e4/815df443 replay confirms direct cursor reader
+is original DA7DB0 on both lanes, called by DB7620. Ghidra and generated
+body agree: read cursor+headroom, unsigned compare against capacity.
+Private resolver now runs that ORIGINAL body under scoped permission for
+its aligned u32 counter load. It sees the synchronized transaction counter;
+all flags/register effects still come from the original body. Byte reads,
+ordinary writes, and other callers remain refused. Regression proves the
+helper sees updates and permission ends on return;35 focused pass.
+Next: offline rebuild/replay48124; no recapture required.
