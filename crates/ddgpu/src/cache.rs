@@ -14,12 +14,15 @@ pub(crate) struct Ring {
     at: u64,
     /// the first byte not yet written to the GPU buffer
     dirty_from: u64,
+    /// counts restarts: an offset allocated in this generation still holds
+    /// what was written there
+    pub generation: u64,
 }
 
 impl Ring {
     pub fn new(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages, label: &str) -> Ring {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: usage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        Ring { buffer, cpu: vec![0; size as usize], at: 0, dirty_from: 0 }
+        Ring { buffer, cpu: vec![0; size as usize], at: 0, dirty_from: 0, generation: 0 }
     }
 
     pub fn size(&self) -> u64 {
@@ -55,8 +58,54 @@ impl Ring {
     pub fn restart(&mut self) {
         self.at = 0;
         self.dirty_from = 0;
+        self.generation += 1;
     }
 }
+
+/// A fast hasher for the backend's maps (L78; rustc's FxHash): keys are
+/// resource addresses, states and small structures from the game, and
+/// SipHash cost more than the lookups.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct FxHasher(u64);
+
+impl std::hash::Hasher for FxHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for c in &mut chunks {
+            self.write_u64(u64::from_le_bytes(c.try_into().unwrap()));
+        }
+        for &b in chunks.remainder() {
+            self.write_u64(b as u64);
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, v: u8) {
+        self.write_u64(v as u64);
+    }
+    #[inline]
+    fn write_u16(&mut self, v: u16) {
+        self.write_u64(v as u64);
+    }
+    #[inline]
+    fn write_u32(&mut self, v: u32) {
+        self.write_u64(v as u64);
+    }
+    #[inline]
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+    #[inline]
+    fn write_usize(&mut self, v: usize) {
+        self.write_u64(v as u64);
+    }
+}
+
+pub(crate) type FxMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<FxHasher>>;
 
 /// One vertex buffer of a pipeline: stride, step mode, attributes
 /// (format, offset, shader location).

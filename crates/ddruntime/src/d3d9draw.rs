@@ -316,8 +316,8 @@ fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, 
         textures.sort_unstable_by_key(|t| t.0);
         Read {
             textures,
-            // in state order already (a BTreeMap)
-            render_states: state.render.iter().map(|(&k, &v)| (k, v)).collect(),
+            // in state order already
+            render_states: state.render.as_slice().to_vec(),
             vertices: vertices.unwrap_or_else(|| Vertices::Streams(
                 state.streams.iter().enumerate().filter(|(_, s)| s.0 != 0)
                     .map(|(k, s)| (k as u32, s.0, s.1, s.2, state.stream_freq[k])).collect(),

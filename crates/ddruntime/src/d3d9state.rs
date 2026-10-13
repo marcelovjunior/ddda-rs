@@ -16,7 +16,6 @@ use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 use crate::fasthash::FxMap as HashMap;
-use std::collections::BTreeMap;
 
 const RS_ZENABLE: u32 = 7;
 const TSS_TEXCOORDINDEX: u32 = 11;
@@ -27,8 +26,7 @@ pub use d3d9cmd::Constants;
 
 #[derive(Clone, Debug)]
 pub struct DeviceState {
-    /// by state number (L78: ordered, so a draw reads them sorted)
-    pub render: BTreeMap<u32, u32>,
+    pub render: RenderStates,
     /// (sampler, type) -> value; samplers 0..15 and vertex samplers 257..260
     pub sampler: HashMap<(u32, u32), u32>,
     /// (stage, type) -> value
@@ -52,11 +50,54 @@ pub struct DeviceState {
     pub in_scene: bool,
 }
 
+/// The render states by number, kept sorted: a draw carries them in order
+/// as they are (L78: a hash map was collected and sorted for every draw, a
+/// BTreeMap walked node by node).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RenderStates(Vec<(u32, u32)>);
+
+impl RenderStates {
+    pub fn get(&self, state: &u32) -> Option<&u32> {
+        self.0.binary_search_by_key(state, |e| e.0).ok().map(|i| &self.0[i].1)
+    }
+
+    /// Set a state; the value it had.
+    pub fn insert(&mut self, state: u32, value: u32) -> Option<u32> {
+        match self.0.binary_search_by_key(&state, |e| e.0) {
+            Ok(i) => Some(std::mem::replace(&mut self.0[i].1, value)),
+            Err(i) => {
+                self.0.insert(i, (state, value));
+                None
+            }
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&u32, &u32)> {
+        self.0.iter().map(|(k, v)| (k, v))
+    }
+
+    /// (state, value) in state order.
+    pub fn as_slice(&self) -> &[(u32, u32)] {
+        &self.0
+    }
+}
+
+impl FromIterator<(u32, u32)> for RenderStates {
+    /// As a map collects: a later value of a state replaces an earlier one.
+    fn from_iter<I: IntoIterator<Item = (u32, u32)>>(iter: I) -> Self {
+        let mut r = RenderStates::default();
+        for (k, v) in iter {
+            r.insert(k, v);
+        }
+        r
+    }
+}
+
 impl DeviceState {
     /// A fresh device's state for a back buffer of `w` x `h`.
     pub fn new(auto_depth: bool, w: u32, h: u32) -> DeviceState {
         let p = profile();
-        let mut render: BTreeMap<u32, u32> = p.render_states.iter().copied().collect();
+        let mut render: RenderStates = p.render_states.iter().copied().collect();
         render.insert(RS_ZENABLE, auto_depth as u32);
         let mut sampler = HashMap::default();
         for &(s, t, v) in &p.sampler_states {

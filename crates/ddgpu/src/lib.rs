@@ -308,17 +308,17 @@ pub struct Frame {
 pub struct WgpuBackend {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    textures: HashMap<u32, Tex>,
+    textures: cache::FxMap<u32, Tex>,
     /// image uploads for textures not created yet: resource -> (index, upload)
     pending: HashMap<u32, Vec<Upload>>,
-    buffers: HashMap<u32, wgpu::Buffer>,
+    buffers: cache::FxMap<u32, wgpu::Buffer>,
     /// standalone surfaces used as targets (back buffers, render targets,
     /// depth-stencil)
-    surfaces: HashMap<u32, Rt>,
+    surfaces: cache::FxMap<u32, Rt>,
     /// translated shaders by (shader hash, linked vertex shader hash, depth
     /// bias, channels sampled as 1)
-    modules: HashMap<ModuleKey, (wgpu::ShaderModule, d3d9wgsl::Interface)>,
-    samplers: HashMap<[u32; 14], wgpu::Sampler>,
+    modules: cache::FxMap<ModuleKey, (wgpu::ShaderModule, d3d9wgsl::Interface)>,
+    samplers: cache::FxMap<[u32; 14], wgpu::Sampler>,
     blits: HashMap<(wgpu::TextureFormat, u32), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// clears of part of a target, by (colour formats per slot, depth
     /// format, depth written, stencil written)
@@ -358,6 +358,10 @@ pub struct WgpuBackend {
     open_draws: Cell<u32>,
     /// buffers and textures the open draws read
     open_uses: RefCell<HashSet<u32>>,
+    /// per stage (0 pixel, 1 vertex): the last block's constants and extra
+    /// vec4s, its uniform ring offset and the ring generation it was
+    /// written in (L78)
+    last_constants: RefCell<[(d3d9cmd::Constants, Vec<[u32; 4]>, u32, u64); 2]>,
     uniforms: RefCell<Ring>,
     inline: RefCell<Ring>,
     /// group 0: the constant blocks in the uniform ring (dynamic offsets)
@@ -365,13 +369,13 @@ pub struct WgpuBackend {
     group0: wgpu::BindGroup,
     /// the vertex shader's inputs and the pixel shader's input declarations
     /// (usage, index), by token hash
-    vs_inputs: HashMap<u64, Vec<(u32, u32)>>,
-    ps_inputs: HashMap<u64, Vec<(u32, u32)>>,
-    tex_layouts: HashMap<(bool, SamplerKinds), wgpu::BindGroupLayout>,
-    pipeline_layouts: HashMap<(SamplerKinds, SamplerKinds), wgpu::PipelineLayout>,
-    pipelines: HashMap<PipelineKey, wgpu::RenderPipeline>,
-    tex_groups: HashMap<TexGroupKey, wgpu::BindGroup>,
-    target_views: HashMap<TargetKey, Option<(wgpu::TextureView, wgpu::TextureFormat)>>,
+    vs_inputs: cache::FxMap<u64, Vec<(u32, u32)>>,
+    ps_inputs: cache::FxMap<u64, Vec<(u32, u32)>>,
+    tex_layouts: cache::FxMap<(bool, SamplerKinds), wgpu::BindGroupLayout>,
+    pipeline_layouts: cache::FxMap<(SamplerKinds, SamplerKinds), wgpu::PipelineLayout>,
+    pipelines: cache::FxMap<PipelineKey, wgpu::RenderPipeline>,
+    tex_groups: cache::FxMap<TexGroupKey, wgpu::BindGroup>,
+    target_views: cache::FxMap<TargetKey, Option<(wgpu::TextureView, wgpu::TextureFormat)>>,
     /// the draws' pipelines are created through this cache, kept on disk
     /// ([`enable_pipeline_cache`](Self::enable_pipeline_cache))
     pipeline_cache: Option<std::sync::Arc<pipelines::Persistent>>,
@@ -486,12 +490,12 @@ impl WgpuBackend {
         WgpuBackend {
             device,
             queue,
-            textures: HashMap::new(),
+            textures: Default::default(),
             pending: HashMap::new(),
-            buffers: HashMap::new(),
-            surfaces: HashMap::new(),
-            modules: HashMap::new(),
-            samplers: HashMap::new(),
+            buffers: Default::default(),
+            surfaces: Default::default(),
+            modules: Default::default(),
+            samplers: Default::default(),
             blits: HashMap::new(),
             clears: HashMap::new(),
             last_frame: None,
@@ -513,17 +517,18 @@ impl WgpuBackend {
             open: RefCell::new(None),
             open_draws: Cell::new(0),
             open_uses: RefCell::new(HashSet::new()),
+            last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX), (Default::default(), Vec::new(), 0, u64::MAX)]),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
             layout0,
             group0,
-            vs_inputs: HashMap::new(),
-            ps_inputs: HashMap::new(),
-            tex_layouts: HashMap::new(),
-            pipeline_layouts: HashMap::new(),
-            pipelines: HashMap::new(),
-            tex_groups: HashMap::new(),
-            target_views: HashMap::new(),
+            vs_inputs: Default::default(),
+            ps_inputs: Default::default(),
+            tex_layouts: Default::default(),
+            pipeline_layouts: Default::default(),
+            pipelines: Default::default(),
+            tex_groups: Default::default(),
+            target_views: Default::default(),
             pipeline_cache: None,
         }
     }
@@ -565,13 +570,18 @@ impl WgpuBackend {
     /// Room in a ring for `bytes` (`len` reserved), flushing and starting
     /// the ring again when it is full: the offset.
     fn ring_alloc(&self, ring: &RefCell<Ring>, bytes: &[u8], len: u64, align: u64) -> u64 {
+        self.ring_fill(ring, len, align, |dst| dst[..bytes.len()].copy_from_slice(bytes))
+    }
+
+    /// As [`ring_alloc`](Self::ring_alloc), the room filled by `fill`.
+    fn ring_fill(&self, ring: &RefCell<Ring>, len: u64, align: u64, fill: impl FnOnce(&mut [u8])) -> u64 {
         if !ring.borrow().fits(len, align) {
             self.flush();
             ring.borrow_mut().restart();
         }
         let mut r = ring.borrow_mut();
         let (off, dst) = r.alloc(len, align).expect("ring room after a restart");
-        dst[..bytes.len()].copy_from_slice(bytes);
+        fill(dst);
         off
     }
 
@@ -588,28 +598,51 @@ impl WgpuBackend {
 
     /// A constant block in the uniform ring (same bytes as a draw's own
     /// uniform buffer had): its dynamic offset.
-    fn constants(&self, c: &d3d9cmd::Constants, floats: usize, extra: &[[u32; 4]], block: u64) -> u32 {
-        let mut bytes = Vec::with_capacity(block as usize);
-        for k in 0..floats {
-            for w in c.f.get(k).copied().unwrap_or([0; 4]) {
-                bytes.extend_from_slice(&w.to_le_bytes());
+    /// L78: packed straight into the ring (it was built 4 bytes at a time
+    /// into a new Vec, then copied), and a stage's block whose constants
+    /// equal the previous draw's, still in the ring, is not written again:
+    /// the draw uses its offset.
+    fn constants(&self, c: &d3d9cmd::Constants, floats: usize, extra: &[[u32; 4]], block: u64, stage: usize) -> u32 {
+        let len = 16 * (floats + 16 + 16 + extra.len());
+        assert!(len as u64 <= block, "constant block of {len} bytes");
+        let generation = self.uniforms.borrow().generation;
+        let mut last = self.last_constants.borrow_mut();
+        let last = &mut last[stage];
+        if last.3 == generation && last.0 == *c && last.1[..] == *extra {
+            return last.2;
+        }
+        let off = self.ring_fill(&self.uniforms, block, UNIFORM_ALIGN, |dst| {
+            // plain loops over the vec4s: straight copies even where helpers
+            // stay out of line (the play profile's 64 codegen units)
+            fn put(dst: &mut [u8], v: [u32; 4]) {
+                for (d, w) in dst.chunks_exact_mut(4).zip(v) {
+                    d.copy_from_slice(&w.to_le_bytes());
+                }
             }
-        }
-        for v in c.i {
-            for w in v {
-                bytes.extend_from_slice(&w.to_le_bytes());
+            let mut at = 0;
+            for k in 0..floats {
+                put(&mut dst[at..at + 16], c.f.get(k).copied().unwrap_or([0; 4]));
+                at += 16;
             }
-        }
-        for b in c.b {
-            for w in [b, 0, 0, 0] {
-                bytes.extend_from_slice(&w.to_le_bytes());
+            for v in c.i {
+                put(&mut dst[at..at + 16], v.map(|w| w as u32));
+                at += 16;
             }
-        }
-        for w in extra.iter().flatten() {
-            bytes.extend_from_slice(&w.to_le_bytes());
-        }
-        assert!(bytes.len() as u64 <= block, "constant block of {} bytes", bytes.len());
-        self.ring_alloc(&self.uniforms, &bytes, block, UNIFORM_ALIGN) as u32
+            for b in c.b {
+                put(&mut dst[at..at + 16], [b, 0, 0, 0]);
+                at += 16;
+            }
+            for &v in extra {
+                put(&mut dst[at..at + 16], v);
+                at += 16;
+            }
+        }) as u32;
+        last.0.clone_from(c);
+        last.1.clear();
+        last.1.extend_from_slice(extra);
+        last.2 = off;
+        last.3 = self.uniforms.borrow().generation;
+        off
     }
 
     /// target_view, cached (release() drops the cache).
@@ -1758,8 +1791,8 @@ impl WgpuBackend {
         } };
         // the constant blocks last: a ring restart above (a flush) must not
         // separate them from this draw
-        let ps_off = self.constants(&d.ps_constants, 224, &ps_extra, PS_BLOCK);
-        let vs_off = self.constants(&d.vs_constants, 256, &[hp], VS_BLOCK);
+        let ps_off = self.constants(&d.ps_constants, 224, &ps_extra, PS_BLOCK, 0);
+        let vs_off = self.constants(&d.vs_constants, 256, &[hp], VS_BLOCK, 1);
         // a draw made while guest occlusion queries count gets its own slot
         let slot = (!self.active_queries.is_empty()).then(|| self.occlusion_slot());
         if let Some(s) = slot {
