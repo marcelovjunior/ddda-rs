@@ -217,17 +217,31 @@ impl<T: Default> Default for D3dCell<T> {
     }
 }
 
-/// This thread's key for D3dCell::owner, and the D3D locks it holds.
+/// This thread's key for D3dCell::owner (0 until first asked), and the D3D
+/// locks it holds. Const-initialised (L144): a lazily initialised
+/// thread-local checks its state on every access, two per D3D call.
 struct ThreadKey {
-    key: u64,
+    key: std::cell::Cell<u64>,
     held: std::cell::Cell<u32>,
 }
 
 thread_local! {
-    static THREAD_KEY: ThreadKey = {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        ThreadKey { key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), held: std::cell::Cell::new(0) }
-    };
+    static THREAD_KEY: ThreadKey = const { ThreadKey { key: std::cell::Cell::new(0), held: std::cell::Cell::new(0) } };
+}
+
+impl ThreadKey {
+    #[inline]
+    fn key(&self) -> u64 {
+        match self.key.get() {
+            0 => {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                let k = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.key.set(k);
+                k
+            }
+            k => k,
+        }
+    }
 }
 
 impl<T> D3dCell<T> {
@@ -235,7 +249,7 @@ impl<T> D3dCell<T> {
         use std::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
         let me = THREAD_KEY.with(|k| {
             k.held.set(k.held.get() + 1);
-            k.key
+            k.key()
         });
         if self.owner.load(Relaxed) != me && self.owner.compare_exchange(0, me, Acquire, Relaxed).is_err() {
             // contended: wait for a release (which notifies while anyone waits)
@@ -270,7 +284,7 @@ impl<T> D3dCell<T> {
         // A surrounding DeviceLock already keeps this cell alive and locked.
         // Borrow checking remains active; no depth/HELD bookkeeping is needed
         // for a borrow whose lifetime ends before that surrounding guard.
-        if self.owner.load(std::sync::atomic::Ordering::Acquire) == THREAD_KEY.with(|k| k.key) {
+        if self.owner.load(std::sync::atomic::Ordering::Acquire) == THREAD_KEY.with(|k| k.key()) {
             return f(&mut self.cell.borrow_mut());
         }
         struct Release<'a, T>(&'a D3dCell<T>);

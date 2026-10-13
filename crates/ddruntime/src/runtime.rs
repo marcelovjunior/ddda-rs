@@ -68,24 +68,43 @@ pub struct Runtime {
     pub(crate) graphics: std::sync::Mutex<crate::d3d9draw::Graphics>,
 }
 
-/// This host thread's runtime. `ptr` is the runtime `current` holds, for
-/// [`with`]'s fast path (L101: an Arc clone per access was a tenth of a D3D
-/// call). A runtime replaced by [`enter`] while a `with` on this thread
-/// still uses it is kept in `retired` until the outermost `with` returns.
+/// This host thread's runtime. A runtime replaced by [`enter`] while a
+/// `with` on this thread still uses it is kept in `retired` until the
+/// outermost `with` returns.
 struct Current {
     current: RefCell<Option<Arc<Runtime>>>,
+    retired: RefCell<Vec<Arc<Runtime>>>,
+}
+
+/// [`with`]'s fast path: the runtime `current` holds (L101: an Arc clone
+/// per access was a tenth of a D3D call), the pins on this thread, and
+/// whether `retired` holds any. Apart from [`Current`] (L144): a
+/// thread-local with no destructor is a plain TLS access, one with a
+/// destructor checks its registration on every access, and a D3D call
+/// pins three times.
+struct Pin {
     ptr: std::cell::Cell<*const Runtime>,
     depth: std::cell::Cell<u32>,
-    retired: RefCell<Vec<Arc<Runtime>>>,
+    retired: std::cell::Cell<bool>,
+}
+
+impl Drop for Current {
+    fn drop(&mut self) {
+        // the thread is ending: a pin from here on asks for CURRENT (and
+        // fails) instead of using the runtime this held
+        let _ = PIN.try_with(|p| p.ptr.set(std::ptr::null()));
+    }
 }
 
 thread_local! {
     static CURRENT: Current = const {
-        Current {
-            current: RefCell::new(None),
+        Current { current: RefCell::new(None), retired: RefCell::new(Vec::new()) }
+    };
+    static PIN: Pin = const {
+        Pin {
             ptr: std::cell::Cell::new(std::ptr::null()),
             depth: std::cell::Cell::new(0),
-            retired: RefCell::new(Vec::new()),
+            retired: std::cell::Cell::new(false),
         }
     };
 }
@@ -94,10 +113,11 @@ thread_local! {
 /// starting).
 pub fn enter(rt: Arc<Runtime>) {
     CURRENT.with(|c| {
-        c.ptr.set(Arc::as_ptr(&rt));
+        PIN.with(|p| p.ptr.set(Arc::as_ptr(&rt)));
         let old = c.current.borrow_mut().replace(rt);
-        if let Some(old) = old.filter(|_| c.depth.get() > 0) {
+        if let Some(old) = old.filter(|_| PIN.with(|p| p.depth.get()) > 0) {
             c.retired.borrow_mut().push(old);
+            PIN.with(|p| p.retired.set(true));
         }
     });
 }
@@ -109,7 +129,7 @@ pub fn current() -> Arc<Runtime> {
             return rt.clone();
         }
         let rt = Arc::new(Runtime::default());
-        c.ptr.set(Arc::as_ptr(&rt));
+        PIN.with(|p| p.ptr.set(Arc::as_ptr(&rt)));
         *c.current.borrow_mut() = Some(rt.clone());
         rt
     })
@@ -121,13 +141,14 @@ pub(crate) struct Pinned {
     ptr: *const Runtime,
 }
 
+#[inline]
 pub(crate) fn pin() -> Pinned {
-    let ptr = CURRENT.with(|c| {
-        if c.ptr.get().is_null() {
+    let ptr = PIN.with(|p| {
+        if p.ptr.get().is_null() {
             drop(current());
         }
-        c.depth.set(c.depth.get() + 1);
-        c.ptr.get()
+        p.depth.set(p.depth.get() + 1);
+        p.ptr.get()
     });
     Pinned { ptr }
 }
@@ -142,16 +163,27 @@ impl std::ops::Deref for Pinned {
 }
 
 impl Drop for Pinned {
+    #[inline]
     fn drop(&mut self) {
-        // (at thread exit the runtime has already gone with CURRENT)
-        let _ = CURRENT.try_with(|c| {
-            c.depth.set(c.depth.get() - 1);
-            if c.depth.get() == 0 && !c.retired.borrow().is_empty() {
-                let retired = std::mem::take(&mut *c.retired.borrow_mut());
-                drop(retired);
-            }
+        let last = PIN.with(|p| {
+            p.depth.set(p.depth.get() - 1);
+            p.depth.get() == 0 && p.retired.replace(false)
         });
+        if last {
+            release_retired();
+        }
     }
+}
+
+/// The runtimes `enter` replaced while pinned, once the last pin is gone.
+#[cold]
+#[inline(never)]
+fn release_retired() {
+    // (at thread exit the runtime has already gone with CURRENT)
+    let _ = CURRENT.try_with(|c| {
+        let retired = std::mem::take(&mut *c.retired.borrow_mut());
+        drop(retired);
+    });
 }
 
 /// Run `f` with this thread's runtime (the pointer is not borrowed while
@@ -180,7 +212,8 @@ mod tests {
             assert_eq!(Arc::strong_count(&a), retained);
         });
         assert_eq!(Arc::strong_count(&a), 1);
-        CURRENT.with(|c| { assert_eq!(c.depth.get(), 0); assert!(c.retired.borrow().is_empty()); });
+        assert_eq!(PIN.with(|p| p.depth.get()), 0);
+        CURRENT.with(|c| assert!(c.retired.borrow().is_empty()));
         enter(original);
     }
 
@@ -197,10 +230,11 @@ mod tests {
             assert!(result.is_err());
             assert!(std::ptr::eq(outer, a.as_ref()));
             with(|rt| assert!(std::ptr::eq(rt, b.as_ref())));
-            CURRENT.with(|c| assert_eq!(c.depth.get(), 1));
+            assert_eq!(PIN.with(|p| p.depth.get()), 1);
         });
         assert_eq!(Arc::strong_count(&a), 1);
-        CURRENT.with(|c| { assert_eq!(c.depth.get(), 0); assert!(c.retired.borrow().is_empty()); });
+        assert_eq!(PIN.with(|p| p.depth.get()), 0);
+        CURRENT.with(|c| assert!(c.retired.borrow().is_empty()));
         enter(original);
     }
 }
