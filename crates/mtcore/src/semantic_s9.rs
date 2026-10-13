@@ -68,11 +68,19 @@ pub fn pop_render_state(m: &mut dyn Mem, c: &mut Cpu) {
     c.esp = entry.wrapping_add(8);
     let depth = pg.u32(m, this.wrapping_add(0x30874)).wrapping_sub(1);
     pg.set_u32(m, this.wrapping_add(0x30874), depth);
-    let saved = this.wrapping_add(depth.wrapping_mul(STATE_SIZE)).wrapping_add(0x81f8);
+    let saved = this
+        .wrapping_add(depth.wrapping_mul(STATE_SIZE))
+        .wrapping_add(0x81f8);
     let current = this.wrapping_add(0xb4);
     if full {
         let slot_count = pg.u32(m, this.wrapping_add(0x14));
-        copy_guest(m, pg, current, saved, slot_count.wrapping_mul(8).wrapping_add(BASE_BLOCK));
+        copy_guest(
+            m,
+            pg,
+            current,
+            saved,
+            slot_count.wrapping_mul(8).wrapping_add(BASE_BLOCK),
+        );
         c.eax = current;
         return;
     }
@@ -194,9 +202,16 @@ impl Upload<'_> {
     }
     fn call(&mut self, target: u32, this: u32, args: &[u32], back: u32) -> u32 {
         let (pg, frame) = (self.pg, self.frame);
-        crate::semantic::call_from(self.m, self.c, pg, frame, this, args, back, move |m: &mut dyn Mem, c: &mut Cpu| {
-            ddnative_base::x86::call_ext(m, c, target)
-        })
+        crate::semantic::call_from(
+            self.m,
+            self.c,
+            pg,
+            frame,
+            this,
+            args,
+            back,
+            move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target),
+        )
     }
     /// Take `size` bytes from the context's constant arena, growing it
     /// (0x00FED890) when full.
@@ -250,7 +265,8 @@ impl Upload<'_> {
             for column in 0..3u32 {
                 for row in 0..4u32 {
                     let v = self.model(0xb0 + 0x10 * row + 4 * column);
-                    self.pg.set_u32(self.m, block.wrapping_add(16 * column + 4 * row), v);
+                    self.pg
+                        .set_u32(self.m, block.wrapping_add(16 * column + 4 * row), v);
                 }
             }
         }
@@ -304,7 +320,8 @@ impl Upload<'_> {
         self.add_dirty(1);
         self.fill_block(block, d, 0);
         self.mode_and(!2);
-        let second_pass = (self.model(0x108) >> 30) & 1 != 0 && self.pg.u16(self.m, self.ctx.wrapping_add(0x16a)) & 0x208 == 0;
+        let second_pass = (self.model(0x108) >> 30) & 1 != 0
+            && self.pg.u16(self.m, self.ctx.wrapping_add(0x16a)) & 0x208 == 0;
         if !second_pass {
             return;
         }
@@ -361,7 +378,14 @@ pub fn model_upload_state(m: &mut dyn Mem, c: &mut Cpu) {
     let model = c.ecx;
     // The original's frame: push ebp; and esp, -16; 0x64 locals; 3 pushes.
     let frame = (entry.wrapping_sub(4) & !0xf).wrapping_sub(0x64 + 12);
-    let mut u = Upload { m, c, pg, frame, ctx, model };
+    let mut u = Upload {
+        m,
+        c,
+        pg,
+        frame,
+        ctx,
+        model,
+    };
     if u.model(0x108) & 0x8000_0000 != 0 {
         let new = u.defaults(0x2670);
         u.set_state(0x2868, new, 0x4ce, 0x4ce);
@@ -418,11 +442,22 @@ pub fn set_fade(m: &mut dyn Mem, c: &mut Cpu) {
         // The original's frame at this call: entry - 16 (four saved registers).
         let page_allocator = pg.u32(m, 0x018d_08f4);
         let frame = entry.wrapping_sub(16);
-        let block = crate::semantic::call_from(m, c, pg, frame, page_allocator, &[chunk], 0x00ff_1372, |m: &mut dyn Mem, c: &mut Cpu| {
-            ddnative_base::x86::call_ext(m, c, 0x00da_7d70)
-        });
+        let block = crate::semantic::call_from(
+            m,
+            c,
+            pg,
+            frame,
+            page_allocator,
+            &[chunk],
+            0x00ff_1372,
+            |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, 0x00da_7d70),
+        );
         pg.set_u32(m, field(0x24), block);
-        pg.set_u32(m, field(0x28), if block == 0 { 0 } else { block.wrapping_add(chunk) });
+        pg.set_u32(
+            m,
+            field(0x28),
+            if block == 0 { 0 } else { block.wrapping_add(chunk) },
+        );
         c.esp = entry.wrapping_add(8);
     }
     let block = pg.u32(m, field(0x24));
@@ -508,9 +543,16 @@ impl Collect<'_> {
     }
     fn guest_call(&mut self, target: u32, this: u32, args: &[u32], back: u32) {
         let (pg, frame) = (self.pg, self.frame);
-        crate::semantic::call_from(self.m, self.c, pg, frame, this, args, back, move |m: &mut dyn Mem, c: &mut Cpu| {
-            ddnative_base::x86::call_ext(m, c, target)
-        });
+        crate::semantic::call_from(
+            self.m,
+            self.c,
+            pg,
+            frame,
+            this,
+            args,
+            back,
+            move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, target),
+        );
     }
     /// A call through slot `slot` of `object`'s vtable.
     fn virtual_call(&mut self, object: u32, slot: u32, args: &[u32], back: u32) {
@@ -594,7 +636,10 @@ impl Collect<'_> {
         let mut selected = 0;
         for _ in 0..remaining {
             let object = self.word(cursor);
-            if self.passes_filter(object, passbit) && selected < self.max && self.word(object.wrapping_add(0x1e0)) != 0 {
+            if self.passes_filter(object, passbit)
+                && selected < self.max
+                && self.word(object.wrapping_add(0x1e0)) != 0
+            {
                 self.set_selected(selected, object);
                 selected += 1;
             }
@@ -735,7 +780,10 @@ impl Collect<'_> {
                 self.log(wanted_slot);
                 let default = self.default_value(source);
                 self.set_ctx(0x1f8 + wanted_slot * 8, default);
-                self.set_ctx(0x1fc + wanted_slot * 8, ((wanted ^ different) & 0xffff_f000) | source);
+                self.set_ctx(
+                    0x1fc + wanted_slot * 8,
+                    ((wanted ^ different) & 0xffff_f000) | source,
+                );
                 self.add_dirty(3);
             }
             // The related slot of position j, then of position i.
@@ -790,7 +838,17 @@ pub fn scene_collect_visible(m: &mut dyn Mem, c: &mut Cpu) {
     // The original's frame: push ebp; and esp, -16; 0x84 locals; 3 pushes.
     let frame = (entry.wrapping_sub(4) & !0xf).wrapping_sub(0x84 + 12);
     let passbit = 1u32 << (pg.u8(m, ctx.wrapping_add(0x168)) & 31);
-    let mut s = Collect { m, c, pg, frame, scene, ctx, mask, max, probe };
+    let mut s = Collect {
+        m,
+        c,
+        pg,
+        frame,
+        scene,
+        ctx,
+        mask,
+        max,
+        probe,
+    };
     // The selection array (nine slots) starts empty.
     for i in 0..9 {
         s.set_selected(i, 0);
@@ -799,14 +857,28 @@ pub fn scene_collect_visible(m: &mut dyn Mem, c: &mut Cpu) {
     s.select_first_list(passbit);
     let selection = frame.wrapping_add(SELECTED);
     let count_address = frame.wrapping_add(COUNT);
-    s.virtual_call(scene, 0x64, &[ctx, mask, max, selection, count_address, 0], 0x00fe_b2da);
-    let index = if pg.u8(s.m, scene.wrapping_add(0xb5c)) != 0 { s.scene(0xb60) } else { 0 };
+    s.virtual_call(
+        scene,
+        0x64,
+        &[ctx, mask, max, selection, count_address, 0],
+        0x00fe_b2da,
+    );
+    let index = if pg.u8(s.m, scene.wrapping_add(0xb5c)) != 0 {
+        s.scene(0xb60)
+    } else {
+        0
+    };
     if pg.u8(s.m, scene.wrapping_add(0xb5c)) != 0 && index != 0 {
         // The index query's argument block lives in this frame.
         let block = frame.wrapping_add(0x2c);
         let query = frame.wrapping_add(0x40);
         let radius_constant = s.word(0x0162_adb0);
-        let (p0, p1, p2, p3) = (s.word(probe), s.word(probe + 4), s.word(probe + 8), s.word(probe + 12));
+        let (p0, p1, p2, p3) = (
+            s.word(probe),
+            s.word(probe + 4),
+            s.word(probe + 8),
+            s.word(probe + 12),
+        );
         let count = s.count();
         for (offset, v) in [
             (0x48, radius_constant),
@@ -824,13 +896,23 @@ pub fn scene_collect_visible(m: &mut dyn Mem, c: &mut Cpu) {
         ] {
             s.set_word(frame.wrapping_add(offset), v);
         }
-        s.guest_call(0x0117_87c0, index, &[query, scene, 0x00fe_5690, block, 0, 0xffff_ffff], 0x00fe_b362);
+        s.guest_call(
+            0x0117_87c0,
+            index,
+            &[query, scene, 0x00fe_5690, block, 0, 0xffff_ffff],
+            0x00fe_b362,
+        );
         let found = s.word(frame.wrapping_add(0x38));
         s.set_count(found);
     } else {
         s.select_second_list(passbit);
     }
-    s.virtual_call(scene, 0x64, &[ctx, mask, max, selection, count_address, 1], 0x00fe_b44d);
+    s.virtual_call(
+        scene,
+        0x64,
+        &[ctx, mask, max, selection, count_address, 1],
+        0x00fe_b44d,
+    );
     let count = s.count();
     s.sort_selected(count);
     let mut i = 0;
@@ -845,4 +927,730 @@ pub fn scene_collect_visible(m: &mut dyn Mem, c: &mut Cpu) {
     s.merge_bindings(count);
     s.guest_call(0x00fe_4f30, scene, &[ctx, mask], 0x00fe_bb10);
     s.c.esp = entry.wrapping_add(4 + 0x10);
+}
+
+const EPS: f32 = 1.1920929e-07;
+
+/// The inverse of the product `A * B` of the camera matrices (row-major
+/// 4x4), by the game's cofactor expansion; the identity (read from the
+/// game's table at 0x016295C0) when the determinant is exactly zero.
+#[allow(unused_assignments, unused_variables, clippy::all)]
+fn invert_product(p: &[f32; 16], identity: impl Fn() -> [f32; 16]) -> [f32; 16] {
+    let [p00, p01, p02, p03, p10, p11, p12, p13, p20, p21, p22, p23, p30, p31, p32, p33] = *p;
+    let mut inv = [0f32; 16];
+    let mut l298: f32;
+    let mut l1e0: f32;
+    let mut l268: f32;
+    let mut l2ac: f32;
+    let mut l1dc: f32;
+    let mut l288: f32;
+    let mut fv27: f32;
+    let mut l274: f32;
+    let mut l1d8: f32;
+    let mut l26c: f32;
+    let mut fv28: f32;
+    let mut l2a4: f32;
+    let mut l264: f32;
+    let mut l270: f32;
+    let mut l294: f32;
+    let mut fv26: f32;
+    l298 = p12 * p23;
+    l1e0 = p13 * p21;
+    l268 = p13 * p22;
+    l2ac = p23 * p32;
+    l1dc =
+        (((l298 * p31 + ((p11 * p22) * p33) + l1e0 * p32) - l268 * p31) - l2ac * p11) - ((p12 * p33) * p21);
+    l288 = p02 * p23;
+    fv27 = p01 * p22;
+    l274 = p02 * p33;
+    l1d8 = -((((p33 * fv27 + p31 * l288 + (p32 * (p03 * p21))) - (p31 * (p03 * p22))) - l2ac * p01)
+        - p21 * l274);
+    l26c = p02 * p13;
+    fv28 = p01 * p12;
+    l2a4 = p03 * p11;
+    l264 = p03 * p12;
+    l270 = (((p33 * fv28 + p31 * l26c + p32 * l2a4) - p31 * l264) - (p01 * (p13 * p32))) - p11 * l274;
+    l294 = -((((p23 * fv28 + p21 * l26c + p22 * l2a4) - p21 * l264) - l268 * p01) - p11 * l288);
+    inv[15] = l1dc * p00 + l1d8 * p10 + l270 * p20 + l294 * p30;
+    if inv[15] == 0.0 {
+        let ident = identity();
+        inv[0] = ident[0];
+        inv[1] = ident[1];
+        inv[2] = ident[2];
+        inv[3] = ident[3];
+        inv[4] = ident[4];
+        inv[5] = ident[5];
+        inv[6] = ident[6];
+        inv[7] = ident[7];
+        inv[8] = ident[8];
+        inv[9] = ident[9];
+        inv[10] = ident[10];
+        inv[11] = ident[11];
+        inv[12] = ident[12];
+        inv[13] = ident[13];
+        inv[14] = ident[14];
+        inv[15] = ident[15];
+    } else {
+        inv[15] = 1.0 / inv[15];
+        inv[0] = inv[15] * l1dc;
+        inv[1] = inv[15] * l1d8;
+        inv[3] = inv[15] * l294;
+        inv[2] = inv[15] * l270;
+        inv[4] = -(((((((p10 * p22) * p33) + l298 * p30 + ((p13 * p20) * p32)) - l268 * p30) - l2ac * p10)
+            - ((p12 * p33) * p20))
+            * inv[15]);
+        inv[5] = ((((((p00 * p22) * p33) + p30 * l288 + ((p03 * p20) * p32)) - (p30 * (p03 * p22)))
+            - l2ac * p00)
+            - p20 * l274)
+            * inv[15];
+        l2ac = p03 * p10;
+        inv[6] = -(((((((p00 * p12) * p33) + p30 * l26c + l2ac * p32) - p30 * l264) - (p00 * (p13 * p32)))
+            - p10 * l274)
+            * inv[15]);
+        inv[7] = ((((((p00 * p12) * p23) + p20 * l26c + l2ac * p22) - p20 * l264) - l268 * p00) - p10 * l288)
+            * inv[15];
+        l270 = p10 * p21;
+        inv[8] = ((((((p11 * p23) * p30) + l270 * p33 + ((p13 * p20) * p31)) - l1e0 * p30)
+            - (p10 * (p23 * p31)))
+            - ((p11 * p33) * p20))
+            * inv[15];
+        l298 = p01 * p23;
+        l294 = p00 * p21;
+        inv[9] = -(((((l298 * p30 + l294 * p33 + ((p03 * p20) * p31)) - (p30 * (p03 * p21)))
+            - (p00 * (p23 * p31)))
+            - ((p01 * p33) * p20))
+            * inv[15]);
+        fv26 = p00 * p11;
+        inv[10] = ((((((p01 * p13) * p30) + fv26 * p33 + l2ac * p31) - p30 * l2a4) - ((p13 * p31) * p00))
+            - (p10 * (p01 * p33)))
+            * inv[15];
+        inv[11] = -(((((((p01 * p13) * p20) + fv26 * p23 + l2ac * p21) - p20 * l2a4) - l1e0 * p00)
+            - p10 * l298)
+            * inv[15]);
+        inv[12] = -(((((l270 * p32 + ((p11 * p22) * p30) + ((p12 * p20) * p31)) - ((p12 * p21) * p30))
+            - ((p22 * p31) * p10))
+            - ((p11 * p32) * p20))
+            * inv[15]);
+        inv[13] = ((((l294 * p32 + p30 * fv27 + ((p02 * p20) * p31)) - ((p02 * p21) * p30))
+            - ((p22 * p31) * p00))
+            - ((p01 * p32) * p20))
+            * inv[15];
+        inv[14] = -(((((fv26 * p32 + p30 * fv28 + ((p02 * p10) * p31)) - ((p02 * p11) * p30))
+            - ((p12 * p31) * p00))
+            - ((p01 * p32) * p10))
+            * inv[15]);
+        inv[15] = ((((fv26 * p22 + p20 * fv28 + ((p02 * p10) * p21)) - ((p02 * p11) * p20))
+            - ((p12 * p21) * p00))
+            - p10 * fv27)
+            * inv[15];
+    }
+    inv
+}
+
+/// The inverse of the matrix `B` (row-major 4x4), by the game's cofactor
+/// expansion; the identity when the determinant is exactly zero.
+#[allow(unused_assignments, unused_variables, clippy::all)]
+fn invert_matrix(b: &[f32; 16], identity: impl Fn() -> [f32; 16]) -> [f32; 16] {
+    let fv2 = b[0];
+    let mut inv = [0f32; 16];
+    let mut fv27: f32;
+    let mut fv28: f32;
+    let mut fv26: f32;
+    let mut fv1: f32;
+    let mut l2c0: f32;
+    let mut l2bc: f32;
+    let mut fv3: f32;
+    let mut l2d8: f32;
+    let mut l2e0: f32;
+    let mut l2d4: f32;
+    let mut l2e4: f32;
+    let mut l2e8: f32;
+    let mut l2dc: f32;
+    let mut l298: f32;
+    let mut l2a4: f32;
+    let mut l294: f32;
+    let mut fv4: f32;
+    fv27 = b[10];
+    fv28 = b[14];
+    fv26 = b[13];
+    fv1 = b[15];
+    l2c0 = b[7] * fv27;
+    l2bc = b[1];
+    inv[0] = (((((b[6] * b[11]) * fv26) + ((b[5] * fv27) * fv1) + ((b[7] * b[9]) * fv28)) - l2c0 * fv26)
+        - ((fv28 * b[11]) * b[5]))
+        - ((b[6] * fv1) * b[9]);
+    fv3 = b[2];
+    l2d8 = fv3 * b[11];
+    l2e0 = b[3];
+    l2d4 = (fv3 * fv1);
+    l2e4 = l2e0 * b[5];
+    l2e8 = l2bc * b[6];
+    l2dc = l2e0 * b[6];
+    inv[1] = -((((((l2bc * fv27) * fv1) + l2d8 * fv26 + ((l2e0 * b[9]) * fv28)) - ((l2e0 * fv27) * fv26))
+        - (l2bc * (fv28 * b[11])))
+        - l2d4 * b[9]);
+    inv[2] = (((((fv3 * b[7]) * fv26) + l2e8 * b[15] + l2e4 * fv28) - l2dc * b[13]) - ((fv28 * b[7]) * l2bc))
+        - l2d4 * b[5];
+    inv[3] = -((((((fv3 * b[7]) * b[9]) + l2e8 * b[11] + l2e4 * b[10]) - l2dc * b[9]) - l2bc * l2c0)
+        - l2d8 * b[5]);
+    inv[15] = b[4] * inv[1] + inv[0] * fv2 + inv[2] * b[8] + b[12] * inv[3];
+    if inv[15] == 0.0 {
+        let ident = identity();
+        inv[0] = ident[0];
+        inv[1] = ident[1];
+        inv[2] = ident[2];
+        inv[3] = ident[3];
+        inv[4] = ident[4];
+        inv[5] = ident[5];
+        inv[6] = ident[6];
+        inv[7] = ident[7];
+        inv[8] = ident[8];
+        inv[9] = ident[9];
+        inv[10] = ident[10];
+        inv[11] = ident[11];
+        inv[12] = ident[12];
+        inv[13] = ident[13];
+        inv[14] = ident[14];
+        inv[15] = ident[15];
+    } else {
+        inv[15] = 1.0 / inv[15];
+        inv[0] = inv[15] * inv[0];
+        inv[1] = inv[15] * inv[1];
+        fv27 = b[8];
+        inv[2] = inv[15] * inv[2];
+        fv28 = b[12];
+        inv[3] = inv[15] * inv[3];
+        fv26 = b[15];
+        inv[4] = -(((((((b[6] * b[11]) * fv28) + ((b[4] * b[10]) * fv26) + (b[14] * (b[7] * fv27)))
+            - ((b[7] * b[10]) * fv28))
+            - ((b[14] * b[11]) * b[4]))
+            - ((b[6] * fv26) * fv27))
+            * inv[15]);
+        fv1 = b[2];
+        l298 = b[3] * fv27;
+        inv[5] = ((((((fv2 * b[10]) * fv26) + ((fv1 * b[11]) * fv28) + l298 * b[14])
+            - ((b[3] * b[10]) * fv28))
+            - (fv2 * (b[14] * b[11])))
+            - ((fv1 * fv26) * fv27))
+            * inv[15];
+        l2e0 = b[3] * b[4];
+        fv3 = b[4];
+        inv[6] = -(((((((fv1 * b[7]) * fv28) + ((fv2 * b[6]) * fv26) + l2e0 * b[14])
+            - ((b[3] * b[6]) * fv28))
+            - ((b[14] * b[7]) * fv2))
+            - ((fv1 * fv26) * fv3))
+            * inv[15]);
+        l2a4 = b[9];
+        l294 = l2a4 * fv3;
+        inv[7] = ((((((fv1 * b[7]) * fv27) + ((fv2 * b[6]) * b[11]) + l2e0 * b[10])
+            - ((b[3] * b[6]) * fv27))
+            - (fv2 * (b[7] * b[10])))
+            - ((fv1 * b[11]) * fv3))
+            * inv[15];
+        fv26 = b[5];
+        fv1 = b[15];
+        fv3 = b[1];
+        inv[8] = ((((((fv26 * b[11]) * fv28) + l294 * b[15] + (b[13] * (b[7] * fv27)))
+            - ((l2a4 * b[7]) * fv28))
+            - ((b[13] * b[11]) * b[4]))
+            - ((fv26 * fv1) * fv27))
+            * inv[15];
+        l2c0 = fv3 * b[11];
+        inv[9] = -(((((((fv2 * l2a4) * fv1) + l2c0 * fv28 + b[13] * l298) - ((l2a4 * b[3]) * fv28))
+            - (fv2 * (b[13] * b[11])))
+            - ((fv3 * fv1) * fv27))
+            * inv[15]);
+        inv[10] = ((((((fv3 * b[7]) * fv28) + ((fv2 * fv26) * b[15]) + b[13] * l2e0)
+            - ((fv26 * b[3]) * fv28))
+            - ((b[13] * b[7]) * fv2))
+            - ((fv3 * fv1) * b[4]))
+            * inv[15];
+        fv1 = b[4];
+        fv4 = b[14];
+        inv[11] = -(((((((fv3 * b[7]) * fv27) + ((fv2 * fv26) * b[11]) + l2a4 * l2e0)
+            - ((fv26 * b[3]) * fv27))
+            - (fv2 * (l2a4 * b[7])))
+            - l2c0 * fv1)
+            * inv[15]);
+        l2e4 = b[2];
+        inv[12] = -(((((((fv26 * b[10]) * fv28) + l294 * fv4 + ((fv27 * b[6]) * b[13]))
+            - ((l2a4 * b[6]) * b[12]))
+            - (fv1 * (b[10] * b[13])))
+            - ((b[5] * fv4) * b[8]))
+            * inv[15]);
+        fv27 = b[1] * b[10];
+        fv28 = b[1] * fv4;
+        l2d8 = ((((b[9] * fv2) * fv4) + fv27 * b[12] + ((l2e4 * b[8]) * b[13])) - ((l2e4 * b[9]) * b[12]))
+            - (fv2 * (b[10] * b[13]));
+        inv[13] = (l2d8 - fv28 * b[8]) * inv[15];
+        l2e8 = fv2 * b[5];
+        l2dc = b[6];
+        l2d4 = (l2e4 * b[5]);
+        l2e4 = l2e4 * fv1;
+        inv[14] = -(((((l2e8 * b[14] + ((l2dc * b[1]) * b[12]) + l2e4 * b[13]) - l2d4 * b[12])
+            - ((l2dc * b[13]) * fv2))
+            - fv28 * b[4])
+            * inv[15]);
+        inv[15] = ((((((l2dc * b[1]) * b[8]) + l2e8 * b[10] + l2e4 * b[9]) - l2d4 * b[8])
+            - ((l2dc * b[9]) * fv2))
+            - fv27 * b[4])
+            * inv[15];
+    }
+    inv
+}
+
+/// The six clip-space frustum planes (24 floats: nx, ny, nz, d each) from
+/// the eight transformed corners `c` (32 floats, 4 per corner; corner 7 is
+/// unused), with the plane windings of the mirrored (`mirrored`) or normal
+/// projection.
+#[allow(unused_assignments, unused_variables, clippy::all)]
+fn frustum_planes(c: &[f32; 32], mirrored: bool) -> [f32; 24] {
+    let mut pl = [0f32; 24];
+    let mut l1d0: f32;
+    let mut fv26: f32;
+    let mut fv27: f32;
+    let mut fv28: f32;
+    let mut l70: f32;
+    let mut l6c: f32;
+    let mut l2d0: f32;
+    let mut fs2cc: f32;
+    let mut fs2c8: f32;
+    let mut l1cc: f32;
+    let mut l2e4: f32;
+    let mut l2d8: f32;
+    if !mirrored {
+        l1d0 = c[4] - c[0];
+        fv26 = (c[18] - c[2]) * (c[5] - c[1]) - (c[17] - c[1]) * (c[6] - c[2]);
+        fv27 = (c[6] - c[2]) * (c[16] - c[0]) - (c[18] - c[2]) * l1d0;
+        pl[2] = (c[17] - c[1]) * l1d0 - (c[5] - c[1]) * (c[16] - c[0]);
+        fv28 = (fv27 * fv27 + fv26 * fv26 + pl[2] * pl[2]).sqrt();
+        if !(EPS > fv28) {
+            fv28 = 1.0 / fv28;
+            fv26 = fv28 * fv26;
+            fv27 = fv27 * fv28;
+            pl[2] = pl[2] * fv28;
+        }
+        pl[3] = -(fv27 * c[1] + c[0] * fv26 + pl[2] * c[2]);
+        pl[0] = fv26;
+        pl[1] = fv27;
+        pl[6] = (c[9] - c[25]) * (c[12] - c[24]) - (c[13] - c[25]) * (c[8] - c[24]);
+        fv28 = (c[14] - c[26]) * (c[8] - c[24]) - (c[10] - c[26]) * (c[12] - c[24]);
+        fv27 = (c[10] - c[26]) * (c[13] - c[25]) - (c[9] - c[25]) * (c[14] - c[26]);
+        fv26 = (fv28 * fv28 + fv27 * fv27 + pl[6] * pl[6]).sqrt();
+        if !(EPS > fv26) {
+            fv26 = 1.0 / fv26;
+            fv27 = fv26 * fv27;
+            fv28 = fv28 * fv26;
+            pl[6] = pl[6] * fv26;
+        }
+        pl[4] = fv27;
+        pl[5] = fv28;
+        pl[7] = -(fv27 * c[24] + fv28 * c[25] + pl[6] * c[26]);
+        l70 = c[4] - c[8];
+        pl[10] = (c[1] - c[9]) * l70 - (c[5] - c[9]) * (c[0] - c[8]);
+        fv27 = (c[6] - c[10]) * (c[0] - c[8]) - (c[2] - c[10]) * l70;
+        fv26 = (c[2] - c[10]) * (c[5] - c[9]) - (c[1] - c[9]) * (c[6] - c[10]);
+        fv28 = (fv27 * fv27 + fv26 * fv26 + pl[10] * pl[10]).sqrt();
+        if !(EPS > fv28) {
+            fv28 = 1.0 / fv28;
+            fv26 = fv26 * fv28;
+            fv27 = fv27 * fv28;
+            pl[10] = pl[10] * fv28;
+        }
+        pl[8] = fv26;
+        pl[9] = fv27;
+        pl[11] = -(c[8] * fv26 + fv27 * c[9] + pl[10] * c[10]);
+        fv27 = (c[26] - c[18]) * (c[21] - c[17]) - (c[25] - c[17]) * (c[22] - c[18]);
+        pl[14] = (c[25] - c[17]) * (c[20] - c[16]) - (c[21] - c[17]) * (c[24] - c[16]);
+        fv28 = (c[22] - c[18]) * (c[24] - c[16]) - (c[26] - c[18]) * (c[20] - c[16]);
+        fv26 = (fv27 * fv27 + fv28 * fv28 + pl[14] * pl[14]).sqrt();
+        if !(EPS > fv26) {
+            fv26 = 1.0 / fv26;
+            fv27 = fv26 * fv27;
+            pl[14] = fv26 * pl[14];
+            fv28 = fv28 * fv26;
+        }
+        pl[12] = fv27;
+        pl[13] = fv28;
+        pl[15] = -(fv27 * c[16] + c[17] * fv28 + c[18] * pl[14]);
+        l6c = c[9] - c[17];
+        fv27 = (c[2] - c[18]) * l6c - (c[1] - c[17]) * (c[10] - c[18]);
+        pl[18] = (c[8] - c[16]) * (c[1] - c[17]) - (c[0] - c[16]) * l6c;
+        fv28 = (c[0] - c[16]) * (c[10] - c[18]) - (c[8] - c[16]) * (c[2] - c[18]);
+        fv26 = (fv27 * fv27 + fv28 * fv28 + pl[18] * pl[18]).sqrt();
+        if !(EPS > fv26) {
+            fv26 = 1.0 / fv26;
+            fv27 = fv26 * fv27;
+            fv28 = fv28 * fv26;
+            pl[18] = pl[18] * fv26;
+        }
+        pl[16] = fv27;
+        pl[17] = fv28;
+        pl[19] = -(fv27 * c[16] + c[17] * fv28 + c[18] * pl[18]);
+        l2d0 = (c[22] - c[6]) * (c[13] - c[5]) - (c[21] - c[5]) * (c[14] - c[6]);
+        fs2cc = (c[20] - c[4]) * (c[14] - c[6]) - (c[12] - c[4]) * (c[22] - c[6]);
+        fs2c8 = (c[12] - c[4]) * (c[21] - c[5]) - (c[20] - c[4]) * (c[13] - c[5]);
+        fv27 = (l2d0 * l2d0 + fs2cc * fs2cc + fs2c8 * fs2c8).sqrt();
+        if !(EPS > fv27) {
+            fv27 = 1.0 / fv27;
+            l2d0 = l2d0 * fv27;
+            fs2cc = fs2cc * fv27;
+            fs2c8 = fs2c8 * fv27;
+        }
+        pl[20] = l2d0;
+        pl[21] = fs2cc;
+        pl[23] = -(l2d0 * c[4] + c[5] * fs2cc + c[6] * fs2c8);
+    } else {
+        fv27 = (c[2] - c[18]) * (c[5] - c[17]) - (c[1] - c[17]) * (c[6] - c[18]);
+        pl[2] = (c[4] - c[16]) * (c[1] - c[17]) - (c[0] - c[16]) * (c[5] - c[17]);
+        fv26 = (c[0] - c[16]) * (c[6] - c[18]) - (c[4] - c[16]) * (c[2] - c[18]);
+        fv28 = (fv27 * fv27 + fv26 * fv26 + pl[2] * pl[2]).sqrt();
+        if !(EPS > fv28) {
+            fv28 = 1.0 / fv28;
+            fv27 = fv28 * fv27;
+            fv26 = fv28 * fv26;
+            pl[2] = fv28 * pl[2];
+        }
+        pl[3] = -(fv27 * c[16] + fv26 * c[17] + pl[2] * c[18]);
+        fv28 = (c[26] - c[10]) * (c[13] - c[9]) - (c[25] - c[9]) * (c[14] - c[10]);
+        pl[0] = fv27;
+        pl[1] = fv26;
+        pl[6] = (c[12] - c[8]) * (c[25] - c[9]) - (c[24] - c[8]) * (c[13] - c[9]);
+        fv26 = (c[24] - c[8]) * (c[14] - c[10]) - (c[12] - c[8]) * (c[26] - c[10]);
+        fv27 = (fv28 * fv28 + fv26 * fv26 + pl[6] * pl[6]).sqrt();
+        if !(EPS > fv27) {
+            fv27 = 1.0 / fv27;
+            fv28 = fv27 * fv28;
+            pl[6] = fv27 * pl[6];
+            fv26 = fv26 * fv27;
+        }
+        l1cc = c[9] - c[1];
+        l2e4 = c[10] - c[2];
+        pl[7] = -(fv28 * c[8] + c[9] * fv26 + c[10] * pl[6]);
+        l2d8 = c[8] - c[0];
+        pl[4] = fv28;
+        pl[5] = fv26;
+        fv28 = l2e4 * (c[5] - c[1]) - l1cc * (c[6] - c[2]);
+        pl[10] = (c[4] - c[0]) * l1cc - l2d8 * (c[5] - c[1]);
+        fv27 = l2d8 * (c[6] - c[2]) - (c[4] - c[0]) * l2e4;
+        fv26 = (fv27 * fv27 + fv28 * fv28 + pl[10] * pl[10]).sqrt();
+        if !(EPS > fv26) {
+            fv26 = 1.0 / fv26;
+            fv28 = fv26 * fv28;
+            fv27 = fv27 * fv26;
+            pl[10] = pl[10] * fv26;
+        }
+        pl[11] = -(fv27 * c[1] + c[0] * fv28 + pl[10] * c[2]);
+        pl[8] = fv28;
+        pl[9] = fv27;
+        fv28 = (c[22] - c[26]) * (c[16] - c[24]) - (c[18] - c[26]) * (c[20] - c[24]);
+        fv27 = (c[18] - c[26]) * (c[21] - c[25]) - (c[17] - c[25]) * (c[22] - c[26]);
+        pl[14] = (c[17] - c[25]) * (c[20] - c[24]) - (c[21] - c[25]) * (c[16] - c[24]);
+        fv26 = (fv28 * fv28 + fv27 * fv27 + pl[14] * pl[14]).sqrt();
+        if !(EPS > fv26) {
+            fv26 = 1.0 / fv26;
+            fv27 = fv26 * fv27;
+            fv28 = fv28 * fv26;
+            pl[14] = pl[14] * fv26;
+        }
+        pl[12] = fv27;
+        pl[13] = fv28;
+        l1d0 = c[16] - c[0];
+        pl[15] = -(fv27 * c[24] + fv28 * c[25] + pl[14] * c[26]);
+        pl[18] = (c[17] - c[1]) * l2d8 - l1cc * l1d0;
+        fv27 = l2e4 * l1d0 - (c[18] - c[2]) * l2d8;
+        fv28 = (c[18] - c[2]) * l1cc - (c[17] - c[1]) * l2e4;
+        fv26 = (fv27 * fv27 + fv28 * fv28 + pl[18] * pl[18]).sqrt();
+        if !(EPS > fv26) {
+            fv26 = 1.0 / fv26;
+            fv28 = fv28 * fv26;
+            fv27 = fv27 * fv26;
+            pl[18] = pl[18] * fv26;
+        }
+        pl[16] = fv28;
+        pl[17] = fv27;
+        pl[19] = -(fv27 * c[1] + c[0] * fv28 + pl[18] * c[2]);
+        l2d0 = (c[6] - c[22]) * (c[13] - c[21]) - (c[5] - c[21]) * (c[14] - c[22]);
+        fs2cc = (c[14] - c[22]) * (c[4] - c[20]) - (c[6] - c[22]) * (c[12] - c[20]);
+        fs2c8 = (c[5] - c[21]) * (c[12] - c[20]) - (c[13] - c[21]) * (c[4] - c[20]);
+        fv27 = (fs2cc * fs2cc + l2d0 * l2d0 + fs2c8 * fs2c8).sqrt();
+        if !(EPS > fv27) {
+            fv27 = 1.0 / fv27;
+            l2d0 = l2d0 * fv27;
+            fs2cc = fs2cc * fv27;
+            fs2c8 = fs2c8 * fv27;
+        }
+        pl[20] = l2d0;
+        pl[21] = fs2cc;
+        pl[23] = -(fs2cc * c[21] + c[20] * l2d0 + fs2c8 * c[22]);
+    }
+    pl[22] = fs2c8;
+    pl
+}
+
+/// Row-major 4x4 product `a * b`: `p[4i + j] = a[4i]*b[j] + a[4i+1]*b[4+j]
+/// + a[4i+2]*b[8+j] + a[4i+3]*b[12+j]`, summed left to right as the
+/// game does.
+fn multiply_matrices(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut p = [0f32; 16];
+    for i in 0..4 {
+        for j in 0..4 {
+            p[4 * i + j] = ((a[4 * i] * b[j] + a[4 * i + 1] * b[4 + j]) + a[4 * i + 2] * b[8 + j])
+                + a[4 * i + 3] * b[12 + j];
+        }
+    }
+    p
+}
+
+fn read_floats16(m: &dyn Mem, pg: Pages, address: u32) -> [f32; 16] {
+    std::array::from_fn(|i| f32::from_bits(pg.u32(m, address.wrapping_add(4 * i as u32))))
+}
+
+/// A 4-corner-vector times a matrix: `x * row0 + y * row1 + z * row2 + w *
+/// row3`, per lane, left to right.
+fn transform_corner(v: [f32; 4], m: &[f32; 16]) -> [f32; 4] {
+    std::array::from_fn(|j| ((v[0] * m[j] + v[1] * m[4 + j]) + v[2] * m[8 + j]) + v[3] * m[12 + j])
+}
+
+/// 0x00FF2EE0, `camera->set_view_projection(view, projection, viewport,
+/// bias)` (thiscall, `ret 0x10`, void): load a camera's view and projection
+/// matrices into the draw context and build the constant blocks derived
+/// from them.
+///
+/// From the view matrix `view` and projection `projection` (row-major 4x4
+/// floats) it computes the product, the inverse of the product, the
+/// inverse of the projection, the inverse-rotation block and, after the
+/// viewport setup 0x00FF04C0, the depth scale (a `log` pair through the
+/// CRT's 0x012F45C4 / 0x012F439E: the mirrored-projection flag is
+/// `projection[10] < 0`). Then two constant blocks are taken from the
+/// context's arena:
+///
+/// 1. (`this + 0xCA0`) the six frustum planes: the eight clip-space cube
+///    corners through the inverse product, divided by their w where it is
+///    positive, and the plane through each face (normalized unless the
+///    normal is shorter than `FLT_EPSILON`);
+/// 2. (`this + 0xC88`) the matrices: the product, view, rotation,
+///    projection, inverse projection and inverse product, plus the
+///    camera position terms, the projection's depth ratio and the
+///    `bias` argument.
+///
+/// The camera position (-translation in the rotation basis) also lands in
+/// `this + 0x184..0x190`.
+// Translated from 0x00FF2EE0 (DDDA.exe 2017-12-13 Steam)
+pub fn set_camera_matrices(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (view, projection, viewport) = (arg(m, 0), arg(m, 1), arg(m, 2));
+    // The original's frame: push ebp; and esp, -16; 0x2E4 locals; 3 pushes.
+    let frame = (entry.wrapping_sub(4) & !0xf).wrapping_sub(0x2e4 + 12);
+    let word = |m: &dyn Mem, a: u32| pg.u32(m, a);
+    let float = |m: &dyn Mem, a: u32| f32::from_bits(pg.u32(m, a));
+    let a = read_floats16(m, pg, view);
+    let b = read_floats16(m, pg, projection);
+
+    // The product and its inverse, the projection's inverse, the rotation block.
+    let product = multiply_matrices(&a, &b);
+    let inverse_product = invert_product(&product, || read_floats16(m, pg, 0x0162_95c0));
+    let inverse_projection = invert_matrix(&b, || read_floats16(m, pg, 0x0162_95c0));
+    let mut rotation = [0f32; 16];
+    rotation[0] = a[0];
+    rotation[4] = a[1];
+    rotation[8] = a[2];
+    rotation[1] = a[4];
+    rotation[5] = a[5];
+    rotation[9] = a[6];
+    rotation[2] = a[8];
+    rotation[6] = a[9];
+    rotation[10] = a[10];
+    rotation[15] = 1.0;
+    rotation[12] = -((a[13] * rotation[4] + a[12] * rotation[0]) + a[14] * rotation[8]);
+    rotation[13] = -((a[12] * rotation[1] + a[13] * rotation[5]) + a[14] * rotation[9]);
+    rotation[14] = -((a[12] * rotation[2] + a[13] * rotation[6]) + a[14] * rotation[10]);
+
+    // The viewport setup (jitter/scale block at this + 0xC90).
+    let mut call = |m: &mut dyn Mem,
+                    c: &mut Cpu,
+                    target: u32,
+                    this: u32,
+                    args: &[u32],
+                    back: u32,
+                    xmm0: Option<[u32; 2]>|
+     -> (u32, [u32; 2]) {
+        crate::semantic::call_from(
+            m,
+            c,
+            pg,
+            frame,
+            this,
+            args,
+            back,
+            move |m: &mut dyn Mem, c: &mut Cpu| {
+                if let Some(v) = xmm0 {
+                    c.xmm[0] = [v[0], v[1], 0, 0];
+                }
+                ddnative_base::x86::call_ext(m, c, target)
+            },
+        );
+        (c.eax, [c.xmm[0][0], c.xmm[0][1]])
+    };
+    call(m, c, 0x00ff_04c0, this, &[viewport], 0x00ff_4a67, None);
+
+    // The depth scale from the projection's z terms.
+    let b10 = float(m, projection + 0x28);
+    let depth_ratio = float(m, projection + 0x38) / b10;
+    let remap = (-(b10 * depth_ratio)) / ((-b10) - 1.0);
+    let clamped = if remap > 1.0 { remap } else { 1.0 };
+    let (_, log_result) = call(
+        m,
+        c,
+        0x012f_45c4,
+        this,
+        &[],
+        0x00ff_4ac6,
+        Some([(clamped + 1.0).to_bits(), 0]),
+    );
+    let natural_log = f32::from_bits(log_result[0]);
+    let two = word(m, 0x0161_ca50);
+    let two_high = word(m, 0x0161_ca54);
+    let (_, ln2) = call(m, c, 0x012f_439e, this, &[], 0x00ff_4ad9, Some([two, two_high]));
+    let ln2 = f64::from_bits(ln2[0] as u64 | (ln2[1] as u64) << 32) as f32;
+    let depth_scale = natural_log / ln2;
+    let depth_scale_inverse = 1.0 / depth_scale;
+    let mirrored = 0.0 > float(m, projection + 0x28);
+    let state = word(m, this + 0x114);
+    if (state >> 8) & 1 != mirrored as u32 {
+        pg.set_u32(
+            m,
+            this + 0x114,
+            (((mirrored as u32) | 0x10) << 8) | (state & 0xeff),
+        );
+    }
+
+    // Block 1 (this + 0xCA0): the six frustum planes.
+    let descriptor = word(m, word(m, this + 0x18).wrapping_add(0x554));
+    let size = ((pg.u16(m, descriptor + 0x18) as u32) * 4 + 0xf) & !0xf;
+    let block = arena_take(m, c, pg, frame, this, size, 0x00ff_4b86);
+    pg.set_u32(m, this + 0xca0, block);
+    let dirty = word(m, this + 0x154) | 1;
+    pg.set_u32(m, this + 0x154, dirty);
+    if block != 0 {
+        let (source, bytes) = (
+            word(m, descriptor + 0x24),
+            (pg.u16(m, descriptor + 0x18) as u32) * 4,
+        );
+        copy_guest(m, pg, block, source, bytes);
+        let one = float(m, 0x0140_6ce0);
+        let minus_one = float(m, 0x0161_c20c);
+        // The clip-space cube: x, y in {1, -1}, z in {1, 0}, w = 1.
+        let cube: [[f32; 4]; 8] = [
+            [one, one, one, one],
+            [one, one, 0.0, one],
+            [minus_one, one, one, one],
+            [minus_one, one, 0.0, one],
+            [one, minus_one, one, one],
+            [one, minus_one, 0.0, one],
+            [minus_one, minus_one, one, one],
+            [minus_one, minus_one, 0.0, one],
+        ];
+        let mut corners = [0f32; 32];
+        for (i, corner) in cube.iter().enumerate() {
+            let mut t = transform_corner(*corner, &inverse_product);
+            if 0.0 < t[3] {
+                let reciprocal = one / t[3];
+                t = [
+                    reciprocal * t[0],
+                    reciprocal * t[1],
+                    reciprocal * t[2],
+                    reciprocal * t[3],
+                ];
+            }
+            corners[4 * i..4 * i + 4].copy_from_slice(&t);
+        }
+        let planes = frustum_planes(&corners, mirrored);
+        for (i, v) in planes.iter().enumerate() {
+            pg.set_u32(m, block.wrapping_add(4 * i as u32), v.to_bits());
+        }
+    }
+
+    // Block 2 (this + 0xC88): the matrices.
+    let descriptor = word(m, word(m, this + 0x18).wrapping_add(0x548));
+    let size = ((pg.u16(m, descriptor + 0x18) as u32) * 4 + 0xf) & !0xf;
+    let block = arena_take(m, c, pg, frame, this, size, 0x00ff_5e6a);
+    pg.set_u32(m, this + 0xc88, block);
+    let dirty = word(m, this + 0x154) | 1;
+    pg.set_u32(m, this + 0x154, dirty);
+    if block != 0 {
+        let (source, bytes) = (
+            word(m, descriptor + 0x24),
+            (pg.u16(m, descriptor + 0x18) as u32) * 4,
+        );
+        copy_guest(m, pg, block, source, bytes);
+        let put = |m: &mut dyn Mem, offset: u32, v: u32| pg.set_u32(m, block.wrapping_add(offset), v);
+        for (i, v) in product.iter().enumerate() {
+            put(m, 4 * i as u32, v.to_bits());
+        }
+        for i in 0..16u32 {
+            let v = word(m, view + 4 * i);
+            put(m, 0x70 + 4 * i, v);
+        }
+        for (i, v) in rotation.iter().enumerate() {
+            put(m, 0xb0 + 4 * i as u32, v.to_bits());
+        }
+        for i in 0..16u32 {
+            let v = word(m, projection + 4 * i);
+            put(m, 0xf0 + 4 * i, v);
+        }
+        for (i, v) in inverse_projection.iter().enumerate() {
+            put(m, 0x130 + 4 * i as u32, v.to_bits());
+        }
+        for (i, v) in inverse_product.iter().enumerate() {
+            put(m, 0x170 + 4 * i as u32, v.to_bits());
+        }
+        put(m, 0x40, rotation[12].to_bits());
+        put(m, 0x44, rotation[13].to_bits());
+        put(m, 0x48, rotation[14].to_bits());
+        put(m, 0x50, (-rotation[8]).to_bits());
+        put(m, 0x54, (-rotation[9]).to_bits());
+        put(m, 0x58, (-rotation[10]).to_bits());
+        let bias = arg(m, 3);
+        put(m, 0x5c, bias);
+        put(m, 0x4c, depth_ratio.to_bits());
+        put(m, 0x60, depth_scale.to_bits());
+        put(m, 0x64, depth_scale_inverse.to_bits());
+    }
+    pg.set_u32(m, this + 0x184, rotation[12].to_bits());
+    pg.set_u32(m, this + 0x188, rotation[13].to_bits());
+    pg.set_u32(m, this + 0x18c, rotation[14].to_bits());
+    c.esp = entry.wrapping_add(4 + 0x10);
+}
+
+/// Take `size` bytes from the context's arena (`this + 0x24` cursor,
+/// `+ 0x28` limit), refilling it from the page allocator 0x00DA7D70 when
+/// the cursor would pass the limit (a failed refill leaves it empty).
+fn arena_take(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, size: u32, back: u32) -> u32 {
+    if pg.u32(m, this + 0x24).wrapping_add(size) > pg.u32(m, this + 0x28) {
+        let chunk = size.wrapping_add(0xfff) & !0xfff;
+        let allocator = pg.u32(m, 0x018d_08f4);
+        let page = crate::semantic::call_from(
+            m,
+            c,
+            pg,
+            frame,
+            allocator,
+            &[chunk],
+            back,
+            |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, 0x00da_7d70),
+        );
+        pg.set_u32(m, this + 0x24, page);
+        pg.set_u32(
+            m,
+            this + 0x28,
+            if page == 0 { 0 } else { page.wrapping_add(chunk) },
+        );
+    }
+    let block = pg.u32(m, this + 0x24);
+    pg.set_u32(m, this + 0x24, block.wrapping_add(size));
+    block
 }
