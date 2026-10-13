@@ -25,6 +25,9 @@ use std::sync::Arc;
 
 mod cache;
 pub mod native;
+pub mod native_compare;
+mod native_job;
+pub use native_job::NativeJobStats;
 mod pipelines;
 mod shader_cache;
 mod pipeline_log;
@@ -340,6 +343,9 @@ pub struct Frame {
 }
 
 pub struct WgpuBackend {
+    native_worker: Option<native_job::Worker>,
+    native_stats: NativeJobStats,
+    native_comparisons: Option<native_job::Comparisons>,
     shader_identities: shader_identity::ShaderIdentities,
     /// Derived draw state by what it derives from (L99), DRAW_MEMO slots.
     memo: Vec<Option<DrawMemo>>,
@@ -658,6 +664,9 @@ impl WgpuBackend {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: block(PS_BLOCK) }, wgpu::BindGroupEntry { binding: 2, resource: block(VS_BLOCK) }],
         });
         WgpuBackend {
+            native_worker: None,
+            native_stats: Default::default(),
+            native_comparisons: None,
             device,
             queue,
             textures: Default::default(),
@@ -2558,6 +2567,12 @@ fn rect_or_full(r: [i32; 4], w: u32, h: u32) -> [i32; 4] {
 }
 
 impl GraphicsBackend for WgpuBackend {
+    fn native_supported(&self) -> bool { true }
+    fn native_compare_begin(&mut self, begin: d3d9cmd::NativeCompareBegin) -> bool { self.begin_native_comparison(begin) }
+    fn native_compare_end(&mut self, id: u64, job: d3d9cmd::NativeJob) -> Result<(), d3d9cmd::NativeJob> { self.end_native_comparison(id, job) }
+    fn native(&mut self, job: d3d9cmd::NativeJob) -> Result<(), d3d9cmd::NativeJob> {
+        self.run_native_job(job)
+    }
     fn copy(&mut self, c: &CopyCall) {
         // All paths stay ordered with preceding/following draws in the
         // open encoder. Uploads to either target must submit these uses first.
@@ -2822,6 +2837,7 @@ impl GraphicsBackend for WgpuBackend {
 
     fn release(&mut self, resource: u32) {
         self.flush();
+        self.native_worker = None; // Guest/resource identities may now be reused.
         // cached views and bind groups may hold the resource
         self.tex_groups.clear();
         self.last_group = Default::default();
@@ -2837,6 +2853,7 @@ impl GraphicsBackend for WgpuBackend {
     }
 
     fn present(&mut self, back_buffer: &Target) {
+        self.poll_native_comparisons_internal();
         pipeline_log::present();
         self.flush();
         if let Some(p) = &self.pipeline_cache {

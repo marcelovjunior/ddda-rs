@@ -347,6 +347,7 @@ pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) => {
             let d = snapshot(m, dev, ty, count, start, 0, 0, n, None, Some(Indices::None));
+            crate::ndraw_native::observe(&d);
             backend_unlocked(|b| b.draw(&d));
             D3D_OK
         }
@@ -364,6 +365,7 @@ pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = match vertex_count(ty, a[6]) {
         Some(_) if with_device(dev, |d| d.state.in_scene && d.state.indices != 0) => {
             let d = snapshot(m, dev, ty, a[6], a[5], a[2] as i32, a[3], a[4], None, None);
+            crate::ndraw_native::observe(&d);
             backend_unlocked(|b| b.draw(&d));
             D3D_OK
         }

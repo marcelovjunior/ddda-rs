@@ -195,6 +195,7 @@ impl Registry {
         #[cfg(feature = "game")]
         ddports::ensure_with(|ports| {
             crate::archive_inflate::install(ports);
+            crate::procedural_geometry::install(ports);
             if crate::ndraw_stats::enabled() {
                 crate::ndraw_stats::wrap_executor(ports, &ddnative::generated::lifted::bodies());
             }

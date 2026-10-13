@@ -4,7 +4,7 @@
 //! original executable) made on the runtime's device, then the draw.
 //! Needs the installed game (DDDA_EXE) for a session; skipped without it.
 use ddnative_base::mem::Mem;
-use ddruntime::ndraw_native::{decode, draw_call, draw_params, identity, native_draw, reads_of, Caches, FrameInfo, Pending};
+use ddruntime::ndraw_native::{decode, differences, draw_call, reads as shader_reads, draw_params, identity, native_draw, reads_of, Caches, FrameInfo, Pending};
 use ddruntime::session::{Outcome, Session};
 
 const SCRATCH: u32 = 0x7EFF_0000;
@@ -221,6 +221,12 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     assert_eq!(com(&mut s, dev, 82, &[primitive, base as u32, 0, vertices, start, primitives]), 0);
     let d3d9 = ddruntime::d3d9draw::recorded(|r| r.draws.last().cloned()).flatten().expect("the D3D9 path drew");
 
+    // the verify mode's comparison finds them equal, and finds a change
+    let r = [shader_reads(&vertex_shader(8)).unwrap(), shader_reads(&pixel_shader(4)).unwrap()];
+    assert_eq!(differences(&native, r, &d3d9), vec![]);
+    let mut moved = d3d9.clone();
+    moved.viewport[0] += 1;
+    assert_eq!(differences(&native, r, &moved).iter().map(|w| w.0).collect::<Vec<_>>(), ["viewport"]);
     // equal, but for the render states the native one leaves out (the
     // backend reads only those it carries) and the registers no shader reads
     let mut a = d3d9.clone();

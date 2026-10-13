@@ -15,6 +15,7 @@ type Work = Box<dyn FnOnce(&mut dyn GraphicsBackend) + Send>;
 /// Two outstanding Presents bound frame latency independently of queue length.
 /// Dropping the adapter drains the stream and joins the worker.
 pub struct DeferredBackend {
+    native_supported: bool,
     sender: Option<SyncSender<Work>>,
     worker: Option<JoinHandle<()>>,
     presents: VecDeque<Receiver<()>>,
@@ -38,6 +39,7 @@ impl DeferredBackend {
     /// A full queue blocks the producer; no command is dropped or reordered.
     pub fn with_capacity(mut backend: Box<dyn GraphicsBackend>, capacity: usize) -> Self {
         assert!(capacity > 0);
+        let native_supported = backend.native_supported();
         let (sender, receiver) = mpsc::sync_channel::<Work>(capacity);
         let executed = Arc::new(AtomicU64::new(0));
         let counter = executed.clone();
@@ -48,7 +50,7 @@ impl DeferredBackend {
             }
         }).expect("start D3D9 backend worker");
         Self {
-            sender: Some(sender), worker: Some(worker), presents: VecDeque::new(), recorded: 0, executed,
+            native_supported, sender: Some(sender), worker: Some(worker), presents: VecDeque::new(), recorded: 0, executed,
             generation: HashMap::new(), asked: HashMap::new(), results: Default::default(),
         }
     }
@@ -106,8 +108,16 @@ impl Drop for DeferredBackend {
 }
 
 impl GraphicsBackend for DeferredBackend {
+    fn native_supported(&self) -> bool { self.native_supported }
     fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> {
-        self.result(move |b| b.native(job))
+        if !self.native_supported { return Err(job); }
+        self.enqueue(move |b| {
+            if let Err(job) = b.native(job) {
+                eprintln!("ERROR: accepted native job rejected on backend worker: {} passes / {} draws; producer eligibility contract violated",
+                    job.passes.len(), job.passes.iter().map(|p| p.draws.len()).sum::<usize>());
+            }
+        });
+        Ok(())
     }
     fn native_compare_begin(&mut self, begin: NativeCompareBegin) -> bool {
         self.result(move |b| b.native_compare_begin(begin))
@@ -349,6 +359,7 @@ mod tests {
     }
     struct NativeLog(Log);
     impl GraphicsBackend for NativeLog {
+        fn native_supported(&self) -> bool { true }
         fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> {
             self.0.add(format!("native:{}", job.passes.len())); Ok(())
         }
@@ -377,5 +388,24 @@ mod tests {
         let entries = log.lock().unwrap();
         assert!(entries[0].starts_with("upload:"));
         assert_eq!(&entries[1..], ["native:1", "begin:7", "release:42"]);
+    }
+
+    #[test]
+    fn supported_native_enqueue_does_not_wait_for_prior_work() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = DeferredBackend::with_capacity(Box::new(NativeLog(Log(log.clone()))), 4);
+        assert!(backend.native_supported());
+        let (unblock, blocked) = mpsc::channel();
+        backend.enqueue(move |_| { blocked.recv().unwrap(); });
+        let (sent, received) = mpsc::channel();
+        let producer = thread::spawn(move || {
+            let result = backend.native(NativeJob::default());
+            sent.send(result).unwrap(); backend
+        });
+        let result = received.recv_timeout(Duration::from_secs(2));
+        unblock.send(()).unwrap();
+        drop(producer.join().unwrap());
+        assert_eq!(result.unwrap(), Ok(()), "native enqueue must not drain worker");
+        assert_eq!(*log.lock().unwrap(), ["native:0"]);
     }
 }
