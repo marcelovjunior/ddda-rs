@@ -13,6 +13,19 @@
 - No full native/game acceptance or FPS claim. Head #13696 redirected
   next work to the 50-function real-input codegen benchmark corpus.
 
+### L165 codegen corpus tooling (2026-10-13)
+
+- Offline ranking accounts for split lifted functions, waits and unknown
+  leaves; reports self/nearest/inclusive separately, with text-report limits.
+- All 50 baseline/candidate bodies compile privately at opt1 without shards;
+  real-input replay requires complete CPU/Mem/callee contracts. Nine Python
+  tests and guarded/page harness self-test with five corruption rejections
+  pass. Synthetic tests add no real-data coverage.
+- Real coverage remains **0/50**: no head captures yet, and generic capture
+  needs local/lifted call seams beyond the shared ext-only recorder.
+- Next: finish shared capture hook and request a head-only gameplay capture.
+  Details and one-command reproduction: `tasks/L165-codegen-corpus.md`.
+
 ### L165 autoplay proposal (2026-10-13)
 
 - Follow-up skip correctness: 256 composed original/Rust returns and 129
