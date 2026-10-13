@@ -1259,7 +1259,20 @@ fn compare_replays(
         }
         let Some(Some(r)) = reads.get(&handle) else { return Err(format!("shader {handle:#x} not captured or not parsed")) };
         if r.reads(ca.register as usize, (ca.byte / 4) as usize) {
-            return Err(format!("shader {handle:#x} may read c{} component {}", ca.register, ca.byte / 4));
+            // the instructions that read the register (or any, relatively)
+            let lines: Vec<String> = shaders
+                .get(&handle)
+                .and_then(|t| d3d9shader::parse(t).ok())
+                .map(|s| d3d9shader::disasm::disassemble(&s))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|l| l.contains(&format!("c{}", ca.register)) || l.contains("[a0") || l.contains("[aL"))
+                .take(8)
+                .collect();
+            return Err(format!(
+                "shader {handle:#x} may read c{} component {} (direct mask {:#x}, relative mask {:#x}): {lines:?}",
+                ca.register, ca.byte / 4, r.direct.get(ca.register as usize).copied().unwrap_or(0xff), r.any
+            ));
         }
         residue.push((path.to_vec(), ca, a.bytes[offset], b.bytes[offset]));
         Ok(())
