@@ -45,6 +45,12 @@ pub enum Binding {
     /// (taken first), without it (the hot device methods, which touch only
     /// the D3D objects and the backend) none in parallel mode.
     Device(LiftFn, bool),
+    /// A Direct3D 9 device method that only sets or reads device state
+    /// (L101: SetRenderState, SetTexture, the shader constants, ...): the
+    /// D3D lock, no guest lock, and the guest's x87 state stays in the FPU
+    /// (these run no host code that uses it; an object destroyed by a
+    /// Release in them parks it first, crate::d3d9dev::release_of).
+    DeviceState(LiftFn),
 }
 
 impl Binding {
@@ -55,6 +61,7 @@ impl Binding {
             Binding::ServiceTail(_) => "service with host-only tail",
             Binding::LockFree(_) => "lock-free service",
             Binding::Device(..) => "D3D service",
+            Binding::DeviceState(_) => "D3D state service",
         }
     }
 }
@@ -287,13 +294,54 @@ impl Registry {
         };
         match binding {
             None => crate::executor::run(self, m, cpu, target),
-            Some(Binding::Service(f)) => self.run_service(f, m, cpu, target, true, false),
-            Some(Binding::ServiceTail(f)) => self.run_service(f, m, cpu, target, true, true),
-            Some(Binding::LockFree(f)) => self.run_service(f, m, cpu, target, false, false),
-            Some(Binding::Device(f, guest)) => self.run_service_as(f, m, cpu, target, guest, false, true),
-            Some(Binding::Lifted(f)) => f(m, cpu),
+            Some(b) => self.run_binding(b, m, cpu, target),
         }
         Ok(())
+    }
+
+    /// The binding a call of `target` runs directly (not the step executor).
+    fn direct(&self, target: u32) -> Option<Binding> {
+        match self.entries.get(&target) {
+            Some(Entry { step: None, binding: Some(b) }) => Some(*b),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn run_binding(&self, binding: Binding, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        match binding {
+            Binding::Service(f) => self.run_service(f, m, cpu, target, true, false),
+            Binding::ServiceTail(f) => self.run_service(f, m, cpu, target, true, true),
+            Binding::LockFree(f) => self.run_service(f, m, cpu, target, false, false),
+            Binding::Device(f, guest) => self.run_service_as(f, m, cpu, target, guest, false, true),
+            Binding::DeviceState(f) => self.run_device_state(f, m, cpu, target),
+            Binding::Lifted(f) => f(m, cpu),
+        }
+    }
+
+    /// A [`Binding::DeviceState`] method: [`run_service_as`](Self::run_service_as)
+    /// for a D3D method without the guest lock, minus the x87 park.
+    fn run_device_state(&self, f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        // the lock statistics and the service trace keep the full path
+        if crate::threads::stats::on() || trace::on() {
+            return self.run_service_as(f, m, cpu, target, false, false, true);
+        }
+        // L22: Rust runs under the host default MXCSR, as in run_service_as
+        let guest = x86::stmxcsr();
+        cpu.mxcsr = x86::Mxcsr(guest);
+        if guest != x86::MXCSR_DEFAULT {
+            x86::ldmxcsr(x86::MXCSR_DEFAULT);
+        }
+        let lock = crate::threads::service_lock_free();
+        let scope = crate::threads::ServiceScope::enter_with_tail(false);
+        let d3d = crate::d3d9dev::device_lock();
+        f(m, cpu);
+        drop(d3d);
+        drop(scope);
+        drop(lock);
+        if x86::stmxcsr() != cpu.mxcsr.0 {
+            x86::ldmxcsr(cpu.mxcsr.0);
+        }
     }
 
     #[cold]
@@ -325,8 +373,11 @@ impl Registry {
         // L22: a service is Rust: it runs under the host default MXCSR and
         // the guest's (live while lifted code runs) waits in cpu.mxcsr, so
         // neither sees nor changes the other's rounding or sticky flags.
-        cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
-        x86::ldmxcsr(x86::MXCSR_DEFAULT);
+        let guest = x86::stmxcsr();
+        cpu.mxcsr = x86::Mxcsr(guest);
+        if guest != x86::MXCSR_DEFAULT {
+            x86::ldmxcsr(x86::MXCSR_DEFAULT);
+        }
         // L62: the guest x87 state leaves the host FPU, so host code
         // (drivers, libraries) sees the thread's own FPU
         ddnative_base::x87::park();
@@ -349,7 +400,10 @@ impl Registry {
         drop(scope);
         drop(lock);
         drop(stats);
-        x86::ldmxcsr(cpu.mxcsr.0);
+        // (the register as the guest's again; loaded only if it differs)
+        if x86::stmxcsr() != cpu.mxcsr.0 {
+            x86::ldmxcsr(cpu.mxcsr.0);
+        }
     }
 
     fn unbound(&self, m: &dyn Mem, cpu: &Cpu, target: u32) -> Unbound {
@@ -372,7 +426,21 @@ impl Registry {
         ddnative_host::install();
         ddnative_host::set_preempt_hook(crate::threads::preempt);
         let me = Arc::clone(self);
+        // L101: the bindings this thread called, direct-mapped by address
+        // (the registry no longer changes once shared, so they never go
+        // stale): a hit skips the map lookup
+        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 256]> = Box::new([const { std::cell::Cell::new(None) }; 256]);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
+            let slot = &cache[((target >> 2) ^ (target >> 10)) as usize & 255];
+            if let Some((t, b)) = slot.get() {
+                if t == target {
+                    return me.run_binding(b, m, cpu, target);
+                }
+            }
+            if let Some(b) = me.direct(target) {
+                slot.set(Some((target, b)));
+                return me.run_binding(b, m, cpu, target);
+            }
             if let Err(u) = me.call(m, cpu, target) {
                 std::panic::panic_any(u);
             }
@@ -413,9 +481,28 @@ mod trace {
         .as_ref()
     }
 
+    /// Whether service calls are traced (DDRUNTIME_TRACE_SERVICES).
+    pub(super) fn on() -> bool {
+        file().is_some()
+    }
+
     /// The line's start, if this call is traced.
+    #[inline]
     pub(super) fn start(r: &Registry, m: &dyn Mem, cpu: &Cpu, target: u32) -> Option<String> {
-        file()?;
+        // (L101: the untraced case is one load, inline)
+        static OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if OFF.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        if file().is_none() {
+            OFF.store(true, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+        start_traced(r, m, cpu, target)
+    }
+
+    #[inline(never)]
+    fn start_traced(r: &Registry, m: &dyn Mem, cpu: &Cpu, target: u32) -> Option<String> {
         let name = r.names.get(&target)?;
         let word = |k: u32| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.u32(cpu.esp.wrapping_add(4 * k)))).ok();
         let w = |k| word(k).map_or("-".to_string(), |v| format!("{v:#x}"));
