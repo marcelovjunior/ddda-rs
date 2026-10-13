@@ -1438,3 +1438,32 @@ Matched, mismatched, skipped, pending and error counts remain distinct;
 receipt hashes describe reductions, not presented frames. New Vulkan query
 and resource-fallback counters separate initialization from unsupported work.
 Head's image gate and limitations: `docs/tasks/L159-vk-default.md`.
+
+
+## L156 exact decoder and table opt-ins (2026-10-13)
+
+`DDRUNTIME_ZLIB_FAST=2` selects the exact `cf2cb0` candidate with bounded
+root-table/output spans via `Pages`, packed input pairs, aligned atomic
+64-bit forward matches (periodic seeds for distances 1/2/4), and one
+forward copy per remaining match. Other short distances retain byte order.
+Logical bit counts, input/output guards, end/error modes, argument spills,
+registers and all return-state bytes stay original. Explicit overrides win;
+FAST=0/1 remain available and defaults do not change. Refill speculation and
+literal batching were measured and removed after ARC regressions.
+
+`DDRUNTIME_ZLIB_TABLE=1` independently replaces the entire `cf30c0`
+Huffman-table builder. Original stack/register layout, capacity and invalid
+tree paths remain; embedded tables are read from the mapped install image.
+Local frame storage snapshots only the six cdecl arguments and commits
+written bytes at return; unused stack padding is never read.
+Load telemetry appends `zlib_table_ns` to transition deltas and reports the
+builder's helper total, including when an explicit override is wrapped.
+
+The differential gate covers 217 streams / 12,893 returns, 632 leaf cases
+in five decoder/memory configurations, and 81 direct table fixtures.
+Full light: 224 reported pass, inherited fullscreen gamma failure, six
+ignored. Final argument-only frame and page-access rechecks passed.
+The combined ARC microbenchmark improves 4.1-13.6%; FAST=2 alone is mixed.
+Modern-library parity and actual loading/image/control acceptance remain
+unestablished. Sources, hashes, measurements and limits:
+[task L156](tasks/L156-inflate-fast.md).
