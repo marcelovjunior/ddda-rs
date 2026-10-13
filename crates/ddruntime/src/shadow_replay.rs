@@ -1680,8 +1680,16 @@ fn compare_replays(
             results[0].1.entries.len(), results[1].1.entries.len(),
         ));
     }
-    // Conservative proof gate: no differing memory accepted yet. Private
-    // scheduler/context relocation classification needs separate evidence.
+    // Final-memory gate. Accepted categories (claude-9, docs/tasks/L172), each
+    // counted; every other differing byte refuses:
+    // - root context recording state the parallel branch left untouched:
+    //   DB63E0's parallel branch records into the lane contexts and FED3B0
+    //   merges only their command arrays (compared through the stream above)
+    //   into the root, while the serial branch records into the root itself
+    //   and leaves its caches at the last unit's values. Both are the
+    //   original's own post-states for this input; the byte is accepted only
+    //   where the parallel run kept the input value.
+    let mut root_untouched = 0usize;
     for address in results[0].2.keys().chain(results[1].2.keys()) {
         // Only newly allocated private sort storage is discarded. FED3B0's
         // consumed roots/children must already be outside it (PublishedView),
@@ -1700,12 +1708,18 @@ fn compare_replays(
             .copied()
             .unwrap_or_else(|| input.u8(*address));
         if a != b {
+            if address.wrapping_sub(context) < LANE_BYTES && b == input.u8(*address) {
+                root_untouched += 1;
+                continue;
+            }
             return Err(format!(
-                "streams matched {} entries; serial/parallel memory mismatch at {address:#x}: serial={a:#04x} parallel={b:#04x}",
-                observed.entries.len()
+                "streams matched {} entries; serial/parallel memory mismatch at {address:#x}: serial={a:#04x} parallel={b:#04x} input={:#04x} (root context bytes the parallel branch left untouched: {root_untouched})",
+                observed.entries.len(),
+                input.u8(*address)
             ));
         }
     }
+    eprintln!("parallel-shadow root context bytes the parallel branch left untouched={root_untouched}");
     if abi(&results[0].0) != abi(&results[1].0) {
         return Err("serial/parallel ABI mismatch".into());
     }
