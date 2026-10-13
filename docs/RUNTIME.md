@@ -1,5 +1,20 @@
 # Phase 1 runtime proposal (R01)
 
+## L160 job CPU sizing and wake diagnostics
+
+Parallel `GetSystemInfo` reports host logical processors capped at 32;
+serial mode reports one. The game's foreground job constructor caps at
+eight participants and subtracts one for counts >=4, so 8/12/16 reported
+CPUs all select main plus six workers. CPU-count inflation cannot create
+the requested larger pool. No CPU-count override or scheduler patch is
+included. See [L160 evidence](tasks/L160-job-threads.md).
+
+`scripts/job_wake.py <private L158 trace> --min-frame N` reports correlated
+SetEvent-entry to worker-wait-return and first-callback delays, rejecting
+incomplete/ambiguous/lossy batches. It requires L158 wake records; the L153
+aggregate service census alone cannot measure wake latency. Seven offline
+tests pass; live game latency and performance acceptance await head runs.
+
 ## L140 opt-in loading diagnostics and acceleration
 
 `DDRUNTIME_ZLIB_ADLER=1` substitutes the exact native `0x00cf34d0`
