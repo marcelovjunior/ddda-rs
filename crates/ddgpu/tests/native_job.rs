@@ -390,3 +390,188 @@ fn native_resident_jobs_follow_async_finisher_and_skip_unchanged_uploads() {
     assert!(backend.native(job(red, &t, None)).is_ok());
     assert_eq!(backend.read_back(&t).unwrap(), expected);
 }
+
+#[test]
+fn deferred_native_refusals_keep_all_original_draws_and_query_order() {
+    let Some(mut gpu) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    gpu.set_async_submit(true);
+    let mut backend = DeferredBackend::new(Box::new(gpu));
+    let mut oracle = d3d9ref::Oracle::new().unwrap();
+    let t = target(1, 21);
+    upload(&mut backend);
+    for format in [101, 102] {
+        let bytes: Vec<u8> = if format == 101 {
+            [0u16, 1, 2].into_iter().flat_map(u16::to_le_bytes).collect()
+        } else {
+            [0u32, 1, 2].into_iter().flat_map(u32::to_le_bytes).collect()
+        };
+        backend.upload(Upload::Buffer {
+            resource: 11,
+            bytes: bytes.clone(),
+        });
+        for primitive in [5] {
+            for query in [false, true] {
+                // The first draw could run natively; the second refuses. Alpha
+                // blending makes both dropped and duplicated first draws visible.
+                let mut first = draw(true, false, false, [1.0, 0.0, 0.0, 0.5]);
+                first.indices.as_mut().unwrap().format = format;
+                let mut strip = draw(true, false, false, [0.0, 1.0, 0.0, 0.5]);
+                strip.indices.as_mut().unwrap().format = format;
+                strip.primitive = primitive;
+                // Alpha-test ALWAYS has the same output, but is deliberately
+                // outside the native worker's supported state. Keep exercising
+                // atomic fallback now that bounded strips themselves work.
+                let state = Arc::make_mut(&mut strip.state);
+                let mut states = state.render_states.to_vec();
+                states.extend([(15, 1), (24, 0), (25, 8)]);
+                states.sort_unstable();
+                state.render_states = states.into();
+                let calls: Vec<_> = [&first, &strip]
+                    .into_iter()
+                    .map(|d| {
+                        let mut call = legacy(d, &t, None);
+                        call.indices = Indices::Inline {
+                            bytes: bytes.clone(),
+                            format,
+                        };
+                        call
+                    })
+                    .collect();
+                let expected = oracle.render(&[], Some(&clear(&t, None)), &calls, &t).unwrap();
+                backend.clear(&clear(&t, None));
+                if query {
+                    backend.query_begin(99);
+                }
+                let mut native = job(first, &t, None);
+                native.passes.push(NativePass {
+                    colours: [Some(t.clone()), None, None, None],
+                    draws: vec![strip],
+                    ..Default::default()
+                });
+                backend.native_or_draw(native, calls);
+                if query {
+                    backend.query_end(99);
+                }
+                let mut actual = backend.read_back(&t).unwrap();
+                // D3DFMT_A8R8G8B8 read_back returns BGRA, host oracle RGBA.
+                for pixel in actual.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+                assert_eq!(
+                    actual, expected.rgba,
+                    "format={format} primitive={primitive} query={query}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_indexed_strips_match_host_driver_with_start_base_and_culling() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let mut oracle = d3d9ref::Oracle::new().unwrap();
+    let original = target(1, 21);
+    let native = target(2, 21);
+    let bytes: Vec<u8> = [
+        [-1.0f32, -1.0, 0.5, 1.0],
+        [-1.0, 1.0, 0.5, 1.0],
+        [1.0, -1.0, 0.5, 1.0],
+        [1.0, 1.0, 0.5, 1.0],
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(f32::to_le_bytes)
+    .collect();
+    backend.upload(Upload::Buffer {
+        resource: 10,
+        bytes: bytes.clone(),
+    });
+    for format in [101, 102] {
+        let index_bytes: Vec<u8> = if format == 101 {
+            [0u16, 1, 2, 3, 4]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+                .collect()
+        } else {
+            [0u32, 1, 2, 3, 4]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect()
+        };
+        backend.upload(Upload::Buffer {
+            resource: 11,
+            bytes: index_bytes.clone(),
+        });
+        for primitive in [5] {
+            for cull in [1, 2, 3] {
+                let mut d = draw(false, false, false, [0.8, 0.2, 0.5, 1.0]);
+                d.indices.as_mut().unwrap().format = format;
+                d.primitive = primitive;
+                d.primitives = if primitive == 3 { 3 } else { 2 };
+                d.start = 1;
+                d.base_vertex = -1;
+                d.min_index = 1;
+                d.vertex_count = 4;
+                let state = Arc::make_mut(&mut d.state);
+                Arc::make_mut(&mut state.render_states)
+                    .iter_mut()
+                    .find(|x| x.0 == 22)
+                    .unwrap()
+                    .1 = cull;
+                let mut call = legacy(&d, &original, None);
+                // Inline indices encode UP draws and start at zero in the
+                // backend. Buffer-backed controls exercise start=1 correctly.
+                call.vertices = Vertices::Streams(vec![(0, 10, 0, 16, 1)].into());
+                call.indices = Indices::Buffer(11, format);
+                let expected = oracle
+                    .render(
+                        &[
+                            Upload::Buffer {
+                                resource: 10,
+                                bytes: bytes.clone(),
+                            },
+                            Upload::Buffer {
+                                resource: 11,
+                                bytes: index_bytes.clone(),
+                            },
+                        ],
+                        Some(&clear(&original, None)),
+                        &[call.clone()],
+                        &original,
+                    )
+                    .unwrap();
+                backend.clear(&clear(&original, None));
+                backend.draw(&call);
+                backend.present(&original);
+                assert_eq!(
+                    backend.last_frame.as_ref().unwrap().rgba,
+                    expected.rgba,
+                    "legacy format={format} primitive={primitive} cull={cull}"
+                );
+                backend.clear(&clear(&native, None));
+                assert!(backend.native(job(d, &native, None)).is_ok());
+                backend.present(&native);
+                assert_eq!(
+                    backend.last_frame.as_ref().unwrap().rgba,
+                    expected.rgba,
+                    "native format={format} primitive={primitive} cull={cull}"
+                );
+            }
+        }
+    }
+    assert_eq!(backend.native_job_stats().accepted, 6);
+    assert_eq!(backend.native_job_stats().rejected, 0);
+    // Retain rejection for a declared range that permits the u16 sentinel.
+    let mut unsafe_strip = draw(false, false, false, [1.0; 4]);
+    unsafe_strip.primitive = 5;
+    unsafe_strip.vertex_count = 65536;
+    assert!(backend.native(job(unsafe_strip, &native, None)).is_err());
+    assert_eq!(
+        backend.native_job_stats().rejection_reasons["native indexed strip range may include restart index"],
+        1
+    );
+}
