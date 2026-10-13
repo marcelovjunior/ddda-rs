@@ -168,12 +168,27 @@ pub fn euler_matrix(sx: f32, sy: f32, sz: f32, cx: f32, cy: f32, cz: f32) -> Mat
     ]
 }
 
-/// A guest call of a single-precision CRT function from a routine whose
-/// ESP is `base`: argument and result in XMM0.
-fn crt_f32(m: &mut dyn Mem, c: &mut Cpu, call: &PoseCall, base: u32, target: u32, back: u32, x: f32) -> f32 {
+/// A single-precision CRT call from a routine whose ESP is `base`:
+/// argument and result in XMM0. sinf (0x012F0906) and cosf (0x012F0A55) are
+/// computed natively ([`crate::semantic_s7_trig`], bit-exact) except for
+/// arguments it hands back (finite magnitudes of 8192 and more, NaN,
+/// infinities), which run the guest function.
+pub(crate) fn crt_f32_at(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, base: u32, target: u32, back: u32, x: f32) -> f32 {
+    let native = match target {
+        0x012f_0906 => crate::semantic_s7_trig::sinf(x),
+        0x012f_0a55 => crate::semantic_s7_trig::cosf(x),
+        _ => None,
+    };
+    if let Some(v) = native {
+        return v;
+    }
     c.xmm[0][0] = x.to_bits();
-    call_from(m, c, call.pages, base, call.joint, &[], back, |m, c| ddnative_base::x86::call_ext(m, c, target));
+    call_from(m, c, pg, base, 0, &[], back, |m, c| ddnative_base::x86::call_ext(m, c, target));
     f32::from_bits(c.xmm[0][0])
+}
+
+fn crt_f32(m: &mut dyn Mem, c: &mut Cpu, call: &PoseCall, base: u32, target: u32, back: u32, x: f32) -> f32 {
+    crt_f32_at(m, c, call.pages, base, target, back, x)
 }
 
 /// The joint's rotation as the Euler angles (radians converted to degrees

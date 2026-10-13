@@ -26,7 +26,7 @@ use ddnative_base::mem::{Mem, Pages};
 use ddnative_base::x86::Cpu;
 
 use crate::semantic::call_from;
-use crate::semantic_s6_pose::{build_pose, has_pose_routine, PoseCall};
+use crate::semantic_s6_pose::{build_pose, crt_f32_at, has_pose_routine, PoseCall};
 
 /// A 4x4 float matrix, row-major (element `4 * row + column`), as the
 /// game stores them.
@@ -175,11 +175,7 @@ fn blend_toward_rest(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, filter
         cosine = -cosine;
     }
     let (rest_weight, pose_weight) = if SLERP_LIMIT > cosine {
-        let call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, back: u32, x: f32| {
-            c.xmm[0][0] = x.to_bits();
-            call_from(m, c, pg, frame, filter, &[], back, |m, c| ddnative_base::x86::call_ext(m, c, target));
-            f32::from_bits(c.xmm[0][0])
-        };
+        let call = |m: &mut dyn Mem, c: &mut Cpu, target: u32, back: u32, x: f32| crt_f32_at(m, c, pg, frame, target, back, x);
         let angle = call(m, c, 0x012f_161f, 0x0087_2839, cosine);
         let sin_angle = call(m, c, 0x012f_0906, 0x0087_2844, angle);
         let scale = 1.0 / sin_angle;
