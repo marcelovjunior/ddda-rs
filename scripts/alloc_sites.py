@@ -60,6 +60,8 @@ def main():
     parser.add_argument('--top', type=int, default=30)
     parser.add_argument('--frames', type=int, help='Presents during the selected census window')
     args = parser.parse_args()
+    if args.top <= 0 or (args.frames is not None and args.frames <= 0):
+        parser.error("--top and --frames must be positive")
     text = args.log.read_text(errors='replace')
     rows = latest(text, args.kind)
     rows.sort(key=lambda row: row[0 if args.sort == "bytes" else 1], reverse=True)
@@ -70,13 +72,15 @@ def main():
         raise SystemExit('Split multi-process logs before symbolizing')
     name = resolver(args.exe.resolve(), next(iter(bases))) if args.exe else lambda pc: f'0x{pc:x}'
     for rank, (size, calls, base, pcs) in enumerate(rows[:args.top], 1):
-        print(f'{rank}. {args.kind} requested_bytes={size} calls={calls} image_base=0x{base:x}')
+        metric = 'requested_bytes' if args.kind == 'alloc' else 'freed_bytes'
+        print(f'{rank}. {args.kind} {metric}={size} calls={calls} image_base=0x{base:x}')
         if args.frames:
             print(f'   bytes/frame={size / args.frames:.3f} calls/frame={calls / args.frames:.3f}')
         for pc in pcs:
             print(f'   {name(pc)}')
+    print(f'Captured {args.kind} events: calls={sum(row[1] for row in rows)} bytes={sum(row[0] for row in rows)} sites={len(rows)}')
     overflow = re.findall(r'alloc-site-overflow bytes=(\d+)', text)
-    print(f'Unattributed bytes (bounded table): {overflow[-1] if overflow else "unknown"}')
+    print(f'Unattributed allocation/free event bytes (bounded table): {overflow[-1] if overflow else "unknown"}')
     print('Cumulative requested bytes, not retained memory. Stack census adds overhead; do not use its run for speed claims.')
 
 

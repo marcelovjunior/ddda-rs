@@ -130,6 +130,13 @@ mod sites {
         const fn new() -> Self { Self { key: AtomicU64::new(0), frames: [const { AtomicUsize::new(0) }; DEPTH], bytes: AtomicU64::new(0), calls: AtomicU64::new(0), free: super::AtomicU8::new(0) } }
     }
     static TABLE: [Site; SLOTS] = [const { Site::new() }; SLOTS];
+    // A report after the time window must also wait for stack walks which
+    // entered before its end. New callbacks after the end cannot record.
+    static ACTIVE: AtomicU64 = AtomicU64::new(0);
+    struct Flight;
+    impl Drop for Flight {
+        fn drop(&mut self) { ACTIVE.fetch_sub(1, Release); }
+    }
     static DROPPED_CALLS: AtomicU64 = AtomicU64::new(0);
     static REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     static DROPPED_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -251,6 +258,8 @@ mod sites {
         if !enabled() { return; }
         let _ = BUSY.try_with(|busy| {
             if busy.replace(true) { return; }
+            ACTIVE.fetch_add(1, Acquire);
+            let _flight = Flight;
             #[cfg(windows)]
             if !window::accepts() { busy.set(false); return; }
             #[cfg(windows)]
@@ -274,7 +283,7 @@ mod sites {
     pub(super) fn report() {
         if !enabled() { return; }
         #[cfg(windows)]
-        if window::timed() && (!window::finished() || REPORTED.swap(true, Relaxed)) { return; }
+        if window::timed() && (!window::finished() || ACTIVE.load(Acquire) != 0 || REPORTED.swap(true, Relaxed)) { return; }
         let _ = BUSY.try_with(|busy| {
             if busy.replace(true) { return; }
             #[cfg(windows)]

@@ -21,6 +21,26 @@ The base already includes owned DrawCall transport and upload-buffer recycling
 from L144/L147. Binding caches retain entries until 16,384 entries, so the
 profile's cache-clear samples do not imply a clear on every frame.
 
+## Source inventory (not a measured gameplay ranking)
+
+| Construction site | Existing allocation events | Lifetime / next owner |
+|---|---|---|
+| `Shadow::prune` context deduplication | Temporary Vec grows at 4, 8, 16… unique addresses; 16 unique writes cost 3 allocation/realloc events, 224 requested bytes | Every nonempty context prune; in-place candidate prepared |
+| `Mirror::textures` | Temporary Vec starts at 8 textures, grows if needed; conversion allocates immutable Arc slice | Whenever texture snapshot changes; fixed 21-slot candidate prepared |
+| `stream_part` | Vec capacity 4, Arc slice, enclosing Arc StreamPart | Each distinct stream binding per frame; array candidate prepared |
+| `binding_part` | Two float Vec clones (if nonempty), two Arc Constants, one Arc BindingPart on changed bindings | Exact equality already reuses the whole binding; independent stage reuse suggested to claude-2 |
+| `binding_part` refusal | Scratch float Vecs dropped after `mem::take`, reallocated on subsequent attempts | Three uncovered-register exits; restoration candidate prepared |
+| `flush_uploads` | Binding-Arc Vec taken and dropped at each flush | Capacity recycling suggested to claude-2 |
+| `send_batch` | Replacement draw Vec capacity 64, later possible growth | Backend owns previous batch; requires coordinated recycling API |
+| frame caches / statistics | Stream/target Arc drops every frame; binding clear above 16,384; Frame maps discarded by take | Retention needs identity/lifetime evidence; not changed |
+| D3D9 snapshot fallback | Changed constant bank copy-on-write and Arc texture slice | Existing L144 sharing already present; object/lock work stays claude-9 |
+
+New c25 default text profile has 267 busy worker samples: heap allocation
+6.0% self, free 4.5%, `Shadow::prune` 5.6% inclusive, binding clear/drop
+5.6% inclusive. The c25 zlib-fast variant instead shows allocation 12.8% and
+free 3.7%. Both are text-only without heap-caller sections. Neither supplies
+allocation counts or bytes; variation reinforces the need for the census.
+
 ## Diagnostic protocol
 
 The unchanged System allocator now records successful allocation and free
@@ -69,6 +89,31 @@ a separate uninstrumented profile with `sample_profile.py --seconds 30 --hz
 - Standalone allocator/parser: **3 tests pass**, including real global-allocator
   startup, aligned/realloc forwarding, separate free stacks, exact named-thread
   inclusion/exclusion, delayed capture, and one-shot reporting. No ddplay build.
-- Runtime light suite running; allocation fixes and head gameplay evidence pending.
+- Baseline runtime light `--no-fail-fast`: **208 pass / 3 fail / 5 ignored**
+  (excluding two successful nested child-test runs). Fullscreen gamma is the
+  documented inherited failure; Present/interlocked timing thresholds both pass
+  isolated reruns. Command transport **14 pass**, ddgpu CPU **26 pass**.
+- GPU correctness sweep, resumed after the head's combo25 pause: **26 pass /
+  2 ignored / 2 hard-timeout kills** across draw/cache/targets/upload_data.
+  `depth_precision_matches_the_d3d9_driver` and
+  `target_formats_match_the_d3d9_driver` each exceeded 60 seconds; neither is
+  claimed verified. All tests ran one process at a time with a pause check;
+  no active L154 build/GPU process remains.
+- Prepared private candidates for context-write compaction, fixed-slot stream
+  and texture staging, and binding scratch recovery; no ndraw source edits
+  without ownership agreement. A standalone compaction prototype matches output
+  and read order in **25,600 cases**. At 16 writes, **3 allocs / 224 requested
+  bytes -> 0**; five-pair median **410 -> 225 ns** under shared machine load.
+  This is prototype evidence, not an integrated runtime or gameplay measurement.
+- The committed `scripts/bench_ndraw_alloc.py` extracts the actual prune method
+  from a before revision and after source, replacing only its memory reader.
+  Candidate source (still private pending ownership) matches **25,600 output /
+  read-order cases**. Seven alternating pairs at 16 writes: **411.5 -> 149.4 ns**,
+  **3 allocations / 224 bytes -> 0**. At 4/32/64 writes: 118.5/648.6/1018.3 ->
+  44.9/265.2/550.7 ns. Shared-load local evidence, not a gameplay claim.
+- Timed reporting now waits for in-flight accepted stack captures before its
+  one-shot snapshot. Standalone allocator/parser tests remain **3 pass**.
+- Allocation fixes and head gameplay evidence pending. Head ownership question
+  #12744 explicitly lists the four proposed ndraw hunks; file not edited.
 - Next: head captures worker census; coordinate ndraw allocation hunks, rank
   measured sites, and gate targeted fixes. No FPS or image comparison claim.

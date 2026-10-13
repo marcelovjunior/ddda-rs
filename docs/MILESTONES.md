@@ -4,9 +4,11 @@
 
 - Timed exact-thread Rust allocation/free census avoids startup contamination;
   all bounded-table rows and overflow are reported, ranked by calls or bytes.
-- Standalone allocator/parser **3 tests pass**; no shard build or game run.
-  c24 heap time shares are not allocation count/byte ranks.
-- Next: head gameplay census, then coordinated allocation fixes and gates.
+- Standalone allocator/parser **3 tests pass**, command **14**, ddgpu CPU **26**;
+  GPU **26 pass / 2 ignored / 2 bounded timeouts**. Runtime baseline **208 pass /
+  3 fail / 5 ignored**; two timing failures pass isolated, inherited gamma remains.
+- No shard build or game run. c24/c25 heap time shares cannot rank counts/bytes.
+- Next: head gameplay census and ndraw hunk agreement; candidate tests prepared.
   Protocol and limitations: `docs/tasks/L154-worker-alloc.md`.
 
 ### L139 combo21 combined native gate (2026-10-13)
