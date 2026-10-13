@@ -306,6 +306,21 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
             }
             eprintln!("{what}: {:.3} us", t.elapsed().as_secs_f64() * 1e6 / n as f64);
         };
+        // another record and binding: the same shaders and pixel values,
+        // other vertex values (draws alternating between the two decode the
+        // vertex stage every time, the pixel uploads are skipped)
+        let (record_b, shader_b, vs_values_b) = (NDRAW + 0x100 * 30, NDRAW + 0x100 * 31, NDRAW + 0x100 * 32);
+        for k in 0..0x30 {
+            let w = s.mem.u32(record + 4 * k);
+            s.mem.set_u32(record_b + 4 * k, w);
+        }
+        s.mem.set_u32(record_b + 0xC, shader_b);
+        for k in 0..7 {
+            let w = s.mem.u32(shader + 4 * k);
+            s.mem.set_u32(shader_b + 4 * k, w);
+        }
+        s.mem.set_u32(shader_b + 4 * 5, vs_values_b);
+        put(&mut s, vs_values_b, &(0..32).map(|k| (k as f32 + 0.25).to_bits()).collect::<Vec<_>>());
         let mem = &s.mem;
         // the guest words a draw from the caches reads (every read through
         // the counted slow path: no page table)
@@ -332,6 +347,11 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
         eprintln!("guest bytes a draw from the caches reads: {}", counted.1.get());
         time("draw_call from the caches", &mut || {
             std::hint::black_box(draw_call(mem, &info, &mut caches, CONTEXT, record, 1).unwrap());
+        });
+        let mut flip = false;
+        time("draw_call alternating two bindings (each decoded)", &mut || {
+            flip = !flip;
+            std::hint::black_box(draw_call(mem, &info, &mut caches, CONTEXT, if flip { record } else { record_b }, 1).unwrap());
         });
         time("a new frame and its first draw (the binding unchanged)", &mut || {
             caches.begin_frame(&info);

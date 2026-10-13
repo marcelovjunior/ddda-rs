@@ -728,12 +728,30 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         }
     }
     // constants: the binding's registers over zeros (in reused banks)
+    // (L180: only the registers the last binding wrote are cleared, not the
+    // whole banks)
     let mut banks = std::mem::take(&mut c.banks);
     for (stage, bank) in banks.iter_mut().enumerate() {
-        bank.f.clear();
+        let (floats, ints, bools) = c.banks_written[stage];
+        for word in 0..4 {
+            let mut m = floats[word];
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                if let Some(r) = bank.f.get_mut(n) {
+                    *r = [0; 4];
+                }
+            }
+        }
+        for n in 0..16 {
+            if ints >> n & 1 != 0 {
+                bank.i[n] = [0; 4];
+            }
+            if bools >> n & 1 != 0 {
+                bank.b[n] = 0;
+            }
+        }
         bank.f.resize(meta.floats[stage].min(FLOATS[stage]), [0; 4]);
-        bank.i = [[0; 4]; 16];
-        bank.b = [0; 16];
     }
     let mut written = [([0u64; 4], 0u16, 0u16); 2];
     let mut uncovered = [[0u64; 4]; 2];
@@ -813,6 +831,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         };
         if let Some(refusal) = refusal {
             c.banks = banks;
+            c.banks_written = written;
             return Err(refusal);
         }
     }
@@ -836,7 +855,9 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                         // a changed bank moves into the part (the scratch bank
                         // starts over: an allocation, not a copy of the bank)
                         constants: std::array::from_fn(|stage| match previous {
-                            Some(p) if *p.constants[stage] == banks[stage] => p.constants[stage].clone(),
+                            Some(p) if p.written[stage] == written[stage] && same_registers(&p.constants[stage], &banks[stage], &written[stage]) => {
+                                p.constants[stage].clone()
+                            }
                             _ => Arc::new(std::mem::take(&mut banks[stage])),
                         }),
                         written,
@@ -850,12 +871,37 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         }
     };
     c.banks = banks;
+    c.banks_written = written;
     Ok(part)
 }
 
 /// Whether part `p` is what these decoded values make.
 fn same_part(p: &BindingPart, meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64; 4], u16, u16); 2], banks: &[Constants; 2]) -> bool {
-    Arc::ptr_eq(&p.meta, meta) && p.alpha == alpha && p.written == *written && *p.constants[0] == banks[0] && *p.constants[1] == banks[1]
+    Arc::ptr_eq(&p.meta, meta)
+        && p.alpha == alpha
+        && p.written == *written
+        && (0..2).all(|stage| same_registers(&p.constants[stage], &banks[stage], &written[stage]))
+}
+
+/// Two banks over zeros (a part's, the scratch) with the same `written`
+/// registers are equal when those registers are (L180: not the whole
+/// banks).
+fn same_registers(a: &Constants, b: &Constants, written: &([u64; 4], u16, u16)) -> bool {
+    let (floats, ints, bools) = *written;
+    if a.f.len() != b.f.len() {
+        return false;
+    }
+    for word in 0..4 {
+        let mut m = floats[word];
+        while m != 0 {
+            let n = word * 64 + m.trailing_zeros() as usize;
+            m &= m - 1;
+            if a.f.get(n) != b.f.get(n) {
+                return false;
+            }
+        }
+    }
+    (0..16).all(|n| (ints >> n & 1 == 0 || a.i[n] == b.i[n]) && (bools >> n & 1 == 0 || a.b[n] == b.b[n]))
 }
 
 /// A binding's content key (L180): its metadata, alpha test and the
@@ -1449,8 +1495,10 @@ pub struct Caches {
     /// or checked in (kept across frames: an unchanged binding keeps its
     /// part, no allocation)
     bindings: FxMap<u32, (u64, Result<Arc<BindingPart>, Refusal>)>,
-    /// the banks a binding's constants are read into
+    /// the banks a binding's constants are read into, and the registers
+    /// written in them (all others are zero)
     banks: [Constants; 2],
+    banks_written: [([u64; 4], u16, u16); 2],
     /// binding parts by content (`content_key`), with the frame they were
     /// last used in: a binding at a new address with content seen lately
     /// takes that part (no allocation, and no drop later)
