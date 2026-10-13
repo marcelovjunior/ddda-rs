@@ -15,6 +15,16 @@
   No game/image/FPS claim. Details: `docs/tasks/L134-combined-gate.md`.
 - Next: head's second combined pin `7aa2d159` (L132b plus newer ports and
   worker fixes), then the next helper batch.
+### L109d memory ownership diagnostics (2026-10-13)
+
+- Head reports 2.6 -> 15.7–17 GB private memory at save load; cause remains
+  unmeasured. L109c process/guest counters are ready in `e7099da7`.
+- New opt-in `DDPLAY_ALLOC_LOG=1` measures live Rust requested bytes and
+  4 KiB aligned allocations through the unchanged System allocator.
+  Standalone off/on tests cover allocation, zeroing, realloc and real global
+  allocator startup. No game run by agent.
+- Next: head's combined process/guest/Rust counter run, then an attributed
+  memory fix; save-load time follows. `docs/tasks/L109d-memory.md`.
 
 ### L129 combined integer/float flag fusion gate (2026-10-13)
 
@@ -31,26 +41,27 @@
 - Next: head's same-scene loading/image/FPS measurement. Details and
   timing/profile limits: `docs/tasks/L129-dead-flags.md`.
 
-### L119 native sink, step 2b (2026-10-13)
+### L119 native sink: drawcall is the default (2026-10-13)
 
-### L119 native sink, step 2b (2026-10-13)
-### L119 native sink, steps 2b-2d (2026-10-13)
-
-- `DDDRAW_NATIVE=drawcall|1|verify|census` (crates/ddruntime/src/ndraw_native.rs):
-  scene-pass draw records decoded (mtstate on cache misses, identity and
-  per-frame binding caches) into the D3D9 path's DrawCall (drawcall) or a
-  d3d9cmd::NativeJob (1, when the backend supports native jobs; otherwise
-  DrawCalls); refusals counted by reason.
-- Tested: the sink's DrawCall equals the runtime D3D9 path's for the same
-  record (tests/ndraw_native.rs, real D3D9 objects); decode unit tests.
-- combo13 (step 2b): 22-28 us per draw (per-draw decode, allocation).
-  combo15 (step 2c, `drawcall`): 14.2 fps avg / 15.3-16.0 at the end, equal
-  to the default path; the render thread is no longer the bound (the main
-  thread is: lifted game code and sMain's job join 0x00DBE560).
-- `verify` compares every taken-able scene draw's decoded DrawCall with
-  the one the D3D9 path makes in game: the evidence for making `drawcall`
-  the default. Next: a head run with `DDDRAW_NATIVE=verify`. Details,
-  and the frame-thread reading: docs/tasks/L119-native-executor.md.
+- The executor's scene-pass draw records are decoded straight from the
+  nDraw objects (mtstate on cache misses, identity and per-frame binding
+  caches, 0x00DAA8B0's history-dependent sampler section made on the
+  context and device) into the D3D9 path's DrawCall: the applies, the
+  D3D9 services and the snapshot are skipped for them
+  (crates/ddruntime/src/ndraw_native.rs).
+- **Compared with the original path in game**: combo19, `DDDRAW_NATIVE=verify`,
+  ~420,000 draws per 10 s compared field by field with the DrawCalls the
+  D3D9 path made, all equal (run_c19ver.log). Tests: the sink's DrawCall
+  equals the runtime D3D9 path's (tests/ndraw_native.rs, real D3D9
+  objects), the sampler section equals mtstate::shader on 3,000 random
+  cases, decode unit tests.
+- So `DDDRAW_NATIVE` unset now means `drawcall`; `0`/`off` is the escape
+  hatch (everything through the D3D9 path); `verify`, `compare`, `census`
+  and `1`/`native` (native device jobs, L126) as before.
+- combo15 (`drawcall`): 14.2 fps avg, equal to the D3D9 path; the render
+  thread is no longer the bound (the main thread's game code and sMain's
+  job join 0x00DBE560 are). Details: docs/tasks/L119-native-executor.md.
+- Next: native jobs (`1`) as the scene path once compare is clean.
 
 ### L126 native job transport checkpoint (2026-10-13)
 
