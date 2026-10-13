@@ -120,6 +120,120 @@ fn run(body: LiftFn, case: &Value) {
     );
 }
 
+fn geometry_callback(m: &mut dyn Mem, c: &mut Cpu, event: &Value) {
+    for (a, b) in pairs(&event["effects"]) {
+        m.set_u8(a, b);
+    }
+    *c = cpu(event);
+}
+
+fn run_geometry(body: LiftFn, case: &Value) {
+    let mut m = Memory {
+        bytes: pairs(&case["initial"]),
+        ..Default::default()
+    };
+    let mut c = cpu(&case["before"]);
+    let events = Rc::new(case["events"].as_array().unwrap().clone());
+    let cursor = Rc::new(RefCell::new(0usize));
+    let (trace, position) = (events.clone(), cursor.clone());
+    let old = x86::set_ext_calls(Some(Box::new(move |m, c, target| {
+        let i = *position.borrow();
+        assert_eq!(target, n(&trace[i]["target"]));
+        check(m, c, &trace[i], "geometry callee entry");
+        geometry_callback(m, c, &trace[i + 1]);
+        check(m, c, &trace[i + 1], "geometry callee return");
+        *position.borrow_mut() += 2;
+    })));
+    assert!(old.is_none());
+    body(&mut m, &mut c);
+    x86::set_ext_calls(None);
+    assert_eq!(*cursor.borrow(), events.len());
+    check(&m, &c, &case["after"], "geometry return");
+    assert_eq!(m.writes, pairs(&case["after"]["memory"]));
+}
+
+fn geometry_vectors() -> Option<Value> {
+    let path = "E:/ddda-re/notes/native-L130/geometry.json";
+    match std::fs::read_to_string(path) {
+        Ok(s) => Some(serde_json::from_str(&s).unwrap()),
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => None,
+    }
+}
+
+// verifies 0x011787c0
+#[test]
+fn geometry_matches_original_and_lifted() {
+    ddnative_host::install();
+    let Some(data) = geometry_vectors() else {
+        return;
+    };
+    for case in data["cases"].as_array().unwrap() {
+        run_geometry(mtcore::hot::dispatch_geometry, case);
+        // L130_GEOMETRY_REFERENCE
+    }
+    eprintln!(
+        "{} exact geometry cases passed",
+        data["cases"].as_array().unwrap().len()
+    );
+}
+
+#[test]
+#[ignore = "paired geometry microbenchmark"]
+fn geometry_cost() {
+    ddnative_host::install();
+    ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::Relaxed);
+    let data = geometry_vectors().unwrap();
+    let bodies: Vec<(&str, LiftFn)> = vec![("port", mtcore::hot::dispatch_geometry)]; // L130_GEOMETRY_COST
+    let mut m = Paged::default();
+    for index in [0, 160, 560, 576, 640, 1680] {
+        let case = &data["cases"][index];
+        let initial = pairs(&case["initial"]);
+        let initial_cpu = cpu(&case["before"]);
+        let effects = case["events"]
+            .as_array()
+            .unwrap()
+            .get(1)
+            .map(|event| (cpu(event), pairs(&event["effects"])));
+        for round in 0..5 {
+            for offset in 0..bodies.len() {
+                let (name, body) = bodies[(round + offset) % bodies.len()];
+                let effects = effects.clone();
+                x86::set_ext_calls(Some(Box::new(move |m, c, _| {
+                    let (state, writes) = effects.as_ref().unwrap();
+                    for (&a, &b) in writes {
+                        m.set_u8(a, b);
+                    }
+                    *c = state.clone();
+                })));
+                let mut elapsed = std::time::Duration::ZERO;
+                for iteration in 0..10020 {
+                    for (&a, &b) in &initial {
+                        m.set_u8(a, b);
+                    }
+                    let mut c = initial_cpu.clone();
+                    let start = std::time::Instant::now();
+                    body(std::hint::black_box(&mut m), std::hint::black_box(&mut c));
+                    let time = start.elapsed();
+                    if iteration >= 20 {
+                        elapsed += time;
+                    }
+                    if iteration == 0 {
+                        check(&m, &c, &case["after"], "geometry bench gate");
+                    }
+                }
+                eprintln!(
+                    "geometry shape={} alternate={} round={round} {name} ns/call={:.1}",
+                    case["shape"],
+                    case["alternate"],
+                    elapsed.as_nanos() as f64 / 10000.0
+                );
+                x86::set_ext_calls(None);
+            }
+        }
+    }
+}
+
 // Backed pages exercise the same fast accessor path as the parallel runtime.
 #[derive(Default)]
 struct Paged {

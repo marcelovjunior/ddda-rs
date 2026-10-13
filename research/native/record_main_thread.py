@@ -1,8 +1,9 @@
-"""L130 E0EC50 oracle: original instructions, complete recursive execution.
+"""L130 oracles: E0EC50 recursive traversal and 11787C0 geometry dispatch.
 
 Only maps the original function's code page and synthetic memory. Records
 all touched initial bytes, every final written byte, and machine/memory
-state at each recursive call AND return. Never runs the game. Private output.
+state at each call AND return. Geometry callees have explicit recorded
+synthetic ABI effects. Never runs the game. Private output.
 Run with the research Python through heavy.py.
 """
 import argparse
@@ -141,10 +142,108 @@ class Oracle:
                     after=self.snapshot(),visited=sorted(self.visited),edges=sorted(self.edges))
 
 
+class GeometryOracle(Oracle):
+    """Execute the dispatcher; callees use recorded, explicit ABI effects."""
+    def __init__(self):
+        self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
+        self.uc.ctl_set_tcg_buffer_size(16*1024*1024)
+        for address, size in ((0x1178000,0x1000),(0x1173000,0x3000),
+                              (0x162a000,0x1000),(0x18cf000,0x1000),
+                              (BASE,SIZE),(STACK,STACK_SIZE),(h.RET,0x1000)):
+            self.uc.mem_map(address,size)
+        self.uc.mem_write(0x11787c0,h.code(0x11787c0,0x3d4))
+        self.active=False
+        self.uc.hook_add(UC_HOOK_MEM_READ,self.read)
+        self.uc.hook_add(UC_HOOK_MEM_WRITE,self.write)
+        self.uc.hook_add(UC_HOOK_CODE,self.code)
+
+    def code(self, uc, address, size, data):
+        if address == h.RET:
+            uc.emu_stop(); return
+        if address < 0x1178000:
+            assert address in (0x11731b0,0x1173520,0x1173800,0x1173ae0,0x1173dc0,
+                               0x11740a0,0x1174380,0x1174730,0x1174aa0,0x1174d80,
+                               0x1175060,0x1175340,0x1175620,0x1175900),hex(address)
+            self.events.append(dict(kind='call',target=address,**self.snapshot()))
+            sp=uc.reg_read(x.UC_X86_REG_ESP)
+            return_to=struct.unpack('<I',uc.mem_read(sp,4))[0]
+            # Defined synthetic callee: volatile machine state and owned output.
+            for reg in (x.UC_X86_REG_EAX,x.UC_X86_REG_ECX,x.UC_X86_REG_EDX):
+                uc.reg_write(reg,self.rng.getrandbits(32))
+            for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,self.rng.getrandbits(128))
+            uc.reg_write(x.UC_X86_REG_EFLAGS,0x202 | (self.rng.getrandbits(12)&0xcd5))
+            changes=[]
+            for a in (OUTPUT,sp+24):
+                value=self.rng.getrandbits(32)
+                self.remember(a,4)
+                self.written.update(range(a,a+4))
+                uc.mem_write(a,struct.pack('<I',value))
+                changes.extend((a+i,b) for i,b in enumerate(struct.pack('<I',value)))
+            uc.reg_write(x.UC_X86_REG_ESP,sp+28)
+            self.events.append(dict(kind='return',effects=changes,**self.snapshot()))
+            uc.reg_write(x.UC_X86_REG_EIP,return_to)
+            return
+        assert 0x11787c0 <= address <= 0x1178b29,hex(address)
+        self.visited.add(address)
+        if self.last is not None: self.edges.add((self.last,address))
+        self.last=address
+
+    def run(self, seed, shape, alternate, alignment):
+        uc=self.uc
+        self.active=False
+        self.rng=rng=random.Random(seed)
+        uc.mem_write(BASE,rng.randbytes(SIZE))
+        uc.mem_write(STACK,rng.randbytes(STACK_SIZE))
+        # Synthetic masks, defaults and object lanes also exercise arbitrary bit patterns.
+        for a,size in ((0x162ac60,16),(0x162adb0,4),(0x18cfe80,16)):
+            uc.mem_write(a,rng.randbytes(size))
+        uc.mem_write(OWNER+4,struct.pack('<I',shape))
+        sp=SP+alignment
+        uc.mem_write(sp,struct.pack('<7I',h.RET,OWNER,*[rng.getrandbits(32) for _ in range(3)],alternate,rng.getrandbits(32)))
+        for reg in REGS: uc.reg_write(reg,rng.getrandbits(32))
+        uc.reg_write(x.UC_X86_REG_ESP,sp)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,rng.getrandbits(128))
+        uc.reg_write(x.UC_X86_REG_FPCW,0x37f)
+        uc.reg_write(x.UC_X86_REG_FPSW,0)
+        uc.reg_write(x.UC_X86_REG_FPTAG,0)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_FP0+i,((1<<63)|rng.getrandbits(63),0x3fff))
+        uc.reg_write(x.UC_X86_REG_MXCSR,0x1f80)
+        uc.reg_write(x.UC_X86_REG_EFLAGS,0x202 | (rng.getrandbits(12)&0xcd5))
+        self.initial,self.written,self.events,self.visited={},set(),[],set()
+        self.edges,self.last=set(),None
+        before=self.snapshot(False)
+        self.active=True
+        uc.emu_start(0x11787c0,h.RET,count=1000)
+        assert uc.reg_read(x.UC_X86_REG_EIP)==h.RET,'instruction limit'
+        self.active=False
+        return dict(seed=seed,shape=shape,alternate=alternate,alignment=alignment,
+                    before=before,initial=sorted(self.initial.items()),events=self.events,
+                    after=self.snapshot(),visited=sorted(self.visited),edges=sorted(self.edges))
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--out',default='E:/ddda-re/notes/native-L130/dependencies.json')
+    p.add_argument('--out')
+    p.add_argument('--geometry',action='store_true')
     a=p.parse_args()
+    if a.geometry:
+        oracle=GeometryOracle()
+        cases=[oracle.run(i+1,shape,alt,align) for i,(shape,alt,align) in enumerate(
+            ( (shape,alt,align) for shape in (*range(24),0xffffffff,0x80000000)
+              for alt in (0,1,0x100,0x80,0xffffffff) for align in range(16) ))]
+        out=Path(a.out or 'E:/ddda-re/notes/native-L130/geometry.json')
+        out.parent.mkdir(parents=True,exist_ok=True)
+        edges={tuple(e) for c in cases for e in c['edges']}
+        branches=[i for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(h.code(0x11787c0,0x36c),0x11787c0)
+                  if i.mnemonic.startswith('j') and i.mnemonic!='jmp']
+        assert all((i.address,target) in edges for i in branches
+                   for target in (i.address+i.size,int(i.op_str,16)))
+        assert len({e['target'] for c in cases for e in c['events'] if e['kind']=='call'})==14
+        out.write_text(json.dumps(dict(source='DDDA.exe 2017-12-13 Steam',address=0x11787c0,
+                        exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+                        conditional_edges=2*len(branches),cases=cases),separators=(',',':')))
+        print(f'{len(cases)} geometry cases, {sum(len(c["events"]) for c in cases)} boundaries -> {out}')
+        return
     oracle=Oracle()
     cases=[]
     for depth in range(13):
@@ -158,7 +257,7 @@ def main():
     # Deterministic output/value overlap without introducing cycles.
     for seed in range(201,217): cases.append(oracle.run(seed,0,1,63,True))
     for terminals in (0,1,3): cases.append(oracle.run(len(cases)+1,1,63,terminals))
-    out=Path(a.out); out.parent.mkdir(parents=True,exist_ok=True)
+    out=Path(a.out or 'E:/ddda-re/notes/native-L130/dependencies.json'); out.parent.mkdir(parents=True,exist_ok=True)
     edges=set(tuple(e) for c in cases for e in c['edges'])
     branches=[i for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(h.code(ENTRY,0x306),ENTRY)
               if i.mnemonic.startswith('j') and i.mnemonic!='jmp']

@@ -133,3 +133,49 @@ Private vectors: `E:/ddda-re/notes/native-L130/dependencies.json`.
 Logs: `C:/ddda-targets/L130/{record,differential,bench,core-tests,runtime-light,runtime-light-rest}.log`.
 Next action: head's combined integration gate and gameplay run, followed by
 the retained-stack L131 profile to select the next ports and quantify share.
+
+## Continuation: geometry dispatcher 11787C0
+
+Rebased onto `task/fps-line` (ebd50da3) after E0EC50 adoption. DB7620 was
+inspected again: it is a small two-way update dispatcher, with no measured
+self-cost justification for a separate port. Continued the previously
+identified 11787C0 candidate while awaiting `profile_c17draw.json/.txt`.
+
+Whole `dispatch_geometry` reads the original two dispatch tables and SIMD
+masks at runtime. It preserves all 14 call targets, their return addresses,
+the aligned frame, the AABB temporary and scratch writes, XMM lanes and
+observable CMP flags. The AABB path performs bitwise operations only;
+there is no float reassociation or guessed geometric behavior. Registration
+is through the existing `mtcore::hot::PORTS` / ddports chain.
+
+- **2,080 original Unicorn cases and isolated lifted replays pass**, with
+  **1,120 callee entry/return boundaries**, every one of 14 callees and
+  **6/6 conditional outcomes**. Inputs include tags 0..23, FFFFFFFF and
+  80000000; five mode words (testing low-byte semantics), all 16 stack
+  alignments, arbitrary SIMD masks/object bits and nonempty x87 sentinels.
+  Exact registers, arithmetic flags/DF, XMM, MXCSR, x87 and complete written
+  memory match. Callees are explicit synthetic ABI effects, not a claim
+  that their intersection implementations were executed or ported.
+- Original recipes and comparison runner remain in the existing L130 files.
+  Private vectors: `E:/ddda-re/notes/native-L130/geometry.json`.
+  Commands add `--geometry` to recording and `--bench --geometry` to
+  `check_main_thread.py`; ordinary check runs both function suites.
+- Atomic-page opt1 lifted / opt3 port medians, five alternating rounds of
+  10,000 calls (ns/call): default **85.5 -> 59.1**, type2 **256.8 -> 233.3**,
+  AABB normal **436.9 -> 416.8**, AABB alternate **450.9 -> 441.6**, type8
+  **267.1 -> 231.5**, type21 **273.9 -> 237.2**. Callee replay overhead is
+  included equally. Shared CPU outliers and small AABB deltas prevent a
+  strong AABB speedup claim; no gameplay/FPS claim. First implementation
+  used generic stack helpers and regressed; final uses the same page-table
+  stack accessors as the generated code and passes the full oracle again.
+- **Expected share removed remains unquantified**: old inclusive shares
+  (main19.1%, workers13.9/9.1/11.8%) include the large intersection callees,
+  which this port does not accelerate. The fresh nearest-self profile and
+  actual tag distribution are necessary for a responsible estimate.
+
+Local `cargo test -p mtcore -p ddports`: **10 pass / 2 benchmark ignores**,
+including the existing core original-edge and lifted-vector suites. Strict
+`cargo clippy -p mtcore --test hot --no-deps -- -D warnings` passes.
+Logs are `C:/ddda-targets/L130/geometry-{core,clippy,final-differential,final-bench}.log`.
+No shard, game or GPU build/run. Next: head's combined gate/gameplay check
+and the corrected profile, then port the largest exclusive main/job costs.
