@@ -12,6 +12,7 @@
 //! the one they replace, as D3D9 does.
 use crate::d3d9::{profile, D3DERR_INVALIDCALL, D3D_OK};
 use crate::d3d9dev::{add_ref_to, counted_in, hand_out, new_object, objects, release_of, with_device, Kind, Object};
+use crate::guest::View;
 use crate::services::{arg, args, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
@@ -478,7 +479,7 @@ pub fn get_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetViewport(this, D3DVIEWPORT9*).
 pub fn set_viewport(m: &mut dyn Mem, cpu: &mut Cpu) {
     let [dev, p] = args(m, cpu);
-    let v: [u32; 6] = std::array::from_fn(|k| m.u32(p + 4 * k as u32));
+    let v: [u32; 6] = View::new(m).words(p);
     state(dev, |s| s.viewport = v);
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
@@ -496,7 +497,7 @@ pub fn get_viewport(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetScissorRect(this, RECT*).
 pub fn set_scissor_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
     let [dev, p] = args(m, cpu);
-    let r: [i32; 4] = std::array::from_fn(|k| m.u32(p + 4 * k as u32) as i32);
+    let r: [i32; 4] = View::new(m).words::<4>(p).map(|x| x as i32);
     state(dev, |s| s.scissor = r);
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
@@ -515,7 +516,7 @@ pub fn get_scissor_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// shaders do the transforms; fixed-function vertex processing is unused).
 pub fn set_transform(m: &mut dyn Mem, cpu: &mut Cpu) {
     let [dev, t, p] = args(m, cpu);
-    let v: [u32; 16] = std::array::from_fn(|k| m.u32(p + 4 * k as u32));
+    let v: [u32; 16] = View::new(m).words(p);
     state(dev, |s| s.transforms.insert(t, v));
     cpu.eax = D3D_OK;
     ret(m, cpu, 12);
@@ -705,10 +706,11 @@ fn set_constants(m: &mut dyn Mem, cpu: &mut Cpu, vertex: bool, kind: char) {
     cpu.eax = if start.checked_add(count).is_none_or(|end| end > limit) {
         D3DERR_INVALIDCALL
     } else {
+        let g = View::new(m);
         state(dev, |s| {
             let words = &mut s.constant_words;
             words.clear();
-            words.extend((0..count * if kind == 'b' { 1 } else { 4 }).map(|k| m.u32(p + 4 * k)));
+            g.extend_words(p, count * if kind == 'b' { 1 } else { 4 }, words);
             let c = if vertex { &mut s.vs } else { &mut s.ps };
             // A queued or recorded draw owns the old block. Only detach it
             // when an update changes bits; repeated setters keep sharing.
