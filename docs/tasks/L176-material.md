@@ -18,12 +18,14 @@ ports the lookup pair:
 - 0x01066B10 `this->bind(key, value) -> found`: find in slot 0, then fill
   the entry's second word from the binding table at 0x018D12CC and its
   third from `value`.
+- 0x010655A0 `this->apply(context, value)`: the material's states into
+  the draw context (below).
 
 ## Method
 
 Semantic ports (L171's rule): EAX, the callee-saved registers, ESP and
-every memory write at or above the returned stack match the original;
-ECX, EDX, the flags and the popped stack scratch are not reproduced. Two
+every memory write outside the popped stack scratch match the original;
+ECX, EDX, the flags and that scratch are not reproduced. Two
 details matter:
 
 - The binary search wraps: with five or more indices and a key below the
@@ -46,15 +48,156 @@ the synthetic memory are skipped), private output
 
 ## Results
 
-- `crates/mtdraw/src/material.rs`: `find_parameter`, `bind_parameter`.
-- `crates/mtdraw/tests/material.rs`: 762 (0x01066590) and 766
-  (0x01066B10) ABI-level cases pass.
-- `crates/ddports`: opt-in `DDRUNTIME_MATERIAL=1` registers both.
+- `crates/mtdraw/src/material.rs`: `find_parameter` (0x01066590),
+  `bind_parameter` (0x01066B10), `apply_material_state` (0x010655A0).
+- `crates/mtdraw/tests/material.rs`: 762, 766 and 1080 ABI-level cases
+  pass. Memory is compared everywhere but the popped stack scratch (the
+  4 KiB below the returned ESP): the recorders put their data below the
+  stack, so L171's "at or above the returned ESP" alone would not check
+  it (it did not at first here; see below).
+- `crates/ddports`: opt-in `DDRUNTIME_MATERIAL=1` registers all three.
+- Mutation check (`C:/ddda-targets/L176/mutate.py`, private): six of
+  seven mutations are caught; the survivor (`k >= key` to `k > key` in
+  the binary search) is equivalent, since equality has already returned.
 - Microbenchmark (private, `C:/ddda-targets/L176/bench`: the lifted
   bodies and the ports on the same recorded cases, paged guest memory,
-  release build for both): find 28-36 -> 20-25 ns (1.34-1.43x), bind
-  121-127 -> 49-53 ns (2.4-2.5x).
+  release build for both, the apply's guest call stubbed): find 26-31 ->
+  18-21 ns (1.5x), bind 113-133 -> 40-49 ns (2.7-2.8x), apply 680-870 ->
+  536-670 ns (1.3x; its memory accesses and the entry copy loop dominate
+  either way).
 - mtdraw and ddports tests pass, with and without the switch.
 
-Not yet measured in game. Next: 0x010655A0 (material state apply, SSE
-compares and conversions) and 0x01066C60 nDraw::Material::vf12.
+### 0x010655A0, the material state apply
+
+`this->apply(context, value)`: stamps the material with the frame serial
+(0x018D2CE8 + 1), writes its shader binding, blend, colour, texture,
+extra and flag bits into the context's caches (each group only when it
+differs, marking changes in the context's flags at +0x154 and +0x114),
+appends a pending record when recording, copies the material's source
+entries into the context's slot table, then calls 0x01062F20
+(`this->update(context)`, left a guest call) and returns its EAX. The
+port keeps the original's read and write order (context and material may
+alias), its reloads of `context + 0x6C` and of the source count, and the
+colour's SSE steps through the same hardware helpers as the lifted code.
+
+Vectors: `record_material.py --state`, 1080 cases from a warm run (the
+original run once untraced, so the caches hold what it sets, then single
+cache fields changed) or random caches; colour components at the
+threshold, NaN, infinities, denormals and conversion overflow; the
+constants at 0x01406CE0 and 0x0161C298 from the image. The guest call is
+stubbed: at the call the test checks ECX, ESP, the pushed argument and
+return address and every byte written so far outside the stack scratch.
+Every conditional branch is covered.
+
+### 0x00FEFB90, the render-target setter
+
+The third hottest nearest-lifted function on the job threads in
+profile_c34base/inl (2-5% per job thread, after 0x00E12A20 and
+0x00FEE320), unowned in #13852. `context->set_target(target, depth,
+flags, unused)` (thiscall, `ret 0x10`): unless the context already has
+them, binds the target and depth surface, stamps them with the frame
+serial, records the target's format, copies a new target's state slots
+(the constant slot table at 0x01447B7C, through its source index when the
+target's bit 31 is set), then allocates the next viewport constant block
+from the context's arena (0x00DA7D70 when it runs out, a guest call) and
+fills it: the previous block and the size terms for an unchanged size,
+the pass's template, the viewport's offset and scale and the size terms
+for a new one. EAX: `flags` on the early return, the block size when a
+new size finds no arena, otherwise memcpy's.
+
+- `crates/mtdraw/src/target.rs`: `set_render_target`; memcpy is called
+  as the lifted code calls it (`call_local` to the platform model, so the
+  runtime's redirection applies), the allocation through `call_ext`, both
+  from the original's frame and with its return addresses.
+- Vectors: `record_material.py --target`, 1200 cases (the context already
+  set, a new size, an unchanged size; arena with room, exhausted, absent,
+  failing; targets with and without bit 31; depth surfaces with and
+  without an owner; rectangles small, empty and wide). Every conditional
+  branch is covered except the two copy loops' empty-table exits: the
+  slot table is a constant whose first word is not zero.
+- `tests/material.rs`: 1200 ABI-level cases pass, the allocation checked
+  at its call (ECX, ESP, the pushed size and return address, the memory
+  so far); mutation check 7/7 caught.
+- Microbenchmark: 462-478 -> 246-254 ns per call (1.9x).
+- Opt-in `DDRUNTIME_SET_TARGET=1` (separate from the material ports, for
+  a separate A/B).
+
+### 0x00FEDD60, the draw recording's record sort
+
+The hottest unowned nearest-lifted function on the job threads in the
+four profile_c34 runs (120 samples; reached from 0x00FEE0F0 through
+`call_local`). `sort(records, count, scratch) -> sorted` (stdcall, `ret
+0xc`): a stable bottom-up merge sort of 8-byte records by their first word
+(unsigned), alternating between the two buffers: pairs into the scratch,
+then merge passes doubling the run width up to the smallest power of two
+above the count (at most 32 doublings); runs of 32 or more copy their
+tails with memcpy. Returns the buffer holding the result.
+
+- `crates/mtdraw/src/sort.rs`: `sort_records`. When the buffers do not
+  overlap, every pass writes all records to its buffer, so each buffer
+  ends with its last pass's output, and after the pass of width `w` each
+  aligned block of `w` records is that block of the input stably sorted:
+  the port reads the records once and writes the full sort and the
+  half-width block sort. Overlapping buffers run the original's passes in
+  guest memory, with its read/write order and memcpy calls.
+- Vectors: `record_material.py --sort`, 293 cases: counts -5 to 1000 and
+  the 32-doubling cap (0x7FFFFFFF, 0x80000000), keys from 4 values (many
+  duplicates: stability) to 32 bits, 12 overlapping layouts. Every
+  reachable branch is covered (eight edges are unreachable: no pass sees a
+  count under 2, no run is empty, a run's merge always ends through a
+  tail copy).
+- `tests/material.rs`: 293 ABI-level cases pass; mutation check 8/9
+  caught (the survivor caps the width at 31 doublings instead of 32: the
+  width is then 0x80000000 instead of 0, below 2 either way).
+- Microbenchmark: 59-62 us -> 2.3-2.4 us per call over the cases (25-27x).
+- Opt-in `DDRUNTIME_RECORD_SORT=1`.
+
+### The frustum tests and the material colour
+
+Unowned leaves under uBaseModel::vf11 (0x00EA3130) in stacks_c26vk/def
+(about 4% of that tree together):
+
+- 0x00FF0780 `context->cull_sphere(sphere)`, 0x00FF0D20
+  `context->cull_box(box, known)` and 0x00FF0AD0
+  `context->cull_oriented(transform, known)`: the six planes at
+  `context + 0xCA0`; -1 when wholly behind a plane, otherwise the mask of
+  the planes wholly in front (plus `known`, whose planes are skipped).
+  `crates/mtdraw/src/cull.rs`: the float steps in the original's order as
+  Rust f32 operations (the same scalar SSE instructions under the live
+  MXCSR; Rust neither reassociates nor contracts them); the oriented
+  box's packed steps lane by lane.
+- 0x01067790 nDraw::Material::vf09 `this->colour(out)`: the default
+  colour (0x01629470), replaced by the colour parameter (slot 1, key
+  0x6C8011EE) when present; the fourth component goes through x87
+  fld/fstp, which quiets a signalling NaN.
+- Vectors: `record_material.py --cull`, 2000 cases (500 each; a quarter
+  with integer planes and shapes so that the boundary equalities happen
+  exactly); every conditional branch covered. Signalling NaNs are left
+  out of the colour's cases (Unicorn's fld does not quiet them); a unit
+  test checks the quieting against the CPU's own fld/fstp.
+- Mutation check: 5/6 caught; the survivor reassociates the plane
+  normal's squared length, whose rounding difference flips no test.
+- Microbenchmark: sphere 173 -> 37 ns (4.7x), oriented box 571 -> 114 ns
+  (5.0x), box 246 -> 41 ns (6.0x), colour 120 -> 34 ns (3.5x).
+- Opt-in `DDRUNTIME_CULL=1` (the three tests); the colour with
+  `DDRUNTIME_MATERIAL=1`.
+
+### 0x00FF0E60 and 0x01062F20
+
+- 0x00FF0E60 `context->cull_box_all(box)` (`ret 4`): `cull_box` over all
+  six planes, the mask starting empty. Shares `cull_box`'s code; 500 more
+  cases in `cull.json`; 226 -> 33 ns (7.0x). `DDRUNTIME_CULL=1`.
+- 0x01062F20 `this->update(context)` (`ret 4`), the material apply's last
+  step: for each of four parameter slots (signed 16-bit indices; negative:
+  none) whose group lists keys, each key's constants move to a fresh block
+  of the context's arena (refilled by 0x00FED890, a guest call): the
+  previous block copied in, the slot re-pointed, the context marked. EAX
+  is the original's last value (the slot index, the group, or the key
+  count). `record_material.py --update`: 1409 cases (91 runs whose failed
+  refill led the original's memcpy to address 0 skipped), every branch;
+  the refill stub's writes to the context's arena recorded as the call's
+  effects and replayed by the test. Mutation check 5/5. 694 -> 517 ns
+  (1.3x; the copies dominate). `DDRUNTIME_MATERIAL=1`.
+
+Not yet measured in game. Skipped: 0x01066C60 nDraw::Material::vf12 (11
+self samples, ~0x600 bytes, six guest calls: little to gain).
