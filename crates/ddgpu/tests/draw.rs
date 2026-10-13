@@ -1045,7 +1045,15 @@ fn deferred_frame_matches_synchronous_image() {
             backend.fill(&d3d9cmd::FillCall { dst: bb.clone(), rect: [0, 0, 1, 1], colour: 0xFFFFFFFF });
             backend.present(&bb);
             reads.push(backend.read_back(&copy).expect("copied image"));
-            assert_eq!(backend.query_result(0x500), Some(16));
+            // a deferred backend answers None until its worker has the count
+            // (L102: GetData never waits); a game polls the same way
+            let count = loop {
+                if let Some(n) = backend.query_result(0x500) {
+                    break n;
+                }
+                backend.fence();
+            };
+            assert_eq!(count, 16);
             backend.release(0x300);
             backend.release(0x301);
         }
