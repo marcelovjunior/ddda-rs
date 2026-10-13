@@ -153,13 +153,41 @@ every shard changes anyway, and a warm target already skips unchanged
 shards. So a shared cache only pays when several agents cold-build the
 same commit. Not pursued.
 
+## Build B: split shards + gate + rust-lld (2026-10-13 01:58)
+
+The machine was quiet: no other rustc or cargo at the start, by the head's
+order. All 32 shards were split mechanically into ~170 KB modules, cargo
+ran with `-j 16`, the gate admitted 5 shard compilers, and the linker was
+rust-lld.
+
+**Cold build: 682 s.** Exe and PDB produced; 59,819 lifted symbols
+resolve.
+- CPU was at 99-100% for the first 9.5 min.
+- At the end, ddnative alone took 45 s.
+- Free RAM went from 17.6 GB down to 6.1 GB at minimum.
+- Opt-level 1 shards compiled in 107-263 s each (mean 166 s), five sharing
+  16 tokens.
+- Opt-level 0 shards compiled in 14-23 s each and ran last (opt-level 1
+  goes first).
+
+The head's earlier cold play-fast reference is 447 s, from a different
+day and setup. B is therefore not faster cold: a cold build is
+throughput-bound. The split adds ~10% CPU, and more `-Zthreads`
+parallelism on a full machine costs efficiency.
+
+**Warm rebuilds** (the iteration case):
+
+| change | before | B |
+|---|---|---|
+| runtime only | 9.8-11.3 s (link.exe) | 5-6 s |
+| one opt-level 0 shard + chain | 34 s (jobs=2) | 19 s |
+| one opt-level 1 shard + chain | shard alone 150-216 s | 54 s |
+
 ## Open
 
-- A clean cold play-fast build before/after (split + gate + lld), run
-  overnight when the head releases the machine. Partial data from the
-  stopped run: 4 gated shard compilers, opt-level 1 shards 113-275 s each
-  with 4 sharing 16 tokens, minimum free RAM 8.5 GB.
-- A cold build is CPU-bound: 15 opt-level 1 shards at ~320-490 CPU-s
-  each. Fewer functions at opt-level 1 (L66, function-level hot/cold
-  layout) is the lever for cold builds; split and gate shorten the tail
-  and fill the CPU.
+- A same-night cold baseline (A), to tell whether B's cold time regressed
+  or the 447 s reference was a different setup. Not run: the head decides.
+- Cold builds: the lever is fewer functions at opt-level 1 (L66,
+  function-level hot/cold layout), or fewer front-end threads when the
+  whole build is cold. The split and the gate shorten the tail and the
+  warm rebuilds; they do not reduce total work.
