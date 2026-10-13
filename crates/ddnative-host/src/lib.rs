@@ -119,26 +119,41 @@ fn resolved() -> &'static Resolved {
     resolved_slow()
 }
 
+/// Take the process's TLS slot for the dispatch cache (L103b): first thing
+/// in main, with x87::reserve_slot, before the GPU driver's DLLs use up the
+/// TEB's 64 direct slots. Taken lazily it was past them, and every
+/// cross-shard call went through resolved_slow and a thread_local.
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub fn reserve_resolved_slot() -> u32 {
+    let slot = RESOLVED_SLOT.load(Ordering::Relaxed);
+    if slot != u32::MAX {
+        return slot;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn TlsAlloc() -> u32;
+    }
+    // SAFETY: plain Win32 call; one slot for the process, never freed
+    let new = unsafe { TlsAlloc() };
+    let new = if new < 64 { new } else { 64 }; // 64+: the thread_local fallback
+    match RESOLVED_SLOT.compare_exchange(u32::MAX, new, Ordering::Relaxed, Ordering::Relaxed) {
+        Ok(_) => new,
+        Err(won) => won,
+    }
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+pub fn reserve_resolved_slot() -> u32 {
+    u32::MAX
+}
+
 /// Allocate the slot and this thread's cache (leaked: a thread's cache
 /// lives as long as the thread, and guest threads are few).
 #[cfg(all(windows, target_arch = "x86_64"))]
 #[cold]
 #[inline(never)]
 fn resolved_slow() -> &'static Resolved {
-    let mut slot = RESOLVED_SLOT.load(Ordering::Relaxed);
-    if slot == u32::MAX {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn TlsAlloc() -> u32;
-        }
-        // SAFETY: plain Win32 call; one slot for the process, never freed
-        let new = unsafe { TlsAlloc() };
-        let new = if new < 64 { new } else { 64 }; // 64+: the thread_local fallback
-        slot = match RESOLVED_SLOT.compare_exchange(u32::MAX, new, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => new,
-            Err(won) => won,
-        };
-    }
+    let slot = reserve_resolved_slot();
     if slot >= 64 {
         // SAFETY: the thread_local lives as long as the thread; the
         // reference does not escape a call on it
