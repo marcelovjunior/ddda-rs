@@ -234,6 +234,18 @@ impl Journal<'_> {
             self.fail(textures, "primitive texture size overflow");
         }
     }
+    fn seed_render_commands(&self, render: u32) {
+        // DA7D70 (DDDA.exe 2017-12-13 Steam): command allocation returns
+        // ring_base[ring_index] + old cursor when old+size < capacity.
+        // FED890 requests fresh pages for FED200's empty child cursors even
+        // when the serial parent fits inside its already allocated page.
+        self.stage.set("DA7D70 command arena");
+        let ring = self.u32(render.wrapping_add(0x33db8));
+        let slot = render.wrapping_add(0x33dc0).wrapping_add(ring.wrapping_mul(4));
+        let base = self.u32(slot);
+        let capacity = self.u32(render.wrapping_add(0x33dcc));
+        self.seed(base, capacity);
+    }
 }
 impl Mem for Journal<'_> {
     fn probe(&self, a: u32, n: u32, w: bool) -> Result<(), u32> {
@@ -672,6 +684,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         let render = journal.u32(0x018d08f4);
         journal.seed(render.wrapping_add(0x33dbc), 4);
         journal.seed(render.wrapping_add(0x433dec), 0x20);
+        journal.seed_render_commands(render);
         journal.stage.set("FED200 shader metadata");
         let shader = journal.u32(0x018d12cc);
         journal.seed(shader.wrapping_add(0x24), 0x1c);
@@ -1506,6 +1519,32 @@ mod tests {
                 address: 0
             })
         );
+    }
+
+    #[test]
+    fn command_arena_preseed_includes_unvisited_allocation_pages() {
+        let mut live = GuestMemory::new();
+        live.map(0x100000, 0x34000, READ | WRITE).unwrap();
+        live.map(0x200000, 0x3000, READ | WRITE).unwrap();
+        live.set_u32(0x133db8, 1);
+        live.set_u32(0x133dc0, 0); // Inactive ring must not be read as the arena.
+        live.set_u32(0x133dc4, 0x200820);
+        live.set_u32(0x133dc8, 0x100);
+        live.set_u32(0x133dcc, 0x1800);
+        live.set_u8(0x20201f, 43);
+        let journal = Journal {
+            live: &mut live,
+            input: RefCell::new(Snapshot::default()),
+            writes: RefCell::new(BTreeMap::new()),
+            failure: Cell::new(None),
+            stage: Cell::new("test"),
+        };
+        journal.seed_render_commands(0x100000);
+        assert!(journal.failure.get().is_none());
+        assert!(journal.input.borrow().has_page(0x202000));
+        assert_eq!(journal.input.borrow().u8(0x20201f), 43);
+        assert!(journal.writes.borrow().is_empty());
+        assert_eq!(journal.live.u32(0x133dc8), 0x100);
     }
 
     #[test]

@@ -7,6 +7,10 @@
   Confirmed DA7D80 InterlockedExchangeAdd dependency now uses tracked private
   memory;33 focused tests pass. Offline-example rebuild/replay next.
   Existing sample has one job at t23s; AFTER_MS=60000 selects later work.
+- Rebuilt original replay passes serial/live6, then refuses fresh command
+  page0x64d31820. DA7D70 current arena now preseeded from runtime pointer
+  and capacity;34 focused tests pass. Next: delayed head recapture with
+  AFTER_MS=60000 FIRST=0 COUNT=1, then resume real replay closure.
 - Private scheduler now preserves outer queue storage; scope balance and
   output-pointer escape checks cover its temporary arena.33 focused pass;
   latest complete default light288 pass/0 fail/7 ignored.
