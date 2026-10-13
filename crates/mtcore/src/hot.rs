@@ -23,6 +23,7 @@ pub const PORTS: &[(u32, x86::LiftFn, u8)] = &[
     (0x0112_bbe0, duration_high_nibble8, 0xff),
     (0x00fe_db80, save_draw_recording_state, 0xff),
     (0x00fe_dc00, restore_draw_recording_state, 0xff),
+    (0x00fe_d200, initialize_draw_recording_lanes, 0xff),
 ];
 
 // Translated from 0x00fedb80 (DDDA.exe 2017-12-13 Steam).
@@ -184,6 +185,147 @@ pub fn restore_draw_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
     c.ebp = emit::pop(m, pt, c);
     c.ebx = emit::pop(m, pt, c);
     ret(c, 0);
+}
+
+// Translated from 0x00fed200 (DDDA.exe 2017-12-13 Steam).
+/// Initialize each recording lane from the current draw/resource managers.
+pub fn initialize_draw_recording_lanes(m: &mut dyn Mem, c: &mut Cpu) {
+    use ddnative_base::emit;
+    let pt = m.page_table();
+    macro_rules! r {
+        ($a:expr) => {
+            m.fast_u32(pt, $a)
+        };
+    }
+    macro_rules! w {
+        ($a:expr, $v:expr) => {
+            m.fast_set_u32(pt, $a, $v)
+        };
+    }
+    macro_rules! field {
+        ($offset:expr) => {
+            c.esi.wrapping_add($offset)
+        };
+    }
+    macro_rules! stack {
+        ($offset:expr) => {
+            c.esp.wrapping_add($offset)
+        };
+    }
+    macro_rules! push_fast {
+        ($v:expr) => {
+            emit::push($v, m, pt, c)
+        };
+    }
+    macro_rules! call {
+        ($target:expr, $resume:expr) => {{
+            push_fast!($resume);
+            x86::call_ext(m, c, $target);
+        }};
+    }
+    c.esp = c.esp.wrapping_sub(0x1c);
+    c.eax = r!(c.ecx.wrapping_add(0x4c));
+    w!(stack!(4), c.ecx);
+    c.ecx = r!(stack!(0x24));
+    c.edx = 0;
+    (c.eax, c.edx) = x86::divide(c.eax, c.edx, c.ecx, 32, false).expect("x86 divide error");
+    push_fast!(c.ebp);
+    push_fast!(c.edi);
+    c.edi = 0;
+    c.ebp = 0;
+    w!(stack!(0x10), c.eax);
+    c.fl.alu_sub(c.ecx, c.edi, 32);
+    if c.ecx != 0 {
+        push_fast!(c.ebx);
+        push_fast!(c.esi);
+        c.esi = r!(stack!(0x30));
+        for offset in [0x1c, 0x20, 0x24, 0x28, 0x10] {
+            w!(stack!(offset), c.edi);
+        }
+        c.esi = c.esi.wrapping_add(0x18);
+        loop {
+            c.eax = r!(0x18d12cc);
+            c.eax = c.fl.alu_add(c.eax, 0x3c, 32);
+            w!(field!(8), c.eax);
+            c.ecx = r!(0x18d12cc);
+            c.edx = r!(c.ecx.wrapping_add(0x24));
+            w!(c.esi, c.edx);
+            c.eax = r!(0x18d12cc);
+            c.ecx = r!(c.eax.wrapping_add(0x34));
+            w!(c.esi.wrapping_sub(4), c.ecx);
+            c.edx = r!(0x18d12cc);
+            c.eax = r!(c.edx.wrapping_add(0x28));
+            w!(field!(4), c.eax);
+            c.ecx = r!(0x18d08f4);
+            c.edx = r!(c.ecx.wrapping_add(0x433e04));
+            w!(field!(0x18), c.edx);
+            c.eax = r!(0x18d08f4);
+            c.ecx = r!(c.eax.wrapping_add(0x433e08));
+            push_fast!(0x30);
+            c.ebx = field!(0x64);
+            push_fast!(c.edi);
+            push_fast!(c.ebx);
+            w!(field!(0x24), c.ecx);
+            for offset in [
+                0x1c, 0x14, 0x28, 0x20, 0x10, 0xc, 0x34, 0x2c, 0x30, 0x3c, 0x3085c, 0x30c60, 0x38, 0x40, 0x44,
+            ] {
+                w!(field!(offset), c.edi);
+            }
+            call!(0x12efe20, 0xfed2ca);
+            c.edx = r!(0x18d08f4);
+            c.eax = r!(c.edx.wrapping_add(0x33dbc));
+            c.ecx = 3;
+            c.edx = c.eax % c.ecx;
+            c.eax = r!(0x18d08f4);
+            c.xmm[0] = emit::load64(m, pt, stack!(0x28));
+            c.ecx = r!(c.eax.wrapping_add(c.edx.wrapping_mul(4)).wrapping_add(0x433dec));
+            w!(c.ebx, c.ecx);
+            c.ecx = r!(0x18d08f4);
+            c.eax = r!(c.ecx.wrapping_add(0x33dbc));
+            c.ebx = 3;
+            c.edx = c.eax % c.ebx;
+            c.eax = r!(stack!(0x20));
+            c.ebx = r!(stack!(0x24));
+            c.eax = c.eax.wrapping_add(0xb4);
+            c.edx = r!(c.ecx.wrapping_add(c.edx.wrapping_mul(4)).wrapping_add(0x433df8));
+            emit::store64(c.xmm[0], m, pt, c.esi.wrapping_sub(0x14));
+            c.xmm[0] = emit::load64(m, pt, stack!(0x30));
+            w!(field!(0x8c), c.edx);
+            for offset in [0x94, 0x98, 0x33c64, 0x33c68] {
+                w!(field!(offset), c.edi);
+            }
+            emit::store64(c.xmm[0], m, pt, c.esi.wrapping_sub(0xc));
+            c.ecx = r!(c.eax.wrapping_sub(0x60));
+            c.ecx = c.fl.alu_add(c.ecx, r!(stack!(0x1c)), 32);
+            w!(field!(0x30), c.edi);
+            w!(field!(0x2c), c.ecx);
+            w!(field!(0x38), c.ebx);
+            w!(field!(0x34), c.ebx);
+            w!(field!(0x40), c.ebp);
+            c.edx = r!(c.eax.wrapping_sub(0xa0));
+            c.ecx = c.edx.wrapping_mul(8).wrapping_add(0x144);
+            push_fast!(c.ecx);
+            push_fast!(c.eax);
+            c.edx = field!(0x9c);
+            push_fast!(c.edx);
+            call!(0x12efea0, 0xfed37b);
+            c.esp = c.esp.wrapping_add(0x18);
+            c.ebp = c.ebp.wrapping_add(1);
+            c.ebx = c.ebx.wrapping_mul(8);
+            w!(stack!(0x10), r!(stack!(0x10)).wrapping_add(c.ebx));
+            c.esi = field!(0x33c84);
+            c.fl.alu_sub(c.ebp, r!(stack!(0x34)), 32);
+            if !c.fl.cf() {
+                break;
+            }
+        }
+        c.esi = emit::pop(m, pt, c);
+        c.ebx = emit::pop(m, pt, c);
+    }
+    c.edi = emit::pop(m, pt, c);
+    c.ebp = emit::pop(m, pt, c);
+    c.esp = c.fl.alu_add(c.esp, 0x1c, 32);
+    ret(c, 8);
 }
 
 // Translated from 0x011787c0 (DDDA.exe 2017-12-13 Steam).
