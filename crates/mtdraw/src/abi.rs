@@ -17,4 +17,5 @@ pub const PORTS: &[(u32, LiftFn, u8)] = &[
     (0x00DA_6FE0, crate::apply::targets, 0xff),
     (0x00DA_A5F0, crate::apply::fixed, 0xff),
     (0x00DA_A7C0, crate::apply::streams, 0xff),
+    (0x00DA_A8B0, crate::apply::shader, 0xff),
 ];

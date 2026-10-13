@@ -4,6 +4,7 @@ use ddnative_base::x86::{self, Cpu, LiftFn};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::io::BufRead;
 
 // L125_REFERENCE_MODULE
 
@@ -43,6 +44,7 @@ fn xmm(v: &Value) -> [[u32; 4]; 8] {
 thread_local! {
     static CALLS: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
     static EXPECTED: RefCell<Vec<Value>> = const { RefCell::new(Vec::new()) };
+    static X87_CALLS: RefCell<Vec<u16>> = const { RefCell::new(Vec::new()) };
 }
 fn mock(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
     let n = match target {
@@ -62,6 +64,13 @@ fn mock(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
     let mut call = serde_json::json!({"target":target,"return_to":m.u32(c.esp),
                                  "regs":regs(c),"xmm":c.xmm,"args":args});
     let index = CALLS.with(|v| v.borrow().len());
+    X87_CALLS.with(|v| {
+        if let Some(status) = v.borrow().get(index) {
+            assert_eq!(c.st.control(), 0x37f, "call {index} x87 control");
+            assert_eq!(c.st.status(), *status, "call {index} x87 host status");
+            assert_eq!(c.st.depth(), 0, "call {index} x87 depth");
+        }
+    });
     EXPECTED.with(|v| {
         let v = v.borrow();
         let expected = &v[index]["memory"];
@@ -94,11 +103,44 @@ fn lookup(t: u32) -> Option<LiftFn> {
     (t == 0xda68a0).then_some(color)
 }
 
+/// Independent host execution of the recorded original x87 instructions.
+/// Translated from 0x00DAAE55..0x00DAAEBB and 0x00DAB325..0x00DAB38B
+/// (DDDA.exe 2017-12-13 Steam). Keep the host's pre-test x87 image intact.
+/// Unicorn is the data/control-flow oracle; hardware is the x87 status oracle.
+fn hardware_x87(case: &Value) -> u16 {
+    use std::arch::asm;
+    let mut saved = [0u8; 108];
+    let mut status: u16 = 0;
+    unsafe {
+        asm!("fnsave [{p}]", "fninit", p=in(reg) saved.as_mut_ptr(), options(nostack));
+    }
+    if let Some(ops) = case["x87_ops"].as_array() {
+        for op in ops {
+            let input = number(&op[1]);
+            let mut output = 0u32;
+            unsafe {
+                match op[0].as_str().unwrap() {
+                    "load" => asm!("fild dword ptr [{p}]",p=in(reg) &input,options(nostack)),
+                    "one" => asm!("fld1", options(nostack)),
+                    "divide" => asm!("fdivrp st(1), st(0)", options(nostack)),
+                    "store" => asm!("fstp dword ptr [{p}]",p=in(reg) &mut output,options(nostack)),
+                    _ => panic!("unknown recorded x87 instruction"),
+                }
+            }
+        }
+    }
+    unsafe {
+        asm!("fnstsw [{s}]", "frstor [{p}]",s=in(reg) &mut status,p=in(reg) saved.as_ptr(),options(nostack));
+    }
+    status
+}
+
 fn port(kind: &str) -> Option<LiftFn> {
     match kind {
         "streams" => Some(mtdraw::apply::streams),
         "targets" => Some(mtdraw::apply::targets),
         "fixed" => Some(mtdraw::apply::fixed),
+        "shader" => Some(mtdraw::apply::shader),
         _ => None,
     }
 }
@@ -122,10 +164,19 @@ fn run(body: LiftFn, case: &Value, label: &str) {
         ..Default::default()
     };
     CALLS.with(|v| v.borrow_mut().clear());
-    EXPECTED.with(|v| *v.borrow_mut() = case["calls"].as_array().unwrap().clone());
+    let mut expected_calls = case["calls"].as_array().unwrap().clone();
+    let mut statuses = vec![];
+    for call in &mut expected_calls {
+        if let Some(count) = call.as_object_mut().unwrap().remove("x87_op_count") {
+            let ops = &case["x87_ops"].as_array().unwrap()[..number(&count) as usize];
+            statuses.push(hardware_x87(&serde_json::json!({"x87_ops":ops})));
+        }
+    }
+    X87_CALLS.with(|v| *v.borrow_mut() = statuses);
+    EXPECTED.with(|v| *v.borrow_mut() = expected_calls.clone());
     body(&mut m, &mut c);
     let actual = CALLS.with(|v| v.borrow().clone());
-    let expected = case["calls"].as_array().unwrap();
+    let expected = &expected_calls;
     assert_eq!(actual.len(), expected.len(), "{label} call count");
     for (i, (a, b)) in actual.iter().zip(expected).enumerate() {
         assert_eq!(a, b, "{label} call {i}");
@@ -134,7 +185,12 @@ fn run(body: LiftFn, case: &Value, label: &str) {
     assert_eq!(c.xmm, xmm(&case["after_xmm"]), "{label} xmm");
     let state = words(&case["x87"]);
     assert_eq!(c.st.control() as u32, state[0], "{label} x87 control");
-    assert_eq!(c.st.status() as u32, state[1], "{label} x87 status");
+    assert_eq!(
+        c.st.status(),
+        hardware_x87(case),
+        "{label} x87 hardware status (Unicorn {})",
+        state[1]
+    );
     assert_eq!(c.st.depth(), 0, "{label} x87 depth");
     let expected = bytes(&case["writes"]);
     if m.writes != expected {
@@ -159,20 +215,22 @@ fn original_apply_abi() {
     x86::set_lifted_lookup(lookup);
     x86::set_ext_calls(Some(Box::new(mock)));
     let path = std::env::var("MTDRAW_APPLY_VECTORS")
-        .unwrap_or_else(|_| "E:/ddda-re/notes/native-L125/apply.json".into());
-    let text = match std::fs::read_to_string(&path) {
+        .unwrap_or_else(|_| "E:/ddda-re/notes/native-L125/apply.jsonl".into());
+    let file = match std::fs::File::open(&path) {
         Ok(t) => t,
         Err(e) => {
             assert!(std::env::var_os("MTDRAW_REQUIRE_APPLY").is_none(), "{path}: {e}");
             return;
         }
     };
-    let root: Value = serde_json::from_str(&text).unwrap();
     let mut count = 0;
-    for (i, case) in root["cases"].as_array().unwrap().iter().enumerate() {
-        let kind = case["kind"].as_str().unwrap();
+    for (i, line) in std::io::BufReader::new(file).lines().enumerate() {
+        let case: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        let Some(kind) = case["kind"].as_str() else {
+            continue;
+        };
         if let Some(body) = port(kind) {
-            run(body, case, &format!("{kind} {i} readable"));
+            run(body, &case, &format!("{kind} {i} readable"));
             // L125_REFERENCE_RUN
             count += 1;
         }

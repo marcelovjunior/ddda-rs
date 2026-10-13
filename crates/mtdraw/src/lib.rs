@@ -17,4 +17,5 @@
 
 pub mod abi;
 pub mod apply;
+mod apply_shader;
 pub mod executor;

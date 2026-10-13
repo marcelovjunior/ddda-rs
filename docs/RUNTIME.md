@@ -935,3 +935,19 @@ round-trip tests pass; full light tests retain the independently reproduced
 fullscreen-gamma Reset failure. GPU tests/examples compile; execution gate
 is pending head's exclusive run. See the L90 brief for details and L97/L98
 merge notes.
+
+## L125 nDraw apply ports (2026-10-13)
+
+`mtdraw::abi::PORTS` now supplies DA6FE0 (targets), DAA5F0 (fixed state),
+DAA7C0 (streams) and DAA8B0 (shader/constants). ddports already chains this
+registry; packed state helpers retain their original call boundaries.
+`mtdraw::apply::decode_*` exposes pure binding descriptions to L119 without
+changing the executor context or D3D9 state. Shader source iterators reuse
+mtstate's constant range/dimension decoding and allocate no intermediate
+call vectors. Unsupported derived scratch cases explicitly require fallback.
+
+Verified against 1,568 private Unicorn ABI cases and isolated lifted bodies
+(15,892 calls), with an independent host x87 status oracle; pure decoders
+checked against 811 L117 cases. Runtime light serial tests: 171 pass, the
+existing fullscreen gamma Reset failure, three ignored. No game/image/FPS
+comparison yet. Timings and exact validation limits: docs/tasks/L125-apply-ports.md.

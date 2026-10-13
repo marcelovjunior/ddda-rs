@@ -4,6 +4,9 @@
 //! neither inspect the executor cache nor emit calls, so a native CommandSink
 //! can use them without changing the fallback D3D9 device's state.
 
+pub use crate::apply_shader::{
+    ConstantBinding, ConstantKind, ShaderBinding, ShaderStage, TextureBinding, decode_shader, shader,
+};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 use mtcore::machine::{call_out, pop, push};

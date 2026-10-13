@@ -2142,3 +2142,18 @@ opening (codex-31), route perf (codex-29).
   through mtdraw::abi::PORTS. No shard or game build/run, no FPS claim.
 - Next: complete shader/constants wrapper, expand coverage and measure.
   Details: docs/tasks/L125-apply-ports.md.
+
+### L125 four apply wrappers and native decoders (2026-10-13)
+
+- DA6FE0/DAA5F0/DAA7C0/DAA8B0 registered through mtdraw/ddports;
+  **1,568 Unicorn ABI cases / 15,892 calls** match readable and extracted
+  lifted bodies, with host x87 status oracle. All feasible branch edges
+  covered. Pure allocation-free decoders checked against **811** L117 cases;
+  L117's **3,584 cases** still pass. Details/contract: L125 brief.
+- Synthetic opt1/opt3 transition medians (us): targets **0.651/0.167**,
+  fixed **0.263/0.158**, streams **0.472/0.243**, shaders **1.395/0.412**.
+  The 96-call shader workload has mixed regressions: no reliable gain there.
+- Light runtime **171 pass / one existing gamma Reset failure / three
+  ignored**; ddports test passes. No game, GPU, shard build or FPS claim.
+- Next: head's matched boot/save/frame/profile comparison and L119 adoption
+  of the pure shader/constant source iterators.

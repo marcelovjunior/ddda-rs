@@ -14,6 +14,7 @@ import subprocess
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out',default='E:/ddda-re/notes/native-L125/check')
+    p.add_argument('--bench',action='store_true')
     a=p.parse_args()
     repo=Path(__file__).resolve().parents[2]
     out=Path(a.out)
@@ -36,14 +37,24 @@ def main():
     source+='\n'
     (out/'src/lib.rs').write_text('pub use ddnative_base::mem;\nmod lifted { pub fn f_00da68a0(m:&mut dyn ddnative_base::mem::Mem,c:&mut ddnative_base::x86::Cpu) { ddnative_base::x86::call_ext(m,c,0xda68a0); } }\npub mod reference;\n')
     (out/'src/reference.rs').write_text(source)
-    deps='\n'.join(f'{n} = {{ path = "{(repo / "crates" / n).as_posix()}" }}' for n in ['mtdraw','ddnative-base','ddnative-host'])
-    (out/'Cargo.toml').write_text('[package]\nname="apply-check"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[dependencies]\n'+deps+'\nserde_json="1"\n')
+    deps='\n'.join(f'{n} = {{ path = "{(repo / "crates" / n).as_posix()}" }}' for n in ['mtdraw','mtstate','ddnative-base','ddnative-host'])
+    profiles='\n[profile.release]\nopt-level=1\n[profile.release.package.mtdraw]\nopt-level=3\n[profile.release.package.ddnative-base]\nopt-level=3\n[profile.release.package.ddnative-host]\nopt-level=3\n[profile.release.package.mtcore]\nopt-level=3\n'
+    (out/'Cargo.toml').write_text('[package]\nname="apply-check"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[dependencies]\n'+deps+'\nserde_json="1"\n'+profiles)
     test=(repo/'crates/mtdraw/tests/apply.rs').read_text()
     choices=','.join(f'"{kind}"=>apply_check::reference::f_{addr} as LiftFn' for kind,addr in zip(['targets','fixed','streams','shader'],addresses))
-    test=test.replace('// L125_REFERENCE_RUN',f'run(match kind {{ {choices}, _=>unreachable!() }},case,&format!("{{kind}} {{i}} lifted"));')
+    test=test.replace('// L125_REFERENCE_RUN',f'run(match kind {{ {choices}, _=>unreachable!() }},&case,&format!("{{kind}} {{i}} lifted"));')
     (out/'tests/apply.rs').write_text(test)
+    (out/'tests/apply_decode.rs').write_text((repo/'crates/mtdraw/tests/apply_decode.rs').read_text())
+    if a.bench:
+        test=(repo/'crates/mtdraw/tests/apply_cost.rs').read_text()
+        test=test.replace('#![cfg(any())]','')
+        bodies=','.join(f'"{kind}"=>[apply_check::reference::f_{addr} as LiftFn,mtdraw::apply::{kind} as LiftFn]' for kind,addr in zip(['targets','fixed','streams','shader'],addresses))
+        test=test.replace('// L125_COST_BODIES',f'let bodies=match kind {{ {bodies},_=>unreachable!() }};')
+        (out/'tests/apply_cost.rs').write_text(test)
     env=dict(os.environ,CARGO_TARGET_DIR='C:/ddda-targets/L125',CARGO_BUILD_JOBS='4',CARGO_INCREMENTAL='0',MTDRAW_REQUIRE_APPLY='1')
-    raise SystemExit(subprocess.call(['cargo','test','--manifest-path',str(out/'Cargo.toml'),'--','--nocapture'],env=env))
+    command=['cargo','test','--manifest-path',str(out/'Cargo.toml')]
+    command+=['--release','--test','apply_cost','--','--ignored','--nocapture'] if a.bench else ['--','--nocapture']
+    raise SystemExit(subprocess.call(command,env=env))
 
 
 if __name__=='__main__': main()
