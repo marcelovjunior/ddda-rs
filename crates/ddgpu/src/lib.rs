@@ -24,6 +24,7 @@ use std::collections::{HashMap, HashSet};
 
 mod cache;
 mod pipelines;
+mod shader_cache;
 pub mod present;
 pub use pipelines::{default_cache_dir, pipeline_stats, report_pipeline_stats_every, save_pipeline_caches, PipelineStats};
 use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
@@ -468,7 +469,11 @@ impl WgpuBackend {
 
     /// A backend on the default adapter without a window.
     pub fn headless() -> Option<WgpuBackend> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        // Permit bounded headless checks on a chosen backend without changing
+        // normal adapter selection or validation flags.
+        descriptor.backends = wgpu::Backends::from_env().unwrap_or(descriptor.backends);
+        let instance = wgpu::Instance::new(descriptor);
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         let needed = Self::required_features();
         if !adapter.features().contains(needed) {
@@ -1350,8 +1355,11 @@ impl WgpuBackend {
         let shader = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
         let t = d3d9wgsl::translate_with(&shader, options).map_err(|e| e.to_string())?;
         pipelines::translated(started);
+        // Resolve parse/cache errors before opening the device error scope.
+        // wgpu still validates the exact cached IR against this device.
+        let source = shader_cache::source(t.wgsl)?;
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(t.wgsl.into()) });
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source });
         if let Some(e) = block_on(scope.pop()) {
             return Err(format!("{e}"));
         }

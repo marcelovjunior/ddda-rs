@@ -36,6 +36,17 @@
   the generic byte-vector symbol does not establish an audio caller.
 - No game/FPS comparison. Next: head caller-resolved render profile after
   integration. Details: `docs/tasks/L81-audio-render-thread.md`.
+### L83 production shader IR cache (2026-10-13)
+
+- Exact Naga IR cache connected to draw-module creation; unchanged translation
+  and device validation. Cache misses/corruption regenerate safely.
+- Cache tests 2, reflection 29,198 shaders, WGSL variants 60,524 and runtime
+  light serial tests 133 pass. All 29,198 IR roundtrips are exact.
+- Preliminary 1,000-shader Vulkan sample: 4.31 -> 1.05 ms including translation
+  and cache I/O. Filesystem residency matters; whole-corpus paired timing pending.
+- Initial GPU pass: 29 executed cases pass before yielding to L90's gate.
+- Next: remaining targets, warm GPU repeat and full paired timing after GPU
+  release. Details: `docs/tasks/L83-naga-direct.md`.
 
 ### L66 hot/cold build (2026-10-12)
 

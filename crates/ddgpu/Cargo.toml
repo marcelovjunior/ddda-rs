@@ -10,10 +10,17 @@ publish.workspace = true
 d3d9cmd = { path = "../d3d9cmd" }
 d3d9shader = { path = "../d3d9shader" }
 d3d9wgsl = { path = "../d3d9wgsl" }
-wgpu = "29.0.4"
+wgpu = { version = "29.0.4", features = ["naga-ir"] }
+naga = { version = "=29.0.4", features = ["wgsl-in", "serialize", "deserialize"] }
+bincode = "1.3.3"
+blake3 = "1"
 
 [dev-dependencies]
 # examples/pipeline_cost.rs reads the game's shader packages
 mtarc = { path = "../mtarc" }
 d3d9frame = { path = "../d3d9frame" }
 d3d9ref = { path = "../d3d9ref" }
+
+[[example]]
+name = "module_cost"
+path = "src/module_cost.rs"
