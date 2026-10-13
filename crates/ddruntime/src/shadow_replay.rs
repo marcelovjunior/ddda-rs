@@ -1306,6 +1306,7 @@ fn compare_replays(
     // acceptance first. These categories never exempt bytes from comparison.
     let mut state_differences = BTreeMap::<&str, (usize, u32)>::new();
     let mut other_words = std::collections::BTreeSet::new();
+    let mut root_words = std::collections::BTreeSet::new();
     let render = input
         .probe(0x018d08f4, 4, false)
         .ok()
@@ -1353,9 +1354,27 @@ fn compare_replays(
             if category == "other state" && other_words.len() < 24 {
                 other_words.insert(address & !3);
             }
+            if category == "root context" && root_words.len() < 64 {
+                root_words.insert(address & !3);
+            }
         }
     }
     eprintln!("parallel-shadow state differences (byte count, first address)={state_differences:#x?}");
+    for address in root_words {
+        let word = |writes: &BTreeMap<u32, u8>| {
+            u32::from_le_bytes(std::array::from_fn(|i| {
+                let at = address + i as u32;
+                writes.get(&at).copied().unwrap_or_else(|| input.u8(at))
+            }))
+        };
+        eprintln!(
+            "parallel-shadow root context +{:#x} serial={:#x} parallel={:#x} input={:#x}",
+            address - context,
+            word(&results[0].2),
+            word(&results[1].2),
+            input.u32(address)
+        );
+    }
     for address in other_words {
         let word = |writes: &BTreeMap<u32, u8>| {
             u32::from_le_bytes(std::array::from_fn(|i| {

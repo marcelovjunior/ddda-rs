@@ -596,3 +596,82 @@ Do not claim later full-suite results. Respect head pause and GPU rules.
 
 Implemented/tested diagnostics and synthetic replay are NOT original
 serial/parallel equality, live publication, image equality, or speedup.
+
+## claude-9 takeover (2026-10-13)
+
+Replay fixture: v4 capture `shadow-24392-0.ddshadow` (79 entries, 174
+jobs, 2 lanes, 14 captured shaders). Result: **the normalized serial and
+parallel streams match on all 79 entries.** The next refusal is the
+final-memory gate (below). Every rule below is exact or source-backed;
+each accepted category is counted in the replay log.
+
+### Comparison rules added
+
+1. **Targets and Fixed bindings compare by content**
+   (mtcore::shadow_lanes). 0x00DA6FE0 returns for the current pointer, and
+   for any other pointer compares each view, the depth surface, the
+   viewport and the scissor with the context's cached values, calling the
+   device only on a change. 0x00DAA5F0 compares its blend, depth and raster
+   objects and the factor, stencil reference and flip bit the same way.
+   Equal bytes therefore apply identically, and lanes' local copies of
+   serial-reused bindings are equivalent. Shader and stream bindings keep
+   pointer identity. Covered by the lane tests (12 pass).
+2. **Normalized replays.** `sSceneExt::vf16` 0x0049B1A0 builds its
+   0x190-byte light constant block in four stack arrays (+0x20, +0xA0,
+   +0x130, +0x1B0 of its frame) and copies them whole, filling only the
+   found lights' entries. crates/mtdraw/src/lights.rs (L176) documents
+   this. The rest is stack leftovers, undefined in the original and
+   different on a lane's stack. That is where the `fWindParams`/`fWinds`
+   tails and the c4 context-pointer word came from. The compared serial and
+   parallel replays zero those arrays on entry (`NORMALIZE`, resolver
+   wrapper). The plain serial replay is still checked against the live run
+   (it passes).
+3. **Residue-dependent bytes (definedness runs).** Two extra normalized
+   serial replays fill the residue sources with 0x00 and 0xFF:
+   - the command arena's free space (render +0x33DC0[ring] + cursor
+     +0x33DC8 .. capacity +0x33DCC);
+   - the 256 KiB of stack below ESP (`DDRUNTIME_PARALLEL_SHADOW_POISON_STACK`
+     changes the depth).
+
+   A binding byte that these runs change depends on memory the original
+   never initialized, and only such bytes may differ. A misclassification
+   can only refuse. Disable with `DDRUNTIME_PARALLEL_SHADOW_NO_POISON`.
+   On this capture: 161 bytes, the CBSkinning w words among them.
+4. Kept, but unused on this capture:
+   - **unread constant components:** the bound shader, and every later draw
+     of the stream until the register is uploaded again, provably never
+     reads it (d3d9shader `float_reads`, conservative and tested;
+     `float_reads_in_bounds` assumes relative indexing stays in its CTAB
+     array, and is counted separately);
+   - **relocated context pointer:** a word pointing into the root context
+     serially, and at the same offset of a lane context in parallel.
+
+### Evidence and diagnostics (debug switches, replay only)
+
+- `DDRUNTIME_PARALLEL_SHADOW_WATCH=hex,..` (plus `_WATCH_READS`): report
+  writes (and reads) of those words, with the recent resolver entries.
+- `DDRUNTIME_PARALLEL_SHADOW_TRACE=function,offset`: log ECX and a field
+  on each entry to a function.
+- `DDRUNTIME_PARALLEL_SHADOW_SHADER_DIR`: write the captured shaders'
+  disassembly.
+- `DDRUNTIME_PARALLEL_SHADOW_ZERO_ARENA`: the zeroed-arena experiment.
+
+The CBSkinning residue is the w word of `fMatrixMapScale/Offset`
+(0x00FE4960's caller writes xyz only). The wind arrays come from vf16
+(above). The shader 0x202C5550 reads `c1[a0.x]` / `c9[a0.x]` with a0 from
+`floor(v * fWindNum)`, so static proofs of their tails are impossible:
+negative starts reach c2. Normalization is used for that reason.
+
+### Next
+
+1. Final-memory gate. On this capture:
+   - the command arena differs in 0x40AB bytes: the same contents at lane
+     addresses;
+   - the root context in 0x1CD bytes, from context+0x24 on;
+   - other state in 0xD2 bytes: the renderer arena cursor (+0x33DC8,
+     serial 0x155000 vs parallel 0x156000, page-granular lane refills) and
+     relocated command pointers at 0x64473054...
+
+   Classify each by its consumers, never by masking.
+2. Publication boundary, the same-run check and live A/B, as the handoff
+   above says.
