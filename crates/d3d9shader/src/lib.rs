@@ -44,6 +44,28 @@ impl Shader {
     /// relatively indexed source (or a CONST2..4 bank) may read any register
     /// at the components it selects.
     pub fn float_reads(&self) -> FloatReads {
+        self.float_reads_with(&|_| None)
+    }
+
+    /// As `float_reads`, with relative reads confined to the float constant
+    /// of the shader's constant table that holds the base register (an
+    /// array, as HLSL indexes it): ASSUMES in-bounds indexing, which HLSL
+    /// leaves undefined otherwise (D3D9 itself does not clamp). A base
+    /// outside every float constant, or no table, reads any register.
+    pub fn float_reads_in_bounds(&self) -> FloatReads {
+        let table = ctab::table(self);
+        let ranges: Vec<(u32, u32)> = table
+            .iter()
+            .flat_map(|t| &t.constants)
+            .filter(|c| c.register_set == 2 && c.register_count > 0)
+            .map(|c| (c.register_index, c.register_index + c.register_count))
+            .collect();
+        self.float_reads_with(&|base| ranges.iter().copied().find(|&(lo, hi)| lo <= base && base < hi))
+    }
+
+    /// `bounds(base)`: the registers a relative read based at `base` may
+    /// reach (None: any).
+    fn float_reads_with(&self, bounds: &dyn Fn(u32) -> Option<(u32, u32)>) -> FloatReads {
         let mut direct = vec![0u8; 256];
         let mut any = 0u8;
         for ins in &self.instructions {
@@ -74,8 +96,21 @@ impl Shader {
                         components |= 1 << (p.mask_or_swizzle >> (2 * lane) & 3);
                     }
                 }
-                if p.kind != reg::CONST || p.relative.is_some() {
+                if p.kind != reg::CONST {
                     any |= components;
+                    continue;
+                }
+                if p.relative.is_some() {
+                    match bounds(p.index) {
+                        Some((lo, hi)) => {
+                            for register in lo..hi {
+                                if let Some(m) = direct.get_mut(register as usize) {
+                                    *m |= components;
+                                }
+                            }
+                        }
+                        None => any |= components,
+                    }
                     continue;
                 }
                 for row in 0..rows {
