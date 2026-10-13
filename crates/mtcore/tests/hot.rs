@@ -465,7 +465,7 @@ fn dependencies_cost() {
     )
     .unwrap();
     let data: Value = serde_json::from_str(&text).unwrap();
-    let bodies: Vec<(&str, LiftFn)> = vec![("port", mtcore::hot::expand_dependencies)]; // L130_COST_BODIES
+    let bodies: Vec<(&str, LiftFn)> = vec![("port", mtcore::hot::expand_dependencies), ("semantic", mtcore::semantic::expand_dependencies)]; // L130_COST_BODIES
     let mut m = Paged::default();
     for index in [0, 2, 11, 23, 35, 77] {
         let case = &data["cases"][index];
@@ -490,7 +490,7 @@ fn dependencies_cost() {
                     if iteration >= 20 {
                         elapsed += time;
                     }
-                    if iteration == 0 {
+                    if iteration == 0 && name == "port" {
                         check(&m, &c, &case["after"], "bench gate");
                     }
                     std::hint::black_box(c.eax);
