@@ -72,6 +72,19 @@
   one ignored**; new map-equivalence, snapshot-retention and lock-unwind checks
   pass. No game/shard/GPU runs. Details: `docs/tasks/L118-d3d9-render-thread.md`.
 - Next: head combo4 gameplay/image comparison and renewed render-thread profile.
+### L117 nDraw state semantics (2026-10-13)
+
+- New standalone mtstate decoder: four descriptor constructors, eight
+  applies and InputLayout/declaration synthesis compared with original
+  Unicorn vectors. **3,584 cases / 17,928 D3D9 calls** and checked memory
+  match; four contract tests and strict crate clippy pass.
+- Raster depth-bias multiplier is `0x33800001`; sampler max-mip conversion
+  truncates. This is a call-level semantic decoder, not an ABI override.
+- NDRAW section9 maps descriptors to D3D9/wgpu and lists native gaps.
+  Runtime light serial:155 pass,1 inherited fullscreen gamma Reset failure,
+  1 ignored (initial parallel lock-timing failure passes serially).
+- Next: L112/L110 integration and head-run frame comparison. No GPU/game
+  run or image/FPS claim. Details: `docs/tasks/L117-state-semantics.md`.
 
 ### L90 shared draw payloads (2026-10-13)
 
