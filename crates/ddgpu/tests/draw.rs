@@ -75,7 +75,7 @@ fn draw(ps: Vec<u32>, ps_constants: Constants, textures: Vec<TextureBinding>) ->
         fvf: 0,
         vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
         ps_constants: ps_constants.into(),
-        textures,
+        textures: textures.into(),
         render_states: render_states().into(),
         viewport: [0, 0, 4, 4, 0f32.to_bits(), 1f32.to_bits()],
         scissor: [0, 0, 4, 4],
@@ -509,7 +509,7 @@ fn instanced_draws_match_the_d3d9_driver() {
         d.vertex_shader = Some((vs_offset()).into());
         d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [1, 0, 0, 0, 3, 0, 5, 1]].into();
         let geometry = if start == 0 { 0x403 } else { 0x400 };
-        d.vertices = Vertices::Streams(vec![(0, geometry, 0, 16, 0x4000_0003), (1, 0x401, 0, 16, 0x8000_0001)]);
+        d.vertices = Vertices::Streams(vec![(0, geometry, 0, 16, 0x4000_0003), (1, 0x401, 0, 16, 0x8000_0001)].into());
         if indexed {
             d.indices = Indices::Buffer(0x402, 101);
             d.base_vertex = start as i32;

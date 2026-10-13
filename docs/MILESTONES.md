@@ -2003,3 +2003,16 @@ opening (codex-31), route perf (codex-29).
   pixel match**. Full 150-case texture/state matrix and completed draw
   comparisons pass. Next: remaining serialized GPU gate/timings after
   L96's independent WGL teardown fix; snapshot groups stay separate.
+
+
+### L90 dirty snapshot groups (2026-10-13)
+
+- Implemented setter-driven immutable draw groups, shared texture/stream
+  lists, stack draw/read arguments, and reused constant-setter staging.
+  Resource flushing and backend worker ordering are unchanged.
+- Runtime allocations **10 -> 3/draw**; paired median **39.19 -> 23.05 us**
+  (shared-machine load). **152 runtime + 5 frame tests pass**, one baseline
+  fullscreen-gamma failure and one existing ignored test remain. New
+  binding-transition/UP/old-snapshot regression passes. GPU targets compile.
+- Next: complete serialized GPU gate/timings after head's gameplay run;
+  integrate snapshot module with L97 render sharing and L98 flush_reads.

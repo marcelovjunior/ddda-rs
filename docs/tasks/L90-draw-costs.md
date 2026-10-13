@@ -83,3 +83,30 @@ Serialize GPU suites through HEAVY_BIG=1/heavy.py. Measure `draw_path` and
   state comparison and completed draw cases also passed. The serialized
   gate was yielded for L96's independent WGL teardown fix; remaining
   cases and paired GPU timings are still pending. No checks were weakened.
+
+
+## Results: dirty snapshot groups and allocation reuse
+
+- Device-owned immutable groups retain texture/sampler descriptors, streams,
+  shader/declaration payloads, index format and target metadata. Setters
+  dirty only their groups; UP draws explicitly dirty/reset stream/index
+  bindings. Redundant texture/sampler/stream setters retain shared lists.
+  DrawCall texture and stream lists are Arc slices, so queued/recorded
+  clones keep prior draws without copying lists.
+- Resource shadows still flush on every draw. The bounded 42-entry read
+  array replaces the transient Vec; L98 independently owns selecting
+  dirty resources. Snapshot code now lives in d3d9snapshot.rs. L97 owns
+  render-state sharing: its merge changes that module's render-state
+  expression to s.render.shared(). Neither worker nor queue code changed.
+- Indexed draw arguments use fixed arrays; constant setters reuse their
+  word buffer. **Allocations/draw: 10 -> 3**, including the COM helper's
+  allocations; this branch still has the render-state Vec copied per draw.
+- Three paired debug CPU runs, Arc vs groups: median **39.19 -> 23.05 us**,
+  ranges **35.05-51.31 -> 16.31-26.57 us**. Shared-machine load varies;
+  allocation counts are stable, and no gameplay gain is attributed here.
+- **152 runtime light tests + 5 frame tests pass**, with the same one
+  baseline fullscreen-gamma Reset failure and one existing ignored test.
+  New regression checks old snapshots, pointer sharing, sampler changes,
+  stream offsets/frequencies, target/index changes, nonindexed draws and
+  the UP stream reset. All ddgpu tests and examples compile. GPU gate and
+  paired backend timings remain pending the head's next run-done release.

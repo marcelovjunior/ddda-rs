@@ -90,7 +90,7 @@ pub struct Target {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Vertices {
     /// stream number, vertex buffer, offset, stride, frequency setting
-    Streams(Vec<(u32, u32, u32, u32, u32)>),
+    Streams(std::sync::Arc<[(u32, u32, u32, u32, u32)]>),
     /// DrawPrimitiveUP data for stream 0, with its stride
     Inline { bytes: Vec<u8>, stride: u32 },
 }
@@ -157,7 +157,7 @@ pub struct DrawCall {
     /// Immutable snapshot; setters detach a shared block only when bits change.
     pub vs_constants: std::sync::Arc<Constants>,
     pub ps_constants: std::sync::Arc<Constants>,
-    pub textures: Vec<TextureBinding>,
+    pub textures: std::sync::Arc<[TextureBinding]>,
     /// every render state, sorted by state
     pub render_states: RenderStateList,
     pub viewport: [u32; 6],

@@ -330,7 +330,7 @@ impl<W: Write> Writer<W> {
             Vertices::Streams(s) => {
                 e.u8(0);
                 e.u32(s.len() as u32);
-                for &(n, res, off, stride, freq) in s {
+                for &(n, res, off, stride, freq) in s.iter() {
                     for v in [n, res, off, stride, freq] {
                         e.u32(v);
                     }
@@ -373,7 +373,7 @@ impl<W: Write> Writer<W> {
             e.u32(id);
         }
         e.u32(d.textures.len() as u32);
-        for t in &d.textures {
+        for t in d.textures.iter() {
             for v in [t.sampler, t.resource, kind_code(t.kind), t.format, t.width, t.height, t.depth, t.levels, t.usage] {
                 e.u32(v);
             }
@@ -671,7 +671,7 @@ impl Dec<'_> {
                 for _ in 0..n {
                     v.push((self.u32()?, self.u32()?, self.u32()?, self.u32()?, self.u32()?));
                 }
-                Vertices::Streams(v)
+                Vertices::Streams(v.into())
             }
             1 => Vertices::Inline { bytes: self.blob()?.to_vec(), stride: self.u32()? },
             k => return Err(bad(format!("vertices kind {k}"))),
@@ -711,7 +711,7 @@ impl Dec<'_> {
         let depth = self.opt_target()?;
         Ok(DrawCall {
             primitive, primitives, start, base_vertex, min_index, vertex_count, vertices, indices, vertex_shader, pixel_shader, declaration, fvf,
-            vs_constants: vs_constants.into(), ps_constants: ps_constants.into(), textures, render_states, viewport, scissor, targets, depth,
+            vs_constants: vs_constants.into(), ps_constants: ps_constants.into(), textures: textures.into(), render_states, viewport, scissor, targets, depth,
         })
     }
 }
@@ -872,11 +872,11 @@ mod tests {
         vs.b[15] = 1;
         let draw = DrawCall {
             primitive: 4, primitives: 2, start: 3, base_vertex: -5, min_index: 1, vertex_count: 9,
-            vertices: Vertices::Streams(vec![(0, 0x500, 16, 24, 1), (1, 0x501, 0, 8, 0x8000_0002)]),
+            vertices: Vertices::Streams(vec![(0, 0x500, 16, 24, 1), (1, 0x501, 0, 8, 0x8000_0002)].into()),
             indices: Indices::Buffer(0x600, 101),
             vertex_shader: Some((vec![0xFFFE_0300, 0x0000_FFFF]).into()), pixel_shader: None,
             declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]].into(), fvf: 0, vs_constants: vs.into(), ps_constants: Constants::default().into(),
-            textures: vec![TextureBinding { sampler: 257, resource: 0x300, kind: TexKind::Cube, format: 113, width: 16, height: 16, depth: 1, levels: 5, usage: 1, states: [7; 14] }],
+            textures: vec![TextureBinding { sampler: 257, resource: 0x300, kind: TexKind::Cube, format: 113, width: 16, height: 16, depth: 1, levels: 5, usage: 1, states: [7; 14] }].into(),
             render_states: vec![(7, 1), (27, 0)].into(), viewport: [0, 0, 8, 4, 0, 0x3F80_0000], scissor: [0, 0, 8, -4],
             targets: [Some(target(0x101, Some(tex))), None, Some(target(0x102, None)), None], depth: Some(target(0x180, None)),
         };

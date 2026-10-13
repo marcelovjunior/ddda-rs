@@ -1735,7 +1735,7 @@ impl WgpuBackend {
         });
         let attached = |r: u32| attached.contains(&Some(r));
         let mut snapshots: HashMap<u32, wgpu::Texture> = HashMap::new();
-        for b in &d.textures {
+        for b in d.textures.iter() {
             if attached(b.resource) && !snapshots.contains_key(&b.resource) {
                 let Some(tx) = self.texture_for(b) else { continue };
                 let src = tx.texture.clone();
@@ -2032,7 +2032,7 @@ fn instancing(d: &DrawCall) -> Result<(u32, Vec<u32>), String> {
         return Ok((1, vec![]));
     }
     let mut instanced = Vec::new();
-    for s in streams {
+    for s in streams.iter() {
         if s.4 & INSTANCEDATA != 0 {
             if s.4 & 0x3FFF_FFFF != 1 {
                 return Err(format!("instance data divisor {} on stream {} (wgpu steps every instance)", s.4 & 0x3FFF_FFFF, s.0));

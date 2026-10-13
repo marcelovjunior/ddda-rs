@@ -866,3 +866,24 @@ ring-rollover driver regression and the full 150-case texture/state matrix
 pass; the remaining GPU gate/timings await the shared slot and L96 driver
 teardown fix. See the L90 brief for the light-suite result and independently
 reproduced fullscreen-gamma failure.
+
+
+### L90 dirty draw groups (2026-10-13)
+
+Device setters mark texture/sampler, stream, shader, declaration, index or
+render-target groups dirty. The snapshot refreshes only those groups;
+unchanged texture and stream Arc slices also make command cloning cheap.
+Target/index invalidation is setter-driven, preserving correct metadata
+when guest addresses are later reused. UP draws invalidate the bindings
+they reset. Resource shadow flushing remains independent of these flags.
+The snapshot uses fixed resource-ID scratch space, indexed draws use stack
+arguments, and constant setters reuse staging words. Production queue and
+worker plumbing are unchanged.
+
+The synthetic runtime draw path falls from 10 to 3 allocations per draw
+(including test COM arguments), with paired debug medians 39.19 to 23.05 us
+under variable shared load. The runtime snapshot regression and frame
+round-trip tests pass; full light tests retain the independently reproduced
+fullscreen-gamma Reset failure. GPU tests/examples compile; execution gate
+is pending head's exclusive run. See the L90 brief for details and L97/L98
+merge notes.

@@ -146,9 +146,9 @@ fn frame_of(rng: &mut Rng, count: usize) -> (Vec<Upload>, Vec<ClearCall>, Vec<Dr
         states.sort();
         let (primitive, vertices, indices, primitives) = match rng.next() % 4 {
             0 => (4, Vertices::Inline { bytes: bytes(&(0..6).map(|_| vertex(rng)).collect::<Vec<_>>()), stride: 24 }, Indices::None, 2),
-            1 => (5, Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]), Indices::None, 3),
-            2 => (6, Vertices::Streams(vec![(0, 0x300, 24, 24, 1)]), Indices::None, 3),
-            _ => (4, Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]), Indices::Buffer(0x301, 101), 2),
+            1 => (5, Vertices::Streams(vec![(0, 0x300, 0, 24, 1)].into()), Indices::None, 3),
+            2 => (6, Vertices::Streams(vec![(0, 0x300, 24, 24, 1)].into()), Indices::None, 3),
+            _ => (4, Vertices::Streams(vec![(0, 0x300, 0, 24, 1)].into()), Indices::Buffer(0x301, 101), 2),
         };
         let vp = [rng.next() % 4, rng.next() % 4, W - 4 + rng.next() % 4, H - 4 + rng.next() % 4];
         // DrawPrimitiveUP data starts at its first vertex
@@ -166,7 +166,7 @@ fn frame_of(rng: &mut Rng, count: usize) -> (Vec<Upload>, Vec<ClearCall>, Vec<Dr
                 vec![TextureBinding { sampler: 0, resource: 0x200 + tex, kind: TexKind::Flat, format: formats[tex as usize], width: 4, height: 4, depth: 1, levels: 1, usage: 0, states: st }]
             } else {
                 vec![]
-            },
+            }.into(),
             render_states: states.into(),
             viewport: [vp[0], vp[1], vp[2].min(W - vp[0]), vp[3].min(H - vp[1]), 0f32.to_bits(), 1f32.to_bits()],
             scissor: [(rng.next() % 8) as i32, (rng.next() % 8) as i32, 8 + (rng.next() % 8) as i32, 8 + (rng.next() % 8) as i32],
