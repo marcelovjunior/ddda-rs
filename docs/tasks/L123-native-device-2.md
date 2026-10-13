@@ -85,9 +85,10 @@ sequences, larger shaders/targets and tiny-pass workloads need separate data.
 N2 API agreement: head decision **#11087** adopts the owned NativeJob FIFO
 proposal. The worker adapter owns Device/Recorder; Claude-2 never touches
 wgpu. Head assigns that adapter/transport as L126 to codex-9 on this branch.
-Creating a recorder per job is valid but forfeits cross-job resident/bundle
-reuse; that integration limitation remains explicit until worker persistence
-is implemented.
+L126 now retains closed RecorderState storage across jobs and hands render
+encoders to the FPS line finisher. Persistence source `e3599f42`, comparison
+submission-order follow-up `542111eb`; final 16 GPU / 14 CPU tests pass.
+See `docs/tasks/L126-native-worker.md` for worker integration evidence.
 No game image or gameplay/FPS comparison claimed. Private logs:
 `C:/ddda-targets/L123-final-gate.log`, `C:/ddda-targets/L123-runtime-all.log`.
 A rebuild was externally terminated with exit 0xffffffff and no diagnostic;
