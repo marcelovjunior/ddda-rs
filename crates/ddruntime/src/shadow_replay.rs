@@ -294,6 +294,34 @@ impl Mem for PrivateMemory {
         self.0.borrow_mut().set_u8(a, v);
     }
 }
+/// A completed stream must not consume the temporary secondary sort arena.
+/// FED3B0 copies roots and nested arrays to the parent before returning.
+struct PublishedView<'a> {
+    memory: &'a dyn Mem,
+    private: Option<Range<u32>>,
+}
+impl Mem for PublishedView<'_> {
+    fn probe(&self, a: u32, n: u32, w: bool) -> Result<(), u32> {
+        if let Some(range) = &self.private {
+            for offset in 0..n {
+                let at = a.wrapping_add(offset);
+                if range.contains(&at) {
+                    return Err(at);
+                }
+            }
+        }
+        self.memory.probe(a, n, w)
+    }
+    fn u8(&self, a: u32) -> u8 {
+        if self.private.as_ref().is_some_and(|range| range.contains(&a)) {
+            std::panic::panic_any(Reject::PrivateOutputEscape(a));
+        }
+        self.memory.u8(a)
+    }
+    fn set_u8(&mut self, _: u32, _: u8) {
+        panic!("read-only published view");
+    }
+}
 struct Replay {
     raw: Arc<BTreeMap<u32, LiftFn>>,
     memory: PrivateMemory,
@@ -595,7 +623,21 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         journal.stage.set("primary entry arena");
         journal.seed(journal.u32(context + 0x44), capacity);
         journal.stage.set("secondary entry arena");
-        journal.seed(journal.u32(context + 0x54), capacity);
+        // FED200 deliberately sets a child lane's +54 to null. It is not
+        // serial input; a nested parallel replay supplies private sort storage.
+        let secondary = journal.u32(context + 0x54);
+        if secondary != 0 {
+            journal.seed(secondary, capacity);
+        }
+        // Parallel FED200 alone reads these frame-ring/shader headers. The
+        // values stay install/runtime data, never inferred from other lanes.
+        journal.stage.set("FED200 renderer metadata");
+        let render = journal.u32(0x018d08f4);
+        journal.seed(render.wrapping_add(0x33dbc), 4);
+        journal.seed(render.wrapping_add(0x433dec), 0x20);
+        journal.stage.set("FED200 shader metadata");
+        let shader = journal.u32(0x018d12cc);
+        journal.seed(shader.wrapping_add(0x24), 0x1c);
         journal.seed_primitives();
     }));
     if preseed.is_err() {
@@ -725,6 +767,14 @@ fn replay_fixture(fixture: capture_file::Fixture, raw: Arc<BTreeMap<u32, LiftFn>
     }
 }
 
+type ReplayResult = (
+    Cpu,
+    mtcore::shadow_lanes::StreamSnapshot,
+    BTreeMap<u32, u8>,
+    u32,
+    Option<Range<u32>>,
+);
+
 fn compare_replays(
     input: Arc<Snapshot>,
     incoming: Cpu,
@@ -738,6 +788,38 @@ fn compare_replays(
     observed_writes: BTreeMap<u32, u8>,
     raw: Arc<BTreeMap<u32, LiftFn>>,
 ) -> Result<usize, String> {
+    let abi = |c: &Cpu| [c.eax, c.ebx, c.esi, c.edi, c.ebp, c.esp];
+    let scratch = stack.start..outgoing.esp;
+    let verify_serial = |result: &ReplayResult| -> Result<(), String> {
+        if abi(&result.0) != abi(&outgoing) {
+            return Err("original serial replay ABI differs from live serial".into());
+        }
+        compare_control_state(&outgoing, result_mxcsr, &result.0, result.3)
+            .map_err(|field| format!("live/original serial replay {field} mismatch"))?;
+        if observed.first_difference(&result.1).is_some() {
+            return Err("original serial replay stream differs from live serial".into());
+        }
+        for address in observed_writes.keys().chain(result.2.keys()) {
+            if scratch.contains(address) {
+                continue;
+            }
+            let a = observed_writes
+                .get(address)
+                .copied()
+                .unwrap_or_else(|| input.u8(*address));
+            let b = result
+                .2
+                .get(address)
+                .copied()
+                .unwrap_or_else(|| input.u8(*address));
+            if a != b {
+                return Err(format!(
+                    "live/original serial replay memory mismatch at {address:#x}"
+                ));
+            }
+        }
+        Ok(())
+    };
     let mut results = Vec::new();
     for parallel in [false, true] {
         let (input, raw, mut cpu, stack) = (input.clone(), raw.clone(), incoming.clone(), stack.clone());
@@ -745,6 +827,18 @@ fn compare_replays(
             .name(format!("shadow-replay-{parallel}"))
             .stack_size(64 << 20)
             .spawn(move || {
+                let (input, arena) = if parallel && input.u32(context + 0x54) == 0 {
+                    let size = input
+                        .u32(context + 0x4c)
+                        .checked_mul(8)
+                        .ok_or_else(|| "secondary arena size overflow".to_string())?;
+                    let (extended, range) = input
+                        .private_arena(size)
+                        .map_err(|error| format!("private secondary arena: {error:?}"))?;
+                    (Arc::new(extended), Some(range))
+                } else {
+                    (input, None)
+                };
                 let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(input, ACCESS_LIMIT))));
                 with_replay(
                     Replay {
@@ -756,6 +850,9 @@ fn compare_replays(
                     },
                     |m| {
                         if parallel {
+                            if let Some(range) = &arena {
+                                m.set_u32(context + 0x54, range.start);
+                            }
                             m.set_u8(NESTING, 0);
                             m.set_u8(NESTING_OTHER, 0);
                             m.set_u32(scheduler + 0x98, 2);
@@ -767,10 +864,17 @@ fn compare_replays(
                         let final_mxcsr = x86::stmxcsr();
                         ddnative_base::x87::park();
                         x86::ldmxcsr(x86::MXCSR_DEFAULT);
-                        let stream = capture_context(m, context, Limits::default())
+                        if arena.is_some() {
+                            m.set_u32(context + 0x54, 0);
+                        }
+                        let published = PublishedView {
+                            memory: m,
+                            private: arena.clone(),
+                        };
+                        let stream = capture_context(&published, context, Limits::default())
                             .map_err(|e| format!("stream: {e:?}"))?;
                         let writes = memory.0.borrow().writes().clone();
-                        Ok::<_, String>((cpu.clone(), stream, writes, final_mxcsr))
+                        Ok::<_, String>((cpu.clone(), stream, writes, final_mxcsr, arena.clone()))
                     },
                 )
             })
@@ -781,36 +885,14 @@ fn compare_replays(
                 |e| format!("replay rejected: {e:?}"),
             )
         })??;
+        if !parallel {
+            verify_serial(&result)?;
+            eprintln!(
+                "parallel-shadow original serial/live verified entries={}",
+                result.1.entries.len()
+            );
+        }
         results.push(result);
-    }
-    let abi = |c: &Cpu| [c.eax, c.ebx, c.esi, c.edi, c.ebp, c.esp];
-    if abi(&results[0].0) != abi(&outgoing) {
-        return Err("original serial replay ABI differs from live serial".into());
-    }
-    compare_control_state(&outgoing, result_mxcsr, &results[0].0, results[0].3)
-        .map_err(|field| format!("live/original serial replay {field} mismatch"))?;
-    if observed.first_difference(&results[0].1).is_some() {
-        return Err("original serial replay stream differs from live serial".into());
-    }
-    let scratch = stack.start..outgoing.esp;
-    for address in observed_writes.keys().chain(results[0].2.keys()) {
-        if scratch.contains(address) {
-            continue;
-        }
-        let a = observed_writes
-            .get(address)
-            .copied()
-            .unwrap_or_else(|| input.u8(*address));
-        let b = results[0]
-            .2
-            .get(address)
-            .copied()
-            .unwrap_or_else(|| input.u8(*address));
-        if a != b {
-            return Err(format!(
-                "live/original serial replay memory mismatch at {address:#x}"
-            ));
-        }
     }
     if let Some(diff) = results[0].1.first_difference(&results[1].1) {
         return Err(format!("serial/parallel stream mismatch: {diff:?}"));
@@ -818,7 +900,10 @@ fn compare_replays(
     // Conservative proof gate: no differing memory accepted yet. Private
     // scheduler/context relocation classification needs separate evidence.
     for address in results[0].2.keys().chain(results[1].2.keys()) {
-        if scratch.contains(address) {
+        // Only newly allocated private sort storage is discarded. FED3B0's
+        // consumed roots/children must already be outside it (PublishedView),
+        // and the complete stream comparison above must have passed.
+        if scratch.contains(address) || results[1].4.as_ref().is_some_and(|range| range.contains(address)) {
             continue;
         }
         let a = results[0]
@@ -843,8 +928,8 @@ fn compare_replays(
     }
     compare_control_state(&results[0].0, results[0].3, &results[1].0, results[1].3)
         .map_err(|field| format!("serial/parallel {field} mismatch"))?;
-    if observed.entries.is_empty() {
-        return Err("empty stream is not shadow acceptance".into());
+    if observed.entries.len() <= input.u32(context + 0x48) as usize {
+        return Err("traversal appended no commands; existing stream is not shadow acceptance".into());
     }
     Ok(observed.entries.len())
 }
@@ -873,6 +958,53 @@ fn compare_control_state(a: &Cpu, a_mxcsr: u32, b: &Cpu, b_mxcsr: u32) -> Result
 mod tests {
     use super::*;
     use crate::memory::{GuestMemory, READ, WRITE};
+
+    #[test]
+    fn merged_stream_must_not_retain_private_secondary_storage() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, 0x2000, READ | WRITE).unwrap();
+        live.set_u32(0x1048, 1);
+        live.set_u32(0x2100, 7 << 16);
+        live.set_u32(0x2104, 42);
+        live.set_u32(0x2108, 1);
+        let mut input = Snapshot::default();
+        for page in [0x1000, 0x2000] {
+            input.capture_page(&live, page, READ | WRITE);
+        }
+        let (input, range) = input.private_arena(8).unwrap();
+        let mut memory = LaneMemory::new(Arc::new(input), 10000);
+        memory.set_u32(0x1044, range.start);
+        memory.set_u32(range.start, 5);
+        memory.set_u32(range.start + 4, 0x2100);
+        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            capture_context(
+                &PublishedView {
+                    memory: &memory,
+                    private: Some(range.clone()),
+                },
+                0x1000,
+                Limits::default(),
+            )
+        }));
+        assert_eq!(
+            rejected.unwrap_err().downcast_ref::<Reject>(),
+            Some(&Reject::PrivateOutputEscape(range.start))
+        );
+        memory.set_u32(0x2000, memory.u32(range.start));
+        memory.set_u32(0x2004, memory.u32(range.start + 4));
+        memory.set_u32(0x1044, 0x2000);
+        let stream = capture_context(
+            &PublishedView {
+                memory: &memory,
+                private: Some(range),
+            },
+            0x1000,
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(stream.entries.len(), 1);
+        assert_eq!(stream.entries[0].key, 5);
+    }
 
     #[test]
     fn private_sections_match_runtime_recursive_guest_memory_contract() {
@@ -1085,6 +1217,7 @@ mod tests {
         }
         live.set_u32(0x1010, mutation);
         live.set_u32(0x1044, 0x2000);
+        live.set_u32(0x104c, 16);
         live.set_u32(SCHEDULER_GLOBAL, 0x40000);
         live.set_u8(NESTING, 1);
         live.set_u8(NESTING_OTHER, 1);
@@ -1188,6 +1321,36 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("REJECTED capture"));
         assert!(error.contains("diagnostic replay only: Ok(4)"));
+    }
+
+    #[test]
+    fn serial_live_mismatch_is_reported_before_parallel_execution() {
+        let mut fixture = synthetic_fixture(4); // Parallel body would refuse its import.
+        fixture.outgoing.eax ^= 1;
+        let error = replay_fixture(
+            fixture,
+            Arc::new(BTreeMap::from([
+                (TRAVERSE, synthetic_traverse as LiftFn),
+                (0x400010, synthetic_job as LiftFn),
+            ])),
+        )
+        .unwrap_err();
+        assert_eq!(error, "original serial replay ABI differs from live serial");
+    }
+
+    #[test]
+    fn unchanged_existing_commands_do_not_count_as_shadow_work() {
+        let mut fixture = synthetic_fixture(0);
+        fixture.input = Arc::new(fixture.input.with_writes(&BTreeMap::from([(0x1048, 4)])));
+        let error = replay_fixture(
+            fixture,
+            Arc::new(BTreeMap::from([
+                (TRAVERSE, synthetic_traverse as LiftFn),
+                (0x400010, synthetic_job as LiftFn),
+            ])),
+        )
+        .unwrap_err();
+        assert!(error.contains("traversal appended no commands"));
     }
 
     #[test]

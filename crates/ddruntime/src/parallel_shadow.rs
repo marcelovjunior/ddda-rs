@@ -28,6 +28,38 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
+    /// Storage owned solely by the offline transaction, not the live guest
+    /// allocator. Select an unused range in THIS snapshot's address space.
+    /// Consumers must prove all published references leave this storage before
+    /// dropping it. The address preference and bound are host policy.
+    pub(crate) fn private_arena(&self, length: u32) -> Result<(Self, Range<u32>), Reject> {
+        if length == 0 || length > 64 << 20 {
+            return Err(Reject::InvalidPrivateRange);
+        }
+        let length = length.checked_add(PAGE - 1).ok_or(Reject::InvalidPrivateRange)? & !(PAGE - 1);
+        let mut base = 0x8000_0000u32;
+        loop {
+            let end = base.checked_add(length).ok_or(Reject::InvalidPrivateRange)?;
+            match self.pages.range(base..end).next() {
+                Some((&occupied, _)) => {
+                    base = occupied.checked_add(PAGE).ok_or(Reject::InvalidPrivateRange)?
+                }
+                None => {
+                    let mut result = self.clone();
+                    for page in (base..end).step_by(PAGE as usize) {
+                        result.pages.insert(
+                            page,
+                            Arc::new(Page {
+                                bytes: Box::new([0; PAGE as usize]),
+                                permissions: READ | WRITE,
+                            }),
+                        );
+                    }
+                    return Ok((result, base..end));
+                }
+            }
+        }
+    }
     pub(crate) fn with_writes(&self, writes: &BTreeMap<u32, u8>) -> Self {
         let mut result = self.clone();
         result.apply(writes);
@@ -164,6 +196,7 @@ pub(crate) enum Reject {
     IncoherentInput(u32),
     PublicationConflict(u32),
     UnsupportedLock(u32),
+    PrivateOutputEscape(u32),
 }
 
 /// Each lane owns its writes and reads the same immutable input. Keeping
@@ -549,6 +582,25 @@ mod tests {
         snapshot.capture_page(&m, 0x1000, READ | WRITE);
         snapshot.capture_page(&m, 0x3000, READ);
         Arc::new(snapshot)
+    }
+
+    #[test]
+    fn private_arena_is_bounded_and_never_replaces_captured_pages() {
+        let mut live = GuestMemory::new();
+        live.map(0x80001000, PAGE, READ | WRITE).unwrap();
+        live.set_u32(0x80001000, 0x12345678);
+        let mut input = Snapshot::default();
+        input.capture_page(&live, 0x80001000, READ | WRITE);
+        let (extended, range) = input.private_arena(PAGE + 1).unwrap();
+        assert_eq!(range, 0x80002000..0x80004000);
+        assert_eq!(extended.u32(0x80001000), 0x12345678);
+        assert_eq!(extended.u32(range.start), 0);
+        assert!(!input.has_page(range.start));
+        assert!(matches!(input.private_arena(0), Err(Reject::InvalidPrivateRange)));
+        assert!(matches!(
+            input.private_arena(u32::MAX),
+            Err(Reject::InvalidPrivateRange)
+        ));
     }
 
     #[test]

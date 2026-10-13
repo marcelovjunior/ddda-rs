@@ -155,6 +155,34 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Nonempty-work gate now requires appended commands, not merely a nonempty
+pre-existing stream. The real capture goes from2 to6 roots (four appended).
+Fifteen focused replay tests pass, including refusal when an unchanged
+nonempty prefix would otherwise look like successful shadow work.
+
+
+Real v3 capture shadow-44100-300.ddshadow:6,759,804 bytes,1,632 pages,
+13,226 written bytes; SHA256
+4193551ef5af0d3a409f85f5ee5375a6b60dff89552ce91b12c1fcfe2a4fadef.
+It is an outer lane (context+58=1), whose secondary arena at+54 is zero.
+FED200 explicitly initializes child+54 to zero, so capture no longer treats
+that absent serial input as a failed read. Parallel replay supplies bounded
+private sort storage. FED3B0 copies roots/nested arrays back to the parent;
+a read barrier requires every consumed output byte to leave private storage
+before those private writes can be discarded. The original+54 is restored.
+All other memory/ABI/resource gates remain. Private addresses are host-only
+snapshot allocations, never reservations or writes in the live guest.
+
+Old-capture serial execution completes; parallel first refuses missing page
+0x647066f4 (sRender+0x433e04, read only by FED200). New capture preseeds the
+exact FED200 frame-ring and shader header fields. Serial/live verification
+now runs BEFORE parallel execution and reports its own result. Thirty-one
+focused shadow tests pass, including arena bounds, output-reference rejection
+and serial-mismatch-before-parallel checks. Head recapture is required;
+old rejected input never becomes accepted. Production publication remains
+open; no TRAIN READY or speedup claim.
+
+
 Capture format v3 now saves bounded diagnostic fixtures even when preseed or
 stream capture rejects. The journal retains its first failure while recording
 later valid serial input/writes. The file contains the rejection reason;
