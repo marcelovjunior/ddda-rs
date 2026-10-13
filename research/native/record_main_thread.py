@@ -474,6 +474,80 @@ class RecordingOracle(Oracle):
                     after=self.snapshot(),visited=sorted(self.visited),edges=sorted(self.edges))
 
 
+SMALL_ENTRIES=(0x5828e0,0x582900,0x582920,0x5abdc0,0x5829a0)
+SMALL_LENGTHS={entry:(0x64 if entry==0x5829a0 else 0x20) for entry in SMALL_ENTRIES}
+
+
+class SmallOracle(Oracle):
+    def __init__(self):
+        self.uc=Uc(UC_ARCH_X86,UC_MODE_32)
+        self.uc.ctl_set_tcg_buffer_size(16*1024*1024)
+        for address,size in ((0x582000,0x1000),(0x5ab000,0x1000),(BASE,SIZE),
+                             (STACK,STACK_SIZE),(h.RET,0x1000)):
+            self.uc.mem_map(address,size)
+        for entry in SMALL_ENTRIES: self.uc.mem_write(entry,h.code(entry,SMALL_LENGTHS[entry]))
+        self.active=False
+        self.uc.hook_add(UC_HOOK_MEM_READ,self.read)
+        self.uc.hook_add(UC_HOOK_MEM_WRITE,self.write)
+        self.uc.hook_add(UC_HOOK_CODE,self.code)
+
+    def code(self,uc,address,size,data):
+        if address==h.RET: uc.emu_stop(); return
+        if address==0x582a10:
+            self.events.append(dict(kind='call',target=address,**self.snapshot()))
+            sp=uc.reg_read(x.UC_X86_REG_ESP)
+            self.remember(sp,24)
+            resume,owner,first,second,table,count=struct.unpack('<IIIIII',uc.mem_read(sp,24))
+            assert (table,count)=={0x5828e0:(0x1578008,3),0x582900:(0x1578020,5),0x582920:(0x1578048,5)}[self.entry]
+            payload=self.rng.randbytes(4); self.remember(owner+0x20,4)
+            uc.mem_write(owner+0x20,payload)
+            effects=list(zip(range(owner+0x20,owner+0x24),payload));self.written.update(a for a,b in effects)
+            for reg in REGS[:3]: uc.reg_write(reg,self.rng.getrandbits(32))
+            for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,self.rng.getrandbits(128))
+            uc.reg_write(x.UC_X86_REG_EFLAGS,0x202|(self.rng.getrandbits(12)&0xcd5))
+            uc.reg_write(x.UC_X86_REG_ESP,sp+24)
+            self.events.append(dict(kind='return',effects=effects,**self.snapshot()))
+            uc.reg_write(x.UC_X86_REG_EIP,resume)
+            return
+        assert self.entry<=address<self.entry+SMALL_LENGTHS[self.entry],hex(address)
+        if self.last is not None: self.edges.add((self.last,address))
+        self.last=address
+
+    def run(self,entry,seed,value):
+        uc=self.uc; self.entry=entry; self.active=False; self.rng=rng=random.Random(seed)
+        uc.mem_write(BASE,rng.randbytes(SIZE));uc.mem_write(STACK,rng.randbytes(STACK_SIZE))
+        for a,v in ((SP,h.RET),(SP+4,OWNER),(SP+8,rng.getrandbits(32)),(SP+12,rng.getrandbits(32)),(OWNER+0x2364,value)):
+            uc.mem_write(a,struct.pack('<I',v))
+        if entry==0x5829a0:
+            state=value if seed%4==0 else seed%3
+            bank,index=BANK,seed%4
+            expected=rng.getrandbits(32)
+            candidate=expected if seed%2 else expected^1
+            if seed%7==0:
+                bank,index=OWNER+0x2dc4,1
+                candidate=state if seed%2 else state^1
+            if seed%11==0:
+                # Last cleared slot aliases saved EDI: it must be popped
+                # before the clears, as the original does.
+                bank,index,state,candidate,expected=SP-44,1,0,1,0
+            words={SP+8:bank,SP+12:index,SP+16:candidate,OWNER+0x2dd4:expected,bank+index*8+8:state}
+            for a,v in words.items():uc.mem_write(a,struct.pack('<I',v))
+        for reg in REGS: uc.reg_write(reg,rng.getrandbits(32))
+        uc.reg_write(x.UC_X86_REG_ESP,SP); uc.reg_write(x.UC_X86_REG_ECX,OWNER)
+        for i in range(8): uc.reg_write(x.UC_X86_REG_XMM0+i,rng.getrandbits(128))
+        uc.reg_write(x.UC_X86_REG_FPCW,0x37f|((seed%4)<<10));uc.reg_write(x.UC_X86_REG_FPSW,(seed%8)<<11);uc.reg_write(x.UC_X86_REG_FPTAG,0)
+        for i in range(8):uc.reg_write(x.UC_X86_REG_FP0+i,((1<<63)|rng.getrandbits(63),0x3fff))
+        uc.reg_write(x.UC_X86_REG_MXCSR,0x1f80|((seed%4)<<13))
+        uc.reg_write(x.UC_X86_REG_EFLAGS,0x202|(rng.getrandbits(12)&0xcd5))
+        self.initial,self.written,self.events={},set(),[]
+        self.edges,self.last=set(),None
+        before=self.snapshot(False);self.active=True
+        uc.emu_start(entry,h.RET,count=1000)
+        assert uc.reg_read(x.UC_X86_REG_EIP)==h.RET
+        self.active=False
+        return dict(entry=entry,seed=seed,value=value,before=before,initial=sorted(self.initial.items()),events=self.events,after=self.snapshot(),edges=sorted(self.edges))
+
+
 class DependencyKeyOracle(Oracle):
     def __init__(self):
         self.uc=Uc(UC_ARCH_X86,UC_MODE_32)
@@ -555,7 +629,26 @@ def main():
     p.add_argument('--restore',action='store_true')
     p.add_argument('--lanes',action='store_true')
     p.add_argument('--keys',action='store_true')
+    p.add_argument('--small',action='store_true')
     a=p.parse_args()
+    if a.small:
+        oracle=SmallOracle();rng=random.Random(130)
+        values=[0,1,0xffff,0x10000,0x10001,0xffffffff,0x80000000]+[rng.getrandbits(32) for _ in range(121)]
+        cases=[oracle.run(entry,i+1,value) for entry in SMALL_ENTRIES for i,value in enumerate(values)]
+        edges={tuple(e) for c in cases for e in c['edges']}
+        for entry in (0x5abdc0,0x5829a0):
+            branches=[i for i in Cs(CS_ARCH_X86,CS_MODE_32).disasm(h.code(entry,SMALL_LENGTHS[entry]),entry)
+                      if i.mnemonic.startswith('j') and i.mnemonic!='jmp']
+            missing=[(hex(i.address),hex(t)) for i in branches for t in (i.address+i.size,int(i.op_str,16)) if (i.address,t) not in edges]
+            assert not missing,missing
+        out=Path(a.out or 'E:/ddda-re/notes/native-L130/small.json');out.parent.mkdir(parents=True,exist_ok=True)
+        out.write_text(json.dumps(dict(source='DDDA.exe 2017-12-13 Steam',
+                       exe_sha256=hashlib.sha256(Path(h.EXE).read_bytes()).hexdigest(),
+                       code={str(entry):h.code(entry,SMALL_LENGTHS[entry]).hex() for entry in SMALL_ENTRIES},cases=cases),separators=(',',':')))
+        import lift
+        out.with_suffix('.rs').write_text('\n'.join(lift.rust_fn(entry,'record forwarding or flag predicate',lift.lift(entry,SMALL_LENGTHS[entry],ext=True)) for entry in SMALL_ENTRIES))
+        print(f'{len(cases)} small cases, {sum(len(c["events"]) for c in cases)} boundaries -> {out}')
+        return
     if a.keys:
         oracle=DependencyKeyOracle()
         cases=[oracle.run(i+1,*recipe) for i,recipe in enumerate(
