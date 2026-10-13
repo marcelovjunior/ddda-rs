@@ -1,5 +1,17 @@
 # Milestones
 
+### L134 x87 helper follow-up, next batch (2026-10-13)
+
+- Discarding x87 callers omit unused PUSHFQ/POP capture; public flag-returning
+  calls, opcode guards, memory order and PREEMPT polling remain intact.
+  **34 base tests pass in debug/play**, including 312 full-state/access
+  cases. Runtime light: **190 pass / inherited gamma failure / 3 ignored**.
+- Caller-opt1/base-opt3 FLD1/pop median **5.407 -> 2.350 ns/pair**, all three
+  alternating pairs improve. Other pairs are load-sensitive; no FPS claim.
+  Profile evidence, exact benchmark and limits: `docs/tasks/L134-combined-gate.md`.
+- Not included in either green gate below. Next: combine this helper with
+  the next integration batch for required native replay, then head gameplay.
+
 ### L134 second combined gate: L132b and L130 integration (2026-10-13)
 
 - Exact production pin `7aa2d159`, checked on L134 `10a484e9`: expanded
@@ -8,8 +20,9 @@
   port suite and inventory declaration checks. Five existing gaps remain.
 - L132b packed permission/backing entries (9 -> 8 MiB page table) pass
   31 base tests and the full lifted replay. L130's eight new ports pass
-  the required core oracles, including six duration decoders replacing
-  the profiled emulator calls. No additional FPS claim from these tests.
+  the required core oracles, including six duration decoder implementations.
+  L136 tracks missing runtime activation for entries without generated
+  bodies; this gate does not prove that activation. No FPS claim here.
 - The fixed shared-sink lock passes both 400-frame mtdraw comparisons.
   Details and per-suite counts: `docs/tasks/L134-combined-gate.md`.
 - Next: measured x87 helper follow-up, then the next batched native gate

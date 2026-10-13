@@ -116,3 +116,61 @@ L132 private evaluator cleanup (its leaf symbols still show `*_value`).
 
 Private helper attribution script/output: `C:/ddda-targets/L134/`.
 No capture data or generated game bodies are added to the repository.
+
+### Follow-up: omit unused x87 host-flag capture
+
+Implemented a private const-selected execution path in `ddnative-base/x87.rs`.
+Memory/register operations and push/pop no longer execute PUSHFQ/POP to
+capture an integer-flags result they discard. Public `exec` and
+`compare_flags` retain the original flag-capturing path. The x87 instruction,
+validation, live-state acquisition, memory order, page-table lookup and
+PREEMPT opportunities remain unchanged. No forced shard inlining added.
+
+- **34 ddnative-base tests pass in debug and play**. Three new regressions
+  compare complete 108-byte x87 images, memory bytes/access order and five
+  page-table polls across **312 cases** (13 float bit patterns, three
+  precision modes, four rounding modes, parked/unparked). Includes zeros,
+  subnormals, infinities and quiet/signalling NaNs. Four FCOMI comparisons
+  still capture CF/ZF/PF, and invalid-opcode/unmasked-exception guards remain.
+- Runtime light suite, serial `--no-fail-fast`: **190 passed, one inherited
+  fullscreen gamma failure, three ignored**. Failure:
+  `a_gamma_ramp_is_shown_on_a_full_screen_swap_chain_only`, line 135;
+  same pre-existing failure reported by L130/L132b. No check relaxed.
+- Added `examples/x87_cost.rs` and `research/native/bench_x87_cost.py`.
+  The driver builds a tiny private workspace with caller opt1 and base/host
+  opt3, matching the sampled lifted-helper boundary without shard builds.
+  It requires the caller's `CARGO_TARGET_DIR`; four jobs, incremental off.
+
+Final baseline is green checkpoint `4f8b5713`, including L132b. Same source
+benchmark, before/after binaries, three alternating AB/BA pairs pinned to
+logical CPU 10, each seven samples of 20 million instruction pairs. Host
+timing/float work runs after `park()`; one park/acquisition per sample and
+loop/timer overhead are included. Report the median of the three process
+medians (ns per pair, not per instruction):
+
+| Synthetic pair | Before | After |
+|---|---:|---:|
+| FLD1 / pop | 5.407 | 2.350 |
+| push real32 / pop | 5.872 | 3.835 |
+| FLD real32 / FSTP real32, backed-page memory | 10.369 | 9.243 |
+
+FLD1/pop improved in all three pairs. Push/pop and the memory pair improved
+in two of three; the middle pair regressed under shared-machine load
+(push 6.044 -> 6.989, memory 11.147 -> 18.051 ns). Do not interpret their
+median differences as stable general speedups, or any result as FPS gain.
+Final raw logs: `x87-v2-{0,1,2}-{before,after}.log` and
+`x87-final-retained.log` under the private task target.
+
+Reproduce current code:
+
+```powershell
+$env:CARGO_TARGET_DIR='C:/ddda-targets/L134'
+$env:CARGO_BUILD_JOBS='4'
+$env:CARGO_INCREMENTAL='0'
+python research/native/bench_x87_cost.py --iterations 20000000
+```
+
+**This follow-up is after the green integration checkpoint.** Full native
+replay of the changed helper and head gameplay/FPS comparison remain for
+the next combined batch, per the merge-train rule. No further shard build
+or game/GPU run was made for this candidate.
