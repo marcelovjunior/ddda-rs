@@ -212,3 +212,11 @@ fn semantic_player_prepare_draw_matches_original() {
     );
     eprintln!("{cases} ABI-level player_draw cases passed; calls {made:x?}");
 }
+
+// verifies 0x00fe4780 (ABI level; void)
+#[test]
+fn semantic_bind_consumer_to_model_matches_original() {
+    let callees = [Callee { target: 0x00fe_d890, reads: &[ECX], stack_args: 1 }];
+    let (cases, made) = run_cases(&vectors("consumer_state.json"), mtcore::semantic_s10::bind_consumer_to_model, false, &callees, &[]);
+    eprintln!("{cases} ABI-level consumer_state cases passed; calls {made:x?}");
+}

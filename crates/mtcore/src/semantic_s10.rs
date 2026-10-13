@@ -607,3 +607,122 @@ fn copy_words(m: &mut dyn Mem, pg: Pages, dst: u32, src: u32, words: u32) {
         }
     }
 }
+
+/// Constants of 0x00FE4780's transform block: the multipliers of the
+/// packed word's cell (x 12) and slot parts (the game's own data).
+const CELL_SCALE: u32 = 0x0143_a04c;
+const SLOT_SCALE: u32 = 0x0143_43a8;
+
+// Translated from 0x00fe4780 (DDDA.exe 2017-12-13 Steam).
+/// 0x00FE4780, `consumer->bind_to_model(model, packed)` (thiscall, `ret 8`;
+/// void): bind a consumer's (the model-draw object found by 0x00FE46C0)
+/// resources and buffer ranges into a model's render state for the packed
+/// word `packed` = {slot (bits 0..11), cell (12..23), count (24..31)}.
+///
+/// 1. The consumer's resources (+0x8c, +0x90) go into the model's slots
+///    0x1b80 / 0x1b88 ([`StateSlots::set_resource`], undo codes 0x331 /
+///    0x332).
+/// 2. The model's allocator (+0x24 cursor, +0x28 limit; 0x00FED890 grows
+///    it) hands out a block sized for the skeleton at `model[0x18][0x7d4]`
+///    (words u16 at +0x18, x 4 rounded up to 16) which becomes the model's
+///    constants at +0x11a0 (the undo log records the old pair, code 0x1f5);
+///    when allocated it holds `{CELL_SCALE, cell * 12 * CELL_SCALE, slot *
+///    SLOT_SCALE}` as floats (the original's x87 multiply of the exact
+///    integer by the game's constant, rounded once to float).
+/// 3. With `n = (count * 36 + 15) / 16` below 16, each of the consumer's
+///    buffer ranges (+0x2a0 -> model slots 0x11a8 and 0x11b8, +0x2a4 ->
+///    0x11b0; address `base + slot * stride (+0x2a8) + cell * 576`, or the
+///    device table's default at +0xfb0 / +0xfc0 / +0xfb8 when that is 0)
+///    is bound as `address | n` unless the slot already holds it (low four
+///    bits ignored) with a zero tag, logging the old pair (codes 0x1f6 /
+///    0x1f8 / 0x1f7).
+///
+/// Bit 1 of the model's flag word (+0x5c) is set during the constants
+/// block's allocation, as the original does.
+pub fn bind_consumer_to_model(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let consumer = c.ecx;
+    let model = pg.u32(m, entry.wrapping_add(4));
+    // The original's frame: ECX, EBX, EBP, ESI, EDI pushed.
+    let frame = entry.wrapping_sub(20);
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let slots = StateSlots { pg, model };
+
+    let resource = pg.u32(m, consumer.wrapping_add(0x8c));
+    slots.set_resource(m, 0x1b80, resource, 0x331, 0xe06e_a000);
+    let resource = pg.u32(m, consumer.wrapping_add(0x90));
+    slots.set_resource(m, 0x1b88, resource, 0x332, 0x7c77_0000);
+    let flags = slots.field(m, 0x5c);
+    slots.set_field(m, 0x5c, flags | 2);
+    slots.log_old(m, 0x11a0, 0x1f5);
+
+    let skeleton = pg.u32(m, pg.u32(m, model.wrapping_add(0x18)).wrapping_add(0x7d4));
+    let size = (u32::from(pg.u16(m, skeleton.wrapping_add(0x18))).wrapping_mul(4).wrapping_add(0xf)) & !0xf;
+    if slots.field(m, 0x24).wrapping_add(size) > slots.field(m, 0x28) {
+        call_from(m, c, pg, frame, model, &[size], 0x00fe_4989, guest(0x00fe_d890));
+    }
+    let block = slots.field(m, 0x24);
+    slots.set_field(m, 0x24, block.wrapping_add(size));
+    let packed = pg.u32(m, entry.wrapping_add(8));
+    slots.set_field(m, 0x11a0, block);
+    slots.mark_dirty(m, 1);
+    if block != 0 {
+        let scale = |m: &dyn Mem, address: u32, whole: u32| {
+            // FILD of an exact integer, FMUL by the float constant, FSTP to float
+            (f64::from(whole) * f64::from(f32::from_bits(pg.u32(m, address)))) as f32
+        };
+        let cell = scale(m, CELL_SCALE, ((packed >> 12) & 0xfff) * 12);
+        let slot = scale(m, SLOT_SCALE, packed & 0xfff);
+        pg.set_u32(m, block.wrapping_add(4), cell.to_bits());
+        pg.set_u32(m, block.wrapping_add(8), slot.to_bits());
+        let first = pg.u32(m, CELL_SCALE);
+        pg.set_u32(m, block, first);
+    }
+    let flags = slots.field(m, 0x5c) & !2;
+    slots.set_field(m, 0x5c, flags);
+    let count_units = ((packed >> 24).wrapping_mul(36).wrapping_add(0xf)) >> 4;
+    if count_units <= 0xf {
+        let cell_offset = ((packed >> 12) & 0xfff).wrapping_mul(9) << 6;
+        let slot_part = |m: &dyn Mem| (packed & 0xfff).wrapping_mul(pg.u32(m, consumer.wrapping_add(0x2a8)));
+        let device_default = |m: &dyn Mem, offset: u32| pg.u32(m, slots.field(m, 0x20).wrapping_add(offset));
+        // `bind_range`: the model's {value, tag} range slot at `slot`
+        let bind_range = |m: &mut dyn Mem, slot: u32, address: u32, code: u32, stale_flags: Option<u32>| {
+            let current = slots.field(m, slot);
+            if current & !0xf == address && slots.field(m, slot + 4) == 0 {
+                return;
+            }
+            // the first range checks the flags word read before the allocation's
+            // end (a stale copy), the others read it again
+            let logging = match stale_flags {
+                Some(flags) => flags as u8 & 0x80 != 0,
+                None => pg.u8(m, model.wrapping_add(0x5c)) & 0x80 != 0,
+            };
+            if logging {
+                slots.log_old(m, slot, code);
+            }
+            slots.set_field(m, slot, address | count_units);
+            if slots.field(m, slot + 4) != 0 {
+                slots.set_field(m, slot + 4, 0);
+                slots.mark_dirty(m, 2);
+            }
+            slots.mark_dirty(m, 1);
+        };
+        let first = pg.u32(m, consumer.wrapping_add(0x2a0));
+        if first != 0 {
+            let base = slot_part(m).wrapping_add(first).wrapping_add(cell_offset);
+            let address = if base == 0 { device_default(m, 0xfb0) } else { base };
+            bind_range(m, 0x11a8, address, 0x1f6, Some(flags));
+            let address = if base == 0 { device_default(m, 0xfc0) } else { base };
+            bind_range(m, 0x11b8, address, 0x1f8, None);
+        }
+        let second = pg.u32(m, consumer.wrapping_add(0x2a4));
+        if second != 0 {
+            let base = slot_part(m).wrapping_add(second).wrapping_add(cell_offset);
+            let address = if base == 0 { device_default(m, 0xfb8) } else { base };
+            bind_range(m, 0x11b0, address, 0x1f7, None);
+        }
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 8);
+}
