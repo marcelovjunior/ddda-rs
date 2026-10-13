@@ -678,17 +678,6 @@ incremental = false
 opt-level = 0
 incremental = false
 
-# BEGIN generated hot shards
-[profile.dev.package.ddlift-hot-00]
-opt-level = 0
-debug = 1
-[profile.release.package.ddlift-hot-00]
-opt-level = 1
-[profile.play.package.ddlift-hot-00]
-opt-level = 1
-incremental = false
-# END generated hot shards
-
 # Profiling the play builds (scripts/sample_profile.py): line tables for the
 # runtime-side crates, so internal functions are named instead of resolving
 # to the nearest public symbol. Not for the shards (their names are public).
@@ -706,3 +695,14 @@ debug = "line-tables-only"
 debug = "line-tables-only"
 [profile.play.package.ddnative-host]
 debug = "line-tables-only"
+
+# BEGIN generated hot shards
+[profile.dev.package.ddlift-hot-00]
+opt-level = 0
+debug = 1
+[profile.release.package.ddlift-hot-00]
+opt-level = 1
+[profile.play.package.ddlift-hot-00]
+opt-level = 1
+incremental = false
+# END generated hot shards

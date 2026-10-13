@@ -2781,6 +2781,52 @@ def lazy_inc_dec(arm):
     return INC_DEC.sub(lambda m: f"fl.inc_dec(x86::{m[1]}, a, r, {m[2]});", arm)
 
 
+# Match complete adjacent instructions inside one cached basic block. A
+# branch target at LAHF/TEST/Jcc splits the arm and therefore cannot match.
+FLOAT_TEST_BRANCH = re.compile(
+    r"fl = x86::comiss_hw::<(true|false)>\(([^;]+)\);\s+"
+    r"eax = \(eax & !0xff00\) \| \(\(fl\.lahf\(\) as u32\) << 8\);\s+"
+    r"\{ let r = fl\.alu_and\(\(\(eax >> 8\) & 0xFF\), (0x[0-9A-Fa-f]+)u32, 8\); \}\s+"
+    r'pc = if fl\.cond\("([a-z]+)"\) \{ (0x[0-9A-Fa-f]+) \} else \{ (0x[0-9A-Fa-f]+) \};')
+
+
+def fuse_float_test_branches(arm):
+    """Fuse COMISS/UCOMISS; LAHF; TEST AH,imm8; Jcc at emission time.
+
+    Keep the hardware compare (including live MXCSR exceptions/DAZ), AH,
+    and the complete lazy TEST flags. Only the branch predicate and flag
+    decoding are folded. comiss_hw's documented result is 0 equal,
+    1 greater, 2 less, 3 unordered; corresponding LAHF bytes are below.
+    No flag-liveness assumption or comparison of host-language floats.
+    """
+    def replace(m):
+        ordered, operands, immediate, cc, taken, other = m.groups()
+        mask = int(immediate, 16)
+        if mask > 255:
+            return m[0]
+        outcomes = []
+        for result, ah in enumerate((0x42, 0x02, 0x03, 0x47)):
+            value = ah & mask
+            z, s, p = value == 0, bool(value & 128), value.bit_count() % 2 == 0
+            conditions = dict(o=False, no=True, b=False, ae=True,
+                              e=z, ne=not z, be=z, a=not z,
+                              s=s, ns=not s, p=p, np=not p,
+                              l=s, ge=not s, le=z or s, g=not z and not s)
+            if cc not in conditions:
+                return m[0]
+            if conditions[cc]:
+                outcomes.append(result)
+        predicate = ('false' if not outcomes else 'true' if len(outcomes) == 4
+                     else 'matches!(float_cmp.r, ' + ' | '.join(map(str, outcomes)) + ')')
+        return (f'let float_cmp = x86::comiss_hw::<{ordered}>({operands}); '
+                'let float_ah = match float_cmp.r { 0 => 0x42u32, 1 => 0x02, 2 => 0x03, _ => 0x47 }; '
+                'eax = (eax & !0xff00) | (float_ah << 8); '
+                f'fl = Flags {{ kind: x86::LOGIC, a: float_ah, b: {immediate}, '
+                f'r: float_ah & {immediate}, bits: 8, cf_in: false }}; '
+                f'pc = if {predicate} {{ {taken} }} else {{ {other} }};')
+    return FLOAT_TEST_BRANCH.sub(replace, arm)
+
+
 def cpu_arm(arm, start=None, fast=True):
     """Lower cached local-register IR onto the shared Cpu in place.
 
@@ -2793,6 +2839,8 @@ def cpu_arm(arm, start=None, fast=True):
     every access of a restartable instruction.
     """
     arm = lazy_inc_dec(compact_alu(exact_compares(arm, start=start))).replace(SAVE, "").replace(LOAD, "")
+    if fast and LEAN:
+        arm = fuse_float_test_branches(arm)
     # Prepared pre-DF caches use the old state-transfer markers.
     arm = arm.replace(SAVE.replace(", df: cpu.df", ""), "").replace(LOAD.replace(", df: _", ""), "")
     fields = {r: f"cpu.{r}" for r in GPR32 + ["fl", "st"]}

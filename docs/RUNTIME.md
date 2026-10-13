@@ -10,15 +10,17 @@ and repeated ranges improved. Loading logs include cache hit/miss/fetched
 byte counters and all-zlib counters alongside archive-scoped inflate.
 Head's instr1 baseline records 4.854 s archive inflate before the movie
 opens, versus 0.056 s file-read and 0.007 s pipeline time at that sample.
-UI phase boundaries and a paired post-port run remain with head.
+Head's combo6 runs reduce the same 2,979 boot archive inflates from 4.85 s
+to 1.39 s; first Present remains 5.84–5.86 s. Visible phase timings remain
+with head. Original logo/movie timing is retained (no fast-boot option).
 
 The archive zlib fast loop (`0x00cf2cb0`) is a readable runtime port,
-verified against 559 original-instruction vectors including state,
+verified against 632 original-instruction vectors including state,
 output, registers, flags and stack spills. The original outer inflate and
 archive streaming functions still handle checksums, buffers and callbacks.
 `DDRUNTIME_ARCHIVE_INFLATE=0` selects the generated leaf for A/B runs;
 explicit mods at that address retain precedence. Isolated leaf timings
-improved 2.30–8.06x; whole-game loading is awaiting head comparison.
+improved 2.30–8.06x; the port is enabled by default.
 
 `DDRUNTIME_LOAD_LOG=1` adds process-relative startup/movie/file/archive/GPU
 timing and frame counters. `scripts/load_timeline.py` produces a timeline;
@@ -957,3 +959,21 @@ and resolves 17 -> 1; median copy CPU costs 138.2 -> 17.6 / 146.0 -> 26.8 /
 external Present sinks); `ddgpu --example copy_cost` provides the comparison.
 These are synthetic backend results, not a gameplay FPS claim. See
 [scope, complete timings and verification](tasks/L121-copy-no-flush.md).
+### L118 step 3: clean snapshots and COM dispatch (2026-10-13)
+
+The snapshot checks the resource dirty index during its existing device borrow.
+Clean resources skip read-list population; dirty reads use the same objects
+borrow. Clean state groups populate draws directly without taking/restoring the
+cache; constants, render states, viewport and scissor remain current. The debug
+dirty-index audit remains active. Registry resolves COM tokens densely for
+calls and direct-binding cache misses, invalidating on binding or instruction
+lookup mutation. L101's ext-call cache, runtime pin/retirement and D3dCell
+implementation are retained, with new runtime lifetime/unwind regressions.
+
+On the L101 base, three alternating debug draw-path pairs give clean medians
+12.29 -> 11.00 us and changed-sampler 24.00 -> 20.39 us, with unchanged 3 / 6
+allocations. Overlapping shared-load ranges and mixed clean pairs limit these
+numbers. Light suite: 177 pass, one inherited fullscreen gamma Reset failure,
+three ignored; all 48 active unit tests pass. Six resource/draw audit tests and
+ten command/frame tests pass. Implemented and synthetically tested; game/image
+comparison remains with the head. Full evidence: L118 task Results.

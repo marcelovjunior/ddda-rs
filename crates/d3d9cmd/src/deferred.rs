@@ -106,6 +106,15 @@ impl Drop for DeferredBackend {
 }
 
 impl GraphicsBackend for DeferredBackend {
+    fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> {
+        self.result(move |b| b.native(job))
+    }
+    fn native_compare_begin(&mut self, begin: NativeCompareBegin) -> bool {
+        self.result(move |b| b.native_compare_begin(begin))
+    }
+    fn native_compare_end(&mut self, id: u64, job: NativeJob) -> Result<(), NativeJob> {
+        self.result(move |b| b.native_compare_end(id, job))
+    }
     fn upload(&mut self, upload: Upload) { self.enqueue(move |b| b.upload(upload)); }
     fn draw(&mut self, draw: &DrawCall) {
         let draw = draw.clone();
@@ -321,5 +330,52 @@ mod tests {
         let (mut deferred, _) = queue(1);
         deferred.enqueue(|_| panic!("backend failed"));
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || deferred.drain())).is_err());
+    }
+
+    #[test]
+    fn unsupported_native_job_returns_owned_payload_after_prior_uploads() {
+        let (mut backend, log) = queue(4);
+        backend.upload(Upload::Buffer { resource: 42, bytes: vec![1, 2, 3] });
+        let job = NativeJob { passes: vec![NativePass { colours: [Some(target()), None, None, None], clear_colour: Some(17), ..Default::default() }] };
+        assert_eq!(backend.native(job.clone()), Err(job.clone()));
+        assert!(!backend.native_compare_begin(NativeCompareBegin { id: 7, ..Default::default() }));
+        assert_eq!(backend.native_compare_end(7, job.clone()), Err(job));
+        backend.release(42);
+        backend.drain();
+        let entries = log.lock().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].starts_with("upload:"));
+        assert_eq!(entries[1], "release:42");
+    }
+    struct NativeLog(Log);
+    impl GraphicsBackend for NativeLog {
+        fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> {
+            self.0.add(format!("native:{}", job.passes.len())); Ok(())
+        }
+        fn upload(&mut self, u: Upload) { self.0.upload(u); }
+        fn draw(&mut self, d: &DrawCall) { self.0.draw(d); }
+        fn clear(&mut self, c: &ClearCall) { self.0.clear(c); }
+        fn present(&mut self, t: &Target) { self.0.present(t); }
+        fn copy(&mut self, c: &CopyCall) { self.0.copy(c); }
+        fn fill(&mut self, c: &FillCall) { self.0.fill(c); }
+        fn read_back(&mut self, t: &Target) -> Option<Vec<u8>> { self.0.read_back(t) }
+        fn query_begin(&mut self, q: u32) { self.0.query_begin(q); }
+        fn query_end(&mut self, q: u32) { self.0.query_end(q); }
+        fn query_result(&mut self, q: u32) -> Option<u64> { self.0.query_result(q) }
+        fn gamma(&mut self, g: Option<&GammaRamp>) { self.0.gamma(g); }
+        fn release(&mut self, r: u32) { self.0.release(r); }
+    }
+    #[test]
+    fn accepted_native_job_shares_resource_and_query_fifo() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = DeferredBackend::with_capacity(Box::new(NativeLog(Log(log.clone()))), 4);
+        backend.upload(Upload::Buffer { resource: 42, bytes: vec![9] });
+        assert_eq!(backend.native(NativeJob { passes: vec![NativePass::default()] }), Ok(()));
+        backend.query_begin(7);
+        backend.release(42);
+        backend.drain();
+        let entries = log.lock().unwrap();
+        assert!(entries[0].starts_with("upload:"));
+        assert_eq!(&entries[1..], ["native:1", "begin:7", "release:42"]);
     }
 }

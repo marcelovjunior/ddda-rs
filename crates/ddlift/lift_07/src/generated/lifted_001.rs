@@ -4,12 +4,6 @@ use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 use ddnative_base::emit;
 
-// Translated from 0x01383440 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01383440.
-pub fn f_01383440(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x10u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x143A7A0u32, m, pt, cpu); cpu.ecx = 0x18D2CA4u32; emit::push(0x138345C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x139AEF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x18D2CA4u32, 0x143A030u32); emit::push(0x1383470, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
 // Translated from 0x01383480 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01383480.
 pub fn f_01383480(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
@@ -1310,4 +1304,22 @@ pub fn f_013867d0(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn f_013867e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     cpu.xmm[0] = emit::load128(m, pt, 0x1442970u32); emit::store128(cpu.xmm[0], m, pt, 0x18D5420u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013867F0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013867F0.
+pub fn f_013867f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.xmm[0] = emit::load128(m, pt, 0x1442980u32); emit::store128(cpu.xmm[0], m, pt, 0x18D5450u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01386800 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01386800.
+pub fn f_01386800(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.xmm[0] = emit::load128(m, pt, 0x1442990u32); emit::store128(cpu.xmm[0], m, pt, 0x18D5440u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01386810 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01386810.
+pub fn f_01386810(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.xmm[0] = emit::load128(m, pt, 0x14429A0u32); emit::store128(cpu.xmm[0], m, pt, 0x18D5400u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

@@ -1,17 +1,44 @@
 # Milestones
 
-### L129 lifted flag liveness (2026-10-13)
+### L129 combined integer/float flag fusion gate (2026-10-13)
 
-- L73 local dead flags already present; restored missing direct predicates
-  and added conservative whole-function successor proofs plus single-use
-  CMP/TEST native comparisons. Calls/exits and unknown paths retain flags.
-- Hot sample44: **2,445 flag setters**, existing local pass removes872;
-  new pass removes544 more including334 fusions (**57.9% total**).
-- **23 focused tests pass**, including two compiled121-input full-state /
-  memory-order fixtures and edge-case predicate comparisons. Original
-  lifted-vector gate, compile effects and gameplay remain unverified.
-- Next: head batches regeneration/gate with codex-6 float fusion, then
-  loading/render profile comparison. Details: `docs/tasks/L129-dead-flags.md`.
+- Merged FPS-line `05b35e35` with both lifter emitters and regenerated
+  **59,734 functions / 33 crates**, preserving 44 scoped step functions.
+- **178,130 original lifted cases pass; zero failing lifted functions**.
+  Full required-vector native gate: **49 tests pass**, readable ports and
+  inventory checks pass; **26 focused Python tests** also pass.
+- Corrected one pre-L62 x87 test to use documented `park()` host boundaries;
+  host assertions retained, guest continuity assertions added. No runtime
+  change or weakened fixture checks. Existing 5 coverage gaps remain.
+- Clean shard compilation: **264.95 s wall span**, **434.82 MiB rlibs**;
+  generated source **+0.2194%**. No comparative compile-speed/FPS claim.
+- Next: head's same-scene loading/image/FPS measurement. Details and
+  timing/profile limits: `docs/tasks/L129-dead-flags.md`.
+
+### L119 native sink, step 2b (2026-10-13)
+
+- `DDDRAW_NATIVE=drawcall|1|census` (crates/ddruntime/src/ndraw_native.rs):
+  scene-pass draw records decoded through mtstate into the D3D9 path's
+  DrawCall (drawcall) or a d3d9cmd::NativeJob (1, rejected jobs go out as
+  their DrawCalls); refusals counted by reason.
+- Tested: the sink's DrawCall equals the runtime D3D9 path's for the same
+  record (tests/ndraw_native.rs, real D3D9 objects); decode unit tests.
+- combo13 (`drawcall`): 3,425 scene draws taken/frame, images normal, but
+  22-28 us per draw from per-draw decoding and allocation (7.9 vs 14.7
+  fps). Step 2c caches the decode by object identity and per-frame
+  binding; 2.5 us per draw in a debug build.
+- Blockers: the L126 worker; `native()` waits for the worker per job
+  (board #11174). Next: a head run of step 2c. Details:
+  docs/tasks/L119-native-executor.md.
+
+### L126 native job transport checkpoint (2026-10-13)
+
+- Owned NativeJob/Pass/Draw transport with effective D3D9 values, identity
+  keys, resource IDs and register ranges; same DeferredBackend FIFO.
+  Rejection returns the intact job before native target writes.
+- **7 transport tests pass**, including upload/native/query ordering and
+  unsupported-job ownership. Worker and game comparison pending.
+- Next: ddgpu native worker adapter; `docs/tasks/L126-native-worker.md`.
 
 ### L122 gameplay pass map (2026-10-13)
 
@@ -28,6 +55,21 @@
   changes, game/GPU/shard runs, image-equivalence or FPS claim.
 - Next: head's same-run capture with producer tags; existing L111 stats alone
   lack caller/class identities. L113 retains SoftBody replacement ownership.
+### L109c boot attribution and inflate default (2026-10-13)
+
+- Head combo6: boot archive inflate **4.85 -> 1.39 s**, first Present still
+  **5.84–5.86 s**. Cold run has zero shader modules/pipelines through 5.02 s.
+- **632 exact inflate cases** pass again; default-on and explicit-off
+  registration tested. Read-ahead remains default-off. Per head's updated
+  brief, no fast-boot option: original timing/input paths remain unchanged.
+- Boot profile implicates scene/geometry setup; a nested Vorbis symbol is
+  inconsistent with original callers. Exact opt-in FE9580/12EB690 counters
+  added; wrapper-effects regression and eight parser tests pass.
+- Float compare/LAHF/TEST/Jcc fusion covers **1,537 sites / 701 functions**,
+  nine in FE9580. Three tests pass, including **401,408 native oracle
+  cases** preserving AH, flags and MXCSR. Whole geometry port is WIP.
+  Next: head integration regeneration/gate and counter run; UI timings
+  need head marks. No measured geometry or first-Present speedup yet.
 
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 
@@ -2176,3 +2218,17 @@ opening (codex-31), route perf (codex-29).
   **146.0 -> 26.8** conversion, **990.5 -> 2.7** D24S8, **186.2 -> 12.1** resolve.
 - No game or shard run. Next: head integrates and compares gameplay image,
   submit count and copy/FPS profile. Details: `docs/tasks/L121-copy-no-flush.md`.
+### L118 step 3: clean draw and COM dispatch (2026-10-13)
+
+- Clean resource index skips read-list population; dirty reads share the device
+  borrow. Clean snapshots reuse cached groups without a restore lookup. Dense
+  COM lookup preserves rebinding and step precedence; L101 runtime/lock changes
+  remain intact, with new nested-switch and unwind lifetime coverage.
+- On combo9/L101, three alternating debug pairs: clean median **12.29 -> 11.00
+  us**, changed sampler **24.00 -> 20.39 us**; allocations stay **3 / 6**.
+  Wide overlapping ranges and mixed clean pairs: no gameplay/FPS claim.
+- Light suite **177 pass / one inherited gamma Reset failure / three ignored**;
+  all 48 active unit tests pass. Six draw/resource audit tests and ten command/
+  frame tests pass. No GPU, game or shard runs.
+- Next: head combo9 gameplay/image comparison and render-thread profile after
+  integration. Details: `docs/tasks/L118-d3d9-render-thread.md`.
