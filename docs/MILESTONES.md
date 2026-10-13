@@ -2148,3 +2148,18 @@ opening (codex-31), route perf (codex-29).
 - Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+### L118 step 3: clean draw and COM dispatch (2026-10-13)
+
+- Clean resource index skips read-list population; dirty reads share the device
+  borrow. Clean snapshots reuse cached groups without a restore lookup. Dense
+  COM lookup preserves rebinding and step precedence; L101 runtime/lock changes
+  remain intact, with new nested-switch and unwind lifetime coverage.
+- On combo9/L101, three alternating debug pairs: clean median **12.29 -> 11.00
+  us**, changed sampler **24.00 -> 20.39 us**; allocations stay **3 / 6**.
+  Wide overlapping ranges and mixed clean pairs: no gameplay/FPS claim.
+- Light suite **177 pass / one inherited gamma Reset failure / three ignored**;
+  all 48 active unit tests pass. Six draw/resource audit tests and ten command/
+  frame tests pass. No GPU, game or shard runs.
+- Next: head combo9 gameplay/image comparison and render-thread profile after
+  integration. Details: `docs/tasks/L118-d3d9-render-thread.md`.

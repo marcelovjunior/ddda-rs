@@ -63,3 +63,67 @@ head owns gameplay/FPS and original-image comparison.
 
 Next action: head integrates both commits, compares combo4 gameplay/image, and
 profiles remaining CURRENT/object access before choosing further work over L112.
+
+### Step 3: clean snapshots, resource reads and service dispatch
+
+Final base: `d769d695` on `task/fps-line` (combo9/L101). Snapshot commit:
+`5ffd94f0`. Head assigned dispatch ownership in board #10933; COM and DrawCall
+APIs remain unchanged for claude-2's L112/L119 caller.
+
+- Check L98's resource dirty index during the existing device-state borrow.
+  Empty index skips reads-array population and the resource walk. Dirty reads
+  are collected under that same borrow, eliminating a separate objects access.
+  Upload order, duplicates and owner semantics remain unchanged. Debug audit
+  still scans resources even when the index is empty.
+- Unchanged state groups construct the draw directly from the retained cache:
+  no take/restore device lookup and no duplicate declaration/texture Arc clones.
+  Constants, render states, viewport and scissor still come from current state;
+  resource Lock/Unlock remains independent of state dirtiness.
+- Dense resolved COM method-token entries avoid hashing in Registry::call and
+  L101's direct-binding cache misses. L101's per-thread ext-call cache remains
+  unchanged. Rebinding and instruction-lookup replacement invalidate the dense
+  cache, including interior step entries. Regressions cover holes, unaligned
+  addresses, step precedence, replacement, table growth and registry isolation.
+- L101 landed during this work and already covers runtime pinning, combined
+  lock TLS and state-service entry costs. Final rebase retains those production
+  implementations unchanged, replacing an overlapping L118 prototype. Two new
+  tests prove helper access adds no Arc retains, replaced runtimes remain alive
+  during nested access, and retirement/depth bookkeeping survives unwinding.
+  Necessary D3dCell acquisition and scheduling/backend TLS remain.
+
+Three final alternating-order debug pairs against the actual L101 base,
+microseconds per indexed draw:
+
+| Mode | L101 baseline | L118 on L101 | Medians |
+|---|---|---|---|
+| Clean | 10.54, 18.72, 12.29 | 11.00, 6.85, 13.38 | **12.29 -> 11.00** |
+| Changed sampler before each draw | 42.20, 20.82, 24.00 | 26.84, 20.39, 19.31 | **24.00 -> 20.39** |
+
+Allocations remain **3 clean / 6 changed-sampler**, including COM test buffers.
+Ranges overlap considerably under shared-machine load; clean pairs are mixed.
+These service-only debug measurements establish no gameplay/FPS or optimized
+build speedup. A separate COM lookup microbenchmark measured hash
+136.85/134.83/139.75 ns versus dense 56.90/41.35/47.33 ns (medians
+**136.85 -> 47.33 ns**); this excludes L101 ext-cache hits.
+
+Final validation:
+
+- `cargo test -p ddruntime --no-default-features --no-fail-fast --
+  --test-threads=1`: **177 passed, one failed, three ignored**. All **48** active
+  unit tests pass. Only the previously base-reproduced fullscreen gamma Reset
+  failure remains. The first integrated run ended with a truncated log around
+  the head's pause/memory-pressure interval; the complete retry is reported here.
+- **Six** draw/resource tests pass with `DDRUNTIME_VERIFY_DIRTY_FLUSH=1`:
+  all 42 reads, duplicate bindings, repeated writes, surface aliases, cube/volume
+  resources, state invalidation and immutable queued snapshots.
+- `cargo test -p d3d9cmd -p d3d9frame`: **5 + 5 tests pass**, plus doc tests.
+- No shard build, GPU execution, game run or original-image comparison.
+
+Private receipts under `C:/ddda-targets/`: `L118-step3-L101-{base,final}.exe`,
+`L118-step3-integrated-pairs.log`, `L118-step3-integrated-retry.log`,
+`L118-step3-integrated-audit.log`, `L118-step3-integrated-command-tests.log`.
+Earlier `L118-step3-final-*` logs are pre-L101 prototype receipts and must not
+be used as incremental performance claims for the integrated branch.
+
+Next action: head integrates the two final commits, compares combo9 gameplay
+and images, and profiles snapshot/flush plus remaining runtime/lock overhead.
