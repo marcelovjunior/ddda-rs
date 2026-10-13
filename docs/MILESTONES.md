@@ -12,7 +12,9 @@
   added; wrapper-effects regression and eight parser tests pass.
 - Float compare/LAHF/TEST/Jcc fusion covers **1,537 sites / 701 functions**,
   nine in FE9580. Three tests pass, including **401,408 native oracle
-  cases** preserving AH, flags and MXCSR. Whole geometry port is WIP.
+  cases** preserving AH, flags and MXCSR. Whole-function original replay
+  also passes before/after fusion (three fixtures, **6,155 call boundaries**).
+  Whole geometry port is WIP.
   Next: head integration regeneration/gate and counter run; UI timings
   need head marks. No measured geometry or first-Present speedup yet.
 

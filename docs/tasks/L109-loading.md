@@ -141,6 +141,22 @@ regeneration/native gate and game timing remain pending head integration.
 The whole readable FE9580 port requested alongside fusion is still work
 in progress. No geometry speedup or new boot-time result is claimed yet.
 
+`vectors_geometry.py` now records the complete original FE9580 with
+synthetic allocator, vertex-buffer, memset and string-comparison call
+boundaries. Three fixtures (subdivision 0 with no attributes, subdivision
+0/1 with Position/Normal/Tangent/Color/TexCoord/Tex-prefix/unknown fields,
+including mixed case) produce **6,155 boundary calls**. Isolated whole
+function replay at opt-level 1 passes for both pre-fusion and fused
+emission: GPRs, every XMM lane, defined arithmetic flags, stack, call
+entry/exit states, and all scratch/heap bytes. `bench_geometry.py` prepares
+the private replay crate without any ddlift dependency. Output stays in
+`E:/ddda-re/notes/native-L109c` / `C:/ddda-targets/L109c`.
+
+Unicorn does not reproduce SSE sticky MXCSR exceptions; these vectors
+explicitly do not serve as an MXCSR oracle. The separate hardware oracle
+above checks that aspect of fusion. Single replay durations are diagnostic
+only (callback checks disturb caches); no benchmark speedup is claimed.
+
 ### Continuation: readable inflate fast loop (2026-10-13)
 
 Rebased onto `task/fps-line`; baseline instrumentation/read scratch is
