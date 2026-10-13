@@ -67,17 +67,178 @@ fn expand(m: &mut dyn Mem, pg: Pages, bank: u32, values: u32, packed: u32, mut o
 }
 
 /// 0x00E10FC0, `this->intern_keys(owner, values, keys, extra, crc_out) ->
-/// interned` (thiscall, `ret 0x14`): build a key sequence in a 1 KiB stack
-/// buffer (at the caller's ESP - 0x400, as the original: the interning
-/// callee reads it there), optionally store its CRC, and intern it.
+/// interned` (thiscall, `ret 0x14`): build the key sequence of a
+/// primitive's shader/technique lookup, optionally store its CRC, and
+/// return the sequence's hash (the "interned" id).
 ///
 /// The sequence: the four `keys` words tagged with their slot in the low
 /// bits (zero words skipped), `extra`, then the expansions of the six
 /// `owner` words in the order 0, 3, 4, 2, 1, 5 (zero words skipped). The
-/// CRC is the table CRC of the words' bytes, high byte first, at
-/// 0x014075C0. The interning (0x00E0E5E0, FNV basis 0x811C9DC5) stays a
-/// guest call, so its own port and every caller see the same table.
+/// CRC (when `crc_out` is not null) is the table CRC (table at 0x014075C0)
+/// of the words' bytes, high byte first. The hash
+/// is what 0x00E0E5E0 computes (FNV prime 0x01000193 over the bytes of
+/// `word ^ 0x14DA14DA`, multiply-then-xor, from basis 0x811C9DC5).
+///
+/// The original builds the sequence in a 1 KiB buffer on its stack and
+/// calls 0x00E0E5E0 and (per owner word) 0x00E0EC50; both are pure, so the
+/// sequence is built here in a local buffer and hashed natively: no guest
+/// call and no guest memory traffic except the reads of the inputs. (The
+/// buffer lives below the returned ESP in the original, so nothing
+/// observable is lost.) [`intern_dependency_keys_with`] keeps the
+/// original's shape for tests that replay the guest calls.
 pub fn intern_dependency_keys(m: &mut dyn Mem, c: &mut Cpu) {
+    intern_dependency_keys_table(m, c, true)
+}
+
+/// [`intern_dependency_keys`] with the CRC table either cached after its
+/// first read (production: the table is read-only data) or read from guest
+/// memory on every lookup, like the original (tests whose memories hold a
+/// different table in every case).
+pub fn intern_dependency_keys_table(m: &mut dyn Mem, c: &mut Cpu, cached: bool) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (owner, values, keys, extra, crc_out) = (arg(m, 0), arg(m, 1), arg(m, 2), arg(m, 3), arg(m, 4));
+    c.eax = intern_keys_with(m, pg, c.ecx, owner, values, keys, extra, crc_out, cached);
+    c.esp = entry.wrapping_add(4 + 0x14);
+}
+
+/// The body of [`intern_dependency_keys`] without the guest calling
+/// convention (also used by [`shader_lookup`]).
+#[allow(clippy::too_many_arguments)]
+pub fn intern_keys(m: &mut dyn Mem, pg: Pages, this: u32, owner: u32, values: u32, keys: u32, extra: u32, crc_out: u32) -> u32 {
+    intern_keys_with(m, pg, this, owner, values, keys, extra, crc_out, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn intern_keys_with(m: &mut dyn Mem, pg: Pages, this: u32, owner: u32, values: u32, keys: u32, extra: u32, crc_out: u32, cached: bool) -> u32 {
+    let mut words = [0u32; KEY_CAPACITY];
+    let mut count = 0usize;
+    for slot in 0..4u32 {
+        let k = pg.u32(m, keys.wrapping_add(4 * slot));
+        if k != 0 {
+            words[count] = (k & 0xffff_f000) | slot;
+            count += 1;
+        }
+    }
+    words[count] = extra;
+    count += 1;
+    let mut bank = None;
+    for field in [0u32, 3, 4, 2, 1, 5] {
+        let packed = pg.u32(m, owner.wrapping_add(4 * field));
+        if packed != 0 {
+            let bank = *bank.get_or_insert_with(|| pg.u32(m, this.wrapping_add(0x28)));
+            count = expand_into(m, pg, bank, values, packed, &mut words, count);
+        }
+    }
+    let words = &words[..count];
+    if crc_out != 0 {
+        let crc = if cached { key_crc(crc_table(m, pg), words) } else { key_crc_guest(m, pg, words) };
+        pg.set_u32(m, crc_out, crc);
+    }
+    key_hash(words)
+}
+
+/// Room for the key words (the original's buffer is 0x400 bytes).
+const KEY_CAPACITY: usize = 0x100;
+
+/// The guest's CRC table at 0x014075C0 (256 words, read-only data), read
+/// from guest memory the first time a CRC is needed.
+static CRC_TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
+
+fn crc_table(m: &dyn Mem, pg: Pages) -> &'static [u32; 256] {
+    CRC_TABLE.get_or_init(|| std::array::from_fn(|i| pg.u32(m, 0x0140_75c0 + 4 * i as u32)))
+}
+
+/// CRC over the words' bytes, high byte of each word first, as the
+/// original's table loop does.
+pub fn key_crc(table: &[u32; 256], words: &[u32]) -> u32 {
+    let mut crc = u32::MAX;
+    for &word in words {
+        for shift in [24u32, 16, 8, 0] {
+            crc = (crc >> 8) ^ table[(((word >> shift) ^ crc) & 0xff) as usize];
+        }
+    }
+    crc
+}
+
+/// [`key_crc`] reading the table entries from guest memory as they are used.
+fn key_crc_guest(m: &dyn Mem, pg: Pages, words: &[u32]) -> u32 {
+    let mut crc = u32::MAX;
+    for &word in words {
+        for shift in [24u32, 16, 8, 0] {
+            let index = ((word >> shift) ^ crc) & 0xff;
+            crc = (crc >> 8) ^ pg.u32(m, 0x0140_75c0u32.wrapping_add(index * 4));
+        }
+    }
+    crc
+}
+
+/// The hash of the key words (what 0x00E0E5E0 computes with the basis
+/// 0x811C9DC5).
+pub fn key_hash(words: &[u32]) -> u32 {
+    words.iter().fold(0x811c_9dc5u32, |h, &word| hash_word(h, word))
+}
+
+#[inline(always)]
+fn hash_word(h: u32, word: u32) -> u32 {
+    const PRIME: u32 = 0x0100_0193;
+    let w = word ^ 0x14da_14da;
+    let h = (h.wrapping_mul(PRIME) ^ (w & 0xff)).wrapping_mul(PRIME);
+    let h = (h ^ ((w >> 8) & 0xff)).wrapping_mul(PRIME);
+    let h = (h ^ ((w >> 16) & 0xff)).wrapping_mul(PRIME);
+    h ^ (w >> 24)
+}
+
+/// 0x00E0E5E0, `hash_key_words(words, byte_length, basis) -> hash`
+/// (stdcall, `ret 0xc`): FNV-style hash (prime 0x01000193, multiply then
+/// xor, per byte of `word ^ 0x14DA14DA`) of `byte_length / 4` words.
+pub fn hash_key_words(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (words, length, basis) = (arg(m, 0), arg(m, 1), arg(m, 2));
+    let mut h = basis;
+    for i in 0..length >> 2 {
+        h = hash_word(h, pg.u32(m, words.wrapping_add(4 * i)));
+    }
+    c.eax = h;
+    c.esp = entry.wrapping_add(4 + 0xc);
+}
+
+/// [`expand`] into a local buffer: the expansion of `packed` appended at
+/// `words[count..]`; returns the new count.
+fn expand_into(m: &dyn Mem, pg: Pages, bank: u32, values: u32, packed: u32, words: &mut [u32; KEY_CAPACITY], mut count: usize) -> usize {
+    let high = packed & 0xffff_f000;
+    if high != 0 {
+        words[count] = high;
+        count += 1;
+    }
+    let descriptor = bank.wrapping_add((packed & 0xfff).wrapping_mul(8));
+    let mut index = pg.u32(m, descriptor.wrapping_add(4));
+    let head = pg.u32(m, descriptor);
+    for _ in 0..(head >> 20) & 0x3f {
+        let child = pg.u16(m, index) as u32;
+        index = index.wrapping_add(2);
+        let value = pg.u32(m, values.wrapping_add(child.wrapping_mul(8)).wrapping_add(4));
+        count = expand_into(m, pg, bank, values, value, words, count);
+    }
+    for _ in 0..head >> 26 {
+        let child = pg.u16(m, index) as u32;
+        index = index.wrapping_add(2);
+        let value = pg.u32(m, values.wrapping_add(child.wrapping_mul(8)).wrapping_add(4));
+        if value != 0 {
+            words[count] = value;
+            count += 1;
+        }
+    }
+    count
+}
+
+/// The test seam: the original's shape, with the interning
+/// ([`intern_dependency_keys_with`]) and the expansions ([`Expander`])
+/// replayed as guest calls. The previous production body.
+pub fn intern_dependency_keys_reference(m: &mut dyn Mem, c: &mut Cpu) {
     intern_dependency_keys_with(m, c, native_expand)
 }
 
@@ -169,6 +330,59 @@ pub fn intern_dependency_keys_with(m: &mut dyn Mem, c: &mut Cpu, expander: Expan
 /// [`shader_lookup`] (the rare branch runs it unchanged).
 pub static E12A20_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = std::sync::OnceLock::new();
 
+/// A call from a native port to the guest function at `target`, with the
+/// stack already set up as for `call_ext`: straight into the native port
+/// registered as an override for `target` (no dispatch), otherwise through
+/// `call_ext` (replayed seams in tests, the lifted program in the game).
+#[inline(always)]
+pub(crate) fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
+    if ddnative_base::x86::may_be_overridden(target) {
+        if let Some(f) = ddnative_base::x86::override_of(target) {
+            return f(m, c);
+        }
+    }
+    ddnative_base::x86::call_ext(m, c, target)
+}
+
+/// The CRT `memcpy` 0x012EFEA0 done natively: it behaves like memmove (the
+/// whole source is read before the destination is written). Whole pages are
+/// moved with host copies; anything the page table does not serve directly
+/// goes byte by byte through the memory.
+pub(crate) fn copy_guest(m: &mut dyn Mem, pg: Pages, destination: u32, source: u32, bytes: u32) {
+    use ddnative_base::mem::{PAGE, READ, WRITE};
+    if bytes == 0 {
+        return;
+    }
+    if let (Some(from), Some(to)) = (pg.bytes(source, bytes as usize, READ), pg.bytes(destination, bytes as usize, WRITE)) {
+        // SAFETY: both ranges lie inside one backed page each; `copy` allows overlap
+        unsafe { std::ptr::copy(from, to, bytes as usize) };
+        return;
+    }
+    let mut data = vec![0u8; bytes as usize];
+    let mut done = 0u32;
+    while done < bytes {
+        let at = source.wrapping_add(done);
+        let n = (bytes - done).min(PAGE - at % PAGE);
+        match pg.bytes(at, n as usize, READ) {
+            // SAFETY: `n` bytes inside one backed page
+            Some(p) => unsafe { std::ptr::copy_nonoverlapping(p, data[done as usize..].as_mut_ptr(), n as usize) },
+            None => (0..n).for_each(|k| data[(done + k) as usize] = pg.u8(m, at.wrapping_add(k))),
+        }
+        done += n;
+    }
+    done = 0;
+    while done < bytes {
+        let at = destination.wrapping_add(done);
+        let n = (bytes - done).min(PAGE - at % PAGE);
+        match pg.bytes(at, n as usize, WRITE) {
+            // SAFETY: `n` bytes inside one backed page
+            Some(p) => unsafe { std::ptr::copy_nonoverlapping(data[done as usize..].as_ptr(), p, n as usize) },
+            None => (0..n).for_each(|k| pg.set_u8(m, at.wrapping_add(k), data[(done + k) as usize])),
+        }
+        done += n;
+    }
+}
+
 /// A guest call from the frame `frame` (the caller's ESP at its call
 /// sites): push `args` (last first) and `back`, set ECX and run `body`.
 /// Returns EAX; ESP is `frame` again after the callee's own `ret n`.
@@ -215,12 +429,12 @@ pub fn shader_lookup(m: &mut dyn Mem, c: &mut Cpu) {
         c.eax = r;
         c.esp = entry.wrapping_add(4 + 0x1c);
     };
-    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, 0], 0x00e1_3208, intern_dependency_keys);
+    let key = intern_keys(m, pg, this, owner, owner_values, keys, extra, 0);
     let r = call_from(m, c, pg, frame, this, &[key], 0x00e1_3210, ext(0x00e0_f3c0));
     if r != 0 {
         return finish(c, r);
     }
-    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, crc], 0x00e1_322f, intern_dependency_keys);
+    let key = intern_keys(m, pg, this, owner, owner_values, keys, extra, crc);
     let sum = pg.u32(m, crc);
     let r = call_from(m, c, pg, frame, this, &[key, sum], 0x00e1_3244, ext(0x00e0_f4b0));
     if r != 0 || pg.u8(m, this.wrapping_add(0xab229)) != 0 || other == 0 {
@@ -228,7 +442,7 @@ pub fn shader_lookup(m: &mut dyn Mem, c: &mut Cpu) {
     }
     let table = pg.u32(m, this.wrapping_add(0x24));
     let owner = pg.u32(m, table.wrapping_add((other & 0xfff).wrapping_mul(4))).wrapping_add(0x1c);
-    let key = call_from(m, c, pg, frame, this, &[owner, owner_values, keys, extra, crc], 0x00e1_3280, intern_dependency_keys);
+    let key = intern_keys(m, pg, this, owner, owner_values, keys, extra, crc);
     let sum = pg.u32(m, crc);
     let r = call_from(m, c, pg, frame, this, &[key, sum], 0x00e1_3293, ext(0x00e0_f4b0));
     finish(c, r)

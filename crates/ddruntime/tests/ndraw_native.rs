@@ -380,6 +380,34 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     assert_eq!(differences(&filled.call, r, &d3d9), vec![]);
     s.mem.set_u32(record + 0xC, shader);
 
+    // L180: the constants as the original's apply (0x00DAA8B0) leaves
+    // them. After a binding with the same shaders whose value slot holds
+    // the same pointer, the upload is skipped: the device keeps the earlier
+    // values even though the memory changed. After one with another
+    // pointer, it uploads (reads) again. The same binding again: nothing.
+    let c0y = s.mem.u32(vs_values + 4);
+    let _ = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    s.mem.set_u32(record + 0xC, shader2);
+    let _ = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    s.mem.set_u32(record + 0xC, shader);
+    s.mem.set_u32(vs_values + 4, 123f32.to_bits());
+    let skipped = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    assert!(skipped.rebuilt);
+    assert_eq!(skipped.call.vs_constants.f[0][1], c0y, "the skipped upload keeps the earlier value");
+    let (shader3, vs_values3) = (NDRAW + 0x100 * 22, NDRAW + 0x100 * 23);
+    put(&mut s, shader3, &[3 << 21, 0, meta2, sampler, tex, vs_values3, ps_values]);
+    put(&mut s, vs_values3, &(0..24).map(|k| (k as f32 + 100.0).to_bits()).collect::<Vec<_>>());
+    s.mem.set_u32(record + 0xC, shader3);
+    let _ = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    s.mem.set_u32(record + 0xC, shader);
+    let read = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    assert_eq!(read.call.vs_constants.f[0][1], 123f32.to_bits(), "another pointer before: uploaded again");
+    s.mem.set_u32(vs_values + 4, 7f32.to_bits());
+    let next = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    assert!(!next.rebuilt);
+    assert_eq!(next.call.vs_constants.f[0][1], 123f32.to_bits(), "the same binding: nothing uploaded");
+    s.mem.set_u32(vs_values + 4, c0y);
+
     // an instanced draw (type 3): stream 1 instance data (stride 16,
     // offset 8), 5 instances, instance step 2. The D3D9 path: the stream
     // apply, then the calls 0x00DAB480's type 3 makes around the draw

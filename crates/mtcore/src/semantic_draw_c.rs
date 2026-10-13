@@ -88,7 +88,7 @@ pub fn package_key(m: &mut dyn Mem, c: &mut Cpu) {
     c.esp = c.esp.wrapping_add(8);
 }
 
-fn find_package_key(m: &dyn Mem, p: Pages, owner: u32, key: u32) -> u32 {
+pub(crate) fn find_package_key(m: &dyn Mem, p: Pages, owner: u32, key: u32) -> u32 {
     let count = p.u32(m, owner.wrapping_add(0xac2a0));
     for i in 0..count {
         if p.u32(m, owner.wrapping_add(0xab2a0).wrapping_add(i.wrapping_mul(4))) == key {
@@ -123,7 +123,7 @@ pub fn begin_material(m: &mut dyn Mem, c: &mut Cpu) {
         p.set_u32(m, c.esp, value);
     }
     c.ecx = material;
-    x86::call_ext(m, c, target);
+    crate::semantic::call_guest(m, c, target);
     let policy = c.eax;
     let flag = match policy {
         0 => 0x40,
@@ -138,6 +138,80 @@ pub fn begin_material(m: &mut dyn Mem, c: &mut Cpu) {
     p.set_u32(m, context.wrapping_add(0x68), policy);
     p.set_u32(m, context.wrapping_add(0x6c), 0);
     c.esp = entry.wrapping_add(12);
+}
+
+/// The CRT's `memcpy` (0x012EFEA0), which behaves as `memmove`: `len` bytes
+/// from `source` to `destination`, overlap-safe, page by page through the
+/// page table (anything it does not allow goes through the trait, which
+/// faults as the guest would).
+fn copy_guest(m: &mut dyn Mem, p: Pages, destination: u32, source: u32, len: u32) {
+    const READ: u8 = 1;
+    const WRITE: u8 = 2;
+    let len = len as usize;
+    // one source page and one destination page: a plain overlap-safe move
+    if let (Some(from), Some(to)) = (p.bytes(source, len, READ), p.bytes(destination, len, WRITE)) {
+        // SAFETY: bytes() returned `len` readable and writable bytes, each inside one backed page
+        unsafe { std::ptr::copy(from, to, len) };
+        return;
+    }
+    // general case (pages crossed): read everything first, then write, a
+    // page-bounded chunk at a time
+    let mut data = vec![0u8; len];
+    let mut done = 0usize;
+    while done < len {
+        let at = source.wrapping_add(done as u32);
+        let chunk = (len - done).min(4096 - (at & 4095) as usize);
+        match p.bytes(at, chunk, READ) {
+            // SAFETY: bytes() returned `chunk` readable bytes inside one backed page
+            Some(from) => unsafe { std::ptr::copy_nonoverlapping(from, data[done..].as_mut_ptr(), chunk) },
+            None => data[done..done + chunk].iter_mut().enumerate().for_each(|(k, b)| *b = p.u8(m, at.wrapping_add(k as u32))),
+        }
+        done += chunk;
+    }
+    done = 0;
+    while done < len {
+        let at = destination.wrapping_add(done as u32);
+        let chunk = (len - done).min(4096 - (at & 4095) as usize);
+        match p.bytes(at, chunk, WRITE) {
+            // SAFETY: bytes() returned `chunk` writable bytes inside one backed page
+            Some(to) => unsafe { std::ptr::copy_nonoverlapping(data[done..].as_ptr(), to, chunk) },
+            None => data[done..done + chunk].iter().enumerate().for_each(|(k, &b)| p.set_u8(m, at.wrapping_add(k as u32), b)),
+        }
+        done += chunk;
+    }
+}
+
+/// UCOMISS equality of two floats' bits on the host under the live MXCSR
+/// (denormals-are-zero included): true for equal and ordered, false for
+/// unequal or unordered; the MXCSR exception flags are the hardware's.
+#[inline(always)]
+fn ucomiss_equal(a: u32, b: u32) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: SSE is part of the x86_64 baseline
+    unsafe {
+        use std::arch::x86_64::{_mm_set_ss, _mm_ucomieq_ss};
+        _mm_ucomieq_ss(_mm_set_ss(f32::from_bits(a)), _mm_set_ss(f32::from_bits(b))) != 0
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        x86::comiss_hw::<false>(a, b).r == 0
+    }
+}
+
+/// COMISS "greater" of two floats' bits on the host (the original's `ja`
+/// after `comiss a, b`): false for unordered.
+#[inline(always)]
+fn comiss_greater(a: u32, b: u32) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: SSE is part of the x86_64 baseline
+    unsafe {
+        use std::arch::x86_64::{_mm_comigt_ss, _mm_set_ss};
+        _mm_comigt_ss(_mm_set_ss(f32::from_bits(a)), _mm_set_ss(f32::from_bits(b))) != 0
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        x86::comiss_hw::<true>(a, b).r == 1
+    }
 }
 
 fn bits(m: &mut dyn Mem, p: Pages, address: u32, keep: u32, add: u32) {
@@ -162,7 +236,7 @@ fn draw_call(
         p.set_u32(m, c.esp, value);
     }
     c.ecx = owner;
-    x86::call_ext(m, c, target);
+    crate::semantic::call_guest(m, c, target);
     c.eax
 }
 
@@ -386,8 +460,7 @@ fn commit_state(m: &mut dyn Mem, c: &mut Cpu, p: Pages, entry: u32, context: u32
             (
                 a,
                 b,
-                x86::comiss_hw::<false>(p.u32(m, previous.wrapping_add(12)), b).r != 0
-                    || x86::comiss_hw::<false>(p.u32(m, previous), a).r != 0,
+                !ucomiss_equal(p.u32(m, previous.wrapping_add(12)), b) || !ucomiss_equal(p.u32(m, previous), a),
             )
         } else {
             alpha_threshold(m, c, p, alpha, previous)
@@ -410,16 +483,8 @@ fn commit_state(m: &mut dyn Mem, c: &mut Cpu, p: Pages, entry: u32, context: u32
             if buffer != 0 {
                 let size = p.u16(m, descriptor.wrapping_add(24)) as u32 * 4;
                 let source = p.u32(m, descriptor.wrapping_add(36));
-                draw_call(
-                    m,
-                    c,
-                    p,
-                    entry.wrapping_sub(32),
-                    0x012efea0,
-                    if blend { 0x00feeab5 } else { 0x00feec5b },
-                    source,
-                    &[buffer, source, size],
-                );
+                crate::semantic::copy_guest(m, p, buffer, source, size);
+                c.eax = buffer; // memcpy returns its destination
                 p.set_u32(m, buffer, threshold);
                 p.set_u32(m, buffer.wrapping_add(8), 0);
                 p.set_u32(m, buffer.wrapping_add(4), 0);
@@ -669,7 +734,7 @@ fn draw_model_mesh_body(
     let view = draw_call(m, c, p, frame, 0x00fed940, 0x00ffc3c2, context, &[]);
     let point = std::array::from_fn(|i| p.u32(m, position.wrapping_add(i as u32 * 4)));
     let depth = mesh_depth(m, p, view, point, false) ^ p.u32(m, 0x0161c280);
-    if pass & 0x20 != 0 && x86::comiss_hw::<true>(depth, p.u32(m, model.wrapping_add(0xd84))).r == 1 {
+    if pass & 0x20 != 0 && comiss_greater(depth, p.u32(m, model.wrapping_add(0xd84))) {
         return view;
     }
     let skinned = p.u32(m, mesh.wrapping_add(0x220)) != 0;
@@ -932,7 +997,7 @@ fn allocate_constants(
             p.set_u32(m, c.esp, value);
         }
         c.ecx = context;
-        x86::call_ext(m, c, 0x00fe_d890);
+        crate::semantic::call_guest(m, c, 0x00fe_d890);
         reloaded_primitive = Some(p.u32(m, entry.wrapping_add(8)));
     }
     let buffer = p.u32(m, context.wrapping_add(0x24));
@@ -1005,16 +1070,12 @@ fn apply_primitive_material(
     }
     if buffer != 0 {
         let first_default = p.u32(m, 0x018c_fe70);
-        let mut same = x86::comiss_hw::<false>(p.u32(m, model.wrapping_add(0x1d0)), first_default).r == 0;
+        let mut same = ucomiss_equal(p.u32(m, model.wrapping_add(0x1d0)), first_default);
         for i in 1..4 {
             if !same {
                 break;
             }
-            same = x86::comiss_hw::<false>(
-                p.u32(m, model.wrapping_add(0x1d0 + i * 4)),
-                p.u32(m, 0x018c_fe70 + i * 4),
-            )
-            .r == 0;
+            same = ucomiss_equal(p.u32(m, model.wrapping_add(0x1d0 + i * 4)), p.u32(m, 0x018c_fe70 + i * 4));
         }
         let mut custom = false;
         if !same {

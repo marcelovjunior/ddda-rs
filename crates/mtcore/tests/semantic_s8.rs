@@ -1,0 +1,253 @@
+//! L184 s8: semantic port of 0x00E516F0 against the original's recorded vectors, at the
+//! ABI level: EAX, the callee-saved registers, ESP and every memory byte
+//! the original leaves at or above its returned stack pointer. ECX, EDX,
+//! the flags and the popped stack scratch below the returned ESP are not
+//! compared (MSVC callers never read them after a call).
+use ddnative_base::{
+    mem::Mem,
+    x86::{Cpu, LiftFn},
+};
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+#[derive(Default)]
+struct Memory {
+    bytes: BTreeMap<u32, u8>,
+    writes: BTreeMap<u32, u8>,
+}
+impl Mem for Memory {
+    fn u8(&self, a: u32) -> u8 {
+        *self.bytes.get(&a).unwrap_or_else(|| panic!("unrecorded read {a:x}"))
+    }
+    fn set_u8(&mut self, a: u32, v: u8) {
+        self.bytes.insert(a, v);
+        self.writes.insert(a, v);
+    }
+}
+
+fn n(v: &Value) -> u32 {
+    v.as_u64().unwrap() as u32
+}
+
+fn pairs(v: &Value) -> BTreeMap<u32, u8> {
+    v.as_array().unwrap().iter().map(|p| (n(&p[0]), n(&p[1]) as u8)).collect()
+}
+
+fn regs(v: &Value) -> [u32; 8] {
+    let r: Vec<u32> = v["regs"].as_array().unwrap().iter().map(n).collect();
+    r.try_into().unwrap()
+}
+
+/// Stack arguments of the callees the vectors record (thiscall: ECX is
+/// checked separately).
+fn stack_args(target: u32) -> u32 {
+    match target {
+        0x3000_0020 => 1, // skeleton->root_matrix(-1)
+        0x00d8_e400 => 5, // simplex->tetrahedron_closest(out, p0, p1, p2, p3)
+        _ => panic!("unexpected call target {target:x}"),
+    }
+}
+
+/// As `abi_cases`, for a body that makes guest calls: each recorded call
+/// must see the recorded memory (its arguments and the buffers they point
+/// at) and ECX; the recorded callee's effects and EAX are then replayed.
+fn abi_cases_with_calls(path: &str, body: LiftFn) -> usize {
+    abi_cases_with_calls_ret(path, body, true)
+}
+
+/// `returns`: false for a void function, whose EAX is left over and not
+/// part of its ABI.
+fn abi_cases_with_calls_ret(path: &str, body: LiftFn, returns: bool) -> usize {
+    abi_cases_full(path, body, returns, &[])
+}
+
+/// `native_callees`: recorded calls the semantic port does natively (a
+/// CRT memcpy, say): their events are dropped and the final memory check
+/// covers their effects.
+fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32]) -> usize {
+    use ddnative_base::x86;
+    use std::{cell::RefCell, rc::Rc};
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return 0,
+    };
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let cases = data["cases"].as_array().unwrap();
+    for (i, case) in cases.iter().enumerate() {
+        let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
+        let before = regs(&case["before"]);
+        let after = regs(&case["after"]);
+        let mut c = Cpu::default();
+        [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = before;
+        // paired format: a native callee's call event and its return event both go
+        let mut events: Vec<Value> = Vec::new();
+        let all = case["events"].as_array().unwrap();
+        let mut at = 0;
+        while at < all.len() {
+            let skip = all[at].get("target").is_some_and(|t| native_callees.contains(&n(t)));
+            if skip {
+                at += if all[at].get("kind").is_some() { 2 } else { 1 };
+            } else {
+                events.push(all[at].clone());
+                at += 1;
+            }
+        }
+        let events = Rc::new(events);
+        let cursor = Rc::new(RefCell::new(0usize));
+        let (trace, position) = (events.clone(), cursor.clone());
+        // Two recorded formats: a "call" event followed by its "return"
+        // event (keys.json), or one event per call with "before" and
+        // "after" states (the L165 corpora).
+        let paired = events.first().is_some_and(|e| e.get("kind").is_some());
+        x86::set_ext_calls(Some(Box::new(move |m, c, target| {
+            let k = *position.borrow();
+            let (call, back) = if paired {
+                (&trace[k], &trace[k + 1])
+            } else {
+                (&trace[k]["before"], &trace[k]["after"])
+            };
+            let target_recorded = if paired { n(&trace[k]["target"]) } else { n(&trace[k]["target"]) };
+            assert_eq!(target, target_recorded, "case {i}: call target");
+            assert_eq!(c.ecx, regs(call)[1], "case {i}: call ECX");
+            assert_eq!(c.esp, regs(call)[4], "case {i}: call ESP");
+            // What the callee reads: its return address, its three
+            // arguments and the buffer the first two describe. The rest of
+            // the recorded window is the caller's own frame (saved
+            // registers, locals), which a semantic port need not rebuild.
+            let recorded = pairs(&call["memory"]);
+            let esp = regs(call)[4];
+            let word = |a: u32| u32::from_le_bytes([0, 1, 2, 3].map(|k| recorded[&(a + k)]));
+            // What the callee reads: its return address and arguments, and
+            // for the interning call (0xE0E5E0: buffer, byte length, basis)
+            // the buffer. The rest of the recorded window is the caller's
+            // own frame (saved registers, locals).
+            let (buffer, len) = if target == 0x00e0_e5e0 { (word(esp + 4), word(esp + 8)) } else { (0, 0) };
+            // the return address and the callee's own stack arguments
+            let words = 1 + stack_args(target);
+            for (&a, &b) in &recorded {
+                let argument = a >= esp && a < esp + 4 * words;
+                let data = a >= buffer && a < buffer.wrapping_add(len);
+                if argument || data {
+                    assert_eq!(m.u8(a), b, "case {i}: call {target:x} memory {a:x}");
+                }
+            }
+            let effects = if paired { pairs(&back["effects"]) } else { pairs(&back["memory"]) };
+            for (a, b) in effects {
+                m.set_u8(a, b);
+            }
+            c.eax = regs(back)[0];
+            c.esp = regs(back)[4];
+            *position.borrow_mut() += if paired { 2 } else { 1 };
+        })));
+        body(&mut m, &mut c);
+        x86::set_ext_calls(None);
+        if c.st.home != 0 {
+            (ddnative_base::hooks::get().x87_release)(&mut c.st);
+        }
+        assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
+        let eax = if returns { [c.eax, after[0]] } else { [0, 0] };
+        let got = [eax[0], c.ebx, c.esp, c.ebp, c.esi, c.edi];
+        let want = [eax[1], after[3], after[4], after[5], after[6], after[7]];
+        assert_eq!(got, want, "case {i}: eax/ebx/esp/ebp/esi/edi");
+        let esp = after[4];
+        let expected = pairs(&case["after"]["memory"]);
+        for (&a, &b) in &expected {
+            if a >= esp {
+                assert_eq!(m.bytes.get(&a).copied(), Some(b), "case {i}: memory {a:x}");
+            }
+        }
+        for (&a, &b) in &m.writes {
+            if a >= esp {
+                assert_eq!(expected.get(&a).copied(), Some(b), "case {i}: extra write {a:x}");
+            }
+        }
+    }
+    cases.len()
+}
+
+
+// verifies 0x00e516f0 (ABI level; EAX included: the upper bytes are the original's leftovers)
+#[test]
+fn semantic_init_chain_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S8_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/ik_chain.json".into());
+    let n = abi_cases_with_calls(&path, mtcore::semantic_s8::init_chain);
+    eprintln!("{n} ABI-level init_chain cases passed");
+}
+
+// verifies 0x01130a00 (ABI level, cdecl; EAX = out)
+#[test]
+fn semantic_look_at_frame_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S8_LOOKAT_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/look_at_frame.json".into());
+    let n = abi_cases_with_calls(&path, mtcore::semantic_s8::look_at_frame);
+    eprintln!("{n} ABI-level look_at_frame cases passed");
+}
+
+// verifies 0x00d7cf70 (ABI level, EAX included) with its real helpers run natively
+#[test]
+fn semantic_sweep_capsule_triangle_matches_original() {
+    ddnative_host::install();
+    let path = std::env::var("S8_SWEEP_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/sweep.json".into());
+    let n = abi_cases_with_calls(&path, mtcore::semantic_s8_sweep::sweep_capsule_triangle);
+    eprintln!("{n} ABI-level sweep cases passed");
+}
+
+// verifies the triangle reduction inside 0x00d7cf70 (case 3 of its simplex switch)
+#[test]
+fn semantic_triangle_reduction_matches_original() {
+    use ddnative_base::mem::Pages;
+    let path = std::env::var("S8_TRIANGLE_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/sweep_triangle.json".into());
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return,
+    };
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let cases = data["cases"].as_array().unwrap();
+    for (i, case) in cases.iter().enumerate() {
+        let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
+        let pg = Pages::of(&m);
+        mtcore::semantic_s8_sweep::reduce_triangle(pg, &mut m, 0x2000_5000);
+        let expected = pairs(&case["after"]);
+        for (&a, &b) in &expected {
+            assert_eq!(m.bytes.get(&a).copied(), Some(b), "case {i}: memory {a:x}");
+        }
+        for (&a, &b) in &m.writes {
+            assert!(expected.get(&a).map_or(false, |&e| e == b), "case {i}: extra write {a:x}");
+        }
+    }
+    eprintln!("{} triangle reduction cases passed", cases.len());
+}
+
+// verifies 0x00d63ff0, 0x00d1b540 and 0x00d12e10 alone (ABI level, EAX included)
+#[test]
+fn semantic_collision_helpers_match_original() {
+    ddnative_host::install();
+    let dir = "E:/ddda-re/notes/native-L184";
+    let n = abi_cases_with_calls(&format!("{dir}/support.json"), mtcore::semantic_s8_sweep::shape_support);
+    let m = abi_cases_with_calls(&format!("{dir}/add_point.json"), mtcore::semantic_s8_sweep::simplex_add_point);
+    let k = abi_cases_with_calls(&format!("{dir}/segment.json"), mtcore::semantic_s8_sweep::simplex_segment_closest);
+    eprintln!("{n} support, {m} add_point, {k} segment cases passed");
+}
+
+// verifies 0x00e10fc0 with the sequence built, expanded and hashed natively: vectors from the
+// original run with its real callees 0x00e0ec50 and 0x00e0e5e0 inline and the real CRC table
+// (research/native/record_intern_keys.py); both the cached-table and the per-lookup table path
+#[test]
+fn semantic_intern_keys_native_matches_original() {
+    ddnative_host::install();
+    let path = "E:/ddda-re/notes/native-L184/intern_keys.json";
+    let a = abi_cases_with_calls(path, |m, c| mtcore::semantic::intern_dependency_keys_table(m, c, false));
+    assert!(a >= 1000);
+    eprintln!("{a} native intern cases passed");
+}
+
+// verifies 0x00e0e5e0 (the key hash, stdcall `ret 0xc`)
+#[test]
+fn semantic_key_hash_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/key_hash.json", mtcore::semantic::hash_key_words);
+    eprintln!("{n} key hash cases passed");
+}
