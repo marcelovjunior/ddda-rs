@@ -16,10 +16,13 @@ profile=()
 if [[ -n "${NATIVE_PROFILE:-}" ]]; then
     profile=(--profile "$NATIVE_PROFILE")
 fi
-CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 cargo test "${profile[@]}" -q -p ddnative
+CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 cargo test "${profile[@]}" -q -p ddnative -p ddnative-base
 # readable ports wired over lifted bodies (crates/mtmath and crates/mtcore,
 # docs/MATH.md, docs/CORE.md)
-CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 cargo test "${profile[@]}" -q -p mtmath -p mtcore -p mtframe
+# The native executor and its registered apply ports are part of the same
+# contract. Their original fixtures use separate required-vector switches.
+CARGO_INCREMENTAL=0 DDNATIVE_REQUIRE_VECTORS=1 MTDRAW_REQUIRE_APPLY=1 MTSTATE_REQUIRE_VECTORS=1 \
+    cargo test "${profile[@]}" -q -p mtmath -p mtcore -p mtframe -p mtdraw -p ddports -p mtstate
 out=$(python scripts/inventory.py build)
 echo "$out"
 if echo "$out" | grep -q "ported without a declared test"; then
