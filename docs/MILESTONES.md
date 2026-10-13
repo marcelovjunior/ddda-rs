@@ -1,5 +1,18 @@
 # Milestones
 
+### L158 critical scheduler jobs (2026-10-13)
+
+- Late c26s1 main-only callback leaders: DB7620 **10.679 ms/Present**,
+  4B9FF0 **5.179**, 1090F70 **3.933**. These dispatch virtual methods;
+  old worker coverage/tail duplication prevents per-join critical ranking.
+- Opt-in private-file trace correlates frame/batch, callback completion,
+  residual join, and worker signal/wait boundaries. Complete-batch parser
+  separates last job from longest job and rejects loss/truncation.
+- Four focused runtime and four parser tests pass. Light **226 pass /
+  inherited gamma failure / six ignored**. No game or speedup claim.
+- Next: head corrected census/trace capture, then exact hot-inner A/B.
+  Source map, hashes and limits: `docs/tasks/L158-critical-jobs.md`.
+
 ### L153 game-thread synchronization (2026-10-13)
 
 - Opt-in service/site/handle census and scheduler job histograms; fan-out

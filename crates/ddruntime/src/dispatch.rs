@@ -201,6 +201,9 @@ impl Registry {
         ddports::ensure_with(|ports| {
             crate::archive_inflate::install(ports);
             crate::procedural_geometry::install(ports);
+            if crate::critical_jobs::enabled() {
+                crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
+            }
             if crate::ndraw_stats::enabled() {
                 crate::ndraw_stats::wrap_executor(ports, &ddnative::generated::lifted::bodies());
             }
@@ -368,7 +371,9 @@ impl Registry {
                 let sample = if crate::threads::sync_profile::enabled() {
                     crate::threads::sync_profile::begin_job(target, m, cpu)
                 } else { None };
+                let critical = crate::critical_jobs::begin_job(target, m, cpu);
                 f(m, cpu);
+                drop(critical);
                 if let Some(sample) = sample { crate::threads::sync_profile::finish_job(sample); }
             },
         }
@@ -461,6 +466,7 @@ impl Registry {
         let sync_sample = if crate::threads::sync_profile::enabled() {
             crate::threads::sync_profile::begin(self.names.get(&target).map(String::as_str), target, m, cpu)
         } else { None };
+        let critical = crate::critical_jobs::begin_join(self.names.get(&target).map(String::as_str), m, cpu);
         let stats = crate::threads::stats::on().then(|| {
             let name = self.names.get(&target).cloned().unwrap_or_else(|| format!("{target:#010x}"));
             crate::threads::stats::start(name)
@@ -477,6 +483,8 @@ impl Registry {
         drop(scope);
         drop(lock);
         drop(stats);
+        if let Some(sample) = critical { sample.finish(cpu.eax); }
+        crate::critical_jobs::presented(self.names.get(&target).map(String::as_str), cpu.eax);
         if let Some(sample) = sync_sample { sample.finish(cpu.eax); }
         if crate::threads::sync_profile::enabled() {
             crate::threads::sync_profile::presented(self.names.get(&target).map(String::as_str), cpu.eax);
