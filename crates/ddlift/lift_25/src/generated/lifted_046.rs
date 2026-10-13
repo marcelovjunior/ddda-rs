@@ -833,7 +833,7 @@ pub fn f_00cf7c10(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0xCF7C10;
     loop {
         match pc {
-            0xCF7C10 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x4)); cpu.eax = cpu.fl.alu_and(cpu.eax, 0xFFFFu32, 32); cpu.eax = cpu.eax.wrapping_sub(1); cpu.fl.alu_sub(cpu.eax, 0x7Fu32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0xCF7C80 } else { 0xCF7C1E }; continue; }
+            0xCF7C10 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x4)); cpu.eax = cpu.eax & 0xFFFFu32; cpu.eax = cpu.eax.wrapping_sub(1); cpu.fl.alu_sub(cpu.eax, 0x7Fu32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0xCF7C80 } else { 0xCF7C1E }; continue; }
             0xCF7C1E => { cpu.eax = (m.fast_u8(pt, cpu.eax.wrapping_add(0xCF7CC0)) as u32); pc = m.fast_u32(pt, cpu.eax.wrapping_mul(4).wrapping_add(0xCF7C84)); continue; }
             0xCF7C2C => { cpu.eax = 0x4u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             0xCF7C32 => { cpu.eax = 0x1u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }

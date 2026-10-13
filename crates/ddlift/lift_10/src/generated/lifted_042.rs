@@ -766,7 +766,7 @@ fn f_00566460_p0(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<cr
             0x5665CB => { pc = 0x5665D0; continue; }
             0x5665D0 => { cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x4C)); cpu.ebx = m.fast_u32(pt, cpu.ecx.wrapping_add(cpu.eax.wrapping_mul(4))); m.fast_set_u32(pt, cpu.ecx.wrapping_add(cpu.eax.wrapping_mul(4)).wrapping_add(0xFFFFFFFC), cpu.ebx); cpu.eax = cpu.eax.wrapping_add(1); cpu.fl.alu_sub(cpu.eax, cpu.edx, 32); pc = if (cpu.fl.a < cpu.fl.b) { 0x5665D0 } else { 0x5665E0 }; continue; }
             0x5665E0 => { { let a = cpu.edx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.edx = r; } m.fast_set_u32(pt, cpu.esp.wrapping_add(0x40), cpu.edx); pc = 0x5665EF; continue; }
-            0x5665E7 => { cpu.edx = m.fast_u32(pt, cpu.esp.wrapping_add(0x40)); cpu.esi = cpu.fl.alu_add(cpu.esi, 0x4u32, 32); { let a = cpu.edi & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.edi = r; } pc = 0x5665EF; continue; }
+            0x5665E7 => { cpu.edx = m.fast_u32(pt, cpu.esp.wrapping_add(0x40)); cpu.esi = cpu.esi.wrapping_add(0x4u32); { let a = cpu.edi & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.edi = r; } pc = 0x5665EF; continue; }
             0x5665EF => { cpu.eax = cpu.edi.wrapping_add(0xFFFFFFFF); cpu.fl.alu_sub(cpu.eax, cpu.edx, 32); pc = if (cpu.fl.a < cpu.fl.b) { 0x566593 } else { 0x5665F6 }; continue; }
             0x5665F6 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.esp.wrapping_add(0x40)), 0x0u32, 32); pc = 0x5665FB; continue; }
             0x5665FB => { pc = if cpu.fl.zf() { 0x5667C9 } else { 0x566601 }; continue; }
