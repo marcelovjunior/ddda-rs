@@ -158,6 +158,8 @@ impl App {
                     Some((device, queue, adapter, window)) => {
                         let mut backend = ddgpu::WgpuBackend::new(device, queue, adapter);
                         backend.read_frames = false;
+                        // L120: occlusion counts read back without stalling the backend
+                        backend.async_queries = true;
                         // L71: the driver's pipeline compilation kept between
                         // runs, in DDPLAY_PIPELINE_CACHE (a directory; 0: off),
                         // by default %LOCALAPPDATA%\ddda-rs\pipelines

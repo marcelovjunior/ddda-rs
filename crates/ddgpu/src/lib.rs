@@ -375,6 +375,12 @@ pub struct WgpuBackend {
     query_slots: HashMap<u32, Vec<u32>>,
     /// guest query -> its resolved count
     query_counts: HashMap<u32, u64>,
+    /// L120: occlusion resolves in flight (read-back buffer, map state:
+    /// 0 pending, 1 mapped, 2 failed, the slot count), with async_queries
+    pending_queries: HashMap<u32, (wgpu::Buffer, std::sync::Arc<std::sync::atomic::AtomicU8>, usize)>,
+    /// L120: query_result never waits for the GPU (None until the count is
+    /// back); off by default, where it resolves and waits as before
+    pub async_queries: bool,
     /// guest queries between D3DISSUE_BEGIN and D3DISSUE_END
     active_queries: Vec<u32>,
     gamma: Option<Box<GammaRamp>>,
@@ -610,6 +616,8 @@ impl WgpuBackend {
             slot_users: HashMap::new(),
             query_slots: HashMap::new(),
             query_counts: HashMap::new(),
+            pending_queries: HashMap::new(),
+            async_queries: false,
             active_queries: Vec::new(),
             gamma: None,
             adapter,
@@ -795,9 +803,38 @@ impl WgpuBackend {
             }
         }
         self.query_counts.remove(&query);
+        self.pending_queries.remove(&query);
     }
 
     /// The samples the draws in `slots` passed, from the GPU.
+    /// Start resolving `slots` into a mappable buffer without waiting
+    /// (L120): the state turns 1 when the counts can be read, 2 on failure.
+    fn start_resolve(&self, slots: &[u32]) -> (wgpu::Buffer, std::sync::Arc<std::sync::atomic::AtomicU8>) {
+        self.flush();
+        let size = 256 * slots.len() as u64;
+        let resolved = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
+        let read = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        for (k, &s) in slots.iter().enumerate() {
+            let i = s % OCCLUSION_SET;
+            enc.resolve_query_set(&self.occlusion_sets[(s / OCCLUSION_SET) as usize], i..i + 1, &resolved, 256 * k as u64);
+        }
+        enc.copy_buffer_to_buffer(&resolved, 0, &read, 0, size);
+        self.queue.submit([enc.finish()]);
+        let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let done = state.clone();
+        read.slice(..).map_async(wgpu::MapMode::Read, move |r| done.store(if r.is_ok() { 1 } else { 2 }, std::sync::atomic::Ordering::Release));
+        (read, state)
+    }
+
+    /// Keep a query's count; its slots are free for later draws.
+    fn store_count(&mut self, query: u32, n: u64) -> u64 {
+        self.drop_query(query);
+        self.query_slots.insert(query, Vec::new());
+        self.query_counts.insert(query, n);
+        n
+    }
+
     fn resolve(&self, slots: &[u32]) -> Option<u64> {
         self.flush();
         if slots.is_empty() {
@@ -2574,13 +2611,44 @@ impl GraphicsBackend for WgpuBackend {
         if let Some(&n) = self.query_counts.get(&query) {
             return Some(n);
         }
-        let slots = self.query_slots.get(&query)?.clone();
-        let n = self.resolve(&slots)?;
-        // the count stays; the slots are free for later draws
-        self.drop_query(query);
-        self.query_slots.insert(query, Vec::new());
-        self.query_counts.insert(query, n);
-        Some(n)
+        if !self.async_queries {
+            let slots = self.query_slots.get(&query)?.clone();
+            let n = self.resolve(&slots)?;
+            return Some(self.store_count(query, n));
+        }
+        // L120: the GPU is never waited for here (it stalled the backend
+        // worker for each of a gameplay frame's six occlusion queries:
+        // query_result was 26% of the worker, combo5). None until the
+        // read-back is mapped; the caller asks again (GetData's S_FALSE).
+        if !self.pending_queries.contains_key(&query) {
+            let slots = self.query_slots.get(&query)?.clone();
+            if slots.is_empty() {
+                return Some(self.store_count(query, 0));
+            }
+            let (read, state) = self.start_resolve(&slots);
+            self.pending_queries.insert(query, (read, state, slots.len()));
+        }
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        let (read, state, n) = {
+            let e = self.pending_queries.get(&query)?;
+            (e.0.clone(), e.1.clone(), e.2)
+        };
+        match state.load(std::sync::atomic::Ordering::Acquire) {
+            0 => None,
+            1 => {
+                let count = {
+                    let data = read.slice(..).get_mapped_range();
+                    (0..n).map(|k| u64::from_le_bytes(data[256 * k..256 * k + 8].try_into().unwrap())).sum()
+                };
+                read.unmap();
+                Some(self.store_count(query, count))
+            }
+            _ => {
+                // the map failed: resolve again on the next ask
+                self.pending_queries.remove(&query);
+                None
+            }
+        }
     }
 
     fn gamma(&mut self, ramp: Option<&GammaRamp>) {

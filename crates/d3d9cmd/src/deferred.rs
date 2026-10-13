@@ -140,9 +140,18 @@ impl GraphicsBackend for DeferredBackend {
     /// count arriving after the query was issued again is not answered.
     fn query_result(&mut self, query: u32) -> Option<u64> {
         let generation = self.generation.get(&query).copied().unwrap_or(0);
-        if let Some(&(g, v)) = self.results.lock().unwrap().get(&query) {
-            if g == generation {
-                return v;
+        {
+            let mut results = self.results.lock().unwrap();
+            if let Some(&(g, v)) = results.get(&query) {
+                if g == generation && v.is_some() {
+                    return v;
+                }
+                if g == generation {
+                    // the backend had no count yet (L120: it does not wait
+                    // for the GPU): ask again
+                    results.remove(&query);
+                    self.asked.remove(&query);
+                }
             }
         }
         if self.asked.get(&query) != Some(&generation) {

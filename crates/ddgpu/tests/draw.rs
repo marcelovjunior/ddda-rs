@@ -428,6 +428,17 @@ fn counted(gpu: &mut ddgpu::WgpuBackend, draws: &[DrawCall], spans: &[std::ops::
         issue(gpu, k + 1, true);
     }
     issue(gpu, draws.len(), false);
+    if gpu.async_queries {
+        // L120: no count until the read-back is mapped; ask again
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        return ids.iter().map(|&q| loop {
+            if let Some(n) = gpu.query_result(q) {
+                break n as u32;
+            }
+            assert!(std::time::Instant::now() < deadline, "query {q:#x}: no count after 20 s");
+            std::thread::yield_now();
+        }).collect();
+    }
     ids.iter().map(|&q| gpu.query_result(q).expect("count") as u32).collect()
 }
 
@@ -458,6 +469,27 @@ fn occlusion_counts_match_the_d3d9_driver() {
     assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
     eprintln!("occlusion counts: D3D9 {theirs:?}, wgpu {ours:?}");
     assert_eq!(ours, theirs, "occlusion counts (wgpu / D3D9)");
+}
+
+/// L120: with async_queries the backend never waits for the GPU in
+/// query_result (None until the count is read back); the counts it then
+/// gives equal the blocking ones.
+#[test]
+fn async_occlusion_counts_equal_blocking_ones() {
+    let (Some(mut blocking), Some(mut nonblocking)) = (ddgpu::WgpuBackend::headless(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    nonblocking.async_queries = true;
+    let clear = ClearCall { flags: 1 | 2 | 4, z: 0.5, depth: Some(depth_target()), ..blue_clear() };
+    let draws = vec![depth_draw(0.25, 1.0, &[]), depth_draw(0.75, 1.0, &[]), depth_draw(0.75, 1.0, &[(7, 0)])];
+    let spans = vec![0..1, 1..2, 2..3, 3..3];
+    blocking.clear(&clear);
+    let want = counted(&mut blocking, &draws, &spans);
+    nonblocking.clear(&clear);
+    let got = counted(&mut nonblocking, &draws, &spans);
+    assert!(nonblocking.errors.is_empty(), "{:?}", nonblocking.errors);
+    assert_eq!(got, want, "async / blocking occlusion counts");
 }
 
 /// vs_3_0: o0 = v0 + v1 (v1: texcoord1, the per-instance offset; one
