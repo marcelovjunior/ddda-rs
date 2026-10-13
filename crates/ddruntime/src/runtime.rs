@@ -43,6 +43,7 @@ impl<T> GuestCell<T> {
 pub struct Runtime {
     pub(crate) movies: GuestCell<crate::movies::Movies>,
     pub(crate) input: GuestCell<crate::input::Input>,
+    pub(crate) input_poll: Arc<crate::input::PollState>,
     pub(crate) audio: GuestCell<crate::audio::Audio>,
     pub(crate) lock: crate::threads::GuestLock,
     pub(crate) kernel: GuestCell<crate::threads::Kernel>,

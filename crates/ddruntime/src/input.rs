@@ -4,6 +4,8 @@
 //! sKeyboard 0x00DF43E0, sMouse 0x00E05120, sPad 0x00DFA0C0.
 //! No host device is opened. A host sends events through `connect`; only the
 //! guest-lock holder drains them. Pads retain XInput's four independent ports.
+//! Unchanged keyboard polls use atomic snapshots; pending events still run
+//! the original locked pump so hooks and message-removal ordering survive.
 use crate::dispatch::{Conflict, Registry};
 use crate::interfaces::{self, Spec, Tokens};
 use crate::services::{arg, call_guest, ret, with_state, zero};
@@ -11,6 +13,128 @@ use crate::user32::{self, Msg};
 use ddnative_base::{mem::Mem, x86::Cpu};
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+
+/// Polling state lives outside GuestCell. The host publishes pending input;
+/// the locked pump publishes accepted keys only AFTER low-level hooks have
+/// run (and can suppress them). Idle polls never enter the guest lock.
+pub(crate) struct PollState {
+    pending: AtomicBool,
+    keys: [AtomicU16; 256],
+    queues: Mutex<HashMap<u32, Arc<[AtomicU16; 256]>>>,
+}
+
+impl Default for PollState {
+    fn default() -> Self {
+        Self { pending: AtomicBool::new(false), keys: std::array::from_fn(|_| AtomicU16::new(0)),
+            queues: Mutex::new(HashMap::new()) }
+    }
+}
+
+// A modifier family occupies ONE word: three down bits and three pressed
+// bits. Generic polling atomically consumes all three edges, while polling
+// left/right consumes only that key, as the old locked implementation did.
+fn key_bits(vk: usize) -> (usize, u16, u16) {
+    match vk {
+        0x10..=0x12 => (vk, 0x700, 7),
+        0xa0..=0xa5 => (0x10 + (vk - 0xa0) / 2, 0x200 << ((vk - 0xa0) % 2), 2 << ((vk - 0xa0) % 2)),
+        _ => (vk, 0x8000, 1),
+    }
+}
+
+#[cfg(test)]
+mod polling_tests {
+    use super::*;
+
+    #[test]
+    fn atomic_keys_match_the_previous_locked_key_model() {
+        let poll = PollState::default();
+        let mut keys = [false; 256];
+        let mut pressed = [false; 256];
+        let choices = [0x10, 0x11, 0x12, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0x41, 1, 2, 4];
+        let mut seed = 1u32;
+        for _ in 0..20_000 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let vk = choices[(seed >> 8) as usize % choices.len()];
+            if seed & 3 == 0 {
+                let queried: &[usize] = match vk {
+                    0x10 => &[0x10, 0xa0, 0xa1],
+                    0x11 => &[0x11, 0xa2, 0xa3],
+                    0x12 => &[0x12, 0xa4, 0xa5],
+                    _ => std::slice::from_ref(&vk),
+                };
+                let expected = if queried.iter().any(|&i| keys[i]) { 0x8000 } else { 0 }
+                    | u32::from(queried.iter().any(|&i| pressed[i]));
+                for &i in queried { pressed[i] = false; }
+                assert_eq!(poll.async_key(vk as u32), expected, "vk={vk:#x}");
+            } else {
+                let down = seed & 4 != 0;
+                poll.key(vk, down, keys[vk]);
+                pressed[vk] |= down && !keys[vk];
+                keys[vk] = down;
+            }
+        }
+        assert_eq!(poll.async_key(256), 0);
+        assert_eq!(poll.async_key(u32::MAX), 0);
+    }
+
+    #[test]
+    fn concurrent_modifier_polls_consume_each_press_only_once() {
+        let poll = Arc::new(PollState::default());
+        poll.key(0xa3, true, false);
+        let workers: Vec<_> = (0..16).map(|i| {
+            let poll = poll.clone();
+            std::thread::spawn(move || poll.async_key(if i % 2 == 0 { 0x11 } else { 0xa3 }))
+        }).collect();
+        let values: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+        assert!(values.iter().all(|v| v & 0x8000 != 0));
+        assert_eq!(values.iter().filter(|v| **v & 1 != 0).count(), 1);
+        poll.key(0xa3, false, true);
+        assert_eq!(poll.async_key(0x11), 0);
+    }
+}
+
+impl PollState {
+    fn key(&self, vk: usize, down: bool, old: bool) {
+        let (index, mut down_bit, mut pressed_bit) = key_bits(vk);
+        if matches!(vk, 0x10..=0x12) {
+            (down_bit, pressed_bit) = (0x100, 1);
+        }
+        if down {
+            self.keys[index].fetch_or(down_bit | if old { 0 } else { pressed_bit }, Ordering::AcqRel);
+        } else {
+            self.keys[index].fetch_and(!down_bit, Ordering::AcqRel);
+        }
+    }
+
+    fn async_key(&self, vk: u32) -> u32 {
+        if vk >= 256 { return 0; }
+        let (index, down, pressed) = key_bits(vk as usize);
+        let value = self.keys[index].fetch_and(!pressed, Ordering::AcqRel);
+        (if value & down != 0 { 0x8000 } else { 0 }) | u32::from(value & pressed != 0)
+    }
+}
+
+fn queue_snapshot() -> Arc<[AtomicU16; 256]> {
+    // Only a cache miss takes this snapshot's own mutex, never the guest
+    // lock. Keeping the Arc prevents address reuse across sessions.
+    thread_local! {
+        static CACHE: std::cell::RefCell<Option<(Arc<PollState>, u32, Arc<[AtomicU16; 256]>)>> = const { std::cell::RefCell::new(None) };
+    }
+    let rt = crate::runtime::current();
+    let tid = crate::threads::current_tid();
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((poll, owner, keys)) = cache.as_ref() {
+            if Arc::ptr_eq(poll, &rt.input_poll) && *owner == tid { return keys.clone(); }
+        }
+        let keys = rt.input_poll.queues.lock().unwrap_or_else(|e| e.into_inner())
+            .entry(tid).or_insert_with(|| Arc::new(std::array::from_fn(|_| AtomicU16::new(0)))).clone();
+        *cache = Some((rt.input_poll.clone(), tid, keys.clone()));
+        keys
+    })
+}
 
 const INVALID: u32 = 0x8007_0057;
 const NOT_REGISTERED: u32 = 0x8004_0154;
@@ -85,8 +209,24 @@ pub struct Rumble {
     pub right: u16,
 }
 pub struct HostInput {
-    pub events: Sender<Event>,
+    pub events: EventSender,
     pub rumble: Receiver<Rumble>,
+}
+
+/// Host-side publication seam. Publish AFTER enqueueing: a pump racing the
+/// send can cause an extra drain, but cannot clear a not-yet-enqueued event.
+#[derive(Clone)]
+pub struct EventSender {
+    sender: Sender<Event>,
+    poll: Arc<PollState>,
+}
+
+impl EventSender {
+    pub fn send(&self, event: Event) -> Result<(), mpsc::SendError<Event>> {
+        self.sender.send(event)?;
+        self.poll.pending.store(true, Ordering::Release);
+        Ok(())
+    }
 }
 
 /// Attach the window/backend to this session, without sharing guest memory.
@@ -98,7 +238,7 @@ pub fn connect() -> HostInput {
         s.rumble = Some(rtx);
     });
     HostInput {
-        events: tx,
+        events: EventSender { sender: tx, poll: crate::runtime::current().input_poll.clone() },
         rumble: rrx,
     }
 }
@@ -122,9 +262,7 @@ pub(crate) struct Input {
     rumble: Option<Sender<Rumble>>,
     pending: VecDeque<Event>,
     keys: [bool; 256],
-    pressed: [bool; 256],
     scan: [u8; 256],
-    queue_keys: HashMap<u32, [u16; 256]>,
     pads: [Option<Pad>; 4],
     packets: [u32; 4],
     vibration: [(u16, u16); 4],
@@ -160,9 +298,7 @@ impl Default for Input {
             rumble: None,
             pending: VecDeque::new(),
             keys: [false; 256],
-            pressed: [false; 256],
             scan: [0; 256],
-            queue_keys: HashMap::new(),
             pads: [None; 4],
             packets: [0; 4],
             vibration: [(0, 0); 4],
@@ -190,6 +326,8 @@ fn next_hook(m: &mut dyn Mem, c: &mut Cpu) -> u32 {
 /// Drain at a guest service boundary. Low-level keyboard hooks run on the
 /// installing thread before its asynchronous key state is updated (MSDN).
 pub fn pump(m: &mut dyn Mem, c: &mut Cpu) {
+    let poll = crate::runtime::current().input_poll.clone();
+    poll.pending.store(false, Ordering::Release);
     state(|s| {
         if let Some(rx) = &s.events {
             s.pending.extend(rx.try_iter());
@@ -236,7 +374,7 @@ pub fn pump(m: &mut dyn Mem, c: &mut Cpu) {
                 }
                 if !keyboard {
                     s.keys = [false; 256];
-                    s.pressed = [false; 256];
+                    for key in &poll.keys { key.store(0, Ordering::Release); }
                     s.scan = [0; 256];
                 }
                 if !mouse {
@@ -295,7 +433,7 @@ pub fn pump(m: &mut dyn Mem, c: &mut Cpu) {
                 if !suppressed {
                     state(|s| {
                         s.keys[vk as usize] = down;
-                        s.pressed[vk as usize] |= down && !old;
+                        poll.key(vk as usize, down, old);
                         s.scan[(scan as usize & 0x7f) | if extended { 0x80 } else { 0 }] =
                             if down { 0x80 } else { 0 };
                     });
@@ -333,7 +471,7 @@ pub fn pump(m: &mut dyn Mem, c: &mut Cpu) {
                     let old = s.buttons;
                     s.buttons = buttons;
                     for (i, vk) in [1, 2, 4, 5, 6].into_iter().enumerate() {
-                        s.pressed[vk] |= buttons[i] && !old[i];
+                        poll.key(vk, buttons[i], old[i]);
                         s.keys[vk] = buttons[i];
                     }
                     old
@@ -405,14 +543,16 @@ pub fn pump(m: &mut dyn Mem, c: &mut Cpu) {
             }
         }
     }
+    if state(|s| !s.pending.is_empty()) {
+        // A keyboard hook belongs to another guest thread; preserve the
+        // deferred event until that thread pumps it (including hook reentry).
+        poll.pending.store(true, Ordering::Release);
+    }
 }
 pub(crate) fn message_removed(msg: Msg) {
     if matches!(msg.message, 0x100 | 0x101 | 0x104 | 0x105) && msg.wparam < 256 {
-        state(|s| {
-            let keys = s
-                .queue_keys
-                .entry(crate::threads::current_tid())
-                .or_insert([0; 256]);
+        {
+            let keys = queue_snapshot();
             let down = msg.message & 1 == 0;
             let index = match msg.wparam {
                 0x10 => {
@@ -438,53 +578,31 @@ pub(crate) fn message_removed(msg: Msg) {
                 }
                 k => k as usize,
             };
-            let k = &mut keys[index];
-            if down && *k & 0x8000 == 0 && matches!(msg.wparam, 0x14 | 0x90 | 0x91) {
-                *k ^= 1;
+            let mut k = keys[index].load(Ordering::Acquire);
+            if down && k & 0x8000 == 0 && matches!(msg.wparam, 0x14 | 0x90 | 0x91) {
+                k ^= 1;
             }
-            *k = (*k & 1) | if down { 0x8000 } else { 0 };
+            keys[index].store((k & 1) | if down { 0x8000 } else { 0 }, Ordering::Release);
             for (generic, left, right) in [(0x10, 0xa0, 0xa1), (0x11, 0xa2, 0xa3), (0x12, 0xa4, 0xa5)] {
                 if index == left || index == right {
-                    keys[generic] = (keys[left] | keys[right]) & 0x8000;
+                    keys[generic].store((keys[left].load(Ordering::Acquire) | keys[right].load(Ordering::Acquire)) & 0x8000, Ordering::Release);
                 }
             }
-        });
+        }
     }
 }
 pub fn get_async_key_state(m: &mut dyn Mem, c: &mut Cpu) {
-    pump(m, c);
+    let poll = crate::runtime::current().input_poll.clone();
+    if poll.pending.load(Ordering::Acquire) {
+        crate::threads::with_lock(|| pump(m, c));
+    }
     let vk = arg(m, c, 0);
-    c.eax = state(|s| {
-        if vk >= 256 {
-            return 0;
-        }
-        let keys: Vec<usize> = match vk {
-            0x10 => vec![0x10, 0xa0, 0xa1],
-            0x11 => vec![0x11, 0xa2, 0xa3],
-            0x12 => vec![0x12, 0xa4, 0xa5],
-            _ => vec![vk as usize],
-        };
-        let v = if keys.iter().any(|&i| s.keys[i]) {
-            0x8000
-        } else {
-            0
-        } | u32::from(keys.iter().any(|&i| s.pressed[i]));
-        for i in keys {
-            s.pressed[i] = false;
-        }
-        v
-    });
+    c.eax = poll.async_key(vk);
     ret(m, c, 4);
 }
 pub fn get_key_state(m: &mut dyn Mem, c: &mut Cpu) {
     let vk = arg(m, c, 0);
-    c.eax = state(|s| {
-        s.queue_keys
-            .get(&crate::threads::current_tid())
-            .and_then(|a| a.get(vk as usize))
-            .copied()
-            .unwrap_or(0) as u32
-    });
+    c.eax = queue_snapshot().get(vk as usize).map_or(0, |k| k.load(Ordering::Acquire) as u32);
     ret(m, c, 4);
 }
 pub fn get_keyboard_layout(m: &mut dyn Mem, c: &mut Cpu) {

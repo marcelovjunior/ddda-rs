@@ -2,6 +2,20 @@
 
 ## L82 render service tails (2026-10-13)
 
+**Input convoy follow-up:** GetAsyncKeyState/GetKeyState and the stateless
+GetKeyboardLayout/MapVirtualKeyA/ImmGetVirtualKey queries are LockFree.
+The host's EventSender atomically publishes pending input; unchanged polls
+read accepted-key snapshots. Pending events still pump under `with_lock`
+so hook suppression and hook-thread ordering remain intact. Modifier
+families share one atomic word for exact pressed-bit consumption.
+GetKeyState snapshots are per-session/per-guest-thread and update only on
+message removal (including toggles). XInput/DirectInput mutations retain
+their existing locks. The snapshot-map mutex is used only on cache misses.
+Busy-worker scenario: 32 polls, **32 -> 0 acquisitions/blocks**, **4.461 ms
+-> 15.003 us/call**; full **141 light tests pass**. Head must measure gameplay
+and build the host integration; the agent neither built shards nor ran the
+game. Details and limits are in the L82 task Results.
+
 `Binding::ServiceTail` preserves locked preparation and the existing
 backend-mutex submission order for DrawPrimitive, DrawIndexedPrimitive and
 Clear (device slots 81/82/43). Their final `unlocked` section no longer

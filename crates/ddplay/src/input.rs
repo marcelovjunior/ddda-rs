@@ -4,13 +4,12 @@
 //! game's rumble sent back. Events carry `hwnd: 0` (the guest's focused
 //! window); mouse positions are the window's pixels scaled to the game's
 //! back buffer, which is the guest window's client area.
-use ddruntime::input::{Event, HostInput, Pad};
-use std::sync::mpsc::Sender;
+use ddruntime::input::{Event, EventSender, HostInput, Pad};
 use winit::event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::platform::scancode::PhysicalKeyExtScancode;
 
 pub struct Input {
-    events: Sender<Event>,
+    events: EventSender,
     /// Held keys as (vk, scan, extended), released when the window loses focus.
     held: Vec<(u8, u8, bool)>,
     alt: bool,
@@ -139,7 +138,7 @@ fn virtual_key(code: u32) -> u8 {
 }
 
 /// Poll the host's four XInput ports, forward changes, apply rumble.
-fn pads(events: Sender<Event>, rumble: std::sync::mpsc::Receiver<ddruntime::input::Rumble>) {
+fn pads(events: EventSender, rumble: std::sync::mpsc::Receiver<ddruntime::input::Rumble>) {
     use windows_sys::Win32::UI::Input::XboxController::{XInputGetState, XInputSetState, XINPUT_STATE, XINPUT_VIBRATION};
     let mut last: [Option<Pad>; 4] = [None; 4];
     let mut announced = [false; 4];
@@ -179,7 +178,7 @@ fn pads(events: Sender<Event>, rumble: std::sync::mpsc::Receiver<ddruntime::inpu
 /// those times (seconds after the game's input connects), for unattended
 /// runs (e.g. `100:enter` past "PRESS ANY BUTTON"). Keys: enter, esc,
 /// space, up, down, left, right, or a virtual-key code in hex (`0x0d`).
-fn autokeys(events: Sender<Event>) {
+fn autokeys(events: EventSender) {
     let Ok(spec) = std::env::var("DDPLAY_AUTOKEYS") else { return };
     let mut plan: Vec<(f64, u8, u8, bool)> = Vec::new();
     for item in spec.split(',').map(str::trim).filter(|s| !s.is_empty()) {

@@ -1,5 +1,17 @@
 # Milestones
 
+### L82 input polling convoy (2026-10-13)
+
+- Head's measured GetAsyncKeyState hotspot (1,284,189 calls / 14,719 ms wait
+  over 120 s) now polls atomic accepted-key state without the guest lock.
+  New host events alone use the locked pump to preserve hook suppression;
+  GetKeyState retains per-thread message-removal/toggle semantics.
+- Five input-query bindings are LockFree. Busy-worker 32-poll scenario:
+  **32 -> 0 acquisitions/blocks**, **4.461 ms -> 15.003 us/call**.
+  **141 light tests pass**, including existing hook/queue behavior, concurrent
+  edge consumption and a 20,000-step comparison against the old key model.
+- Next: head's gameplay/FPS comparison; no agent game or shard build/run.
+
 ### L82 render service lock tails (2026-10-13)
 
 - DrawPrimitive, DrawIndexedPrimitive and Clear retain locked snapshots and

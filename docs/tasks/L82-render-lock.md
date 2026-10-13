@@ -76,3 +76,54 @@ Head redirect #10190: gameplay measured 1,284,189 GetAsyncKeyState calls in
 snapshots, preserving hook suppression and per-thread queue key state.
 `threads.rs` is frozen for claude-2's L86 work. Gameplay/FPS comparison of
 the render-tail checkpoint remains for head.
+
+## Input convoy redirect results (head #10190)
+
+Implemented `Binding::LockFree` for GetAsyncKeyState, GetKeyState,
+GetKeyboardLayout, MapVirtualKeyA and ImmGetVirtualKey. No further changes
+to threads.rs after render-tail checkpoint `3ce658f5` (L86 owns that file).
+
+- `HostInput.events` is now a cloneable `EventSender` with the same `send`
+  call shape. Successful sends publish an atomic pending-event flag after
+  enqueueing. The host does not touch GuestCell or guest memory. A racing
+  pump may drain twice but cannot lose an unpublished channel event.
+- GetAsyncKeyState reads/consumes an atomic accepted-key snapshot when no
+  events are pending. Pending events alone enter `threads::with_lock` to
+  run the existing pump, including hooks on their owning guest thread.
+  Deferred hook events keep the pending flag set. Publishing raw physical
+  keys immediately on the host would break suppression and the hook's
+  required pre-update observation, so accepted keys publish after hooks.
+- Generic/left/right modifiers share one atomic word, preserving exact
+  shared pressed-bit consumption across concurrent generic/specific polls.
+  This also eliminates the previous per-poll temporary Vec allocation.
+- GetKeyState reads a cached per-session/per-guest-thread atomic queue
+  snapshot. Only message removal updates it, including toggle bits and
+  modifier aliases. The snapshot map has its own mutex on cache misses;
+  the hot path never takes the guest lock. Host physical input does not
+  bypass queue semantics.
+- GetKeyboardLayout, MapVirtualKeyA and ImmGetVirtualKey use constants,
+  local tables, CPU and guest stack only. XInput/DirectInput/device and
+  message-queue mutation services retain their current synchronization.
+- `ddplay/src/input.rs` only changes its three event-sender type annotations
+  and import. No game/shard build or run was made; head verifies integration.
+
+Busy guest-worker scenario (statistics on, debug profile, 32 polls each,
+synthetic 4 ms locked work): the same snapshot poll bound as Service versus
+LockFree gives **32 -> 0 acquisitions**, **32 -> 0 blocks**, total acquisition
+wait **142.0 ms -> 0**, mean call **4.461 ms -> 15.003 us**. A real guest
+worker verifies independent queue-key state. New key-up is processed on
+the slow path; queue state changes only after removal. This isolates lock
+policy cost and is not a gameplay FPS claim.
+
+Validation: **141 tests pass**, full
+`cargo test -p ddruntime --no-default-features -- --test-threads=1`, jobs=4,
+incremental off, `C:/ddda-targets/L82`. Existing hook suppression, queue
+state, extended modifiers, mouse and disconnect cases pass. A 20,000-step
+reference-model test matches the previous locked key behavior; concurrent
+generic/right-modifier polling consumes the press edge exactly once.
+
+Next action: head merges both L82 commits and compares gameplay with
+`DDRUNTIME_LOCK_STATS=1` / `DDRUNTIME_LOCK_STATS_EVERY=120` (per-thread frame
+reports are verbose), then measures FPS with diagnostics off. New pending
+input still intentionally takes the guest lock; unchanging polls should
+have zero acquisitions. Original-game/input-feel comparison remains open.

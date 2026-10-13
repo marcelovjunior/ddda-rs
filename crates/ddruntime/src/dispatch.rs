@@ -31,7 +31,10 @@ pub enum Binding {
     /// work. Audit every unlocked call before assigning this policy.
     ServiceTail(LiftFn),
     /// A service that touches only guest memory, host atomics, the host
-    /// clock or the calling thread's own id: no runtime state. In parallel
+    /// clock or the calling thread's own id: no unprotected runtime state.
+    /// A service may explicitly take `threads::with_lock` for a slow path
+    /// (L82 input events/hooks); snapshots must have their own synchronization.
+    /// In parallel
     /// mode it runs without the guest lock (L65; the Interlocked family,
     /// memcpy/memset, the timers); in the serial mode it is an API call
     /// like any other (a time slice may end there).
