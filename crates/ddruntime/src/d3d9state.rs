@@ -11,7 +11,7 @@
 //! number. Set* calls keep a reference to the object they bind and release
 //! the one they replace, as D3D9 does.
 use crate::d3d9::{profile, D3DERR_INVALIDCALL, D3D_OK};
-use crate::d3d9dev::{add_ref_to, hand_out, new_object, objects, release_of, with_counted, with_device, Kind, Object};
+use crate::d3d9dev::{add_ref_to, hand_out, new_object, objects, release_of, with_counted, with_device, Kind};
 use crate::guest::View;
 use crate::services::{arg, args, ret};
 use ddnative_base::mem::Mem;
@@ -487,8 +487,8 @@ pub(crate) fn device_set_texture(dev: u32, st: u32, tex: u32) -> bool {
         // objects; a release to zero goes through release_of (destroyed, or
         // deferred without the guest lock), as before
         let last = objects(|o| {
-            let old = match o.live.get_mut(&dev) {
-                Some(Object { kind: Kind::Device(d), .. }) => {
+            let old = match o.device_mut(dev) {
+                Some(d) => {
                     let s = &mut d.state;
                     let old = if tex == 0 { s.textures.remove(&st) } else { s.textures.insert(st, tex) }.unwrap_or(0);
                     if old != tex {

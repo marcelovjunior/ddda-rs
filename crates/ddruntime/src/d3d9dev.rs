@@ -142,9 +142,48 @@ pub(crate) struct Objects {
     /// A directly flushed child can leave a clean parent indexed until its
     /// next flush; false positives cost one scan, never change uploads.
     pub(crate) dirty: crate::fasthash::FxSet<u32>,
+    /// The device last looked up, and its data (L144: every device method
+    /// found it in `live` again); cleared when that object leaves `live`.
+    device: Option<(u32, DevicePtr)>,
 }
 
+/// A live device's boxed data: the box does not move while the object is
+/// in `live`, and is only reached through `&mut Objects`.
+#[derive(Clone, Copy)]
+struct DevicePtr(std::ptr::NonNull<DeviceData>);
+// SAFETY: only dereferenced through `&mut Objects` (behind the D3D lock)
+unsafe impl Send for DevicePtr {}
+
 impl Objects {
+    /// The live device at `device`: the cached one without a lookup.
+    #[inline]
+    pub(crate) fn device_mut(&mut self, device: u32) -> Option<&mut DeviceData> {
+        if let Some((k, p)) = self.device {
+            if k == device {
+                // SAFETY: cached from `live`, where the object still is
+                // (`remove` clears the cache); borrowed as `self` is
+                return Some(unsafe { &mut *p.0.as_ptr() });
+            }
+        }
+        match self.live.get_mut(&device) {
+            Some(Object { kind: Kind::Device(d), .. }) => {
+                let p = std::ptr::NonNull::from(&mut **d);
+                self.device = Some((device, DevicePtr(p)));
+                // SAFETY: as above
+                Some(unsafe { &mut *p.as_ptr() })
+            }
+            _ => None,
+        }
+    }
+
+    /// Take `object` out of `live`.
+    pub(crate) fn remove(&mut self, object: u32) -> Option<Object> {
+        if self.device.is_some_and(|(k, _)| k == object) {
+            self.device = None;
+        }
+        self.live.remove(&object)
+    }
+
     /// All dirty writers pass here: d3d9res surface_image (surface/flat/cube
     /// UnlockRect and restored images), texture (volume UnlockBox and restored
     /// volumes), buffer (Unlock and restored image), d3d9copy mark_dirty and
@@ -367,7 +406,7 @@ pub(crate) fn release_of(object: u32) -> u32 {
             .unwrap_or_else(|| panic!("Release on {object:#x}, not a live D3D9 object"));
         if left == 0 {
             o.dirty.remove(&object);
-            (object, 0, o.live.remove(&object))
+            (object, 0, o.remove(object))
         } else { (object, left, None) }
     });
     if let Some(x) = gone {
@@ -422,7 +461,7 @@ fn destroy(object: u32, x: Object) {
             Kind::Texture { data, .. } => {
                 // the level surfaces go with the texture (they share its count)
                 for s in &data.surfaces {
-                    if let Some(x) = objects(|o| { o.dirty.remove(s); o.live.remove(s) }) {
+                    if let Some(x) = objects(|o| { o.dirty.remove(s); o.remove(*s) }) {
                         if let Kind::Surface { image, .. } = x.kind {
                             image.free();
                         }
@@ -624,9 +663,9 @@ impl std::fmt::Debug for DeviceData {
 }
 
 pub(crate) fn with_device<R>(device: u32, f: impl FnOnce(&mut DeviceData) -> R) -> R {
-    objects(|o| match o.live.get_mut(&device) {
-        Some(Object { kind: Kind::Device(d), .. }) => f(d),
-        _ => panic!("{device:#x} is not a live IDirect3DDevice9"),
+    objects(|o| match o.device_mut(device) {
+        Some(d) => f(d),
+        None => panic!("{device:#x} is not a live IDirect3DDevice9"),
     })
 }
 
