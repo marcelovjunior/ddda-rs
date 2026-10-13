@@ -20,6 +20,11 @@ class AllocLogTests(unittest.TestCase):
             (950, 5, 0x1000, (0x1100, 0x1200)),
         ])
 
+    def test_free_rows_are_separate(self):
+        from alloc_sites import latest
+        text = 'alloc-site id=1 bytes=64 calls=1 base=1000 pcs=1001\nfree-site id=1 bytes=32 calls=2 base=1000 pcs=1002'
+        self.assertEqual(latest(text, 'free'), [(32, 2, 4096, (4098,))])
+
     def test_system_allocator_forwarding_and_switch(self):
         root = Path(__file__).resolve().parents[1]
         target = Path(os.environ.get('CARGO_TARGET_DIR', root / 'target'))
@@ -40,6 +45,17 @@ class AllocLogTests(unittest.TestCase):
             source = Path(temporary) / 'global.rs'
             source.write_text(f'#[path="{(root / "crates/ddplay/src/alloc_log.rs").as_posix()}"] mod alloc_log;\n' + r'''
 fn main() {
+    if std::env::var_os("CENSUS_FIXTURE").is_some() {
+        let _ = alloc_log::snapshot();
+        std::thread::Builder::new().name("census-worker".into()).spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(75));
+            let data = vec![42u8;123457]; std::hint::black_box(&data); drop(data);
+        }).unwrap().join().unwrap();
+        let other = vec![42u8;1234567]; std::hint::black_box(&other); drop(other);
+        std::thread::sleep(std::time::Duration::from_millis(175));
+        let _ = alloc_log::snapshot(); let _ = alloc_log::snapshot();
+        return;
+    }
     let before=alloc_log::snapshot();
     let mut data=Vec::with_capacity(1<<20); data.resize(1<<20,42u8);
     std::hint::black_box(&data);
@@ -65,6 +81,7 @@ fn main() {
                 if stacks == '1':
                     self.assertIn('alloc-site id=', result.stderr)
                     self.assertIn('pcs=', result.stderr)
+                    self.assertIn('free-site id=', result.stderr)
                     log = Path(temporary) / 'sites.log'
                     log.write_text(result.stderr)
                     ranked = subprocess.run([os.environ.get('PYTHON', 'python'), str(root / 'scripts/alloc_sites.py'),
@@ -73,6 +90,21 @@ fn main() {
                     self.assertEqual(ranked.returncode, 0, ranked.stdout + ranked.stderr)
                     self.assertIn('requested_bytes=', ranked.stdout)
                     self.assertIn('global::', ranked.stdout)
+            env = dict(os.environ, DDPLAY_ALLOC_LOG='1', DDPLAY_ALLOC_STACKS='1',
+                       DDPLAY_ALLOC_THREAD='census-worker', DDPLAY_ALLOC_DELAY_MS='50',
+                       DDPLAY_ALLOC_DURATION_MS='150', CENSUS_FIXTURE='1')
+            result = subprocess.run([str(executable)], env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stderr.count('alloc-window '), 1)
+            from alloc_sites import latest
+            self.assertIn(123457, [row[0] for row in latest(result.stderr)])
+            self.assertIn(123457, [row[0] for row in latest(result.stderr, 'free')])
+            self.assertNotIn(1234567, [row[0] for row in latest(result.stderr)])
+            env['DDPLAY_ALLOC_THREAD'] = 'absent-worker'
+            result = subprocess.run([str(executable)], env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(latest(result.stderr), [])
+
 
 
 if __name__ == '__main__':

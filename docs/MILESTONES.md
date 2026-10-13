@@ -1,5 +1,14 @@
 # Milestones
 
+### L154 render-worker allocation census (2026-10-13)
+
+- Timed exact-thread Rust allocation/free census avoids startup contamination;
+  all bounded-table rows and overflow are reported, ranked by calls or bytes.
+- Standalone allocator/parser **3 tests pass**; no shard build or game run.
+  c24 heap time shares are not allocation count/byte ranks.
+- Next: head gameplay census, then coordinated allocation fixes and gates.
+  Protocol and limitations: `docs/tasks/L154-worker-alloc.md`.
+
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)
 

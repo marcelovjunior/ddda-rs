@@ -11,9 +11,10 @@ from pathlib import Path
 ROW = re.compile(r'alloc-site id=(\d+) bytes=(\d+) calls=(\d+) base=([0-9a-f]+) pcs=([0-9a-f,]+)')
 
 
-def latest(text):
+def latest(text, kind="alloc"):
+    pattern = ROW if kind == "alloc" else re.compile(ROW.pattern.replace("alloc-site", "free-site"))
     sites = {}
-    for match in ROW.finditer(text):
+    for match in pattern.finditer(text):
         site, size, calls, base, pcs = match.groups()
         sites[(int(base, 16), int(site))] = (int(size), int(calls), tuple(int(pc, 16) for pc in pcs.split(',') if int(pc, 16)))
     # Contending first insertions may occupy different slots; merge exact stacks.
@@ -54,17 +55,24 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('log', type=Path)
     parser.add_argument('--exe', type=Path)
+    parser.add_argument('--kind', choices=['alloc', 'free'], default='alloc')
+    parser.add_argument('--sort', choices=['bytes', 'calls'], default='bytes')
+    parser.add_argument('--top', type=int, default=30)
+    parser.add_argument('--frames', type=int, help='Presents during the selected census window')
     args = parser.parse_args()
     text = args.log.read_text(errors='replace')
-    rows = latest(text)
+    rows = latest(text, args.kind)
+    rows.sort(key=lambda row: row[0 if args.sort == "bytes" else 1], reverse=True)
     if not rows:
         raise SystemExit('No allocation stacks: run needs DDPLAY_ALLOC_LOG=1 DDPLAY_ALLOC_STACKS=1 DDRUNTIME_LOAD_LOG=1')
     bases = {row[2] for row in rows}
     if args.exe and len(bases) != 1:
         raise SystemExit('Split multi-process logs before symbolizing')
     name = resolver(args.exe.resolve(), next(iter(bases))) if args.exe else lambda pc: f'0x{pc:x}'
-    for rank, (size, calls, base, pcs) in enumerate(rows[:10], 1):
-        print(f'{rank}. requested_bytes={size} calls={calls} image_base=0x{base:x}')
+    for rank, (size, calls, base, pcs) in enumerate(rows[:args.top], 1):
+        print(f'{rank}. {args.kind} requested_bytes={size} calls={calls} image_base=0x{base:x}')
+        if args.frames:
+            print(f'   bytes/frame={size / args.frames:.3f} calls/frame={calls / args.frames:.3f}')
         for pc in pcs:
             print(f'   {name(pc)}')
     overflow = re.findall(r'alloc-site-overflow bytes=(\d+)', text)
