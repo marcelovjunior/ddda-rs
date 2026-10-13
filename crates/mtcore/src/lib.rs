@@ -34,6 +34,7 @@ pub mod semantic;
 pub mod semantic_jobs;
 pub mod semantic_instancing;
 pub mod semantic_draw;
+pub mod semantic_s9;
 pub mod semantic_draw_c;
 pub mod semantic_draw_b;
 pub mod semantic_draw_a;
