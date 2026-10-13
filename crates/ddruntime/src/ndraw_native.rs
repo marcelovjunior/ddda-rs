@@ -1323,6 +1323,9 @@ pub struct Caches {
     by_content: FxMap<u64, (u64, Arc<BindingPart>)>,
     /// texture lists by content, with the frame they were last used in
     texture_lists: FxMap<u64, (u64, Arc<[TextureBinding]>)>,
+    /// the shader binding of the previous decided draw (0: none, or a
+    /// command that applies others came between): only its part is reused
+    last_binding: u32,
     /// stream and target bindings by address, with the frame they were last
     /// built in (kept across frames: `kept_part`)
     streams: FxMap<u32, (u64, Result<Arc<StreamPart>, Refusal>)>,
@@ -1343,6 +1346,7 @@ impl Caches {
     /// (with the D3D lock held).
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
+        self.last_binding = 0;
         // bindings and contents unused for three frames go (every eighth
         // frame; L180: clearing the whole table dropped every part at once)
         if self.frame % 8 == 0 {
@@ -1488,9 +1492,16 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         r?
     };
     let s = kept_part(&mut c.streams, c.frame, streams, || stream_part(&g, streams))?;
-    let rebuilt = !matches!(c.bindings.get(&shader), Some((frame, _)) if *frame == c.frame);
+    // The binding's part is kept only while the draws use it one after the
+    // other: the original's apply (0x00DAA8B0) skips the uploads when the
+    // context already holds this binding, and reads the values again
+    // otherwise (combo42 verify: a binding used again later in a frame
+    // with new values). L180.
+    let consecutive = shader == c.last_binding;
+    c.last_binding = 0;
+    let rebuilt = !(consecutive && matches!(c.bindings.get(&shader), Some((frame, _)) if *frame == c.frame));
     let b = match c.bindings.get(&shader) {
-        Some((frame, r)) if *frame == c.frame => r.clone()?,
+        Some((frame, r)) if *frame == c.frame && consecutive => r.clone()?,
         other => {
             let previous = match other {
                 Some((_, Ok(p))) => Some(p.clone()),
@@ -1501,6 +1512,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             r?
         }
     };
+    c.last_binding = shader;
     // the fixed state: the objects by identity, the dynamic values
     let id = identity_of(&g, fixed);
     if id.blend.address == 0 || id.depth.address == 0 || id.raster.address == 0 {
@@ -2116,6 +2128,11 @@ impl Native {
                     g.spans.remove(&object);
                 }
             }
+        }
+        // clears (their fallback draws), copies and nested lists apply on
+        // the default path: the next draw's binding is read again
+        if matches!(kind, 4..=6) {
+            g.caches.last_binding = 0;
         }
         match kind {
             0..=3 => {}
