@@ -36,6 +36,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         ports.push((0x00e68390, mtcore::shadow_primitive::sprimitive_vf12));
         ports.push((0x0107ff00, mtcore::shadow_primitive::dispatch_begin));
         ports.push((0x0107ff30, mtcore::shadow_primitive::dispatch_end));
+        ports.push((0x0111e180, mtcore::shadow_primitive::sprimitive_sort));
     }
     if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
         ports.push((0x00efd240, mtcore::shadow_pass::setup));
