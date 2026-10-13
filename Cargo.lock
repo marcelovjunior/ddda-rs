@@ -3025,6 +3025,7 @@ dependencies = [
  "ddsave",
  "hostdisplay",
  "mtarc",
+ "mtcore",
  "mtdraw",
  "mtstate",
  "unicorn-engine",

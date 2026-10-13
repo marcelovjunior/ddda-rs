@@ -1,5 +1,24 @@
 # Milestones
 
+### L172 isolated parallel-shadow proof runner (2026-10-13)
+
+- Private contiguous helper lanes, dependency-checked ordered merge, and
+  strict command/resource-byte comparison are implemented. Opt-in proof
+  runner captures the real serial traversal and replays raw serial/queued
+  bodies privately; unknown host services and incomplete inputs refuse.
+  Live output remains serial. No real-stream acceptance or speedup claimed.
+- TLS routing precedes global overrides and warmed caches only in the
+  `parallel-shadow` Cargo feature. The unconditional check measured slower
+  in 9/9 isolated pairs, so ordinary builds retain the old call path.
+- 17 focused runtime checks and two routing tests pass. Lane oracle:
+  12 tests, eight original FED3B0 returns and 227 shader fixtures reproducing
+  1,704 original uploads (29 conservative refusals). Default light: 271
+  passed / zero failures / seven ignored before final capture-file addition.
+  Final feature-enabled light: 272 passed / zero failures / seven ignored.
+- Next: head proof build and one nonempty private `.ddshadow` capture;
+  offline replay closes unsupported services/dependencies before candidate
+  publication and TRAIN READY. `docs/tasks/L172-parallel-shadow.md`.
+
 ### L162e whole FEE320 capture prerequisite (2026-10-13)
 
 - Opt-in exact sky-shadow wrapper records FEE320 inclusive/external-call

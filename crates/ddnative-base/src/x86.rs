@@ -141,6 +141,8 @@ pub type ExtCall = dyn Fn(&mut dyn crate::mem::Mem, &mut Cpu, u32);
 /// Direct cross-shard calls must never use the external/mock call handler.
 pub type LiftFn = fn(&mut dyn crate::mem::Mem, &mut Cpu);
 pub type LiftLookup = fn(u32) -> Option<LiftFn>;
+#[path = "private_calls.rs"]
+pub mod private_calls;
 static LIFTED: std::sync::OnceLock<LiftLookup> = std::sync::OnceLock::new();
 
 pub fn set_lifted_lookup(lookup: LiftLookup) {
@@ -245,6 +247,8 @@ pub fn call_local(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32, f: Li
 #[cold]
 #[inline(never)]
 fn call_overridden(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32, f: LiftFn) {
+    #[cfg(feature = "private-replay")]
+    if private_calls::dispatch(m, cpu, target) { return; }
     override_of(target).unwrap_or(f)(m, cpu)
 }
 

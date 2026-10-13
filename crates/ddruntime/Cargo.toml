@@ -17,6 +17,7 @@ ddports = { path = "../ddports", optional = true }
 # L119: the native path through the nDraw executor port
 mtdraw = { path = "../mtdraw" }
 mtstate = { path = "../mtstate" }
+mtcore = { path = "../mtcore" }
 # `crt-check` (L67): only the two shards holding the CRT routines, for
 # tests/crtfast.rs against their lifted originals without building all 32
 ddlift-05 = { path = "../ddlift/lift_05", optional = true }
@@ -34,6 +35,8 @@ hostdisplay = { path = "../hostdisplay" }
 # and binds every service, and a call into game code stops as untranslated.
 default = ["game"]
 game = ["dep:ddnative", "dep:ddports"]
+# L172 proof builds only: leaves the ordinary lifted-call hot path unchanged.
+parallel-shadow = ["ddnative-base/private-replay", "ddnative-host/private-replay"]
 crt-check = ["dep:ddlift-05", "dep:ddlift-06"]
 # `emu`: the diagnostic emulator fallback for untranslated functions
 # (src/emu.rs, L51; also needs DDRUNTIME_EMU_FALLBACK=1 at run time).
@@ -55,6 +58,10 @@ required-features = ["game"]
 [[example]]
 name = "winmain"
 required-features = ["game"]
+
+[[example]]
+name = "shadow_replay"
+required-features = ["game", "parallel-shadow"]
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Media_WindowsMediaFormat", "Win32_System_Com", "Win32_System_Com_StructuredStorage"] }
