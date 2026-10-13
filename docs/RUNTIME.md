@@ -1,5 +1,19 @@
 # Phase 1 runtime proposal (R01)
 
+## L168 guest-memory backing experiment
+
+`DDNATIVE_BACKING=regions` opts into 2 MiB-aligned host regions with lazy
+4 KiB commits. Guest permissions, atomic accesses and retired-page lifetime
+stay unchanged. `large` attempts actual large pages, then logs failure and
+falls back to regions; this account lacks the required privilege (error
+1314), and system policy is unchanged. Default backing stays per-page.
+
+Regions improve synthetic sequential access; scattered and hot-leaf gains
+are unproven. Runtime light 250 reported tests pass. Hardware miss rates and
+gameplay performance await the head-owned WPR/game A/B. See
+[L168 measurements and protocol](tasks/L168-tlb.md); alignment alone is not
+large-page backing. Rust allocator counters exclude VirtualAlloc regions.
+
 ## L160 job CPU sizing and wake diagnostics
 
 Parallel `GetSystemInfo` reports host logical processors capped at 32;
