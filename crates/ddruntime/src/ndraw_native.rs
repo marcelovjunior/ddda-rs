@@ -2,16 +2,20 @@
 //! docs/NATIVE_RENDERER.md): a `mtdraw::sink::CommandSink` installed over
 //! the executor port.
 //!
-//! `DDDRAW_NATIVE` selects it:
+//! `DDDRAW_NATIVE` selects it. The default (unset) is `drawcall`, since
+//! `verify` found every decoded DrawCall equal to the D3D9 path's over a
+//! gameplay run (combo19, ~420,000 draws per 10 s, no mismatch); `0` or
+//! `off` turns the native path off (every command through the D3D9 path).
+//! The summary on stderr is printed every `DDDRAW_NATIVE_EVERY` seconds:
+//! by default every 10 s when `DDDRAW_NATIVE` is set, never when it is not.
 //!
 //! - `census`: takes no command (every one runs the default D3D9 path,
 //!   unchanged) and measures, per frame, the commands by type, the draws
 //!   into the frame's largest colour target (the main scene passes) and
 //!   into other targets, the distinct state, shader-binding, stream and
 //!   target objects, and how many scene draws the native path could take
-//!   (and why the others not). It prints a summary to stderr every
-//!   `DDDRAW_NATIVE_EVERY` seconds (default 10).
-//! - `drawcall`: takes the scene draws it can and sends the backend the
+//!   (and why the others not).
+//! - `drawcall` (the default): takes the scene draws it can and sends the backend the
 //!   `DrawCall` the D3D9 path would have sent for them, decoded straight
 //!   from the nDraw objects. The applies, the D3D9 state setters and the
 //!   snapshot are skipped; the backend draws them exactly as before.
@@ -21,7 +25,7 @@
 //!   registers and samplers the shaders read, targets, streams, ...);
 //!   the report counts the comparisons and the mismatches by field and
 //!   prints the first ones.
-//! - `1`: takes the same draws as native jobs (d3d9cmd::NativeJob, L126):
+//! - `1` or `native`: takes the same draws as native jobs (d3d9cmd::NativeJob, L126):
 //!   consecutive taken draws into the same targets form a pass, and the
 //!   passes since the last command left to the default path form a job,
 //!   sent before that command (or at the frame's end), so the backend
@@ -107,13 +111,22 @@ pub enum Mode {
 }
 
 pub fn mode() -> Mode {
-    match std::env::var("DDDRAW_NATIVE").as_deref() {
-        Ok("census") => Mode::Census,
-        Ok("drawcall") => Mode::DrawCall,
-        Ok("verify") => Mode::Verify,
-        Ok("1") => Mode::Native,
-        Ok("compare") => Mode::Compare,
-        _ => Mode::Off,
+    mode_of(std::env::var("DDDRAW_NATIVE").ok().as_deref())
+}
+
+/// The mode a `DDDRAW_NATIVE` value (None: unset) asks for.
+pub fn mode_of(value: Option<&str>) -> Mode {
+    match value {
+        None | Some("drawcall") => Mode::DrawCall,
+        Some("0") | Some("off") => Mode::Off,
+        Some("census") => Mode::Census,
+        Some("verify") => Mode::Verify,
+        Some("1") | Some("native") => Mode::Native,
+        Some("compare") => Mode::Compare,
+        Some(other) => {
+            eprintln!("DDDRAW_NATIVE={other}: not a mode (0/off, drawcall, verify, compare, census, 1/native); using drawcall");
+            Mode::DrawCall
+        }
     }
 }
 
@@ -123,8 +136,13 @@ pub fn install() {
     if mode == Mode::Off {
         return;
     }
-    let every = std::env::var("DDDRAW_NATIVE_EVERY").ok().and_then(|v| v.parse().ok()).unwrap_or(10u64);
-    mtdraw::sink::set_sink(Some(Arc::new(Native::new(mode, Duration::from_secs(every.max(1))))));
+    // the summary: asked for, or with the mode chosen explicitly
+    let every = match std::env::var("DDDRAW_NATIVE_EVERY").ok().and_then(|v| v.parse::<u64>().ok()) {
+        Some(n) => Duration::from_secs(n.max(1)),
+        None if std::env::var_os("DDDRAW_NATIVE").is_some() => Duration::from_secs(10),
+        None => Duration::MAX,
+    };
+    mtdraw::sink::set_sink(Some(Arc::new(Native::new(mode, every))));
 }
 
 // --- the executable's values ---------------------------------------------------
@@ -1752,6 +1770,20 @@ mod tests {
         m.set_u16(view + 0x18, w);
         m.set_u16(view + 0x1A, h | 0x8000);
         at
+    }
+
+    #[test]
+    fn drawcall_is_the_default_and_0_or_off_turns_it_off() {
+        assert_eq!(mode_of(None), Mode::DrawCall);
+        assert_eq!(mode_of(Some("0")), Mode::Off);
+        assert_eq!(mode_of(Some("off")), Mode::Off);
+        assert_eq!(mode_of(Some("drawcall")), Mode::DrawCall);
+        assert_eq!(mode_of(Some("verify")), Mode::Verify);
+        assert_eq!(mode_of(Some("compare")), Mode::Compare);
+        assert_eq!(mode_of(Some("census")), Mode::Census);
+        assert_eq!(mode_of(Some("1")), Mode::Native);
+        assert_eq!(mode_of(Some("native")), Mode::Native);
+        assert_eq!(mode_of(Some("bogus")), Mode::DrawCall);
     }
 
     #[test]

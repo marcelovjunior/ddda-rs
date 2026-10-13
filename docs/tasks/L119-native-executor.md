@@ -83,7 +83,20 @@ measure the per-draw cost.
   field (the first 20 printed). Hook: d3d9draw's DrawPrimitive and
   DrawIndexedPrimitive services call `ndraw_native::observe` (one relaxed
   atomic load when not verifying).
-- Not yet: the per-pass pixel comparison.
+- combo17 (head run, `verify`): nearly every draw's samplers differed:
+  0x00DAA8B0's sampler section depends on the command history (filtering
+  option 3: anisotropy 4 vs 16; textures applied by object). Step 2e
+  (ad821975): taken draws make that section on the executor context and
+  the device (a port tested against mtstate::shader on 3,000 random cases)
+  and take textures and sampler states from the device; returning to the
+  default path clears the context's last fixed/shader bindings and writes
+  the taken draws' constant uploads to the device.
+- combo19 (head run, 4bcef3fa, `verify`): ~420,000 compared per 10 s, all
+  equal, no mismatch; ~7,700 merged by the D3D9 path (sRender+0x30).
+- Step 2f: `drawcall` is the default (`DDDRAW_NATIVE` unset); `0` or `off`
+  turns the native path off. The summary prints only with the mode set
+  or `DDDRAW_NATIVE_EVERY`.
+- Not yet: the per-pass pixel comparison of native jobs (`compare`, L127).
 
 ## Frame threads (question from the head, 2026-10-13)
 
