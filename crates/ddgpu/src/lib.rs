@@ -2765,10 +2765,17 @@ impl GraphicsBackend for WgpuBackend {
                 let size = (bytes.len() as u64).next_multiple_of(4).max(4);
                 match self.buffers.get(resource) {
                     Some(b) if b.size() == size => {
-                        let mut padded = bytes.clone();
-                        padded.resize(size as usize, 0);
                         self.wait_finisher();
-                        self.queue.write_buffer(b, 0, &padded);
+                        // (L144: a 4-aligned upload as it is, without a padded copy)
+                        let whole = bytes.len() & !3;
+                        if whole != 0 {
+                            self.queue.write_buffer(b, 0, &bytes[..whole]);
+                        }
+                        if whole != size as usize {
+                            let mut tail = [0u8; 4];
+                            tail[..bytes.len() - whole].copy_from_slice(&bytes[whole..]);
+                            self.queue.write_buffer(b, whole as u64, &tail);
+                        }
                     }
                     _ => {
                         let b = self.inline_buffer(bytes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX);
@@ -2784,9 +2791,13 @@ impl GraphicsBackend for WgpuBackend {
                     self.errors.push(format!("upload into render target {resource:#x} ignored"));
                 } else {
                     self.pending.entry(*resource).or_default().push(upload);
+                    return;
                 }
             }
         }
+        // the bytes are written (wgpu copied them): the recorder reuses them
+        let (Upload::Buffer { bytes, .. } | Upload::Image { bytes, .. }) = upload;
+        d3d9cmd::bytes::give(bytes);
     }
 
     fn draw(&mut self, draw: &DrawCall) {
