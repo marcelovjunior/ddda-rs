@@ -58,6 +58,23 @@
 - Next: head's separate allocation census and unskipped loading A/B; whole
   loading gains and top-ten game sites remain unmeasured. Details and final
   suite status: `docs/tasks/L140-loading.md`.
+### L138 production Vulkan pass encoder (2026-10-13)
+
+- Opt-in `DDGPU_VK=1` owns HAL Vulkan pipelines/descriptors and batches raw
+  passes through L137's ordered finisher. Wgpu retains queue submission,
+  resource initialization and lifetime; tracked preambles plus internal
+  barriers preserve layouts. Unsupported/query/MSAA passes use wgpu.
+- **20 CPU / 12 focused byte-exact GPU / 2 MSAA fallback tests pass**.
+  Dependent 900-pass float32 ping-pong: **2,698 raw / 2 initialization
+  fallbacks**, byte-exact. Earlier broad sweeps: 21 pass, five hard timeouts.
+- Three production benchmark repeats: median **21.536 -> 6.722 us/pass**
+  for 900 tiny passes (3.20x); 5,000-draw workloads show no clear overall
+  gain, including 40 pipelines / 200 sampled sets. Synthetic, not game FPS.
+- Runtime light: initial 199 pass / 2 fail / 4 ignored; timing failure passes
+  alone, inherited fullscreen-gamma failure remains. No runtime edits.
+- Blocker: original-game image/FPS acceptance requires head's run. Next:
+  integrate with L143's wrapped pipeline key and A/B `DDGPU_VK=0/1` on
+  default `DDDRAW_NATIVE=drawcall`. Hashes/details: `docs/tasks/L138-vk-encoder.md`.
 
 ### L109d memory ownership diagnostics (2026-10-13)
 
