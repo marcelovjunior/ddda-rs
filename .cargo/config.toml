@@ -3,3 +3,10 @@
 # ddlift-09 with the default 8 MiB).
 [env]
 RUST_MIN_STACK = "268435456"
+
+# Link with rust-lld (lld-link, shipped with the toolchain): ddplay.exe (386 MB)
+# links in 2.8 s instead of link.exe's 5.0 s, and its PDB keeps the public
+# symbols scripts/sample_profile.py names functions with (L75, docs/BUILD.md).
+# Changing the linker changes every crate's fingerprint: one full rebuild.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

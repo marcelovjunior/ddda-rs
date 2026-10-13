@@ -4,2434 +4,2410 @@ use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 use ddnative_base::emit;
 
-// Translated from 0x01393360 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393360.
-pub fn f_01393360(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013910F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013910f0.
+pub fn f_013910f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199AF20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996B18u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393370 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393370.
-pub fn f_01393370(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391100 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391100.
+pub fn f_01391100(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199AF40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19971C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393380 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393380.
-pub fn f_01393380(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391110 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391110.
+pub fn f_01391110(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B524u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997320u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393390 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393390.
-pub fn f_01393390(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391120 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391120.
+pub fn f_01391120(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B5A4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19969D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013933A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013933a0.
-pub fn f_013933a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391130 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391130.
+pub fn f_01391130(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ADD8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19971A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013933B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013933b0.
-pub fn f_013933b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391140 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391140.
+pub fn f_01391140(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B624u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996E00u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013933C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013933c0.
-pub fn f_013933c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391150 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391150.
+pub fn f_01391150(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B644u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996A18u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013933D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013933d0.
-pub fn f_013933d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391160 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391160.
+pub fn f_01391160(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B674u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997940u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013933E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013933e0.
-pub fn f_013933e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391170 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391170.
+pub fn f_01391170(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B6BCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996D80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013933F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013933f0.
-pub fn f_013933f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391180 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391180.
+pub fn f_01391180(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B69Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997700u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393400 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393400.
-pub fn f_01393400(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391190 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391190.
+pub fn f_01391190(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B6E4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997740u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393410 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393410.
-pub fn f_01393410(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013911A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013911a0.
+pub fn f_013911a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BAECu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996F80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393420 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393420.
-pub fn f_01393420(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013911B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013911b0.
+pub fn f_013911b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B704u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996C40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393430 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393430.
-pub fn f_01393430(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013911C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013911c0.
+pub fn f_013911c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B94Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997060u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393440 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393440.
-pub fn f_01393440(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013911D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013911d0.
+pub fn f_013911d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B74Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996FA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393450 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393450.
-pub fn f_01393450(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013911E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013911e0.
+pub fn f_013911e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B9CCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19979A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393460 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393460.
-pub fn f_01393460(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013911F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013911f0.
+pub fn f_013911f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B724u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997780u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393470 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393470.
-pub fn f_01393470(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391200 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391200.
+pub fn f_01391200(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B7ACu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997280u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393480 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393480.
-pub fn f_01393480(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391210 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391210.
+pub fn f_01391210(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BA2Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997220u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393490 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393490.
-pub fn f_01393490(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391220 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391220.
+pub fn f_01391220(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B9ECu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19977C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013934A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013934a0.
-pub fn f_013934a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391230 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391230.
+pub fn f_01391230(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BB4Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997540u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013934B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013934b0.
-pub fn f_013934b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391240 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391240.
+pub fn f_01391240(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B7CCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996EC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013934C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013934c0.
-pub fn f_013934c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391250 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391250.
+pub fn f_01391250(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BA6Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19969B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013934D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013934d0.
-pub fn f_013934d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391260 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391260.
+pub fn f_01391260(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B8CCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996E80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013934E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013934e0.
-pub fn f_013934e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391270 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391270.
+pub fn f_01391270(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BB0Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997820u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013934F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013934f0.
-pub fn f_013934f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391280 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391280.
+pub fn f_01391280(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B82Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996958u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393500 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393500.
-pub fn f_01393500(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391290 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391290.
+pub fn f_01391290(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B88Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997560u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393510 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393510.
-pub fn f_01393510(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013912A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013912A0.
+pub fn f_013912a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B8ECu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19977A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393520 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393520.
-pub fn f_01393520(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013912B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013912b0.
+pub fn f_013912b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B80Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996D60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393530 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393530.
-pub fn f_01393530(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013912C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013912c0.
+pub fn f_013912c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B92Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19977E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393540 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393540.
-pub fn f_01393540(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013912D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013912d0.
+pub fn f_013912d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B90Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997340u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393550 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393550.
-pub fn f_01393550(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013912E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013912e0.
+pub fn f_013912e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BA0Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19972A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393560 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393560.
-pub fn f_01393560(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013912F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013912f0.
+pub fn f_013912f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B98Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19968F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393570 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393570.
-pub fn f_01393570(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391300 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391300.
+pub fn f_01391300(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B7ECu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996CE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393580 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393580.
-pub fn f_01393580(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391310 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391310.
+pub fn f_01391310(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B8ACu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997580u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393590 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393590.
-pub fn f_01393590(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391320 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391320.
+pub fn f_01391320(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BACCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997920u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013935A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013935a0.
-pub fn f_013935a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391330 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391330.
+pub fn f_01391330(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BAACu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997240u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013935B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013935b0.
-pub fn f_013935b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391340 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391340.
+pub fn f_01391340(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BB2Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996D20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013935C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013935c0.
-pub fn f_013935c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391350 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391350.
+pub fn f_01391350(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BA4Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996FC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013935D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013935d0.
-pub fn f_013935d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391360 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391360.
+pub fn f_01391360(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B76Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996DC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013935E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013935e0.
-pub fn f_013935e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391370 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391370.
+pub fn f_01391370(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B96Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19970E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013935F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013935f0.
-pub fn f_013935f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391380 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391380.
+pub fn f_01391380(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B78Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996CC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393600 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393600.
-pub fn f_01393600(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391390 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391390.
+pub fn f_01391390(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B86Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996BE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393610 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393610.
-pub fn f_01393610(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013913A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013913a0.
+pub fn f_013913a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B9ACu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997960u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393620 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393620.
-pub fn f_01393620(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013913B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013913b0.
+pub fn f_013913b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BA8Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996B40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393630 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393630.
-pub fn f_01393630(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013913C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013913c0.
+pub fn f_013913c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199B84Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996978u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393640 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393640.
-pub fn f_01393640(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013913D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013913d0.
+pub fn f_013913d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BB94u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996878u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393650 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393650.
-pub fn f_01393650(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013913E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013913e0.
+pub fn f_013913e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BBB4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997640u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393660 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393660.
-pub fn f_01393660(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013913F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013913f0.
+pub fn f_013913f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BBD4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996C60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393670 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393670.
-pub fn f_01393670(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391400 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391400.
+pub fn f_01391400(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BB74u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19971E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393680 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393680.
-pub fn f_01393680(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391410 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391410.
+pub fn f_01391410(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C150u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996AD8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393690 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393690.
-pub fn f_01393690(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391420 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391420.
+pub fn f_01391420(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    let mut pc: u32 = 0x1393690;
-    loop {
-        match pc {
-            0x1393690 => { cpu.eax = 0x184EC00u32; cpu.ecx = 0x6u32; cpu.ebx = cpu.ebx; pc = 0x13936A0; continue; }
-            0x13936A0 => { cpu.eax = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x13936A0 } else { 0x13936AC }; continue; }
-            0x13936AC => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
+    m.fast_set_u32(pt, 0x19974E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013936B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013936b0.
-pub fn f_013936b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391430 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391430.
+pub fn f_01391430(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C2D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19972E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013936C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013936c0.
-pub fn f_013936c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391440 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391440.
+pub fn f_01391440(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C070u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996A78u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013936D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013936d0.
-pub fn f_013936d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391450 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391450.
+pub fn f_01391450(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BC94u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997480u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013936E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013936e0.
-pub fn f_013936e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391460 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391460.
+pub fn f_01391460(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C350u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19974C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013936F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013936f0.
-pub fn f_013936f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391470 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391470.
+pub fn f_01391470(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C1B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19968B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393700 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393700.
-pub fn f_01393700(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391480 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391480.
+pub fn f_01391480(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BC74u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997680u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393710 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393710.
-pub fn f_01393710(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391490 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391490.
+pub fn f_01391490(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C1D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997880u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393720 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393720.
-pub fn f_01393720(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013914A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013914a0.
+pub fn f_013914a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C170u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997300u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393730 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393730.
-pub fn f_01393730(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013914B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013914b0.
+pub fn f_013914b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C330u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19973A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393740 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393740.
-pub fn f_01393740(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013914C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013914c0.
+pub fn f_013914c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BCFCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996898u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393750 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393750.
-pub fn f_01393750(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013914D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013914d0.
+pub fn f_013914d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C210u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997660u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393760 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393760.
-pub fn f_01393760(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013914E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013914e0.
+pub fn f_013914e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C0D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996918u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393770 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393770.
-pub fn f_01393770(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013914F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013914f0.
+pub fn f_013914f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C1F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997980u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393780 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393780.
-pub fn f_01393780(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391500 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391500.
+pub fn f_01391500(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C0F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1996B60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393790 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393790.
-pub fn f_01393790(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391510 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391510.
+pub fn f_01391510(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C2F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19979E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013937A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013937a0.
-pub fn f_013937a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391520 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391520.
+pub fn f_01391520(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C130u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997A10u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013937B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013937b0.
-pub fn f_013937b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391530 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391530.
+pub fn f_01391530(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BC14u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997A30u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013937C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013937c0.
-pub fn f_013937c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391540 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391540.
+pub fn f_01391540(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C230u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997A60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013937D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013937d0.
-pub fn f_013937d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391550 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391550.
+pub fn f_01391550(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C270u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997A88u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013937E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013937e0.
-pub fn f_013937e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391560 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391560.
+pub fn f_01391560(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C2B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997AB0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013937F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013937f0.
-pub fn f_013937f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391570 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391570.
+pub fn f_01391570(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BBF4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997AD8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393800 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393800.
-pub fn f_01393800(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C310u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393810 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393810.
-pub fn f_01393810(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BCDCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393820 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393820.
-pub fn f_01393820(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BC34u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393830 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393830.
-pub fn f_01393830(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BD1Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393840 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393840.
-pub fn f_01393840(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C290u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393850 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393850.
-pub fn f_01393850(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C190u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393860 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393860.
-pub fn f_01393860(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C250u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393870 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393870.
-pub fn f_01393870(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C370u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393880 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393880.
-pub fn f_01393880(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C090u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393890 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393890.
-pub fn f_01393890(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C110u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013938A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013938a0.
-pub fn f_013938a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BCB4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013938B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013938b0.
-pub fn f_013938b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199BC54u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013938C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013938c0.
-pub fn f_013938c0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C0B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013938D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013938d0.
-pub fn f_013938d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C390u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013938E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013938e0.
-pub fn f_013938e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C828u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013938F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013938f0.
-pub fn f_013938f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x13938F0;
-    loop {
-        match pc {
-            0x13938F0 => { cpu.eax = 0x1850630u32; cpu.ecx = 0x1u32; cpu.ebx = cpu.ebx; pc = 0x1393900; continue; }
-            0x1393900 => { cpu.eax = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x1393900 } else { 0x139390C }; continue; }
-            0x139390C => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x01393910 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393910.
-pub fn f_01393910(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C8A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393920 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393920.
-pub fn f_01393920(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C6E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393930 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393930.
-pub fn f_01393930(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C7C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393940 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393940.
-pub fn f_01393940(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C808u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393950 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393950.
-pub fn f_01393950(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C888u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393960 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393960.
-pub fn f_01393960(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C788u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393970 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393970.
-pub fn f_01393970(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C768u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393980 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393980.
-pub fn f_01393980(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C848u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393990 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393990.
-pub fn f_01393990(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C868u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013939A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013939a0.
-pub fn f_013939a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C7E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013939B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013939b0.
-pub fn f_013939b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C7A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013939C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013939c0.
-pub fn f_013939c0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C748u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013939D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013939d0.
-pub fn f_013939d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C700u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013939E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013939e0.
-pub fn f_013939e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C8E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013939F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013939f0.
-pub fn f_013939f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C728u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393A00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a00.
-pub fn f_01393a00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C8C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393A10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a10.
-pub fn f_01393a10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CD40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393A20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a20.
-pub fn f_01393a20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0x1393A20;
-    loop {
-        match pc {
-            0x1393A20 => { cpu.eax = 0x1852100u32; cpu.ecx = 0x1u32; cpu.ebx = cpu.ebx; pc = 0x1393A30; continue; }
-            0x1393A30 => { cpu.eax = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x1393A30 } else { 0x1393A3C }; continue; }
-            0x1393A3C => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
-// Translated from 0x01393A40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a40.
-pub fn f_01393a40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CD80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393A50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a50.
-pub fn f_01393a50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C950u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393A60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a60.
-pub fn f_01393a60(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C9F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393A70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a70.
-pub fn f_01393a70(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CE00u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393A80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a80.
-pub fn f_01393a80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C908u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393A90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393a90.
-pub fn f_01393a90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CDA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393AA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393aa0.
-pub fn f_01393aa0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CE80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393AB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ab0.
-pub fn f_01393ab0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CDE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393AC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ac0.
-pub fn f_01393ac0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CDC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393AD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ad0.
-pub fn f_01393ad0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C9B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393AE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ae0.
-pub fn f_01393ae0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C970u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393AF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393af0.
-pub fn f_01393af0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CD60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b00.
-pub fn f_01393b00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C990u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b10.
-pub fn f_01393b10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CE40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b20.
-pub fn f_01393b20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C928u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b30.
-pub fn f_01393b30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CE20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b40.
-pub fn f_01393b40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199C9D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b50.
-pub fn f_01393b50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CE60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b60.
-pub fn f_01393b60(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CEA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b70.
-pub fn f_01393b70(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D068u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b80.
-pub fn f_01393b80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CFA8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393B90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393b90.
-pub fn f_01393b90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CEC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393BA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ba0.
-pub fn f_01393ba0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D0C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393BB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393bb0.
-pub fn f_01393bb0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D008u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393BC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393bc0.
-pub fn f_01393bc0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CF00u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393BD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393bd0.
-pub fn f_01393bd0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D088u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393BE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393be0.
-pub fn f_01393be0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D028u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393BF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393bf0.
-pub fn f_01393bf0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CFE8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c00.
-pub fn f_01393c00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CF88u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c10.
-pub fn f_01393c10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D048u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c20.
-pub fn f_01393c20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CEE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c30.
-pub fn f_01393c30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CF28u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c40.
-pub fn f_01393c40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CF48u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c50.
-pub fn f_01393c50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CFC8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c60.
-pub fn f_01393c60(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D0A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c70.
-pub fn f_01393c70(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199CF68u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c80.
-pub fn f_01393c80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D230u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393C90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393c90.
-pub fn f_01393c90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D4F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393CA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ca0.
-pub fn f_01393ca0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391580 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391580.
+pub fn f_01391580(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393CB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393cb0.
-pub fn f_01393cb0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D3B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393CC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393cc0.
-pub fn f_01393cc0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D3F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393CD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393cd0.
-pub fn f_01393cd0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D4D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393CE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ce0.
-pub fn f_01393ce0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D1A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393CF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393cf0.
-pub fn f_01393cf0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D370u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d00.
-pub fn f_01393d00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D2D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d10.
-pub fn f_01393d10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D270u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d20.
-pub fn f_01393d20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D168u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d30.
-pub fn f_01393d30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D210u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d40.
-pub fn f_01393d40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D310u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d50.
-pub fn f_01393d50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D290u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d60.
-pub fn f_01393d60(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D2F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d70.
-pub fn f_01393d70(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D330u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d80.
-pub fn f_01393d80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D470u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393D90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393d90.
-pub fn f_01393d90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D0E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393DA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393da0.
-pub fn f_01393da0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D430u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393DB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393db0.
-pub fn f_01393db0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D1F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393DC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393dc0.
-pub fn f_01393dc0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D128u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393DD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393dd0.
-pub fn f_01393dd0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D410u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393DE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393de0.
-pub fn f_01393de0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D4B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393DF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393df0.
-pub fn f_01393df0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D530u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e00.
-pub fn f_01393e00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D510u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e10.
-pub fn f_01393e10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D2B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e20.
-pub fn f_01393e20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D188u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e30.
-pub fn f_01393e30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D3D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e40.
-pub fn f_01393e40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D490u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e50.
-pub fn f_01393e50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D1D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e60.
-pub fn f_01393e60(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D350u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e70.
-pub fn f_01393e70(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D148u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e80.
-pub fn f_01393e80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D450u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393E90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393e90.
-pub fn f_01393e90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D108u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393EA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ea0.
-pub fn f_01393ea0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D250u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393EB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393eb0.
-pub fn f_01393eb0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D390u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393EC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ec0.
-pub fn f_01393ec0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E218u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393ED0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ed0.
-pub fn f_01393ed0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D570u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393EE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ee0.
-pub fn f_01393ee0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E338u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393EF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ef0.
-pub fn f_01393ef0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DAD8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01393F00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f00.
-pub fn f_01393f00(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391590 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391590.
+pub fn f_01391590(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f10.
-pub fn f_01393f10(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013915A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013915a0.
+pub fn f_013915a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
     cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f20.
-pub fn f_01393f20(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013915B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013915b0.
+pub fn f_013915b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E318u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f30.
-pub fn f_01393f30(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013915C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013915c0.
+pub fn f_013915c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D730u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f40.
-pub fn f_01393f40(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013915D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013915d0.
+pub fn f_013915d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DF58u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f50.
-pub fn f_01393f50(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013915E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013915e0.
+pub fn f_013915e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D858u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f60.
-pub fn f_01393f60(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013915F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013915f0.
+pub fn f_013915f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D8B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f70.
-pub fn f_01393f70(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391600 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391600.
+pub fn f_01391600(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D5B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f80.
-pub fn f_01393f80(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391610 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391610.
+pub fn f_01391610(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DFB8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997F60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393F90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393f90.
-pub fn f_01393f90(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391620 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391620.
+pub fn f_01391620(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D550u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997E40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393FA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393fa0.
-pub fn f_01393fa0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391630 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391630.
+pub fn f_01391630(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DA18u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997BF8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393FB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393fb0.
-pub fn f_01393fb0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391640 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391640.
+pub fn f_01391640(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D670u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998380u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393FC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393fc0.
-pub fn f_01393fc0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391650 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391650.
+pub fn f_01391650(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E098u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997D60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393FD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393fd0.
-pub fn f_01393fd0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391660 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391660.
+pub fn f_01391660(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D6D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997E60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393FE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393fe0.
-pub fn f_01393fe0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391670 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391670.
+pub fn f_01391670(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D938u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997CB8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01393FF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01393ff0.
-pub fn f_01393ff0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391680 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391680.
+pub fn f_01391680(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D8F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997E20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394000 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394000.
-pub fn f_01394000(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391690 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391690.
+pub fn f_01391690(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E158u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997C38u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394010 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394010.
-pub fn f_01394010(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013916A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013916a0.
+pub fn f_013916a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DEF8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19982A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394020 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394020.
-pub fn f_01394020(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013916B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013916b0.
+pub fn f_013916b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D710u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997F00u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394030 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394030.
-pub fn f_01394030(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013916C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013916c0.
+pub fn f_013916c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DDD8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997D20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394040 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394040.
-pub fn f_01394040(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013916D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013916d0.
+pub fn f_013916d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D9D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997B38u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394050 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394050.
-pub fn f_01394050(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013916E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013916e0.
+pub fn f_013916e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DD38u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997FC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394060 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394060.
-pub fn f_01394060(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013916F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013916f0.
+pub fn f_013916f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E038u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19983E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394070 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394070.
-pub fn f_01394070(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391700 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391700.
+pub fn f_01391700(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DAB8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19981C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394080 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394080.
-pub fn f_01394080(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391710 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391710.
+pub fn f_01391710(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DED8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19981E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394090 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394090.
-pub fn f_01394090(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391720 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391720.
+pub fn f_01391720(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E178u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998320u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013940A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013940a0.
-pub fn f_013940a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391730 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391730.
+pub fn f_01391730(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D630u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19983C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013940B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013940b0.
-pub fn f_013940b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391740 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391740.
+pub fn f_01391740(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D798u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998260u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013940C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013940c0.
-pub fn f_013940c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391750 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391750.
+pub fn f_01391750(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D9F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998420u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013940D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013940d0.
-pub fn f_013940d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391760 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391760.
+pub fn f_01391760(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DE38u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997EE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013940E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013940e0.
-pub fn f_013940e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391770 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391770.
+pub fn f_01391770(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DAF8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998180u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013940F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013940f0.
-pub fn f_013940f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391780 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391780.
+pub fn f_01391780(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D918u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997FE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394100 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394100.
-pub fn f_01394100(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391790 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391790.
+pub fn f_01391790(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DA78u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997EC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394110 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394110.
-pub fn f_01394110(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013917A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013917a0.
+pub fn f_013917a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DE18u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997E80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394120 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394120.
-pub fn f_01394120(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013917B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013917b0.
+pub fn f_013917b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DD78u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998080u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394130 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394130.
-pub fn f_01394130(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013917C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013917c0.
+pub fn f_013917c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DDF8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997C78u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394140 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394140.
-pub fn f_01394140(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013917D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013917d0.
+pub fn f_013917d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D590u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998300u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394150 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394150.
-pub fn f_01394150(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013917E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013917e0.
+pub fn f_013917e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D958u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997E00u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394160 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394160.
-pub fn f_01394160(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013917F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013917f0.
+pub fn f_013917f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D998u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998360u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394170 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394170.
-pub fn f_01394170(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391800 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391800.
+pub fn f_01391800(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E0F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19980A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394180 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394180.
-pub fn f_01394180(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391810 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391810.
+pub fn f_01391810(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DDB8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997AF8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394190 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394190.
-pub fn f_01394190(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391820 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391820.
+pub fn f_01391820(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D978u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997CD8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013941A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013941a0.
-pub fn f_013941a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391830 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391830.
+pub fn f_01391830(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E058u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998400u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013941B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013941b0.
-pub fn f_013941b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391840 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391840.
+pub fn f_01391840(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DE58u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997C18u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013941C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013941c0.
-pub fn f_013941c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391850 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391850.
+pub fn f_01391850(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D878u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998120u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013941D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013941d0.
-pub fn f_013941d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391860 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391860.
+pub fn f_01391860(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D9B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997F20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013941E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013941e0.
-pub fn f_013941e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391870 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391870.
+pub fn f_01391870(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DA58u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998240u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013941F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013941f0.
-pub fn f_013941f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391880 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391880.
+pub fn f_01391880(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E138u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19983A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394200 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394200.
-pub fn f_01394200(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391890 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391890.
+pub fn f_01391890(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D7F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998020u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394210 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394210.
-pub fn f_01394210(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013918A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013918a0.
+pub fn f_013918a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DF78u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998000u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394220 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394220.
-pub fn f_01394220(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013918B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013918b0.
+pub fn f_013918b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D610u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997B58u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394230 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394230.
-pub fn f_01394230(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013918C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013918c0.
+pub fn f_013918c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D650u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997EA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394240 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394240.
-pub fn f_01394240(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013918D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013918d0.
+pub fn f_013918d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D7B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19982E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394250 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394250.
-pub fn f_01394250(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013918E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013918e0.
+pub fn f_013918e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D770u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998100u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394260 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394260.
-pub fn f_01394260(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013918F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013918f0.
+pub fn f_013918f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DE98u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998340u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394270 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394270.
-pub fn f_01394270(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391900 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391900.
+pub fn f_01391900(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DD58u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997BD8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394280 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394280.
-pub fn f_01394280(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391910 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391910.
+pub fn f_01391910(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D690u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997B98u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394290 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394290.
-pub fn f_01394290(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391920 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391920.
+pub fn f_01391920(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E198u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997C98u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013942A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013942a0.
-pub fn f_013942a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391930 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391930.
+pub fn f_01391930(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D750u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19981A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013942B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013942b0.
-pub fn f_013942b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391940 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391940.
+pub fn f_01391940(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DA38u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997DA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013942C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013942c0.
-pub fn f_013942c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391950 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391950.
+pub fn f_01391950(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DF38u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997B78u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013942D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013942d0.
-pub fn f_013942d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391960 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391960.
+pub fn f_01391960(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E078u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997BB8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013942E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013942e0.
-pub fn f_013942e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391970 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391970.
+pub fn f_01391970(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D8D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997FA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013942F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013942f0.
-pub fn f_013942f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391980 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391980.
+pub fn f_01391980(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D6F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997C58u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394300 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394300.
-pub fn f_01394300(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391990 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391990.
+pub fn f_01391990(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E238u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998060u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394310 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394310.
-pub fn f_01394310(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013919A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013919a0.
+pub fn f_013919a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E1B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998160u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394320 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394320.
-pub fn f_01394320(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013919B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013919b0.
+pub fn f_013919b0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E258u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997D40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394330 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394330.
-pub fn f_01394330(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013919C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013919c0.
+pub fn f_013919c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E0B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998220u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394340 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394340.
-pub fn f_01394340(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013919D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013919d0.
+pub fn f_013919d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E1D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997CF8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394350 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394350.
-pub fn f_01394350(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013919E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013919e0.
+pub fn f_013919e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E2B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998200u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394360 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394360.
-pub fn f_01394360(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013919F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013919f0.
+pub fn f_013919f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DE78u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998280u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394370 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394370.
-pub fn f_01394370(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a00.
+pub fn f_01391a00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D5F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997F40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394380 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394380.
-pub fn f_01394380(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a10.
+pub fn f_01391a10(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D6B0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997F80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394390 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394390.
-pub fn f_01394390(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a20.
+pub fn f_01391a20(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E2F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997D80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013943A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013943a0.
-pub fn f_013943a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a30.
+pub fn f_01391a30(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DF18u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997B18u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013943B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013943b0.
-pub fn f_013943b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a40.
+pub fn f_01391a40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DFF8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997DE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013943C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013943c0.
-pub fn f_013943c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a50.
+pub fn f_01391a50(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D838u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19980E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013943D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013943d0.
-pub fn f_013943d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a60.
+pub fn f_01391a60(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DEB8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1997DC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013943E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013943e0.
-pub fn f_013943e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a70.
+pub fn f_01391a70(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E278u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19980C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013943F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013943f0.
-pub fn f_013943f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a80.
+pub fn f_01391a80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E1F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998040u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394400 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394400.
-pub fn f_01394400(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391A90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391a90.
+pub fn f_01391a90(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E018u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998140u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394410 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394410.
-pub fn f_01394410(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391AA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391aa0.
+pub fn f_01391aa0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D7D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19982C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394420 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394420.
-pub fn f_01394420(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391AB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ab0.
+pub fn f_01391ab0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E118u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998868u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394430 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394430.
-pub fn f_01394430(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391AC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ac0.
+pub fn f_01391ac0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DFD8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998680u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394440 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394440.
-pub fn f_01394440(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391AD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ad0.
+pub fn f_01391ad0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DA98u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998DA8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394450 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394450.
-pub fn f_01394450(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391AE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ae0.
+pub fn f_01391ae0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D898u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998A68u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394460 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394460.
-pub fn f_01394460(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391AF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391af0.
+pub fn f_01391af0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D818u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998CE8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394470 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394470.
-pub fn f_01394470(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391B00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b00.
+pub fn f_01391b00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DF98u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998748u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394480 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394480.
-pub fn f_01394480(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391B10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b10.
+pub fn f_01391b10(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E2D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998CC8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394490 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394490.
-pub fn f_01394490(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391B20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b20.
+pub fn f_01391b20(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E298u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19989E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013944A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013944a0.
-pub fn f_013944a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391B30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b30.
+pub fn f_01391b30(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E0D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1998A88u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013944B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013944b0.
-pub fn f_013944b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391B40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b40.
+pub fn f_01391b40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199D5D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x19988A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013944C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013944c0.
-pub fn f_013944c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391B50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b50.
+pub fn f_01391b50(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199DD98u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013944D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013944d0.
-pub fn f_013944d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391B60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b60.
+pub fn f_01391b60(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E540u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x013944E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013944e0.
-pub fn f_013944e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x01391B70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b70.
+pub fn f_01391b70(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    let mut pc: u32 = 0x13944E0;
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391B80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b80.
+pub fn f_01391b80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391B90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391b90.
+pub fn f_01391b90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391BA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ba0.
+pub fn f_01391ba0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391BB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391bb0.
+pub fn f_01391bb0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391BC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391bc0.
+pub fn f_01391bc0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391BD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391bd0.
+pub fn f_01391bd0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391BE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391be0.
+pub fn f_01391be0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391BF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391bf0.
+pub fn f_01391bf0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998C08u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c00.
+pub fn f_01391c00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998848u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c10.
+pub fn f_01391c10(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998C48u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c20.
+pub fn f_01391c20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998828u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c30.
+pub fn f_01391c30(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19987C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c40.
+pub fn f_01391c40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998908u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c50.
+pub fn f_01391c50(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998C68u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c60.
+pub fn f_01391c60(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998B68u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c70.
+pub fn f_01391c70(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998B48u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c80.
+pub fn f_01391c80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998600u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391C90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391c90.
+pub fn f_01391c90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19984E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391CA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ca0.
+pub fn f_01391ca0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998AC8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391CB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391cb0.
+pub fn f_01391cb0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998D08u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391CC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391cc0.
+pub fn f_01391cc0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19987A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391CD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391cd0.
+pub fn f_01391cd0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998768u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391CE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ce0.
+pub fn f_01391ce0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998E08u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391CF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391cf0.
+pub fn f_01391cf0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998CA8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d00.
+pub fn f_01391d00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998B08u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d10.
+pub fn f_01391d10(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998540u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d20.
+pub fn f_01391d20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19988C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d30.
+pub fn f_01391d30(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19988E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d40.
+pub fn f_01391d40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998B88u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d50.
+pub fn f_01391d50(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19986C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d60.
+pub fn f_01391d60(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19985C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d70.
+pub fn f_01391d70(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998968u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d80.
+pub fn f_01391d80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998728u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391D90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391d90.
+pub fn f_01391d90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998640u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391DA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391da0.
+pub fn f_01391da0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998D28u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391DB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391db0.
+pub fn f_01391db0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998808u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391DC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391dc0.
+pub fn f_01391dc0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19984A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391DD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391dd0.
+pub fn f_01391dd0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998988u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391DE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391de0.
+pub fn f_01391de0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998DE8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391DF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391df0.
+pub fn f_01391df0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19989A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e00.
+pub fn f_01391e00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998788u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e10.
+pub fn f_01391e10(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998BA8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e20.
+pub fn f_01391e20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998480u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e30.
+pub fn f_01391e30(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998708u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e40.
+pub fn f_01391e40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998660u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e50.
+pub fn f_01391e50(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998BC8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e60.
+pub fn f_01391e60(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998580u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e70.
+pub fn f_01391e70(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998560u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e80.
+pub fn f_01391e80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998A08u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391E90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391e90.
+pub fn f_01391e90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19986A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391EA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ea0.
+pub fn f_01391ea0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998D68u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391EB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391eb0.
+pub fn f_01391eb0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19989C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391EC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ec0.
+pub fn f_01391ec0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998A48u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391ED0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ed0.
+pub fn f_01391ed0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998DC8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391EE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ee0.
+pub fn f_01391ee0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19986E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391EF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ef0.
+pub fn f_01391ef0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998B28u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f00.
+pub fn f_01391f00(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998C28u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f10.
+pub fn f_01391f10(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998D48u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f20.
+pub fn f_01391f20(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998AE8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f30.
+pub fn f_01391f30(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998948u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f40.
+pub fn f_01391f40(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998928u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f50.
+pub fn f_01391f50(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998520u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f60.
+pub fn f_01391f60(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998440u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f70.
+pub fn f_01391f70(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19985A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f80.
+pub fn f_01391f80(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19985E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391F90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391f90.
+pub fn f_01391f90(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998AA8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391FA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391fa0.
+pub fn f_01391fa0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998C88u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391FB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391fb0.
+pub fn f_01391fb0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19984C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391FC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391fc0.
+pub fn f_01391fc0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998BE8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391FD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391fd0.
+pub fn f_01391fd0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998D88u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391FE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391fe0.
+pub fn f_01391fe0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998500u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01391FF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01391ff0.
+pub fn f_01391ff0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19987E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392000 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392000.
+pub fn f_01392000(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998888u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392010 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392010.
+pub fn f_01392010(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998A28u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392020 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392020.
+pub fn f_01392020(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998460u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392030 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392030.
+pub fn f_01392030(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998620u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392040 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392040.
+pub fn f_01392040(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998E30u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392050 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392050.
+pub fn f_01392050(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998E50u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392060 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392060.
+pub fn f_01392060(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998E78u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392070 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392070.
+pub fn f_01392070(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998EA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392080 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392080.
+pub fn f_01392080(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998EC8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392090 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392090.
+pub fn f_01392090(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998EF0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013920A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013920a0.
+pub fn f_013920a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999098u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013920B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013920b0.
+pub fn f_013920b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998F30u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013920C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013920c0.
+pub fn f_013920c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19990D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013920D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013920d0.
+pub fn f_013920d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999218u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013920E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013920e0.
+pub fn f_013920e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999118u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013920F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013920f0.
+pub fn f_013920f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19995B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392100 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392100.
+pub fn f_01392100(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19991B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392110 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392110.
+pub fn f_01392110(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19993F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392120 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392120.
+pub fn f_01392120(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19994F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392130 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392130.
+pub fn f_01392130(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392140 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392140.
+pub fn f_01392140(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392150 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392150.
+pub fn f_01392150(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392160 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392160.
+pub fn f_01392160(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392170 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392170.
+pub fn f_01392170(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392180 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392180.
+pub fn f_01392180(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392190 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392190.
+pub fn f_01392190(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999478u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013921A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013921a0.
+pub fn f_013921a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19994B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013921B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013921b0.
+pub fn f_013921b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19992F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013921C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013921c0.
+pub fn f_013921c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998F70u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013921D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013921d0.
+pub fn f_013921d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998FF0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013921E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013921e0.
+pub fn f_013921e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999138u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013921F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013921f0.
+pub fn f_013921f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999338u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392200 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392200.
+pub fn f_01392200(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19990F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392210 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392210.
+pub fn f_01392210(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999438u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392220 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392220.
+pub fn f_01392220(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19991D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392230 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392230.
+pub fn f_01392230(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19992D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392240 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392240.
+pub fn f_01392240(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999058u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392250 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392250.
+pub fn f_01392250(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999038u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392260 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392260.
+pub fn f_01392260(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19993B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392270 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392270.
+pub fn f_01392270(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999558u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392280 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392280.
+pub fn f_01392280(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999278u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392290 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392290.
+pub fn f_01392290(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998F50u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013922A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013922a0.
+pub fn f_013922a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998F90u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013922B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013922b0.
+pub fn f_013922b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999518u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013922C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013922c0.
+pub fn f_013922c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999578u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013922D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013922d0.
+pub fn f_013922d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999598u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013922E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013922e0.
+pub fn f_013922e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999198u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013922F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013922f0.
+pub fn f_013922f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999298u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392300 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392300.
+pub fn f_01392300(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999458u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392310 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392310.
+pub fn f_01392310(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999498u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392320 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392320.
+pub fn f_01392320(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999018u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392330 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392330.
+pub fn f_01392330(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998F10u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392340 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392340.
+pub fn f_01392340(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19994D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392350 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392350.
+pub fn f_01392350(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999538u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392360 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392360.
+pub fn f_01392360(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999318u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392370 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392370.
+pub fn f_01392370(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999178u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392380 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392380.
+pub fn f_01392380(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19991F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392390 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392390.
+pub fn f_01392390(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999398u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013923A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013923a0.
+pub fn f_013923a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19993D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013923B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013923b0.
+pub fn f_013923b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998FD0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013923C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013923c0.
+pub fn f_013923c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999418u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013923D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013923d0.
+pub fn f_013923d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19992B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013923E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013923e0.
+pub fn f_013923e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1998FB0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013923F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013923f0.
+pub fn f_013923f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999158u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392400 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392400.
+pub fn f_01392400(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999378u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392410 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392410.
+pub fn f_01392410(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999258u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392420 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392420.
+pub fn f_01392420(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19990B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392430 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392430.
+pub fn f_01392430(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999238u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392440 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392440.
+pub fn f_01392440(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999078u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392450 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392450.
+pub fn f_01392450(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999358u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392460 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392460.
+pub fn f_01392460(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999B20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392470 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392470.
+pub fn f_01392470(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999BA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392480 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392480.
+pub fn f_01392480(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19999C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392490 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392490.
+pub fn f_01392490(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999800u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013924A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013924a0.
+pub fn f_013924a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999C00u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013924B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013924b0.
+pub fn f_013924b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999678u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013924C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013924c0.
+pub fn f_013924c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19995F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013924D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013924d0.
+pub fn f_013924d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013924E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013924e0.
+pub fn f_013924e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013924F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013924f0.
+pub fn f_013924f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392500 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392500.
+pub fn f_01392500(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392510 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392510.
+pub fn f_01392510(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392520 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392520.
+pub fn f_01392520(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392530 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392530.
+pub fn f_01392530(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392540 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392540.
+pub fn f_01392540(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392550 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392550.
+pub fn f_01392550(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392560 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392560.
+pub fn f_01392560(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392570 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392570.
+pub fn f_01392570(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392580 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392580.
+pub fn f_01392580(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392590 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392590.
+pub fn f_01392590(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013925A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013925a0.
+pub fn f_013925a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013925B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013925b0.
+pub fn f_013925b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19997E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013925C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013925c0.
+pub fn f_013925c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999B60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013925D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013925d0.
+pub fn f_013925d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999760u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013925E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013925e0.
+pub fn f_013925e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999740u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013925F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013925f0.
+pub fn f_013925f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19998E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392600 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392600.
+pub fn f_01392600(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999698u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392610 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392610.
+pub fn f_01392610(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999820u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392620 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392620.
+pub fn f_01392620(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999C60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392630 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392630.
+pub fn f_01392630(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999840u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392640 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392640.
+pub fn f_01392640(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999B00u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392650 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392650.
+pub fn f_01392650(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999780u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392660 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392660.
+pub fn f_01392660(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999B40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392670 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392670.
+pub fn f_01392670(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999900u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392680 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392680.
+pub fn f_01392680(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999A80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392690 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392690.
+pub fn f_01392690(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999940u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013926A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013926a0.
+pub fn f_013926a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999980u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013926B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013926b0.
+pub fn f_013926b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999A60u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013926C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013926c0.
+pub fn f_013926c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19998C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013926D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013926d0.
+pub fn f_013926d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999AC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013926E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013926e0.
+pub fn f_013926e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19999E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013926F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013926f0.
+pub fn f_013926f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19997A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392700 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392700.
+pub fn f_01392700(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19997C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392710 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392710.
+pub fn f_01392710(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19996D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392720 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392720.
+pub fn f_01392720(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999860u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392730 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392730.
+pub fn f_01392730(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999C40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392740 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392740.
+pub fn f_01392740(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999C20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392750 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392750.
+pub fn f_01392750(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999AA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392760 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392760.
+pub fn f_01392760(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999A00u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392770 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392770.
+pub fn f_01392770(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999A40u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392780 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392780.
+pub fn f_01392780(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999BC0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392790 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392790.
+pub fn f_01392790(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999720u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013927A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013927a0.
+pub fn f_013927a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999960u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013927B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013927b0.
+pub fn f_013927b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999A20u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013927C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013927c0.
+pub fn f_013927c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19999A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013927D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013927d0.
+pub fn f_013927d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19995D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013927E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013927e0.
+pub fn f_013927e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999638u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013927F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013927f0.
+pub fn f_013927f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19998A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392800 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392800.
+pub fn f_01392800(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x19996B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392810 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392810.
+pub fn f_01392810(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999658u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392820 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392820.
+pub fn f_01392820(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999AE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392830 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392830.
+pub fn f_01392830(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999618u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392840 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392840.
+pub fn f_01392840(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999BE0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392850 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392850.
+pub fn f_01392850(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999920u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392860 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392860.
+pub fn f_01392860(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999B80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392870 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392870.
+pub fn f_01392870(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999880u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392880 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392880.
+pub fn f_01392880(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999700u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392890 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392890.
+pub fn f_01392890(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999CA0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013928A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013928a0.
+pub fn f_013928a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999D28u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013928B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013928b0.
+pub fn f_013928b0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999C80u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013928C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013928c0.
+pub fn f_013928c0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999DE8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013928D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013928d0.
+pub fn f_013928d0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999DC8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013928E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013928e0.
+pub fn f_013928e0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999E28u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013928F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013928f0.
+pub fn f_013928f0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999D88u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392900 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392900.
+pub fn f_01392900(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999D48u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392910 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392910.
+pub fn f_01392910(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999CC8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392920 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392920.
+pub fn f_01392920(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999E08u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392930 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392930.
+pub fn f_01392930(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999E48u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392940 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392940.
+pub fn f_01392940(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999D68u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392950 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392950.
+pub fn f_01392950(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999CE8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392960 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392960.
+pub fn f_01392960(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999D08u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392970 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392970.
+pub fn f_01392970(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x1999DA8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392980 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392980.
+pub fn f_01392980(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x199A368u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x01392990 (DDDA.exe 2017-12-13 Steam), Global::FUN_01392990.
+pub fn f_01392990(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    m.fast_set_u32(pt, 0x199A508u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+}
+
+// Translated from 0x013929A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013929a0.
+pub fn f_013929a0(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let pt = m.page_table();
+    let mut pc: u32 = 0x13929A0;
     loop {
         match pc {
-            0x13944E0 => { cpu.eax = 0x1857E80u32; cpu.ecx = 0x1u32; cpu.ebx = cpu.ebx; pc = 0x13944F0; continue; }
-            0x13944F0 => { cpu.eax = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x13944F0 } else { 0x13944FC }; continue; }
-            0x13944FC => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0x13929A0 => { cpu.eax = 0x18456E0u32; cpu.ecx = 0x5u32; cpu.ebx = cpu.ebx; pc = 0x13929B0; continue; }
+            0x13929B0 => { cpu.eax = cpu.fl.alu_sub(cpu.eax, 0x30u32, 32); { let a = cpu.ecx & u32::MAX; let r = a.wrapping_sub(1) & u32::MAX; cpu.fl.inc_dec(x86::DEC, a, r, 32); cpu.ecx = r; } m.fast_set_u32(pt, cpu.eax, 0x1558134u32); pc = if cpu.fl.cond("ns") { 0x13929B0 } else { 0x13929BC }; continue; }
+            0x13929BC => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }
     }
 }
 
-// Translated from 0x01394500 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394500.
-pub fn f_01394500(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013929C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013929c0.
+pub fn f_013929c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E358u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x1999E68u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394510 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394510.
-pub fn f_01394510(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013929D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013929d0.
+pub fn f_013929d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E3D8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x199A408u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394520 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394520.
-pub fn f_01394520(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013929E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013929e0.
+pub fn f_013929e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E560u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x199A3E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
-// Translated from 0x01394530 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394530.
-pub fn f_01394530(m: &mut dyn Mem, cpu: &mut Cpu) {
+// Translated from 0x013929F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013929f0.
+pub fn f_013929f0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E4A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394540 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394540.
-pub fn f_01394540(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E480u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394550 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394550.
-pub fn f_01394550(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E3B8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394560 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394560.
-pub fn f_01394560(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E600u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394570 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394570.
-pub fn f_01394570(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E728u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394580 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394580.
-pub fn f_01394580(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E460u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394590 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394590.
-pub fn f_01394590(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E5C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013945A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013945a0.
-pub fn f_013945a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E4E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013945B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013945b0.
-pub fn f_013945b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E788u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013945C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013945c0.
-pub fn f_013945c0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E520u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013945D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013945d0.
-pub fn f_013945d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E580u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013945E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013945e0.
-pub fn f_013945e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E748u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013945F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013945f0.
-pub fn f_013945f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E440u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394600 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394600.
-pub fn f_01394600(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E5E0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394610 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394610.
-pub fn f_01394610(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E6E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394620 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394620.
-pub fn f_01394620(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E828u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394630 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394630.
-pub fn f_01394630(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E500u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394640 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394640.
-pub fn f_01394640(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E3F8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394650 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394650.
-pub fn f_01394650(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E708u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394660 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394660.
-pub fn f_01394660(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E7E8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394670 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394670.
-pub fn f_01394670(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E6A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394680 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394680.
-pub fn f_01394680(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E7A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394690 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394690.
-pub fn f_01394690(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E378u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013946A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013946a0.
-pub fn f_013946a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E768u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013946B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013946b0.
-pub fn f_013946b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E418u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013946C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013946c0.
-pub fn f_013946c0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E808u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013946D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013946d0.
-pub fn f_013946d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E5A0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013946E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013946e0.
-pub fn f_013946e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E6C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013946F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013946f0.
-pub fn f_013946f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E4C0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394700 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394700.
-pub fn f_01394700(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E398u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394710 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394710.
-pub fn f_01394710(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E7C8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394720 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394720.
-pub fn f_01394720(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E848u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394730 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394730.
-pub fn f_01394730(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x1859460u32, 0x1558134u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394740 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394740.
-pub fn f_01394740(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E9D4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394750 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394750.
-pub fn f_01394750(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EA14u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394760 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394760.
-pub fn f_01394760(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E9F4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394770 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394770.
-pub fn f_01394770(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E930u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394780 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394780.
-pub fn f_01394780(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E950u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394790 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394790.
-pub fn f_01394790(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E888u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013947A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013947a0.
-pub fn f_013947a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E910u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013947B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013947b0.
-pub fn f_013947b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E868u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013947C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013947c0.
-pub fn f_013947c0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E9B4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013947D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013947d0.
-pub fn f_013947d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E8F0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013947E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013947e0.
-pub fn f_013947e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E8D0u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013947F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013947f0.
-pub fn f_013947f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199E8A8u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394800 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394800.
-pub fn f_01394800(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x185A7F0u32, 0x1558134u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394810 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394810.
-pub fn f_01394810(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EA34u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394820 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394820.
-pub fn f_01394820(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EA5Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394830 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394830.
-pub fn f_01394830(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EACCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394840 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394840.
-pub fn f_01394840(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EE34u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394850 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394850.
-pub fn f_01394850(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ED74u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394860 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394860.
-pub fn f_01394860(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EED4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394870 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394870.
-pub fn f_01394870(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EC34u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394880 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394880.
-pub fn f_01394880(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EB0Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394890 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394890.
-pub fn f_01394890(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EEF4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013948A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013948a0.
-pub fn f_013948a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EC94u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013948B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013948b0.
-pub fn f_013948b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EDD4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013948C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013948c0.
-pub fn f_013948c0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ECD4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013948D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013948d0.
-pub fn f_013948d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ED14u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013948E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013948e0.
-pub fn f_013948e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EE94u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013948F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013948f0.
-pub fn f_013948f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EB74u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394900 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394900.
-pub fn f_01394900(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EE54u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394910 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394910.
-pub fn f_01394910(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EE74u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394920 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394920.
-pub fn f_01394920(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EB2Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394930 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394930.
-pub fn f_01394930(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ED54u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394940 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394940.
-pub fn f_01394940(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ECB4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394950 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394950.
-pub fn f_01394950(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ED34u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394960 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394960.
-pub fn f_01394960(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EC14u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394970 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394970.
-pub fn f_01394970(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EEB4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394980 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394980.
-pub fn f_01394980(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EBB4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394990 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394990.
-pub fn f_01394990(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EAECu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013949A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013949a0.
-pub fn f_013949a0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EC54u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013949B0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013949b0.
-pub fn f_013949b0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EBD4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013949C0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013949c0.
-pub fn f_013949c0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EBF4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013949D0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013949d0.
-pub fn f_013949d0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EE14u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013949E0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013949e0.
-pub fn f_013949e0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EB4Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x013949F0 (DDDA.exe 2017-12-13 Steam), Global::FUN_013949f0.
-pub fn f_013949f0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EB94u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a00.
-pub fn f_01394a00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ED94u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a10.
-pub fn f_01394a10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EDB4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a20.
-pub fn f_01394a20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199ECF4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a30.
-pub fn f_01394a30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EDF4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a40.
-pub fn f_01394a40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EC74u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a50.
-pub fn f_01394a50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F11Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a60.
-pub fn f_01394a60(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EFBCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a70.
-pub fn f_01394a70(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F23Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a80.
-pub fn f_01394a80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EFDCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394A90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394a90.
-pub fn f_01394a90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F0BCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394AA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394aa0.
-pub fn f_01394aa0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F27Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394AB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394ab0.
-pub fn f_01394ab0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EF9Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394AC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394ac0.
-pub fn f_01394ac0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F05Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394AD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394ad0.
-pub fn f_01394ad0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F2BCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394AE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394ae0.
-pub fn f_01394ae0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F1BCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394AF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394af0.
-pub fn f_01394af0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EFFCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b00.
-pub fn f_01394b00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EF14u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b10.
-pub fn f_01394b10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F17Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b20.
-pub fn f_01394b20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F07Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b30.
-pub fn f_01394b30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F15Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b40.
-pub fn f_01394b40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F25Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b50.
-pub fn f_01394b50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F13Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b60.
-pub fn f_01394b60(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F29Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b70.
-pub fn f_01394b70(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F1FCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b80.
-pub fn f_01394b80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EF7Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394B90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394b90.
-pub fn f_01394b90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F0DCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394BA0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394ba0.
-pub fn f_01394ba0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F0FCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394BB0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394bb0.
-pub fn f_01394bb0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F2DCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394BC0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394bc0.
-pub fn f_01394bc0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EF34u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394BD0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394bd0.
-pub fn f_01394bd0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F09Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394BE0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394be0.
-pub fn f_01394be0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F19Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394BF0 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394bf0.
-pub fn f_01394bf0(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F21Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C00 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c00.
-pub fn f_01394c00(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199EF5Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C10 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c10.
-pub fn f_01394c10(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F03Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C20 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c20.
-pub fn f_01394c20(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F1DCu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C30 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c30.
-pub fn f_01394c30(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F01Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C40 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c40.
-pub fn f_01394c40(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F31Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C50 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c50.
-pub fn f_01394c50(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F47Cu32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C60 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c60.
-pub fn f_01394c60(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199F984u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C70 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c70.
-pub fn f_01394c70(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199FC04u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C80 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c80.
-pub fn f_01394c80(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199FCE4u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
-}
-
-// Translated from 0x01394C90 (DDDA.exe 2017-12-13 Steam), Global::FUN_01394c90.
-pub fn f_01394c90(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    m.fast_set_u32(pt, 0x199FA24u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    m.fast_set_u32(pt, 0x199A648u32, 0x1403510u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
