@@ -163,6 +163,7 @@ pub(crate) enum Reject {
     UnsupportedScheduler(u32),
     IncoherentInput(u32),
     PublicationConflict(u32),
+    UnsupportedLock(u32),
 }
 
 /// Each lane owns its writes and reads the same immutable input. Keeping
@@ -217,7 +218,10 @@ impl LaneMemory {
                 continue;
             }
             live.probe(address, 1, false)
-                .map_err(|address| Reject::Permission { address, write: false })?;
+                .map_err(|address| Reject::Permission {
+                    address,
+                    write: false,
+                })?;
             if self.writes.contains_key(&address) {
                 live.probe(address, 1, true)
                     .map_err(|address| Reject::Permission { address, write: true })?;
@@ -560,12 +564,17 @@ mod tests {
         candidate.set_u32(0x1000, 0x12345678);
         candidate.set_u8(0x1800, 99); // Popped private callback stack.
         live.set_u8(0x2fff, 1);
-        assert_eq!(candidate.publish(&mut live, &BTreeMap::new(), 0x1800..0x1900),
-            Err(Reject::PublicationConflict(0x2fff)));
+        assert_eq!(
+            candidate.publish(&mut live, &BTreeMap::new(), 0x1800..0x1900),
+            Err(Reject::PublicationConflict(0x2fff))
+        );
         assert_eq!(live.u32(0x1000), 0);
         assert_eq!(live.u8(0x1800), 0);
         live.set_u8(0x2fff, 0);
-        assert_eq!(candidate.publish(&mut live, &BTreeMap::new(), 0x1800..0x1900), Ok(4));
+        assert_eq!(
+            candidate.publish(&mut live, &BTreeMap::new(), 0x1800..0x1900),
+            Ok(4)
+        );
         assert_eq!(live.u32(0x1000), 0x12345678);
         assert_eq!(live.u8(0x1800), 0);
     }
@@ -580,12 +589,16 @@ mod tests {
         candidate.set_u8(0x1000, 3);
         candidate.set_u8(0x1001, 4);
         live.set_u8(0x1001, 4);
-        assert_eq!(candidate.publish(&mut live, &BTreeMap::new(), 0..0),
-            Err(Reject::PublicationConflict(0x1001)));
+        assert_eq!(
+            candidate.publish(&mut live, &BTreeMap::new(), 0..0),
+            Err(Reject::PublicationConflict(0x1001))
+        );
         assert_eq!(live.u8(0x1000), 0);
         let baseline = BTreeMap::from([(0x1001, 4), (0x1002, 7)]);
-        assert_eq!(candidate.publish(&mut live, &baseline, 0..0),
-            Err(Reject::PublicationConflict(0x1002)));
+        assert_eq!(
+            candidate.publish(&mut live, &baseline, 0..0),
+            Err(Reject::PublicationConflict(0x1002))
+        );
         assert_eq!(live.u8(0x1000), 0);
         live.set_u8(0x1002, 7);
         assert_eq!(candidate.publish(&mut live, &baseline, 0..0), Ok(2));
@@ -606,8 +619,13 @@ mod tests {
         let mut live = GuestMemory::new();
         live.map(0x1000, PAGE, READ | WRITE).unwrap();
         live.map(0x2000, PAGE, READ).unwrap();
-        assert_eq!(candidate.publish(&mut live, &BTreeMap::new(), 0..0),
-            Err(Reject::Permission { address: 0x2000, write: true }));
+        assert_eq!(
+            candidate.publish(&mut live, &BTreeMap::new(), 0..0),
+            Err(Reject::Permission {
+                address: 0x2000,
+                write: true
+            })
+        );
         assert_eq!(live.u8(0x1000), 0);
         assert_eq!(live.u8(0x2000), 0);
     }

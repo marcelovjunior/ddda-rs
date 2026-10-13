@@ -61,6 +61,17 @@
   limits: `docs/tasks/L169-shadow.md`.
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
+- Head cap172 reached gameplay but returned zero captures/hook lines.
+  Added installation and entry diagnostics; launch receipt/rerun pending.
+  Full feature-light before service addition277/0/7; final replay10PASS
+  with and without feature. Next: diagnose missing hook activation.
+
+- Publication preflight: 11 executor tests pass, including three new
+  all-before-store checks. Complete serialized synthetic replay and private
+  uncontended critical-section model: 10 replay tests pass, including
+  differential runtime service checks and allocator dependency refusal.
+  Still awaiting real capture; no live publication or speed claim.
+
 - Continuation: capture v2 preserves live outgoing MXCSR; replay compares
   x87 and thread control state. Five focused replay tests pass; real
   capture and production publication remain pending.
