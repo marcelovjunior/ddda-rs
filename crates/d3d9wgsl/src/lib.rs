@@ -75,6 +75,8 @@ pub enum TextureKind {
 /// What a translated pixel shader needs bound.
 #[derive(Clone, Debug, Default)]
 pub struct Interface {
+    /// Float4 slots in the uniform layout (at least one for WGSL arrays).
+    pub float_constants: usize,
     /// Declared inputs in location order: (usage, usage index, register).
     pub inputs: Vec<(u32, u32, u32)>,
     /// Sampler registers and their texture kinds.
@@ -95,6 +97,10 @@ pub struct Interface {
 /// way).
 #[derive(Clone, Debug, Default)]
 pub struct Options {
+    /// Size the float constant array to the bytecode's read extent. Relative
+    /// indexing retains the full stage register file. Default preserves the
+    /// full layout used by the standalone translator/driver oracle.
+    pub compact_constants: bool,
     pub capture_position: Option<[f32; 4]>,
     /// Pixel shaders: the location of each declared input in declaration
     /// order, from linking with the vertex stage's outputs by usage and
@@ -296,14 +302,16 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
     if !vertex {
         writeln!(w, "diagnostic(off, derivative_uniformity);").unwrap();
     }
-    let floats = if vertex { 256 } else { 224 };
+    let floats = if options.compact_constants { shader.float_constant_count().max(1) }
+        else if vertex { 256 } else { 224 };
+    iface.float_constants = floats;
     if vertex {
-        writeln!(w, "struct VertexConstants {{ c: array<vec4<f32>, 256>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, hp: vec4<f32> }}").unwrap();
+        writeln!(w, "struct VertexConstants {{ c: array<vec4<f32>, {floats}>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, hp: vec4<f32> }}").unwrap();
         writeln!(w, "@group(0) @binding(2) var<uniform> k: VertexConstants;").unwrap();
     } else {
         let bias = if cx.lod_bias { ", bias: array<vec4<f32>, 4>" } else { "" };
         let zbias = if options.depth_bias { ", zbias: vec4<f32>" } else { "" };
-        writeln!(w, "struct Constants {{ c: array<vec4<f32>, 224>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, alpha: vec4<u32>{bias}{zbias} }}").unwrap();
+        writeln!(w, "struct Constants {{ c: array<vec4<f32>, {floats}>, i: array<vec4<i32>, 16>, b: array<vec4<u32>, 16>, alpha: vec4<u32>{bias}{zbias} }}").unwrap();
         writeln!(w, "@group(0) @binding(0) var<uniform> k: Constants;").unwrap();
     }
     writeln!(w, "{HELPERS}").unwrap();

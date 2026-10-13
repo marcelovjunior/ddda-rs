@@ -211,7 +211,7 @@ mod tests {
                 vertices: Vertices::Inline { bytes: vec![12; 36], stride: 12 }, indices: Indices::Inline { bytes: vec![0, 1, 2], format: 101 },
                 vertex_shader: Some(vec![1, 2].into()), pixel_shader: Some(vec![3, 4].into()), declaration: vec![].into(), fvf: 0,
                 vs_constants: Constants { f: vec![[9; 4]], ..Default::default() }.into(), ps_constants: Constants::default().into(),
-                textures: vec![], render_states: vec![(7, 1)].into(), viewport: [0; 6], scissor: [0; 4], targets: c.targets.clone(), depth: None };
+                textures: vec![].into(), render_states: vec![(7, 1)].into(), viewport: [0; 6], scissor: [0; 4], targets: c.targets.clone(), depth: None };
             b.draw(&d);
             d.vs_constants = Constants::default().into();
             if let Vertices::Inline { bytes, .. } = &mut d.vertices { bytes.fill(99); }

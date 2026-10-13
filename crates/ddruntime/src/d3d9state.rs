@@ -17,6 +17,7 @@ use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 use crate::fasthash::FxMap as HashMap;
 use std::sync::Arc;
+use crate::d3d9draw::snapshot_groups as groups;
 
 const RS_ZENABLE: u32 = 7;
 const TSS_TEXCOORDINDEX: u32 = 11;
@@ -25,8 +26,71 @@ pub const PS_FLOATS: u32 = 224;
 
 pub use d3d9cmd::Constants;
 
+/// A compact immutable draw view of the device's complete register bank.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ConstantSnapshot {
+    pub dirty: bool,
+    value: Option<Arc<Constants>>,
+}
+
+impl ConstantSnapshot {
+    fn get(&mut self, source: &Arc<Constants>, count: usize) -> Arc<Constants> {
+        let count = count.min(source.f.len());
+        if count == source.f.len() { return source.clone(); }
+        if let Some(value) = &self.value {
+            if value.f.len() == count && (!self.dirty ||
+                (value.f == source.f[..count] && value.i == source.i && value.b == source.b)) {
+                self.dirty = false;
+                return value.clone();
+            }
+        }
+        let value = self.value.get_or_insert_with(|| Arc::new(Constants::default()));
+        if let Some(dst) = Arc::get_mut(value) {
+            dst.f.clear();
+            dst.f.extend_from_slice(&source.f[..count]);
+            dst.i = source.i;
+            dst.b = source.b;
+        } else {
+            *value = Arc::new(Constants { f: source.f[..count].to_vec(), i: source.i, b: source.b });
+        }
+        self.dirty = false;
+        value.clone()
+    }
+}
+
+#[cfg(test)]
+mod compact_constant_tests {
+    use super::*;
+
+    #[test]
+    fn prefixes_preserve_old_draws_and_reuse_unread_changes() {
+        let mut source = Arc::new(Constants { f: vec![[0; 4]; 256], ..Default::default() });
+        let mut cache = ConstantSnapshot::default();
+        let first = cache.get(&source, 8);
+        Arc::make_mut(&mut source).f[200] = [7; 4];
+        cache.dirty = true;
+        assert!(Arc::ptr_eq(&first, &cache.get(&source, 8)));
+        let full = cache.get(&source, 256);
+        assert_eq!(full.f[200], [7; 4]);
+        Arc::make_mut(&mut source).f[7] = [9; 4];
+        cache.dirty = true;
+        let changed = cache.get(&source, 8);
+        assert_eq!(first.f[7], [0; 4]);
+        assert_eq!(full.f[7], [0; 4]);
+        assert_eq!(changed.f[7], [9; 4]);
+        assert_eq!(cache.get(&source, 201).f[200], [7; 4]);
+        assert!(cache.get(&source, 0).f.is_empty());
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DeviceState {
+    pub(crate) draw_groups: Option<Box<groups::Groups>>,
+    pub(crate) draw_dirty: u8,
+    /// Reused staging for Set*ShaderConstant; commands own immutable banks.
+    constant_words: Vec<u32>,
+    pub(crate) constant_snapshots: [ConstantSnapshot; 2],
+    pub(crate) shader_float_counts: [usize; 2],
     pub render: RenderStates,
     /// (sampler, type) -> value; samplers 0..15 and vertex samplers 257..260
     pub sampler: HashMap<(u32, u32), u32>,
@@ -102,6 +166,10 @@ impl FromIterator<(u32, u32)> for RenderStates {
 }
 
 impl DeviceState {
+    pub(crate) fn draw_constants(&mut self, counts: [usize; 2]) -> [Arc<Constants>; 2] {
+        [self.constant_snapshots[0].get(&self.vs, counts[0]),
+         self.constant_snapshots[1].get(&self.ps, counts[1])]
+    }
     /// A fresh device's state for a back buffer of `w` x `h`.
     pub fn new(auto_depth: bool, w: u32, h: u32) -> DeviceState {
         let p = profile();
@@ -123,6 +191,11 @@ impl DeviceState {
             }
         }
         DeviceState {
+            draw_groups: None,
+            draw_dirty: u8::MAX,
+            constant_words: Vec::new(),
+            constant_snapshots: Default::default(),
+            shader_float_counts: [VS_FLOATS as usize, PS_FLOATS as usize],
             render,
             sampler,
             stage,
@@ -195,7 +268,9 @@ pub fn get_render_state(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetSamplerState(this, sampler, type, value).
 pub fn set_sampler_state(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, smp, t, v) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
-    state(dev, |s| s.sampler.insert((smp, t), v));
+    state(dev, |s| {
+        if s.sampler.insert((smp, t), v) != Some(v) { s.draw_dirty |= groups::TEXTURES; }
+    });
     cpu.eax = D3D_OK;
     ret(m, cpu, 16);
 }
@@ -239,7 +314,11 @@ pub fn get_texture_stage_state(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn set_texture(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, st, tex) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     cpu.eax = if st < 16 || (256..261).contains(&st) {
-        let old = state(dev, |s| if tex == 0 { s.textures.remove(&st) } else { s.textures.insert(st, tex) }).unwrap_or(0);
+        let old = state(dev, |s| {
+            let old = if tex == 0 { s.textures.remove(&st) } else { s.textures.insert(st, tex) }.unwrap_or(0);
+            if old != tex { s.draw_dirty |= groups::TEXTURES; }
+            old
+        });
         rebind(old, tex);
         D3D_OK
     } else {
@@ -324,7 +403,10 @@ pub fn set_render_target(m: &mut dyn Mem, cpu: &mut Cpu) {
             Some(Kind::Surface { desc, .. }) => Some((desc.width, desc.height)),
             _ => None,
         });
-        let old = with_device(dev, |d| std::mem::replace(&mut d.render_targets[index as usize], surf));
+        let old = with_device(dev, |d| {
+            d.state.draw_dirty |= groups::TARGETS;
+            std::mem::replace(&mut d.render_targets[index as usize], surf)
+        });
         rebind(old, surf);
         if index == 0 {
             if let Some((w, h)) = size {
@@ -341,7 +423,10 @@ pub fn set_render_target(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// SetDepthStencilSurface(this, surface or NULL).
 pub fn set_depth_stencil_surface(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, surf) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    let old = with_device(dev, |d| std::mem::replace(&mut d.depth_stencil, surf));
+    let old = with_device(dev, |d| {
+        d.state.draw_dirty |= groups::TARGETS;
+        std::mem::replace(&mut d.depth_stencil, surf)
+    });
     rebind(old, surf);
     cpu.eax = D3D_OK;
     ret(m, cpu, 8);
@@ -387,8 +472,10 @@ fn read_tokens(m: &dyn Mem, p: u32) -> Vec<u32> {
 fn create_shader(m: &mut dyn Mem, cpu: &mut Cpu, iface: &'static str, stage_bits: u32) {
     let (dev, p, out) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     let tokens = read_tokens(m, p);
-    cpu.eax = if tokens[0] >> 16 == stage_bits && d3d9shader::parse(&tokens).is_ok() {
-        let o = new_object(m, iface, Kind::Shader { device: dev, tokens: tokens.into() });
+    let parsed = d3d9shader::parse(&tokens);
+    cpu.eax = if tokens[0] >> 16 == stage_bits && parsed.is_ok() {
+        let float_constants = parsed.unwrap().float_constant_count();
+        let o = new_object(m, iface, Kind::Shader { device: dev, tokens: tokens.into(), float_constants });
         m.set_u32(out, o);
         D3D_OK
     } else {
@@ -404,7 +491,30 @@ pub fn create_pixel_shader(m: &mut dyn Mem, cpu: &mut Cpu) { create_shader(m, cp
 fn set_bound(m: &mut dyn Mem, cpu: &mut Cpu, iface: &str, slot: fn(&mut DeviceState) -> &mut u32) {
     let (dev, o) = (arg(m, cpu, 0), arg(m, cpu, 1));
     cpu.eax = if o == 0 || is(o, iface) {
-        let old = state(dev, |s| std::mem::replace(slot(s), o));
+        let stage = match iface {
+            "IDirect3DVertexShader9" => Some((0, VS_FLOATS as usize)),
+            "IDirect3DPixelShader9" => Some((1, PS_FLOATS as usize)),
+            _ => None,
+        };
+        let count = stage.map(|(stage, fallback)| (stage, objects(|objects| {
+            match objects.live.get(&o).map(|object| &object.kind) {
+                Some(Kind::Shader { float_constants, .. }) => *float_constants,
+                _ => fallback,
+            }
+        })));
+        let old = state(dev, |s| {
+            if let Some((stage, count)) = count { s.shader_float_counts[stage] = count; }
+            let old = std::mem::replace(slot(s), o);
+            if old != o {
+                s.draw_dirty |= match iface {
+                    "IDirect3DVertexShader9" | "IDirect3DPixelShader9" => groups::SHADERS,
+                    "IDirect3DVertexDeclaration9" => groups::DECLARATION,
+                    "IDirect3DIndexBuffer9" => groups::INDICES,
+                    _ => 0,
+                };
+            }
+            old
+        });
         rebind(old, o);
         D3D_OK
     } else {
@@ -454,8 +564,10 @@ fn set_constants(m: &mut dyn Mem, cpu: &mut Cpu, vertex: bool, kind: char) {
     cpu.eax = if start.checked_add(count).is_none_or(|end| end > limit) {
         D3DERR_INVALIDCALL
     } else {
-        let words: Vec<u32> = (0..count * if kind == 'b' { 1 } else { 4 }).map(|k| m.u32(p + 4 * k)).collect();
         state(dev, |s| {
+            let words = &mut s.constant_words;
+            words.clear();
+            words.extend((0..count * if kind == 'b' { 1 } else { 4 }).map(|k| m.u32(p + 4 * k)));
             let c = if vertex { &mut s.vs } else { &mut s.ps };
             // A queued or recorded draw owns the old block. Only detach it
             // when an update changes bits; repeated setters keep sharing.
@@ -477,6 +589,7 @@ fn set_constants(m: &mut dyn Mem, cpu: &mut Cpu, vertex: bool, kind: char) {
                     _ => c.b[r] = words[k],
                 }
             }
+            s.constant_snapshots[if vertex { 0 } else { 1 }].dirty = true;
         });
         D3D_OK
     };
@@ -589,7 +702,11 @@ pub fn declaration_get(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn set_stream_source(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, n, vb, off, stride) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     cpu.eax = if n < 16 {
-        let old = state(dev, |s| std::mem::replace(&mut s.streams[n as usize], (vb, off, stride)).0);
+        let old = state(dev, |s| {
+            let old = std::mem::replace(&mut s.streams[n as usize], (vb, off, stride));
+            if old != (vb, off, stride) { s.draw_dirty |= groups::STREAMS; }
+            old.0
+        });
         rebind(old, vb);
         D3D_OK
     } else {
@@ -615,7 +732,9 @@ pub fn get_stream_source(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn set_stream_source_freq(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (dev, n, v) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     cpu.eax = if n < 16 {
-        state(dev, |s| s.stream_freq[n as usize] = v);
+        state(dev, |s| {
+            if std::mem::replace(&mut s.stream_freq[n as usize], v) != v { s.draw_dirty |= groups::STREAMS; }
+        });
         D3D_OK
     } else {
         D3DERR_INVALIDCALL

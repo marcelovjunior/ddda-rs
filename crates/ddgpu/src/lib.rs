@@ -32,6 +32,34 @@ use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, 
 mod shader_identity;
 use std::future::Future;
 
+/// Pack raw register bits without a per-component loop on little-endian
+/// hosts. Arrays of four u32 have no padding and every input byte is valid.
+fn copy_float_registers(dst: &mut [u8], registers: &[[u32; 4]]) {
+    assert_eq!(dst.len(), registers.len() * 16);
+    #[cfg(target_endian = "little")]
+    {
+        let bytes = unsafe { std::slice::from_raw_parts(registers.as_ptr().cast::<u8>(), dst.len()) };
+        dst.copy_from_slice(bytes);
+    }
+    #[cfg(target_endian = "big")]
+    for (out, word) in dst.chunks_exact_mut(4).zip(registers.iter().flatten()) {
+        out.copy_from_slice(&word.to_le_bytes());
+    }
+}
+
+#[cfg(test)]
+mod constant_bytes_tests {
+    #[test]
+    fn raw_register_bits_match_little_endian_words() {
+        let registers = [[0, 0x8000_0000, 0x7fc0_1234, u32::MAX], [1, 2, 3, 4]];
+        let mut bytes = [0u8; 32];
+        super::copy_float_registers(&mut bytes, &registers);
+        let expected: Vec<u8> = registers.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(bytes.as_slice(), expected);
+        super::copy_float_registers(&mut [], &[]);
+    }
+}
+
 fn block_on<F: Future>(f: F) -> F::Output {
     struct Wake(std::thread::Thread);
     impl std::task::Wake for Wake {
@@ -367,7 +395,7 @@ pub struct WgpuBackend {
     /// per stage (0 pixel, 1 vertex): the last block's constants and extra
     /// vec4s, its uniform ring offset and the ring generation it was
     /// written in (L78)
-    last_constants: RefCell<[(std::sync::Arc<d3d9cmd::Constants>, Vec<[u32; 4]>, u32, u64); 2]>,
+    last_constants: RefCell<[(std::sync::Arc<d3d9cmd::Constants>, Vec<[u32; 4]>, u32, u64, usize); 2]>,
     uniforms: RefCell<Ring>,
     inline: RefCell<Ring>,
     /// group 0: the constant blocks in the uniform ring (dynamic offsets)
@@ -443,6 +471,9 @@ struct Derived {
     depth: Option<(wgpu::TextureView, wgpu::TextureFormat)>,
     max_out: usize,
     pipeline: wgpu::RenderPipeline,
+    /// float4 constant registers each stage's shader reads (L90)
+    vs_floats: usize,
+    ps_floats: usize,
 }
 
 /// A memo entry: the inputs a Derived was derived from, and it.
@@ -590,7 +621,7 @@ impl WgpuBackend {
             open_uses: RefCell::new(cache::FxSet::default()),
             shader_identities: Default::default(),
             memo: (0..DRAW_MEMO).map(|_| None).collect(),
-            last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX), (Default::default(), Vec::new(), 0, u64::MAX)]),
+            last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX, 0), (Default::default(), Vec::new(), 0, u64::MAX, 0)]),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
             layout0,
@@ -683,10 +714,20 @@ impl WgpuBackend {
         let generation = self.uniforms.borrow().generation;
         let mut last = self.last_constants.borrow_mut();
         let last = &mut last[stage];
-        if last.3 == generation && (std::sync::Arc::ptr_eq(&last.0, c) || last.0 == *c) && last.1[..] == *extra {
+        let prefix = |v: &d3d9cmd::Constants| v.f.len().min(floats);
+        if last.3 == generation && last.4 == floats &&
+            (std::sync::Arc::ptr_eq(&last.0, c) ||
+             (last.0.i == c.i && last.0.b == c.b && last.0.f[..prefix(&last.0)] == c.f[..prefix(c)])) && last.1[..] == *extra {
             return last.2;
         }
-        let off = self.ring_fill(&self.uniforms, block, UNIFORM_ALIGN, |dst| {
+        // Bindings still expose the fixed maximum block size. Only the
+        // compact shader layout's bytes are staged/uploaded; leave enough
+        // buffer space after this offset for the binding descriptor.
+        if !self.uniforms.borrow().fits(block, UNIFORM_ALIGN) {
+            self.flush();
+            self.uniforms.borrow_mut().restart();
+        }
+        let off = self.ring_fill(&self.uniforms, len as u64, UNIFORM_ALIGN, |dst| {
             // plain loops over the vec4s: straight copies even where helpers
             // stay out of line (the play profile's 64 codegen units)
             fn put(dst: &mut [u8], v: [u32; 4]) {
@@ -694,11 +735,10 @@ impl WgpuBackend {
                     d.copy_from_slice(&w.to_le_bytes());
                 }
             }
-            let mut at = 0;
-            for k in 0..floats {
-                put(&mut dst[at..at + 16], c.f.get(k).copied().unwrap_or([0; 4]));
-                at += 16;
-            }
+            let used = c.f.len().min(floats);
+            copy_float_registers(&mut dst[..used * 16], &c.f[..used]);
+            dst[used * 16..floats * 16].fill(0);
+            let mut at = floats * 16;
             for v in c.i {
                 put(&mut dst[at..at + 16], v.map(|w| w as u32));
                 at += 16;
@@ -717,6 +757,7 @@ impl WgpuBackend {
         last.1.extend_from_slice(extra);
         last.2 = off;
         last.3 = self.uniforms.borrow().generation;
+        last.4 = floats;
         off
     }
 
@@ -1405,8 +1446,9 @@ impl WgpuBackend {
         if let Some((m, i)) = self.modules.get(&key) {
             return Ok((m.clone(), i.clone()));
         }
-        let options = options(self);
+        let mut options = options(self);
         let started = std::time::Instant::now();
+        options.compact_constants = true;
         let shader = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
         let t = d3d9wgsl::translate_with(&shader, options).map_err(|e| e.to_string())?;
         pipelines::translated(started);
@@ -1728,7 +1770,8 @@ impl WgpuBackend {
                 pipeline
             }
         };
-        Ok(Derived { ps_kinds, vs_kinds, layout1, layout2, depth_bias, streams, colour, depth, max_out, pipeline })
+        Ok(Derived { ps_kinds, vs_kinds, layout1, layout2, depth_bias, streams, colour, depth, max_out, pipeline,
+                     vs_floats: vs_iface.float_constants, ps_floats: ps_iface.float_constants })
     }
 
     /// The draw's derived state from the memo, or derived now (L99). The
@@ -1789,7 +1832,7 @@ impl WgpuBackend {
         });
         let attached = |r: u32| attached.contains(&Some(r));
         let mut snapshots: HashMap<u32, wgpu::Texture> = HashMap::new();
-        for b in &d.textures {
+        for b in d.textures.iter() {
             if attached(b.resource) && !snapshots.contains_key(&b.resource) {
                 let Some(tx) = self.texture_for(b) else { continue };
                 let src = tx.texture.clone();
@@ -1952,8 +1995,14 @@ impl WgpuBackend {
         } };
         // the constant blocks last: a ring restart above (a flush) must not
         // separate them from this draw
-        let ps_off = self.constants(&d.ps_constants, 224, ps_extra, PS_BLOCK, 0);
-        let vs_off = self.constants(&d.vs_constants, 256, &[hp], VS_BLOCK, 1);
+        // A restart between the two stage allocations would invalidate the
+        // first offset. Reserve both maximum binding ranges before either.
+        if !self.uniforms.borrow().fits(PS_BLOCK + VS_BLOCK + UNIFORM_ALIGN, UNIFORM_ALIGN) {
+            self.flush();
+            self.uniforms.borrow_mut().restart();
+        }
+        let ps_off = self.constants(&d.ps_constants, x.ps_floats, ps_extra, PS_BLOCK, 0);
+        let vs_off = self.constants(&d.vs_constants, x.vs_floats, &[hp], VS_BLOCK, 1);
         // a draw made while guest occlusion queries count gets its own slot
         let slot = (!self.active_queries.is_empty()).then(|| self.occlusion_slot());
         if let Some(s) = slot {
@@ -2132,7 +2181,7 @@ fn instancing(d: &DrawCall) -> Result<(u32, Vec<u32>), String> {
         return Ok((1, vec![]));
     }
     let mut instanced = Vec::new();
-    for s in streams {
+    for s in streams.iter() {
         if s.4 & INSTANCEDATA != 0 {
             if s.4 & 0x3FFF_FFFF != 1 {
                 return Err(format!("instance data divisor {} on stream {} (wgpu steps every instance)", s.4 & 0x3FFF_FFFF, s.0));

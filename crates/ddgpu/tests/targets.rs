@@ -75,7 +75,7 @@ fn draw(c: &[[f32; 4]], targets: [Option<Target>; 4], z: f32, extra: &[(u32, u32
         fvf: 0,
         vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
         ps_constants: ps_constants.into(),
-        textures: vec![],
+        textures: vec![].into(),
         render_states: states(extra).into(),
         viewport: [0, 0, 4, 4, 0f32.to_bits(), 1f32.to_bits()],
         scissor: [0, 0, 4, 4],
@@ -449,7 +449,7 @@ fn sample_draw(binding: d3d9cmd::TextureBinding, out: Target, extra: &[(u32, u32
     d.vertex_shader = Some((vs_textured()).into());
     d.pixel_shader = Some((ps_sample()).into());
     d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]].into();
-    d.textures = vec![binding];
+    d.textures = vec![binding].into();
     d
 }
 

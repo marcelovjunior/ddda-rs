@@ -876,7 +876,7 @@ fn a_draw_reaches_the_backend_with_its_uploads_and_complete_state() {
     assert!(uploads.iter().any(|u| matches!(u, Upload::Buffer { resource, bytes } if *resource == vb && bytes[4..8] == 1f32.to_le_bytes())));
     assert!(uploads.iter().any(|u| matches!(u, Upload::Image { resource, bytes, pitch: 16, .. } if *resource == tex && bytes[0..4] == 0xFF00_FF00u32.to_le_bytes())));
     assert_eq!((draw.primitive, draw.primitives, draw.vertex_count), (4, 1, 3));
-    assert_eq!(draw.vertices, Vertices::Streams(vec![(0, vb, 0, 16, 1)]));
+    assert_eq!(draw.vertices, Vertices::Streams(vec![(0, vb, 0, 16, 1)].into()));
     assert_eq!(draw.indices, Indices::None);
     assert_eq!(draw.vertex_shader.as_deref(), Some(&vs[..]));
     assert_eq!(draw.declaration.len(), 1);
