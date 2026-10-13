@@ -1221,9 +1221,49 @@ loaded machine, best of rounds):
 Implemented and tested: ddruntime lib tests (View against the Mem,
 read_bytes alignment cases, queries), d3d9cmd tests (deferred order, the
 pool). Not yet compared in game; the ddgpu GPU tests haven't been run
-(the GPU gate's). Open: a locked-range upload (`Upload::BufferRange`)
-instead of whole buffers, dense object handles (an FxMap lookup is
-~5-10 ns of a call), and per-call dispatch overhead (TLS keys, MXCSR).
+(the GPU gate's).
+
+In game, combo24 (L144 to fa65ab6e) averaged 21.9 fps against
+combo23's 20.8, and combo25 (to 946df960) 21.4 by default and 22.2 with
+Vulkan, against combo24's 19.9 in the same scene. Both combos hold other
+tasks' work too.
+
+Second round (from the combo25/26 profiles, where the render worker was
+again the bound at ~70% CPU):
+
+- Reference counts in one object lookup (`with_counted`): AddRef and
+  Release took the D3D lock twice and looked the object up twice;
+  SetTexture made four lookups for its two counts.
+- AddRef/Release of every D3D9 object run without the guest lock (they
+  touch reference counts only; a release to zero defers the destruction,
+  L93).
+- The device's data cached in `Objects` (`device_mut`, cleared when the
+  object leaves `live`): every device method, the draw snapshot and
+  SetTexture found the device by a map lookup. The test
+  `a_new_device_does_not_see_a_released_ones_state` fails without the
+  clearing.
+- DeferredBackend sends single draws in runs of up to 32 (one `Draws`
+  command), before any other command, a mark or the drop: the same order,
+  and a mark covers every draw before it.
+- ndraw_native's reader `G` reads through ddnative-base's `Pages` inline
+  (the same check and slow path as `fast_u32`, without its call per word);
+  `fast_u32` was 7.6% of the render worker in c26vk.
+
+`RW_LOOP=ps|tex|draw|addref` runs one call in a loop for a profiler.
+On a loaded machine: SetPSConstantF ~172 -> ~156 ns, SetTexture ~143 ->
+~122 ns, a draw ~700-735 -> ~615-665 ns. A draw costs ~520-590 ns through
+the deferred backend and ~355-375 ns with `DDRUNTIME_SYNC_BACKEND=1`.
+Most of that difference is the 504-byte DrawCall crossing to the backend
+thread. Forgetting the draws on the worker, so it never touches their
+reference counts, saved 0-80 ns, within the noise. About six moves of the
+DrawCall are 16% of a draw, and its four targets and depth are 280 of
+the 504 bytes. One shared `Arc` of them would bring a DrawCall to ~232
+bytes; that is an API change across ddgpu, d3d9frame and ddruntime,
+waiting on the head.
+
+Open: a locked-range upload (`Upload::BufferRange`) instead of whole
+buffers, the DrawCall's targets in one shared group, and the thread-local
+accesses (codex-10's L153).
 
 ### L143 backend worker storage
 
