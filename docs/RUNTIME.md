@@ -1427,3 +1427,14 @@ main work in the double-buffered handoff. The first census omitted worker job
 callbacks and counted tail redispatch twice; the follow-up fixes both, preserves
 MXCSR, and writes sparse cumulative reports. L158 owns the subsequent correlated
 batch trace; aggregate c26 rows cannot identify the last worker in a long join.
+
+### L159 Vulkan pass image gate
+
+`DDGPU_VK=1 DDGPU_VK_SHADOW=997` samples same-run raw passes against wgpu
+using copied attachment load state and identical retained draws. Color,
+depth and stencil reductions execute before later passes overwrite targets.
+`DDGPU_VK_SHADOW=1` checks all eligible passes (expensive); unset/0 disables.
+Matched, mismatched, skipped, pending and error counts remain distinct;
+receipt hashes describe reductions, not presented frames. New Vulkan query
+and resource-fallback counters separate initialization from unsupported work.
+Head's image gate and limitations: `docs/tasks/L159-vk-default.md`.
