@@ -720,3 +720,19 @@ publishes. Its captured input is then replayed privately (plain serial,
 normalized serial, parallel, four definedness runs) and compared in the
 same run. The log reads `parallel-shadow sample=N audit=Ok(entries)` or
 `audit=Err(...)` with `publish=serial`, plus the per-class counts above.
+
+### Live validation-only check PASSES (head run, #14544)
+
+The run used binary R172 fb8320cd (, AFTER_MS
+60000, COUNT 3) and serial publication; the full log is
+E:/ddda-re/notes/runs/run_live172.log. All three samples report
+:
+
+| Sample | Entries | Undefined | Root left untouched | Relocated pointers | Fresh arena | Cursor | Dead slots |
+|---|---|---|---|---|---|---|---|
+| 0 | 278 | 395 | 2476 | 1302 | 96860 | 2 | 42 |
+| 1 | 78 | 215 | 364 | 344 | 43661 | 2 | 42 |
+| 2 | 66 | 110 | 2001 | 302 | 23806 | 2 | 34 |
+
+These are proofs only: nothing is published from the parallel run, and
+there is no speed-up yet.
