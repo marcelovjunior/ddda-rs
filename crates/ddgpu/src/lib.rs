@@ -2898,9 +2898,13 @@ impl GraphicsBackend for WgpuBackend {
                     self.errors.push(format!("upload into render target {resource:#x} ignored"));
                 } else {
                     self.pending.entry(*resource).or_default().push(upload);
+                    return;
                 }
             }
         }
+        // the bytes are written (wgpu copied them): the recorder reuses them
+        let (Upload::Buffer { bytes, .. } | Upload::Image { bytes, .. }) = upload;
+        d3d9cmd::bytes::give(bytes);
     }
 
     fn draw(&mut self, draw: &DrawCall) {

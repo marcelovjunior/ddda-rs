@@ -149,8 +149,9 @@ pub fn recorded<R>(f: impl FnOnce(&Recorder) -> R) -> Option<R> {
 // --- uploads -------------------------------------------------------------------
 
 fn read_bytes(m: &dyn Mem, at: u32, len: u32) -> Vec<u8> {
-    // the same bytes as reading each with m.u8, copied page by page
-    let mut v = vec![0; len as usize];
+    // the same bytes as reading each with m.u8, copied page by page into
+    // a recycled buffer (L144: the backend gives it back once written)
+    let mut v = d3d9cmd::bytes::take(len as usize);
     m.read_bytes(at, &mut v);
     v
 }

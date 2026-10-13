@@ -120,7 +120,11 @@ fn pixel_shader(n: u32) -> Vec<u32> {
 
 struct Null;
 impl d3d9cmd::GraphicsBackend for Null {
-    fn upload(&mut self, _: d3d9cmd::Upload) {}
+    fn upload(&mut self, u: d3d9cmd::Upload) {
+        // as ddgpu: the written bytes go back to the recorder (L144)
+        let (d3d9cmd::Upload::Buffer { bytes, .. } | d3d9cmd::Upload::Image { bytes, .. }) = u;
+        d3d9cmd::bytes::give(bytes);
+    }
     fn draw(&mut self, _: &d3d9cmd::DrawCall) {}
     fn clear(&mut self, _: &d3d9cmd::ClearCall) {}
     fn present(&mut self, _: &d3d9cmd::Target) {}
@@ -264,7 +268,55 @@ fn main() {
             mem.read_bytes(block, &mut buf);
         }
         let gbs = 2000.0 * buf.len() as f64 / t.elapsed().as_secs_f64() / 1e9;
+        // a frame's big upload: a 2 MB dynamic buffer locked whole and
+        // written (the game re-uploads ~3.5 MB a frame: a 1 MB image, 2 MB
+        // and 512 KB buffers), then drawn from
+        let big = out(mem, dev, 26, &[2 << 20, 0x208, 0, 0, OUT, 0]);
+        assert_eq!(com(mem, dev, 100, &[0, big, 0, 32]), 0);
+        let mut upload = f64::MAX;
+        for _ in 0..4 {
+            let t = Instant::now();
+            for _ in 0..50 {
+                assert_eq!(com(mem, big, 11, &[0, 0, OUT, 0]), 0);
+                let p = mem.u32(OUT);
+                for k in (0..2u32 << 20).step_by(4096) {
+                    mem.set_u32(p + k, k);
+                }
+                assert_eq!(com(mem, big, 12, &[]), 0);
+                assert_eq!(com(mem, dev, 82, &[4, 0, 0, 1000, 0, 300]), 0);
+            }
+            upload = upload.min(t.elapsed().as_secs_f64() * 1e6 / 50.0);
+        }
+        assert_eq!(com(mem, dev, 100, &[0, vb, 0, 32]), 0);
         println!("per iteration (Lock/Unlock 4 KB, SetTexture, 16+4 constants, DrawIndexedPrimitive): {:.0} ns, {allocs:.1} allocations", best[0]);
+        println!("2 MB buffer locked, written, drawn from (its upload): {upload:.0} us");
+        if std::env::var_os("RW_SPLIT").is_some() {
+            let shadow = {
+                assert_eq!(com(mem, big, 11, &[0, 0, OUT, 0]), 0);
+                let p = mem.u32(OUT);
+                assert_eq!(com(mem, big, 12, &[]), 0);
+                p
+            };
+            let time = |f: &mut dyn FnMut()| {
+                let t = Instant::now();
+                for _ in 0..50 { f(); }
+                t.elapsed().as_secs_f64() * 1e6 / 50.0
+            };
+            let fresh = time(&mut || { std::hint::black_box(vec![0u8; 2 << 20]); });
+            let touched = time(&mut || {
+                let mut v = vec![0u8; 2 << 20];
+                for k in (0..v.len()).step_by(4096) { v[k] = 1; }
+                std::hint::black_box(v);
+            });
+            let mut reuse = vec![0u8; 2 << 20];
+            let copy = time(&mut || mem.read_bytes(shadow, &mut reuse));
+            let both = time(&mut || {
+                let mut v = vec![0u8; 2 << 20];
+                mem.read_bytes(shadow, &mut v);
+                std::hint::black_box(v);
+            });
+            println!("2 MB: vec![0] {fresh:.0} us, with its pages touched {touched:.0} us; read_bytes into a reused buffer {copy:.0} us, into a new one {both:.0} us");
+        }
         println!("DrawIndexedPrimitive alone: {:.0} ns; guest u32 read through &dyn Mem: {:.2} ns; read_bytes 64 KB (parallel mode): {gbs:.2} GB/s", best[1], best[2]);
     });
     quit();

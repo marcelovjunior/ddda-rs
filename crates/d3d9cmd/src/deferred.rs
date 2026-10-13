@@ -177,7 +177,7 @@ impl GraphicsBackend for DeferredBackend {
         self.command(Command::Draw(draw.clone()));
     }
     fn draw_owned(&mut self, draw: DrawCall) {
-        self.enqueue(move |b| b.draw(&draw));
+        self.command(Command::Draw(draw));
     }
     fn draws(&mut self, draws: Vec<DrawCall>) {
         self.command(Command::Draws(draws));
