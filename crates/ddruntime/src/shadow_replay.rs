@@ -1312,8 +1312,13 @@ fn compare_replays(
                         .collect()
                 })
                 .unwrap_or_default();
+            let word = |x: &mtcore::shadow_lanes::Binding| {
+                let w = offset & !3;
+                x.bytes.get(w..w + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            };
             return Err(format!(
-                "shader {handle:#x} may read c{register} component {component}: {lines:?}; float constants {table:?}"
+                "shader {handle:#x} may read c{register} component {component} (serial {:#x?} written {}, parallel {:#x?} written {}): {lines:?}; float constants {table:?}",
+                word(a), results[0].2.contains_key(&ca.source), word(b), results[1].2.contains_key(&cb.source)
             ));
         }
         // later draws of the stream, until the register is uploaded again
