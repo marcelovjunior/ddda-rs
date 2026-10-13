@@ -103,6 +103,40 @@ pub enum Indices {
     Inline { bytes: Vec<u8>, format: u32 },
 }
 
+/// (state, value) pairs sorted by state, shared: the device and every draw
+/// recorded since its last SetRenderState hold the same list, and a change
+/// copies it first (L97: each draw copied the ~200 states, 1.6 KB and an
+/// allocation). Reads and writes go through the Vec it derefs to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RenderStateList(std::sync::Arc<Vec<(u32, u32)>>);
+
+impl std::ops::Deref for RenderStateList {
+    type Target = Vec<(u32, u32)>;
+    fn deref(&self) -> &Vec<(u32, u32)> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for RenderStateList {
+    fn deref_mut(&mut self) -> &mut Vec<(u32, u32)> {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+
+impl From<Vec<(u32, u32)>> for RenderStateList {
+    fn from(v: Vec<(u32, u32)>) -> Self {
+        RenderStateList(std::sync::Arc::new(v))
+    }
+}
+
+impl<'a> IntoIterator for &'a RenderStateList {
+    type Item = &'a (u32, u32);
+    type IntoIter = std::slice::Iter<'a, (u32, u32)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawCall {
     /// D3DPRIMITIVETYPE
@@ -125,7 +159,7 @@ pub struct DrawCall {
     pub ps_constants: std::sync::Arc<Constants>,
     pub textures: Vec<TextureBinding>,
     /// every render state, sorted by state
-    pub render_states: Vec<(u32, u32)>,
+    pub render_states: RenderStateList,
     pub viewport: [u32; 6],
     pub scissor: [i32; 4],
     pub targets: [Option<Target>; 4],

@@ -76,7 +76,7 @@ fn draw(c: &[[f32; 4]], targets: [Option<Target>; 4], z: f32, extra: &[(u32, u32
         vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
         ps_constants: ps_constants.into(),
         textures: vec![],
-        render_states: states(extra),
+        render_states: states(extra).into(),
         viewport: [0, 0, 4, 4, 0f32.to_bits(), 1f32.to_bits()],
         scissor: [0, 0, 4, 4],
         targets,

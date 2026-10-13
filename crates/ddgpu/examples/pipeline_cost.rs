@@ -129,7 +129,7 @@ fn main() {
             vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
             ps_constants: Constants { f: vec![[0; 4]; 224], ..Default::default() }.into(),
             textures,
-            render_states: states,
+            render_states: states.into(),
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],
             scissor: [0, 0, w as i32, h as i32],
             targets: [Some(bb.clone()), None, None, None],

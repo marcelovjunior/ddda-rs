@@ -55,7 +55,7 @@ pub struct DeviceState {
 /// as they are (L78: a hash map was collected and sorted for every draw, a
 /// BTreeMap walked node by node).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RenderStates(Vec<(u32, u32)>);
+pub struct RenderStates(d3d9cmd::RenderStateList);
 
 impl RenderStates {
     pub fn get(&self, state: &u32) -> Option<&u32> {
@@ -65,6 +65,8 @@ impl RenderStates {
     /// Set a state; the value it had.
     pub fn insert(&mut self, state: u32, value: u32) -> Option<u32> {
         match self.0.binary_search_by_key(&state, |e| e.0) {
+            // the same value: no copy of a list draws still share
+            Ok(i) if self.0[i].1 == value => Some(value),
             Ok(i) => Some(std::mem::replace(&mut self.0[i].1, value)),
             Err(i) => {
                 self.0.insert(i, (state, value));
@@ -80,6 +82,11 @@ impl RenderStates {
     /// (state, value) in state order.
     pub fn as_slice(&self) -> &[(u32, u32)] {
         &self.0
+    }
+
+    /// The list itself, shared (a draw keeps it; L97).
+    pub fn shared(&self) -> d3d9cmd::RenderStateList {
+        self.0.clone()
     }
 }
 
