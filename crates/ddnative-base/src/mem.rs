@@ -381,6 +381,11 @@ impl dyn Mem + '_ {
     }
     #[inline(never)]
     pub fn fast_u32(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
+        self.fast_u32_inner(pt, addr)
+    }
+    // Shared inside this crate (see fast_set_u32_inner).
+    #[inline]
+    pub(crate) fn fast_u32_inner(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
         let Some(p) = allowed(pt, addr, 4, READ) else { return self.slow_u32(addr); };
         // SAFETY: allowed returns 4 bytes inside a backed page.
         unsafe { load_at(p, 4) }

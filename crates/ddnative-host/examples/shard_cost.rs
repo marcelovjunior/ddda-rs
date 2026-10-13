@@ -97,6 +97,14 @@ fn main() {
         bench(|_| rep!({ unsafe { std::arch::asm!("fld dword ptr [{p}]", "fstp dword ptr [{p} + 4]", p = in(reg) p) }; }), n, "floor: raw fld+fstp m32");
         bench(|_| rep!({ unsafe { std::arch::asm!("fld1", "fstp st(0)") }; }), n, "floor: raw fld1+fstp st0");
     }
+    // the call floor: stack and memory accesses as the shards make them
+    {
+        let pt = m.page_table();
+        cpu.esp = 0x108000;
+        bench(|i| rep!({ ddnative_base::emit::push(i, m, pt, &mut cpu); bb(ddnative_base::emit::pop(m, pt, &mut cpu)); }), n, "emit push + pop");
+        bench(|i| rep!({ m.fast_set_u32(pt, 0x104000 + (i & 0xfc), i); }), n, "fast_set_u32");
+        bench(|i| rep!({ bb(m.fast_u32(pt, 0x104000 + (i & 0xfc))); }), n, "fast_u32");
+    }
     // flags
     let mut fl = Flags::default();
     bench(|i| rep!({ bb(fl.alu_sub(i, bb(100), bb(32))); bb(fl.zf()); }), n, "sub+zf");

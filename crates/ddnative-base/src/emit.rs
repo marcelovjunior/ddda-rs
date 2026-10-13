@@ -16,16 +16,33 @@ use std::ptr::NonNull;
 mod flags;
 
 /// `push v`: ESP -= 4, then the dword store at the new ESP.
-#[inline]
+///
+/// L185: `#[inline(always)]` for the call only. The body is one optimised
+/// copy in this crate (`push_out`): a shard makes one call, where the
+/// `#[inline]` body used to be a shard-local copy that made a second call
+/// into `fast_set_u32` (at opt-level 0 that copy ran unoptimised).
+#[inline(always)]
 pub fn push(v: u32, m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) {
+    push_out(v, m, pt, cpu)
+}
+
+#[doc(hidden)]
+#[inline(never)]
+pub fn push_out(v: u32, m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) {
     cpu.esp = cpu.esp.wrapping_sub(4);
-    m.fast_set_u32(pt, cpu.esp, v);
+    m.fast_set_u32_inner(pt, cpu.esp, v);
 }
 
 /// `pop`: the dword at ESP, then ESP += 4; the caller stores the value.
-#[inline]
+#[inline(always)]
 pub fn pop(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) -> u32 {
-    let v = m.fast_u32(pt, cpu.esp);
+    pop_out(m, pt, cpu)
+}
+
+#[doc(hidden)]
+#[inline(never)]
+pub fn pop_out(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) -> u32 {
+    let v = m.fast_u32_inner(pt, cpu.esp);
     cpu.esp = cpu.esp.wrapping_add(4);
     v
 }
