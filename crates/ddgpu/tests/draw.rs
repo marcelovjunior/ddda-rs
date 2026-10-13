@@ -229,6 +229,49 @@ fn frames_match_the_d3d9_driver() {
     assert!(max <= 1, "blended: ours {:?} / D3D9 {:?}", &ours[..4], &theirs[..4]);
 }
 
+/// L124: with async submits (a finisher thread finishes and submits each
+/// batch) after every draw, a frame that re-uploads a texture between draws
+/// that sample it reads back exactly as with synchronous submits: the
+/// first draw sees the old texels, the later one the new.
+#[test]
+fn async_submits_keep_the_order_of_uploads_and_draws() {
+    let (Some(mut sync), Some(mut asynchronous)) = (ddgpu::WgpuBackend::headless(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    asynchronous.set_async_submit(true);
+    asynchronous.draws_per_submit = 1;
+    let mut states = [0u32; 14];
+    for (k, v) in [(1, 1), (2, 1), (3, 1), (5, 1), (6, 1)] {
+        states[k] = v;
+    }
+    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, usage: 0, states };
+    let upload = |texels: [[u8; 4]; 4]| Upload::Image { resource: 0x200, index: 0, format: 21, width: 2, height: 2, depth: 1, pitch: 8, slice: 16, bytes: texels.concat() };
+    let textured = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]);
+    let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    c.f[0] = [1f32.to_bits(), 0.0f32.to_bits(), 0.0f32.to_bits(), 0.25f32.to_bits()];
+    let mut blended = draw(ps_constant(), c, vec![]);
+    blended.render_states.extend([(27, 1), (19, 5), (20, 6), (171, 1)]);
+    blended.render_states.sort();
+    blended.render_states.dedup_by_key(|s| s.0);
+    let mut images = Vec::new();
+    for gpu in [&mut sync, &mut asynchronous] {
+        gpu.clear(&blue_clear());
+        gpu.upload(upload([[0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255], [255, 255, 255, 255]]));
+        gpu.draw(&textured);
+        gpu.draw(&blended);
+        gpu.upload(upload([[9, 9, 9, 255], [99, 99, 99, 255], [199, 199, 199, 255], [255, 0, 255, 255]]));
+        let mut later = textured.clone();
+        later.render_states.extend([(27, 1), (19, 5), (20, 6), (171, 1)]);
+        later.render_states.sort();
+        later.render_states.dedup_by_key(|s| s.0);
+        gpu.draw(&later);
+        images.push(gpu.read_back(&back_buffer()).expect("read back"));
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    }
+    assert_eq!(images[0], images[1], "async / sync submits");
+}
+
 /// xorshift32
 struct Rng(u32);
 impl Rng {

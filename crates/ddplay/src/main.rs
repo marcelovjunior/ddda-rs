@@ -160,6 +160,9 @@ impl App {
                         backend.read_frames = false;
                         // L120: occlusion counts read back without stalling the backend
                         backend.async_queries = true;
+                        // L124: wgpu's encoding of each batch on a second thread
+                        backend.set_async_submit(true);
+                        backend.draws_per_submit = 512;
                         // L71: the driver's pipeline compilation kept between
                         // runs, in DDPLAY_PIPELINE_CACHE (a directory; 0: off),
                         // by default %LOCALAPPDATA%\ddda-rs\pipelines

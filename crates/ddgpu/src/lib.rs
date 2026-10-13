@@ -384,6 +384,12 @@ pub struct WgpuBackend {
     /// L120: query_result never waits for the GPU (None until the count is
     /// back); off by default, where it resolves and waits as before
     pub async_queries: bool,
+    /// L124: the finisher thread (set_async_submit)
+    finisher: Option<Finisher>,
+    /// Draws (and clears and copies) recorded before a submission
+    /// (DRAWS_PER_SUBMIT by default; ddplay lowers it with async submits,
+    /// so encoding overlaps recording within a frame)
+    pub draws_per_submit: u32,
     /// guest queries between D3DISSUE_BEGIN and D3DISSUE_END
     active_queries: Vec<u32>,
     gamma: Option<Box<GammaRamp>>,
@@ -468,6 +474,54 @@ type PassKey = (Vec<Option<wgpu::TextureView>>, Option<wgpu::TextureView>, Optio
 /// in a pass each: a draw sets all the pass state it uses (pipeline, bind
 /// groups, viewport, stencil reference, blend constant, buffers), and the
 /// scissor rectangle when its scissor test is on.
+/// L124: a thread that finishes command encoders and submits them in the
+/// order given.
+struct Finisher {
+    send: Option<std::sync::mpsc::Sender<wgpu::CommandEncoder>>,
+    sent: Cell<u64>,
+    done: Arc<(std::sync::Mutex<u64>, std::sync::Condvar)>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Finisher {
+    fn new(queue: wgpu::Queue) -> Finisher {
+        let (send, recv) = std::sync::mpsc::channel::<wgpu::CommandEncoder>();
+        let done = Arc::new((std::sync::Mutex::new(0u64), std::sync::Condvar::new()));
+        let d = done.clone();
+        let thread = std::thread::Builder::new().name("wgpu-finish".into()).spawn(move || {
+            for enc in recv {
+                queue.submit([enc.finish()]);
+                let (m, c) = &*d;
+                *m.lock().unwrap() += 1;
+                c.notify_all();
+            }
+        }).expect("start the finisher thread");
+        Finisher { send: Some(send), sent: Cell::new(0), done, thread: Some(thread) }
+    }
+
+    fn submit(&self, enc: wgpu::CommandEncoder) {
+        self.sent.set(self.sent.get() + 1);
+        self.send.as_ref().unwrap().send(enc).expect("the finisher thread stopped");
+    }
+
+    fn wait(&self) {
+        let (m, c) = &*self.done;
+        let mut submitted = m.lock().unwrap();
+        while *submitted < self.sent.get() {
+            submitted = c.wait(submitted).unwrap();
+        }
+    }
+}
+
+impl Drop for Finisher {
+    fn drop(&mut self) {
+        drop(self.send.take());
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
 /// The draw memo's size: one slot per (shaders, declaration, render-state
 /// list) hash; a collision derives again.
 const DRAW_MEMO: usize = 256;
@@ -625,6 +679,8 @@ impl WgpuBackend {
             query_counts: HashMap::new(),
             pending_queries: HashMap::new(),
             async_queries: false,
+            finisher: None,
+            draws_per_submit: DRAWS_PER_SUBMIT,
             active_queries: Vec::new(),
             gamma: None,
             adapter,
@@ -696,15 +752,48 @@ impl WgpuBackend {
 
     /// Submit the recorded draws, after writing the ring bytes they use.
     fn flush(&self) {
+        self.flush_async();
+        self.wait_finisher();
+    }
+
+    /// Submit the open encoder; with async_submit its finish and submission
+    /// run on the finisher thread (L124: wgpu-core encodes the recorded
+    /// passes in finish, 61% of the backend worker in combo7) while this
+    /// thread records the next batch. Only the draw-count flushes use it:
+    /// every other flush waits (flush), and every direct queue write or
+    /// submission waits first (wait_finisher), so the queue sees the same
+    /// order as without it. The rings' staged bytes are written here, before
+    /// the hand-off: they reach the GPU with this or an earlier submission,
+    /// at offsets no earlier batch uses (a ring restarts only after flush).
+    fn flush_async(&self) {
         self.end_pass();
         let enc = self.open.borrow_mut().take();
         self.uniforms.borrow_mut().upload(&self.queue);
         self.inline.borrow_mut().upload(&self.queue);
         if let Some(enc) = enc {
-            self.queue.submit([enc.finish()]);
+            match &self.finisher {
+                Some(f) => f.submit(enc),
+                None => {
+                    self.queue.submit([enc.finish()]);
+                }
+            }
         }
         self.open_draws.set(0);
         self.open_uses.borrow_mut().clear();
+    }
+
+    /// Wait until the finisher has submitted everything handed to it.
+    fn wait_finisher(&self) {
+        if let Some(f) = &self.finisher {
+            f.wait();
+        }
+    }
+
+    /// L124: finish and submit draw batches on a second thread (ddplay turns
+    /// it on; off, every submission happens on the calling thread).
+    pub fn set_async_submit(&mut self, on: bool) {
+        self.wait_finisher();
+        self.finisher = on.then(|| Finisher::new(self.queue.clone()));
     }
 
     /// End the open render pass: the encoder can record other commands
@@ -857,6 +946,7 @@ impl WgpuBackend {
             enc.resolve_query_set(&self.occlusion_sets[(s / OCCLUSION_SET) as usize], i..i + 1, &resolved, 256 * k as u64);
         }
         enc.copy_buffer_to_buffer(&resolved, 0, &read, 0, size);
+        self.wait_finisher();
         self.queue.submit([enc.finish()]);
         let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
         let done = state.clone();
@@ -887,6 +977,7 @@ impl WgpuBackend {
             enc.resolve_query_set(&self.occlusion_sets[(s / OCCLUSION_SET) as usize], i..i + 1, &resolved, 256 * k as u64);
         }
         enc.copy_buffer_to_buffer(&resolved, 0, &read, 0, size);
+        self.wait_finisher();
         self.queue.submit([enc.finish()]);
         read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
@@ -990,6 +1081,7 @@ impl WgpuBackend {
             }
         }
         let physical = wgpu::Extent3d { width: width.next_multiple_of(block), height: height.next_multiple_of(block), depth_or_array_layers: *depth };
+        self.wait_finisher();
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &t.texture,
@@ -1097,6 +1189,7 @@ impl WgpuBackend {
             p.extend_from_slice(&v.to_le_bytes());
         }
         let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: p.len() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        self.wait_finisher();
         self.queue.write_buffer(&ubuf, 0, &p);
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }] });
         let mut enc = self.device.create_command_encoder(&Default::default());
@@ -1125,6 +1218,7 @@ impl WgpuBackend {
                 pass.draw(0..3, 0..1);
             }
         }
+        self.wait_finisher();
         self.queue.submit([enc.finish()]);
     }
 
@@ -1165,6 +1259,7 @@ impl WgpuBackend {
                 depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
             });
         }
+        self.wait_finisher();
         self.queue.submit([enc.finish()]);
         Ok(dst)
     }
@@ -1258,6 +1353,7 @@ impl WgpuBackend {
                 bytes.extend_from_slice(&v.to_le_bytes());
             }
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+            self.wait_finisher();
             self.queue.write_buffer(&buf, 0, &bytes);
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None, layout: &layout,
@@ -1292,6 +1388,7 @@ impl WgpuBackend {
                 pass.draw(0..3, 0..1);
             }
         }
+        self.wait_finisher();
         self.queue.submit([enc.finish()]);
         Ok(())
     }
@@ -1382,6 +1479,7 @@ impl WgpuBackend {
             pass.set_viewport(l as f32, t as f32, (r - l) as f32, (b - t) as f32, 0.0, 1.0);
             pass.draw(0..3, 0..1);
         }
+        self.wait_finisher();
         self.queue.submit([enc.finish()]);
         Ok(())
     }
@@ -1555,6 +1653,7 @@ impl WgpuBackend {
         let b = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: usage | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut padded = bytes.to_vec();
         padded.resize(size as usize, 0);
+        self.wait_finisher();
         self.queue.write_buffer(&b, 0, &padded);
         b
     }
@@ -1577,6 +1676,7 @@ impl WgpuBackend {
             wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(rt.height) } },
             wgpu::Extent3d { width: rt.width, height: rt.height, depth_or_array_layers: 1 },
         );
+        self.wait_finisher();
         self.queue.submit([enc.finish()]);
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
@@ -2191,8 +2291,8 @@ impl WgpuBackend {
         }
         self.draws_recorded.set(self.draws_recorded.get() + 1);
         self.open_draws.set(self.open_draws.get() + 1);
-        if self.open_draws.get() >= DRAWS_PER_SUBMIT {
-            self.flush();
+        if self.open_draws.get() >= self.draws_per_submit {
+            self.flush_async();
         }
         Ok(())
     }
@@ -2462,8 +2562,8 @@ impl GraphicsBackend for WgpuBackend {
             );
             *self.open.borrow_mut() = Some(enc);
             self.open_draws.set(self.open_draws.get() + 1);
-            if self.open_draws.get() >= DRAWS_PER_SUBMIT {
-                self.flush();
+            if self.open_draws.get() >= self.draws_per_submit {
+                self.flush_async();
             }
             return;
         }
@@ -2505,6 +2605,7 @@ impl GraphicsBackend for WgpuBackend {
             wgpu::TexelCopyBufferInfo { buffer: &buffer, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) } },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
+        self.wait_finisher();
         self.queue.submit([enc.finish()]);
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
@@ -2533,6 +2634,7 @@ impl GraphicsBackend for WgpuBackend {
                     Some(b) if b.size() == size => {
                         let mut padded = bytes.clone();
                         padded.resize(size as usize, 0);
+                        self.wait_finisher();
                         self.queue.write_buffer(b, 0, &padded);
                     }
                     _ => {
@@ -2612,8 +2714,8 @@ impl GraphicsBackend for WgpuBackend {
         // a clear counts like a draw toward the submit limit, so the open
         // encoder stays bounded when frames clear without a Present
         self.open_draws.set(self.open_draws.get() + 1);
-        if self.open_draws.get() >= DRAWS_PER_SUBMIT {
-            self.flush();
+        if self.open_draws.get() >= self.draws_per_submit {
+            self.flush_async();
         }
     }
 
