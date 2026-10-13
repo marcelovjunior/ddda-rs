@@ -30,6 +30,7 @@ pub mod fasthash;
 pub mod crtfast;
 pub mod fastmem;
 pub mod files;
+mod file_cache;
 pub mod load_log;
 pub mod image;
 pub mod interfaces;

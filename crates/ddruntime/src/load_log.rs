@@ -18,6 +18,11 @@ static ARCHIVE_NS: AtomicU64 = AtomicU64::new(0);
 static ARCHIVE_READS: AtomicU64 = AtomicU64::new(0);
 static INFLATE_NS: AtomicU64 = AtomicU64::new(0);
 static INFLATES: AtomicU64 = AtomicU64::new(0);
+static ZLIB_NS: AtomicU64 = AtomicU64::new(0);
+static ZLIB_CALLS: AtomicU64 = AtomicU64::new(0);
+static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+static CACHE_HOST_BYTES: AtomicU64 = AtomicU64::new(0);
 
 pub fn enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("DDRUNTIME_LOAD_LOG").as_deref() == Ok("1"))
@@ -112,6 +117,13 @@ pub(crate) fn read_done(start: Option<Instant>, bytes: u64) {
         BYTES.fetch_add(bytes, Relaxed);
     }
 }
+pub(crate) fn cache_read(hit: bool, host_bytes: u64) {
+    if enabled() {
+        if hit { CACHE_HITS.fetch_add(1, Relaxed); }
+        else { CACHE_MISSES.fetch_add(1, Relaxed); }
+        CACHE_HOST_BYTES.fetch_add(host_bytes, Relaxed);
+    }
+}
 pub(crate) fn open_done(start: Option<Instant>, name: &str, success: bool) {
     if let Some(start) = start {
         OPEN_NS.fetch_add(start.elapsed().as_nanos() as u64, Relaxed);
@@ -134,23 +146,28 @@ pub fn totals() {
     event(
         "io_totals",
         format_args!(
-            "reads={} bytes={} read_ns={} opens={} open_ns={} archive_opens={}",
+            "reads={} bytes={} read_ns={} opens={} open_ns={} archive_opens={} cache_hits={} cache_misses={} cache_host_bytes={}",
             READS.load(Relaxed),
             BYTES.load(Relaxed),
             READ_NS.load(Relaxed),
             OPENS.load(Relaxed),
             OPEN_NS.load(Relaxed),
-            ARCHIVES.load(Relaxed)
+            ARCHIVES.load(Relaxed),
+            CACHE_HITS.load(Relaxed),
+            CACHE_MISSES.load(Relaxed),
+            CACHE_HOST_BYTES.load(Relaxed)
         ),
     );
     event(
         "archive_totals",
         format_args!(
-            "archive_reads={} archive_ns={} inflates={} inflate_ns={}",
+            "archive_reads={} archive_ns={} inflates={} inflate_ns={} zlib_calls={} zlib_ns={}",
             ARCHIVE_READS.load(Relaxed),
             ARCHIVE_NS.load(Relaxed),
             INFLATES.load(Relaxed),
-            INFLATE_NS.load(Relaxed)
+            INFLATE_NS.load(Relaxed),
+            ZLIB_CALLS.load(Relaxed),
+            ZLIB_NS.load(Relaxed)
         ),
     );
 }
@@ -193,10 +210,14 @@ mod guest {
         ORIGINAL_READ.get().expect("archive timing body")(m, cpu);
     }
     fn inflate(m: &mut dyn Mem, cpu: &mut Cpu) {
-        let start = ARCHIVE_DEPTH.with(|d| (d.get() != 0).then(Instant::now));
+        let archive = ARCHIVE_DEPTH.with(|d| d.get() != 0);
+        let start = Instant::now();
         ORIGINAL_INFLATE.get().expect("inflate timing body")(m, cpu);
-        if let Some(start) = start {
-            INFLATE_NS.fetch_add(start.elapsed().as_nanos() as u64, Relaxed);
+        let elapsed = start.elapsed().as_nanos() as u64;
+        ZLIB_NS.fetch_add(elapsed, Relaxed);
+        ZLIB_CALLS.fetch_add(1, Relaxed);
+        if archive {
+            INFLATE_NS.fetch_add(elapsed, Relaxed);
             INFLATES.fetch_add(1, Relaxed);
         }
     }

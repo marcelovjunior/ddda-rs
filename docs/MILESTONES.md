@@ -1,5 +1,21 @@
 # Milestones
 
+### L109 loading baseline, cache experiment and original waits (2026-10-13)
+
+- Head instr1: at 16.032 s, archive inflate **4.854 s**, file reads
+  **0.056 s**, pipelines **0.007 s**; first Present **6.002 s**.
+  Final archive inflate **5.482 s**. UI phase marks remain unobserved.
+- Bounded install-archive read-ahead implemented and tested, **off by
+  default**: warm sequential 128 KiB **7.601 -> 12.903 us** (regression),
+  repeated 128 KiB **7.559 -> 4.352 us**; host I/O microbench only.
+- Light suite **168 pass / 1 existing gamma failure / 2 ignored**;
+  final cache/APC/overlay/budget checks pass after buffer reuse.
+- Original logo/disclaimer timers unchanged: **2 s / 4 s** nominal
+  holds; alternative regional lists total **2 / 6 / 10 s**, plus GUI
+  transitions. Source addresses and reachability limits in L109 brief.
+- Next: head's matched run with inflate port `9093ace7`, observed UI
+  timestamps and all-zlib telemetry; keep cache disabled for this A/B.
+
 ### L109 readable archive inflate fast loop (2026-10-13)
 
 - Whole `0x00cf2cb0` fast decoder port; original outer inflate/streaming

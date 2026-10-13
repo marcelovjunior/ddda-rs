@@ -2,6 +2,16 @@
 
 ## L109 loading telemetry
 
+ReadFileEx optionally caches immutable install archives with
+`DDRUNTIME_FILE_READ_AHEAD=1`: 256 KiB forward windows, 8 MiB retained
+buffer capacity per runtime, overlay/writable files excluded. It remains
+off by default: warm sequential 128 KiB reads regressed, although small
+and repeated ranges improved. Loading logs include cache hit/miss/fetched
+byte counters and all-zlib counters alongside archive-scoped inflate.
+Head's instr1 baseline records 4.854 s archive inflate before the movie
+opens, versus 0.056 s file-read and 0.007 s pipeline time at that sample.
+UI phase boundaries and a paired post-port run remain with head.
+
 The archive zlib fast loop (`0x00cf2cb0`) is a readable runtime port,
 verified against 559 original-instruction vectors including state,
 output, registers, flags and stack spills. The original outer inflate and
@@ -17,7 +27,7 @@ are inclusive across threads, not additive wall-time phases. Archive
 wrappers retain original code and registered overrides. See
 [timing boundaries and validation](tasks/L109-loading.md). ReadFile and
 ReadFileEx reuse bounded per-thread host scratch for requests up to 128 KiB;
-they still read the file every time. Synthetic warm 128 KiB service time
+by default they still read the file every time. Synthetic warm 128 KiB service time
 was 11.569 -> 9.643 us/call, allocations 1 -> 0. Whole-game phase timings
 remain pending head runs.
 

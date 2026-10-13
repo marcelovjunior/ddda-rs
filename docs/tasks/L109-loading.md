@@ -115,6 +115,104 @@ the game-feature integration build and paired game loading run.
 Next: compare head's process-relative baseline with the same route and
 save using the readable fast loop, leaving the original waits intact.
 
+### Head baseline: instr1
+
+Head supplied `E:/ddda-re/notes/runs/instr1.log` (board 10874): combo5,
+opt-level-1 generated functions, loading and nDraw instrumentation enabled.
+This precedes the readable-inflate port. The parser output is private at
+`C:/ddda-targets/L109/instr1-timeline.md`.
+
+| Observed boundary/sample | Process time | Evidence |
+|---|---:|---|
+| GPU initialization | 0.059–0.618 s | 0.558 s wall |
+| Runtime initialization | 0.618–0.694 s | 0.076 s wall |
+| Guest start | 0.718 s | runtime event |
+| First guest Present | 6.002 s | submission, not visible frame |
+| Movie decoder lifetime | 16.095–44.805 s | 28.710 s; not fixed movie duration |
+| Before movie, last sample | 16.032 s | archive inflate **4.854 s / 2,979 calls**; file reads **0.056 s**; pipelines **0.007 s** |
+| Final sample | 175.271 s | archive inflate **5.482 s / 3,740 calls**; file reads **0.699 s / 377,123,971 bytes**; pipelines **1.526 s** |
+
+About 89% of the recorded archive inflate time accumulates before the
+movie opens. Inflate is the dominant **instrumented archive cost** in
+that interval; the log does not attribute every second of boot. Between
+69.072 and 100.105 s, archive inflate rises only **0.306 s** over **31.032 s**
+wall time. Missing title/menu/Load Game/loading-end observations prevent
+semantic phase timings or a paired loading-speed claim. Existing inflate
+counters are archive-scoped. The next build additionally reports
+`zlib_calls/zlib_ns` for all calls to 0x00cf02e0, including calls outside
+the archive reader; those totals contain the archive subset and must not
+be added to it.
+
+### Bounded archive read-ahead (opt-in)
+
+`DDRUNTIME_FILE_READ_AHEAD=1` enables a content cache for **ReadFileEx on
+read-only `.arc` handles resolved to the install itself**. Overlay/home
+files and writable opens are excluded. Each handle retains one forward
+256 KiB window; least-recently-used eviction bounds retained buffer
+**capacity** to 8 MiB per runtime (in-flight readers can temporarily retain
+an evicted window). Buffers are reused when no reader holds them. Closing
+a handle drops its cached window. Speculative read failure retries the
+original requested range. Host file position, guest short-read/EOF bytes,
+untouched tails and next-alertable-wait APC delivery are preserved.
+Requests above 256 KiB bypass caching. ReadFile still uses host reads.
+
+CPU-only optimized host-read benchmark: synthetic warm 1 MiB file, five
+alternating samples of 800 calls each; excludes guest copying, metadata
+and service dispatch. The small-range pattern cycles eight adjacent 1 KiB
+requests; the large sequential pattern cycles eight adjacent 128 KiB
+requests. Results after buffer reuse, median us/read:
+
+| Pattern | Host read | Cache | Hits/misses per 800 calls |
+|---|---:|---:|---:|
+| Sequential 128 KiB | 7.601 | 12.903 | 400 / 400 |
+| Eight adjacent 1 KiB ranges | 2.925 | 0.508 | 799 / 1 |
+| Repeated 128 KiB range | 7.559 | 4.352 | 799 / 1 |
+
+Large sequential reads **regress** despite halving host read calls; small
+and repeated ranges improve. Earlier unreused-buffer sequential median
+was 6.064 -> 17.092 us. No cold-disk or whole-game benefit is established,
+so caching stays **off by default**. `io_totals` adds cache hits, misses
+and fetched host bytes for head's optional experiment. The baseline's
+0.699 s inclusive file time gives no evidence to prioritize this over
+inflate. Byte/range/EOF/seek/eviction tests pass; actual ReadFileEx tests
+pass for deferred APCs and uncached changing overlay contents. Final
+focused checks also enable `DDRUNTIME_LOAD_LOG=1`.
+
+### Original visible waits: retained unchanged
+
+Read-only exe/Ghidra evidence, 2026-10-13. `aInitialize` update at
+**0x004fc370** creates `uGUITrialLogosManager`. Its init **0x0072d5c0**
+selects a sequence from **0x017eeec8**. **0x0072d670** reads records at
+**0x01515f48**, `(input mode, hold base frames, resource pointer)`;
+**0x0072d410** passes the timer to the GUI. The shared update
+**0x0067d4c0** subtracts `cUnit+0x14` while in hold state. `sMain`'s base
+rate is **30 Hz** (0x0041cec9; FRAME.md), so nominal durations at speed 1:
+
+| Display | Hold | Timer record | Input mode |
+|---|---:|---|---:|
+| Capcom | 60 frames = **2 s** | 0x01515f48 | 4 |
+| MT Framework | 60 = **2 s** | 0x01515f54 | 4 |
+| Trial font | 60 = **2 s** | 0x01515f60 | 4 |
+| Trial disclaimer (`menseki`) | 60 = **2 s** | 0x01515f6c | 0 |
+| ESRB | 120 = **4 s** | 0x01515f78 | 0 |
+| Caution disclaimer | 120 = **4 s** | 0x01515f84 | 0 |
+| CERO | 120 = **4 s** | 0x01515f90 | 0 |
+
+Selector 0 uses CERO, caution, Capcom (**10 s holds**); selector 1 uses
+ESRB, Capcom (**6 s holds**); selector 2 uses Capcom (**2 s hold**).
+These are alternative lists, not cumulative. Mode 4 allows the existing
+input skip path; mode 0 reaches the timer gate. GUI entry/exit sequences
+and frame-boundary transitions add time. The active region selector and
+observed visual timings in instr1 were not supplied. Do not infer them
+from draw counts or sum these holds with the decoder lifetime.
+
+Separately, `uGUICapcomLogo` constructor **0x0067d3a0** sets the same
+60-frame hold. Another embedded `uIdInitialize` path has **35-frame
+(1.167 s) holds** at **0x00735120 / 0x00735230**, with 15-frame fade
+requests (0.5 s each) through **0x0043f4c0 / 0x0043f570**. Its reachability
+in this run is unestablished; it is not added to the startup totals.
+Movie/menu user waits have no fixed duration established by this log.
+
 Instrumentation implemented; no game or shard build/run by this lane.
 Initial six parser tests passed; final eight tests pass. Wrapper test preserves memory/register/stack effects
 and an existing override. ddports: 1 passed. Runtime lib: 29 passed,
