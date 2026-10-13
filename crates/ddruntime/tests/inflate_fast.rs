@@ -11,6 +11,7 @@ fn inflate_registration_defaults_on_and_respects_explicit_override() {
     ddruntime::archive_inflate::install(&mut ports);
     let disabled = std::env::var("DDRUNTIME_ARCHIVE_INFLATE").as_deref() == Ok("0");
     let adler = std::env::var("DDRUNTIME_ZLIB_ADLER").as_deref() == Ok("1");
+    let table = std::env::var("DDRUNTIME_ZLIB_TABLE").as_deref() == Ok("1");
     let outer = std::env::var("DDRUNTIME_ZLIB_PORT").as_deref() == Ok("1");
     let mut addresses: Vec<_> = ports.iter().map(|p| p.0).collect();
     addresses.sort_unstable();
@@ -21,17 +22,23 @@ fn inflate_registration_defaults_on_and_respects_explicit_override() {
     if !disabled {
         expected.push(0x00cf2cb0);
     }
+    if table {
+        expected.push(0x00cf30c0);
+    }
     if adler {
         expected.push(0x00cf34d0);
     }
     assert_eq!(addresses, expected);
     if !disabled {
         let fast = std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("1");
-        let expected: ddnative_base::x86::LiftFn = if fast {
-            ddruntime::archive_inflate::inflate_fast_pages
-        } else {
-            ddruntime::archive_inflate::inflate_fast
-        };
+        let expected: ddnative_base::x86::LiftFn =
+            if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("2") {
+                ddruntime::archive_inflate::inflate_fast_wide
+            } else if fast {
+                ddruntime::archive_inflate::inflate_fast_pages
+            } else {
+                ddruntime::archive_inflate::inflate_fast
+            };
         assert!(std::ptr::fn_addr_eq(
             ports.iter().find(|p| p.0 == 0x00cf2cb0).unwrap().1,
             expected
@@ -42,7 +49,10 @@ fn inflate_registration_defaults_on_and_respects_explicit_override() {
     }
     let mut ports = vec![(0x00cf2cb0, explicit as ddnative_base::x86::LiftFn)];
     ddruntime::archive_inflate::install(&mut ports);
-    assert_eq!(ports.len(), 1 + usize::from(adler) + usize::from(outer));
+    assert_eq!(
+        ports.len(),
+        1 + usize::from(adler) + usize::from(outer) + usize::from(table)
+    );
     let mut c = Cpu::default();
     ports[0].1(&mut Sparse::default(), &mut c);
     assert_eq!(c.eax, 42);
@@ -50,6 +60,11 @@ fn inflate_registration_defaults_on_and_respects_explicit_override() {
     ddruntime::archive_inflate::install(&mut explicit_outer);
     assert_eq!(explicit_outer.iter().filter(|p| p.0 == 0x00cf02e0).count(), 1);
     explicit_outer[0].1(&mut Sparse::default(), &mut c);
+    assert_eq!(c.eax, 42);
+    let mut explicit_table = vec![(0x00cf30c0, explicit as ddnative_base::x86::LiftFn)];
+    ddruntime::archive_inflate::install(&mut explicit_table);
+    assert_eq!(explicit_table.iter().filter(|p| p.0 == 0x00cf30c0).count(), 1);
+    explicit_table.iter().find(|p| p.0 == 0x00cf30c0).unwrap().1(&mut Sparse::default(), &mut c);
     assert_eq!(c.eax, 42);
     // A user-supplied Adler port has the same precedence as the fast decoder.
     let mut explicit_ports = vec![(0x00cf34d0, explicit as ddnative_base::x86::LiftFn)];
@@ -101,8 +116,8 @@ fn original_fast_inflate_registers_and_all_memory() {
         let (r, xmm, input) = machine(&mut c);
         let (expected, out_xmm, output) = machine(&mut c);
         let flags = word(&mut c);
-        for implementation in 0..3 {
-            let mut m: Box<dyn Mem> = if implementation == 2 {
+        for implementation in 0..5 {
+            let mut m: Box<dyn Mem> = if implementation == 2 || implementation == 4 {
                 let mut mapped = ddruntime::memory::GuestMemory::new();
                 let mut pages = std::collections::BTreeSet::new();
                 for (address, bytes) in &input {
@@ -138,6 +153,8 @@ fn original_fast_inflate_registers_and_all_memory() {
             cpu.xmm = xmm;
             if implementation == 0 {
                 ddruntime::archive_inflate::inflate_fast(&mut *m, &mut cpu);
+            } else if implementation >= 3 {
+                ddruntime::archive_inflate::inflate_fast_wide(&mut *m, &mut cpu);
             } else {
                 ddruntime::archive_inflate::inflate_fast_pages(&mut *m, &mut cpu);
             }
@@ -167,5 +184,5 @@ fn original_fast_inflate_registers_and_all_memory() {
         }
     }
     assert_eq!(c.position() as usize, c.get_ref().len());
-    eprintln!("{count} original fast inflate cases matched in three memory/decoder configurations");
+    eprintln!("{count} original fast inflate cases matched in five memory/decoder configurations");
 }

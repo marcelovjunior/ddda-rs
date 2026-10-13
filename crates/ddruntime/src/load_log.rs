@@ -37,9 +37,9 @@ impl ZlibCaller {
 }
 static ZLIB_CALLERS: [ZlibCaller; 32] = [const { ZlibCaller::new() }; 32];
 static ZLIB_CALLER_OVERFLOW: AtomicU64 = AtomicU64::new(0);
-static ZLIB_HELPER_CALLS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
-static ZLIB_HELPER_NS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
-const ZLIB_HELPERS: [u32; 4] = [0x00cf2cb0, 0x00cf34d0, 0x00cf38d0, 0x00cf01e0];
+static ZLIB_HELPER_CALLS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+static ZLIB_HELPER_NS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+const ZLIB_HELPERS: [u32; 5] = [0x00cf2cb0, 0x00cf34d0, 0x00cf38d0, 0x00cf01e0, 0x00cf30c0];
 
 #[cfg(any(feature = "game", test))]
 fn zlib_caller(address: u32, elapsed: u64, input: u32, output: u32) {
@@ -270,7 +270,7 @@ mod guest {
     const INFLATE: u32 = 0x00cf02e0;
     static ORIGINAL_READ: OnceLock<LiftFn> = OnceLock::new();
     static ORIGINAL_INFLATE: OnceLock<LiftFn> = OnceLock::new();
-    static ORIGINAL_HELPERS: [OnceLock<LiftFn>; 4] = [const { OnceLock::new() }; 4];
+    static ORIGINAL_HELPERS: [OnceLock<LiftFn>; 5] = [const { OnceLock::new() }; 5];
     fn helper<const I: usize>(m: &mut dyn Mem, cpu: &mut Cpu) {
         let start = Instant::now();
         ORIGINAL_HELPERS[I].get().expect("zlib helper timing body")(m, cpu);
@@ -418,6 +418,7 @@ mod guest {
             (ZLIB_HELPERS[1], helper::<1> as LiftFn, &ORIGINAL_HELPERS[1]),
             (ZLIB_HELPERS[2], helper::<2> as LiftFn, &ORIGINAL_HELPERS[2]),
             (ZLIB_HELPERS[3], helper::<3> as LiftFn, &ORIGINAL_HELPERS[3]),
+            (ZLIB_HELPERS[4], helper::<4> as LiftFn, &ORIGINAL_HELPERS[4]),
         ] {
             let body = ports.iter().chain(bodies).find(|e| e.0 == address).map(|e| e.1);
             if let Some(body) = body {
@@ -451,9 +452,9 @@ mod guest {
             fn replaced(_: &mut dyn Mem, _: &mut Cpu) {
                 panic!("bypassed override")
             }
-            let mut ports = vec![(ARCHIVE_READ, body as LiftFn)];
+            let mut ports = vec![(ARCHIVE_READ, body as LiftFn), (ZLIB_HELPERS[4], body as LiftFn)];
             wrap_archive(&mut ports, &[(ARCHIVE_READ, replaced), (INFLATE, body), (GEOMETRY, body), (VORBIS, body),
-                (0x005317b0, body), (0x00db4c10, body), (0x00504330, body)]);
+                (0x005317b0, body), (0x00db4c10, body), (0x00504330, body), (ZLIB_HELPERS[4], replaced)]);
             for (address, f) in ports {
                 let mut m = ddnative_base::mem::Sparse::default();
                 m.set_u32(35 + 0xf0, 0x00531800); // observed aTitle dispatcher field
@@ -479,6 +480,7 @@ mod guest {
                     assert_eq!(ZLIB_ENTRY_CALLS[3].load(Relaxed), 1);
                 }
             }
+            assert_eq!(ZLIB_HELPER_CALLS[4].load(Relaxed), 1);
             assert_eq!(ARCHIVE_DEPTH.with(|d| d.get()), 0);
         }
     }

@@ -66,14 +66,14 @@ pub(crate) fn texture_upload(start: Option<Instant>, bytes: u64) {
 }
 
 #[derive(Default)]
-struct Interval { time: f64, name: String, counters: [u64; 29], cpu: [u64; 7] }
+struct Interval { time: f64, name: String, counters: [u64; 30], cpu: [u64; 7] }
 static INTERVAL: Mutex<Option<Interval>> = Mutex::new(None);
-const NAMES: [&str; 29] = ["reads", "bytes", "read_ns", "archive_reads", "archive_ns",
+const NAMES: [&str; 30] = ["reads", "bytes", "read_ns", "archive_reads", "archive_ns",
     "inflates", "inflate_ns", "zlib_calls", "zlib_ns", "zlib_fast_ns", "adler_ns",
     "window_ns", "geometry_ns", "open_ns", "vorbis_ns", "modules", "module_ns",
     "translate_ns", "pipelines", "pipeline_ns", "texture_uploads", "texture_bytes", "texture_enqueue_ns",
     "archive_io_reads", "archive_io_bytes", "archive_io_ns", "emu_engine_ns",
-    "service_samples", "service_sample_ns"];
+    "service_samples", "service_sample_ns", "zlib_table_ns"];
 const CLASSES: [&str; 7] = ["main", "render", "jobs", "loader_io", "host_main", "backend", "other"];
 fn delta<const N: usize>(now: [u64; N], before: [u64; N]) -> [u64; N] {
     std::array::from_fn(|i| now[i].saturating_sub(before[i]))
@@ -91,11 +91,12 @@ pub fn transition(name: &str, details: std::fmt::Arguments<'_>) {
     ddnative_base::x87::park();
     ddnative_base::x86::ldmxcsr(ddnative_base::x86::MXCSR_DEFAULT);
     let mut previous = INTERVAL.lock().unwrap_or_else(|e| e.into_inner());
-    let mut counters = [0; 29];
+    let mut counters = [0; 30];
     counters[..15].copy_from_slice(&interval_counters());
     if let Some(snapshot) = GPU.get() { counters[15..20].copy_from_slice(&snapshot()); }
     for i in 0..3 { counters[20+i] = UPLOADS[i].load(Relaxed); }
     for i in 0..6 { counters[23+i] = EXTRA[i].load(Relaxed); }
+    counters[29] = ZLIB_HELPER_NS[4].load(Relaxed);
     let cpu = cpu_snapshot();
     let now = seconds();
     let old = previous.take().unwrap_or_default();

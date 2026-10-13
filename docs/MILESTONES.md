@@ -1,5 +1,32 @@
 # Milestones
 
+### L159 Vulkan default image gate (2026-10-13)
+
+- Same-run selected raw pass oracle copies attachment load state, replays
+  wgpu on shadows, and compares color/depth/stencil image values in queue
+  order. Separate query/resource fallback counters; initialization retained.
+- 30 CPU / 19 focused GPU tests pass; dedicated four-pass oracle matches
+  all 14 aspects, zero errors/skips/pending. Light suite 221 reported passes,
+  inherited gamma and timing failures / six ignored; timing retry passes.
+  No game acceptance; oracle commit keeps opt-in. Protocol and limitations:
+  `docs/tasks/L159-vk-default.md`.
+- Next: head `DDGPU_VK=1 DDGPU_VK_SHADOW=997` gameplay image gate, then
+  separately adopt the staged default-on commit only after acceptance.
+### L156 exact inflate and Huffman builder (2026-10-13)
+
+- Opt-in FAST=2 adds bounded table/output spans, packed input pairs and
+  aligned wide matches; TABLE=1 ports exact cf30c0 table construction.
+  Defaults unchanged. Speculative input staging/literal batching regressed
+  and were removed; modern-library throughput parity is not established.
+- Original-instruction gate: 217 streams / 12,893 returns; 632 leaf cases
+  x5; 81 table cases. Light 224 reported pass / inherited gamma failure /
+  6 ignored. All final focused and full-stream rechecks passed.
+- Combined ARC microbench gains are 4.1-13.6% and shared-host dependent; no
+  game loading gain claimed. New zlib_table_ns isolates table work in the
+  next real stage capture. Details: docs/tasks/L156-inflate-fast.md.
+- Next: head FAST=1/TABLE=0 vs FAST=2/TABLE=1 with PORT=0, then repeat
+  logging-off with image/control acceptance; retain separate table-only A/B.
+
 ### L153 game-thread synchronization (2026-10-13)
 
 - Head combo26 late-game census: main plus six joined workers, about 69
