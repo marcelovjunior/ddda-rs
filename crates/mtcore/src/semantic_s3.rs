@@ -478,3 +478,308 @@ pub fn update_scene_objects(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4 + 4);
 }
+
+// Translated from 0x007a5fa0 (DDDA.exe 2017-12-13 Steam).
+/// 0x007A5FA0, `attachment->sync_runtime_object()` (ESI = the attachment
+/// record, no stack arguments, plain `ret`): create, update or drop the
+/// runtime object (`+0x28`) that mirrors an attachment record.
+///
+/// - Bytes `+0x62` / `+0x63` make a record that has not yet run but is
+///   flagged wait for the import at `[0x0139d0d0]` (called with the global
+///   `0x018fa50c + 0x20`): a result above 2 returns at once.
+/// - With no runtime object but a target (`+0x24`) whose flag bit 0 is set,
+///   and unless the globals block (`0x018fa4bc`) has bit 16 of `+0xb883c`
+///   set, one is allocated (0xbf0 bytes, 16-aligned, 0x00F0E170) and built
+///   (0x00F12400); it is then registered (0x00DB58B0 on `0x018d09e0`), bound
+///   to the target and the description (`+0x1c`) and its state set to 4,
+///   with `+0x5b` marking it as created. Without bit 0 the target is
+///   released (0x00DE0B90) if its bit 4 is set.
+/// - An existing runtime object whose state (`+4`, low 3 bits) is 4 is
+///   dropped (target released when `+0x5b`), clearing `+0x24`, `+0x28`,
+///   `+0x5a`, `+0x5d`, `+0x5f`; any other copies the record's settings
+///   (`+0x38..+0x59`) into the object, then 0x007A65C0 runs on the record.
+pub fn sync_runtime_object(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let record = c.esi;
+    let entry = c.esp;
+    // the original's frame at its calls: `push ebp` / 8-byte alignment,
+    // then two pushes
+    let frame = (entry.wrapping_sub(4) & !7).wrapping_sub(8);
+    let at = |offset: u32| record.wrapping_add(offset);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let finish = |c: &mut Cpu| c.esp = entry.wrapping_add(4);
+    // the runtime object, read again after every call as the original does
+    let object = |m: &dyn Mem| pg.u32(m, at(0x28));
+    let call = |m: &mut dyn Mem, c: &mut Cpu, this: u32, args: &[u32], back: u32, target: u32| {
+        call_from(m, c, pg, frame, this, args, back, guest(target))
+    };
+    // `call 0x007a65c0` with the record, then return
+    let run_tail = |m: &mut dyn Mem, c: &mut Cpu, back: u32| {
+        call(m, c, 0, &[record], back, 0x007a_65c0);
+        finish(c)
+    };
+    let set_object = |m: &mut dyn Mem, offset: u32, value: u32| {
+        let object = object(m);
+        pg.set_u32(m, object.wrapping_add(offset), value)
+    };
+    let call_object = |m: &mut dyn Mem, c: &mut Cpu, args: &[u32], back: u32, target: u32| {
+        let this = object(m);
+        call(m, c, this, args, back, target)
+    };
+    let release_target = |m: &mut dyn Mem, c: &mut Cpu, target: u32, back: u32| {
+        call(m, c, target, &[], back, 0x00de_0b90);
+        pg.set_u32(m, at(0x24), 0);
+    };
+    if pg.u8(m, at(0x62)) == 0 && pg.u8(m, at(0x63)) != 0 {
+        let import = pg.u32(m, 0x0139_d0d0);
+        let argument = pg.u32(m, 0x018f_a50c).wrapping_add(0x20);
+        if call(m, c, 0, &[argument], 0x007a_5fc3, import) as i32 > 2 {
+            return finish(c);
+        }
+    }
+    pg.set_u8(m, at(0x62), 1);
+    if object(m) == 0 {
+        let target = pg.u32(m, at(0x24));
+        if target != 0 {
+            let flags = pg.u8(m, target.wrapping_add(0x50));
+            if flags & 1 != 0 {
+                if pg.u32(m, pg.u32(m, 0x018f_a4bc).wrapping_add(0xb_883c)) & 0x1_0000 == 0 {
+                    // cdecl: the original pops its two arguments itself (the next call sets the frame again)
+                    let memory = call(m, c, 0, &[0xbf0, 0x10], 0x007a_600c, 0x00f0_e170);
+                    let built = if memory != 0 { call(m, c, memory, &[], 0x007a_601a, 0x00f1_2400) } else { 0 };
+                    pg.set_u32(m, at(0x28), built);
+                }
+                let created = object(m);
+                if created != 0 {
+                    let info = pg.u32(m, at(0x1c));
+                    let description = pg.u32(m, info.wrapping_add(0x1c)) & 0xfdff_ffff;
+                    let identity = pg.u32(m, info.wrapping_add(0x18));
+                    let kind = ((pg.u32(m, info.wrapping_add(4)) >> 3) & 0x7f) + 1;
+                    let registry = pg.u32(m, 0x018d_09e0);
+                    call(m, c, registry, &[kind, created, identity, description], 0x007a_6054, 0x00db_58b0);
+                    let info = pg.u32(m, at(0x1c));
+                    let created = object(m);
+                    if pg.u32(m, info.wrapping_add(0xf0)) != 0 {
+                        pg.set_u32(m, created.wrapping_add(0x1e0), info);
+                        call(m, c, created, &[], 0x007a_606d, 0x00f2_3830);
+                    }
+                    let target = pg.u32(m, at(0x24));
+                    call_object(m, c, &[target], 0x007a_6079, 0x00f2_3f80);
+                    set_object(m, 0x274, 4);
+                    call_object(m, c, &[], 0x007a_608e, 0x00f2_3710);
+                    pg.set_u8(m, at(0x5b), 1);
+                    set_object(m, 0x26c, 1);
+                    set_object(m, 0x270, 0x3f74_69c7);
+                    let owner = pg.u32(m, at(0x18));
+                    call_object(m, c, &[owner], 0x007a_60b8, 0x00f0_ea30);
+                    call_object(m, c, &[u32::MAX], 0x007a_60c2, 0x00f0_eb60);
+                } else {
+                    let target = pg.u32(m, at(0x24));
+                    if target != 0 {
+                        release_target(m, c, target, 0x007a_60da);
+                    }
+                }
+            } else if flags & 0x10 != 0 {
+                release_target(m, c, target, 0x007a_60da);
+            }
+        }
+    }
+    let runtime = object(m);
+    if runtime == 0 {
+        return run_tail(m, c, 0x007a_62b5);
+    }
+    if pg.u8(m, runtime.wrapping_add(4)) & 7 == 4 {
+        let was_created = pg.u8(m, at(0x5b)) != 0;
+        if was_created {
+            let target = pg.u32(m, at(0x24));
+            if target != 0 {
+                release_target(m, c, target, 0x007a_6104);
+            }
+            pg.set_u8(m, at(0x5b), 0);
+        } else {
+            pg.set_u32(m, at(0x24), 0);
+        }
+        pg.set_u32(m, at(0x28), 0);
+        pg.set_u8(m, at(0x5a), 0);
+        pg.set_u8(m, at(0x5f), 0);
+        pg.set_u8(m, at(0x5d), 0);
+        return run_tail(m, c, if was_created { 0x007a_611c } else { 0x007a_6137 });
+    }
+    let value = pg.u32(m, at(0x38));
+    pg.set_u32(m, runtime.wrapping_add(0xdc), value);
+    // the target's value, unless an environment record (+0x20) with its flag set overrides it
+    let environment = pg.u32(m, at(0x20));
+    let source = if environment != 0 && pg.u8(m, environment.wrapping_add(0x21b0)) != 0 { 0 } else { pg.u32(m, at(0x24)) };
+    let value = if source != 0 { through_x87(pg.u32(m, source.wrapping_add(0x94))) } else { 0 };
+    set_object(m, 0x314, value);
+    let state = pg.u32(m, at(0x3c));
+    set_object(m, 0x274, state);
+    let (method, back) = if pg.u8(m, at(0x55)) != 0 { (0x00f2_3710, 0x007a_6194) } else { (0x00f0_ebc0, 0x007a_619b) };
+    call_object(m, c, &[], back, method);
+    let runtime = object(m);
+    for (flag, field) in [(0x51u32, 0x1eau32), (0x52, 0x10f), (0x54, 0x928), (0x56, 0x41c)] {
+        let value = (pg.u8(m, at(flag)) != 0) as u8;
+        pg.set_u8(m, runtime.wrapping_add(field), value);
+    }
+    for (source, field) in [(0x40u32, 0x92cu32), (0x44, 0xb30), (0x48, 0xb34)] {
+        let value = through_x87(pg.u32(m, at(source)));
+        pg.set_u32(m, runtime.wrapping_add(field), value);
+    }
+    let value = pg.u32(m, at(0x4c));
+    pg.set_u32(m, runtime.wrapping_add(0xb38), value);
+    if pg.u8(m, at(0x57)) != 0 {
+        call(m, c, runtime, &[], 0x007a_6240, 0x00f0_eba0);
+    } else {
+        pg.set_u8(m, runtime.wrapping_add(0x1e9), 0);
+        pg.set_u32(m, runtime.wrapping_add(0x418), 0);
+        pg.set_u8(m, runtime.wrapping_add(0xa0), 0);
+    }
+    let runtime = object(m);
+    for (flag, field) in [(0x58u32, 0x110u32), (0x53, 0x1ec)] {
+        let value = (pg.u8(m, at(flag)) != 0) as u8;
+        pg.set_u8(m, runtime.wrapping_add(field), value);
+    }
+    if pg.u8(m, at(0x59)) != 0 {
+        pg.set_u8(m, runtime.wrapping_add(0xb26), 1);
+        return run_tail(m, c, 0x007a_62a0);
+    }
+    pg.set_u8(m, runtime.wrapping_add(0xb26), 0);
+    run_tail(m, c, 0x007a_62b5)
+}
+
+// Translated from 0x00794550 (DDDA.exe 2017-12-13 Steam).
+/// 0x00794550, `toggle->apply(job)` (stdcall, one stack argument, `ret 4`):
+/// switch the two linked objects of a job record on or off.
+///
+/// `job + 0xc` is the requested state. For the object at `job + 0x24`: every
+/// sub-handle of `+0x4c` (their count is the top 24 bits of `[+0x38] + 0x68`)
+/// is switched through 0x01083990 (on, once: bit 2 of `+0x64`) or 0x01084210
+/// (off, clearing that bit); bits 3, 5 and 4 of `+0x64` follow the job bytes
+/// `+0xd`, `+0xe`, `+0xf`; a pending request in `+0x10` is cleared and
+/// handled by 0x010819E0; and the job's value `+0x14` is stored into the
+/// `+0x6c` of each 0x120-byte element at `+0x174`. For the object at
+/// `job + 0x20`: bit 0 of `+0x170` and its sub-handles follow the state
+/// (0x0088D660 with ESI = the object and DL = 0 or 1, and 0x010806C0 on
+/// switching off), and the job's value goes to its `+0x5c`. Finally a
+/// switched-on job with `+0x34` set and `+0x35` clear counts its timer
+/// (`+0x38`) down by the frame time (`[0x018d0b28] + 0x70`) and, when it
+/// reaches 0, runs 0x00794A90 (EDI = the job) and sets `+0x35`; a
+/// switched-off job clears `+0x34`.
+pub fn apply_effect_toggle(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let job = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // the original's frame at its calls: four pushes
+    let frame = entry.wrapping_sub(16);
+    let at = |offset: u32| job.wrapping_add(offset);
+    let guest = |target: u32| move |m: &mut dyn Mem, c: &mut Cpu| call_ext(m, c, target);
+    let call = |m: &mut dyn Mem, c: &mut Cpu, this: u32, args: &[u32], back: u32, target: u32| {
+        call_from(m, c, pg, frame, this, args, back, guest(target))
+    };
+    let enabled = pg.u8(m, at(0xc)) != 0;
+    // 0x010805D0 `object->handle_count()`, run natively: the top 24 bits of the table's +0x68
+    let handle_count = |m: &dyn Mem, object: u32| {
+        let table = pg.u32(m, object.wrapping_add(0x38));
+        if table == 0 { 0 } else { pg.u32(m, table.wrapping_add(0x68)) >> 8 }
+    };
+    // `for each sub-handle of object: call method(handle)`, the count read again after every call
+    let each_handle = |m: &mut dyn Mem, c: &mut Cpu, object: u32, method: u32, back: u32| {
+        let table = pg.u32(m, object.wrapping_add(0x38));
+        if pg.u32(m, table.wrapping_add(0x68)) & 0xffff_ff00 == 0 {
+            return;
+        }
+        let mut i = 0u32;
+        loop {
+            let handle = pg.u32(m, pg.u32(m, object.wrapping_add(0x4c)).wrapping_add(i.wrapping_mul(4)));
+            call(m, c, handle, &[], back, method);
+            i += 1;
+            let table = pg.u32(m, object.wrapping_add(0x38));
+            if i >= pg.u32(m, table.wrapping_add(0x68)) >> 8 {
+                break;
+            }
+        }
+    };
+    let flags_of = |m: &mut dyn Mem, object: u32, mask: u32, on: bool| {
+        let flags = pg.u32(m, object.wrapping_add(0x64));
+        pg.set_u32(m, object.wrapping_add(0x64), if on { flags | mask } else { flags & !mask });
+    };
+    let primary = pg.u32(m, at(0x24));
+    if primary != 0 {
+        if enabled {
+            let flags = pg.u32(m, primary.wrapping_add(0x64));
+            if (flags >> 2) & 1 == 0 {
+                pg.set_u32(m, primary.wrapping_add(0x64), flags | 4);
+                each_handle(m, c, primary, 0x0108_3990, 0x0079_459b);
+            }
+        } else {
+            let flags = pg.u32(m, primary.wrapping_add(0x64));
+            pg.set_u32(m, primary.wrapping_add(0x64), flags & !4);
+            each_handle(m, c, primary, 0x0108_4210, 0x0079_45cb);
+        }
+        for (source, mask) in [(0xdu32, 8u32), (0xe, 0x20), (0xf, 0x10)] {
+            let on = pg.u8(m, at(source)) != 0;
+            flags_of(m, primary, mask, on);
+        }
+        if pg.u8(m, at(0x10)) != 0 {
+            pg.set_u8(m, at(0x10), 0);
+            call(m, c, primary, &[], 0x0079_461a, 0x0108_19e0);
+        }
+        let value = pg.u32(m, at(0x14));
+        let mut i = 0u32;
+        if handle_count(m, primary) != 0 {
+            let mut offset = 0u32;
+            loop {
+                // 0x011181F0 `element->set_value(value)`, run natively
+                let element = pg.u32(m, primary.wrapping_add(0x174)).wrapping_add(offset);
+                pg.set_u32(m, element.wrapping_add(0x6c), value);
+                i += 1;
+                offset = offset.wrapping_add(0x120);
+                if i >= handle_count(m, primary) {
+                    break;
+                }
+            }
+        }
+    }
+    let secondary = pg.u32(m, at(0x20));
+    if secondary != 0 {
+        if enabled {
+            let flags = pg.u32(m, secondary.wrapping_add(0x170));
+            if flags & 1 == 0 {
+                pg.set_u32(m, secondary.wrapping_add(0x170), flags | 1);
+                c.esi = secondary;
+                c.edx &= !0xff;
+                call(m, c, 0, &[], 0x0079_469a, 0x0088_d660);
+                each_handle(m, c, secondary, 0x0108_3990, 0x0079_46bb);
+            }
+        } else {
+            let flags = pg.u32(m, secondary.wrapping_add(0x170));
+            pg.set_u32(m, secondary.wrapping_add(0x170), flags & !1);
+            call(m, c, secondary, &[0x018c_fe80], 0x0079_46de, 0x0108_06c0);
+            c.esi = secondary;
+            c.edx = (c.edx & !0xff) | 1;
+            call(m, c, 0, &[], 0x0079_46e5, 0x0088_d660);
+            each_handle(m, c, secondary, 0x0108_4210, 0x0079_46fe);
+        }
+        // 0x00F65CB0 `object->set_value(value)`, run natively
+        let value = pg.u32(m, at(0x14));
+        pg.set_u32(m, secondary.wrapping_add(0x5c), value);
+    }
+    if enabled {
+        if pg.u8(m, at(0x34)) != 0 && pg.u8(m, at(0x35)) == 0 {
+            let clock = pg.u32(m, 0x018d_0b28);
+            let timer = subss(f32::from_bits(pg.u32(m, at(0x38))), f32::from_bits(pg.u32(m, clock.wrapping_add(0x70))));
+            pg.set_u32(m, at(0x38), timer.to_bits());
+            // comiss 0, timer; jc: not taken only when 0 >= timer (ordered)
+            if timer <= 0.0 {
+                c.edi = job;
+                call(m, c, 0, &[0], 0x0079_4755, 0x0079_4a90);
+                pg.set_u8(m, at(0x35), 1);
+            }
+        }
+    } else {
+        pg.set_u8(m, at(0x34), 0);
+    }
+    (c.ebx, c.ebp, c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(4 + 4);
+}

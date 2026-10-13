@@ -50,6 +50,8 @@ const EAX: usize = 0;
 const ECX: usize = 1;
 const ESI: usize = 6;
 const EDI: usize = 7;
+/// Pseudo register: only the low byte of EDX is compared.
+const DL: usize = 100;
 
 fn cpu_regs(c: &Cpu) -> [u32; 8] {
     [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi]
@@ -83,6 +85,10 @@ fn abi_cases(path: &str, body: LiftFn, returns: bool, callee: fn(u32) -> Callee)
             let spec = callee(target);
             assert_eq!(have[4], want[4], "case {i}: call {k} {target:x} ESP");
             for &r in spec.registers {
+                if r == DL {
+                    assert_eq!(have[2] & 0xff, want[2] & 0xff, "case {i}: call {k} {target:x} DL");
+                    continue;
+                }
                 assert_eq!(have[r], want[r], "case {i}: call {k} {target:x} register {r}");
             }
             let recorded = pairs(&call["memory"]);
@@ -286,4 +292,54 @@ fn semantic_update_scene_objects_matches_original() {
         update_scene_objects_callee,
     );
     eprintln!("{n} ABI-level update_scene_objects cases passed");
+}
+
+fn sync_runtime_object_callee(target: u32) -> Callee {
+    match target {
+        // the import (stdcall, one argument) and the allocator (cdecl, two)
+        0x3000_0100 | 0x007a_65c0 => Callee { stack_words: 1, registers: &[] },
+        0x00f0_e170 => Callee { stack_words: 2, registers: &[] },
+        0x00f1_2400 | 0x00f2_3830 | 0x00f2_3710 | 0x00de_0b90 | 0x00f0_ebc0 | 0x00f0_eba0 => Callee { stack_words: 0, registers: &[ECX] },
+        0x00db_58b0 => Callee { stack_words: 4, registers: &[ECX] },
+        0x00f2_3f80 | 0x00f0_ea30 | 0x00f0_eb60 => Callee { stack_words: 1, registers: &[ECX] },
+        _ => panic!("unexpected callee {target:x}"),
+    }
+}
+
+// verifies 0x007a5fa0 (ABI level; void, ESI = the record)
+#[test]
+fn semantic_sync_runtime_object_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases(
+        "E:/ddda-re/notes/native-L184/proxy_update.json",
+        mtcore::semantic_s3::sync_runtime_object,
+        false,
+        sync_runtime_object_callee,
+    );
+    eprintln!("{n} ABI-level sync_runtime_object cases passed");
+}
+
+fn apply_effect_toggle_callee(target: u32) -> Callee {
+    match target {
+        0x0108_3990 | 0x0108_4210 | 0x0108_19e0 => Callee { stack_words: 0, registers: &[ECX] },
+        // ESI = the object and DL = the state (compared as the low byte, see DL)
+        0x0088_d660 => Callee { stack_words: 0, registers: &[ESI, DL] },
+        0x0108_06c0 => Callee { stack_words: 1, registers: &[ECX] },
+        0x0079_4a90 => Callee { stack_words: 1, registers: &[EDI] },
+        _ => panic!("unexpected callee {target:x}"),
+    }
+}
+
+// verifies 0x00794550 (ABI level; void, `ret 4`; 0x010805D0, 0x011181F0 and
+// 0x00F65CB0 are done natively and ran as original code in the recording)
+#[test]
+fn semantic_apply_effect_toggle_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases(
+        "E:/ddda-re/notes/native-L184/effect_toggle.json",
+        mtcore::semantic_s3::apply_effect_toggle,
+        false,
+        apply_effect_toggle_callee,
+    );
+    eprintln!("{n} ABI-level apply_effect_toggle cases passed");
 }
