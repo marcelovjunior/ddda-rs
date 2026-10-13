@@ -386,3 +386,10 @@ serial/live66PASS,175jobs, lane mergePASS. Fullstream comparison advances
 to root22 bindings; key580055EB and header162C0 match exactly. Added
 bounded binding-kind/identity/length/first-byte diagnostics, comparator
 unchanged.37 focused pass. Next: immediate offline rebuild/replay.
+
+2026-10-13 f9cb8862 real replay: root22 Shader binding identities26/26
+and388-byte snapshots match in size; first byte difference offsetA4 is
+10/00. Descriptor decode maps it to fourth component of a16-byte float
+constant (value index2), not pointer identity. Added bounded containing-word
+diagnostic to trace the producer; no assumed padding/float tolerance.
+37 focused pass. Self-build/replay next.
