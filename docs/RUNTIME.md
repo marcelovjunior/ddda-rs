@@ -2,6 +2,14 @@
 
 ## L109 loading telemetry
 
+The archive zlib fast loop (`0x00cf2cb0`) is a readable runtime port,
+verified against 559 original-instruction vectors including state,
+output, registers, flags and stack spills. The original outer inflate and
+archive streaming functions still handle checksums, buffers and callbacks.
+`DDRUNTIME_ARCHIVE_INFLATE=0` selects the generated leaf for A/B runs;
+explicit mods at that address retain precedence. Isolated leaf timings
+improved 2.30–8.06x; whole-game loading is awaiting head comparison.
+
 `DDRUNTIME_LOAD_LOG=1` adds process-relative startup/movie/file/archive/GPU
 timing and frame counters. `scripts/load_timeline.py` produces a timeline;
 UI milestones require explicit head-observed timestamps. Service totals

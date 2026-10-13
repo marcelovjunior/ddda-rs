@@ -59,6 +59,62 @@ new measurement, not this branch's baseline.
 
 ## Results
 
+### Continuation: readable inflate fast loop (2026-10-13)
+
+Rebased onto `task/fps-line`; baseline instrumentation/read scratch is
+`45b89e6f`. Both L109 archive and L111 executor wrappers are retained.
+Head was sent "ready for a load-log run" with that hash (board 10786).
+
+The entire zlib `inflate_fast` leaf at **0x00cf2cb0** is now readable Rust
+in `ddruntime/src/archive_inflate.rs`. It decodes literals, lengths,
+distances, nested tables, overlapping output matches, all circular-window
+copy paths, end-of-block and the three invalid-code/distance exits. The
+adapter preserves general/XMM registers, final arithmetic flags, stack
+locals and the overwritten argument. Error messages remain pointers into
+the player's executable. No code/data table was copied into the repo.
+
+The original **0x00cf02e0** streaming state machine still controls header
+validation, checksums, table construction, partial buffers, allocation and
+window maintenance. The original **0x00e0d320** archive reader still owns
+its two buffers and read/wait/seek callbacks. This is a whole fast-loop
+port, **not a replacement of those two outer functions**. Runtime setup
+installs it unless `DDRUNTIME_ARCHIVE_INFLATE=0`, and preserves any explicit
+override already at its address.
+
+`research/native/vectors_inflate.py`, run through heavy.py, records **559
+cases** from the original executable with Unicorn. Fixed-Huffman streams
+are generated from synthetic inputs; constructed tables exercise window
+wraps, all copy arms, lengths 3/4/5/8/17/258, history offsets, extra bits,
+nested lookups and errors. The Rust test checks **every scratch, stack and
+heap byte, all eight GPRs, all XMM lanes and defined arithmetic flags**.
+All 559 pass. Vectors stay private at
+`E:/ddda-re/notes/native-L109/vectors/inflate_fast.bin`; the test requires
+them with `DDNATIVE_REQUIRE_VECTORS=1`.
+
+`scripts/bench_archive_inflate.py` prepares a private isolated leaf crate:
+the existing generated leaf and its two split helpers at opt-level 1,
+readable/runtime at opt-level 3. **No ddlift crate is compiled.** Synthetic
+vectors are replayed over paged runtime memory; setup is outside timing,
+the complete function call inside; both implementations match the oracle
+memory. Three alternating rounds, 1,000 calls per implementation/case:
+
+| Produced bytes | Generated median us | Readable median us | Ratio |
+|---:|---:|---:|---:|
+| 1 | 0.449 | 0.195 | 2.30x |
+| 2 | 0.590 | 0.212 | 2.78x |
+| 349 | 18.209 | 2.260 | 8.06x |
+| 512 | 16.274 | 3.239 | 5.02x |
+
+This is decoder CPU cost, not whole-archive throughput or game loading.
+Shared-machine variance is visible in the samples. Full light serial
+suite after the port and cache integration: **168 passed, 1 existing
+fullscreen gamma failure, 2 ignored**. The subsequent explicitly ignored
+cache benchmark adds one test, not included in those counts. Head owns
+the game-feature integration build and paired game loading run.
+
+Next: compare head's process-relative baseline with the same route and
+save using the readable fast loop, leaving the original waits intact.
+
 Instrumentation implemented; no game or shard build/run by this lane.
 Initial six parser tests passed; final eight tests pass. Wrapper test preserves memory/register/stack effects
 and an existing override. ddports: 1 passed. Runtime lib: 29 passed,

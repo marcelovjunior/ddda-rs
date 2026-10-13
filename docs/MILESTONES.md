@@ -1,5 +1,17 @@
 # Milestones
 
+### L109 readable archive inflate fast loop (2026-10-13)
+
+- Whole `0x00cf2cb0` fast decoder port; original outer inflate/streaming
+  state machines retain headers, checksums, buffering and callbacks.
+- **559 original Unicorn cases pass**: all scratch/stack/heap bytes,
+  GPR/XMM registers and arithmetic flags. No shard or game build/run.
+- Isolated opt1 generated / opt3 readable leaf: **18.209 -> 2.260 us**
+  for 349 output bytes, **16.274 -> 3.239 us** for 512 bytes; three
+  alternating 1,000-call rounds. No whole-loading speedup claim.
+- Next: head's load-log/same-save comparison, baseline `45b89e6f`,
+  readable leaf selectable with `DDRUNTIME_ARCHIVE_INFLATE=0/1`.
+
 ### L111 nDraw executor observer (2026-10-13)
 
 - Opt-in read-only executor wrapper plus Present-selected frame counters;
