@@ -1,5 +1,19 @@
 # Milestones
 
+### L109 loading instrumentation and read scratch (2026-10-13)
+
+- Opt-in process-relative init/movie/file/archive/GPU/frame telemetry;
+  original archive read/inflate bodies retained. Timeline parser keeps
+  unobserved title/menu/loading phases explicitly unmeasured.
+- Synthetic optimized warm 128 KiB ReadFile: **11.569 -> 9.643 us/call**,
+  **1 -> 0 allocations** (three alternating pairs, five samples each).
+  Small reads have no reliable timing win; no game loading speedup claim.
+- Light runtime serial suite: **153 passed, 1 existing gamma failure,
+  2 ignored**. Parser **8 pass**, ddports **1 pass**. Details:
+  `docs/tasks/L109-loading.md`.
+- Next: head-run unskipped boot/menu/save baseline using
+  `DDRUNTIME_LOAD_LOG=1`, then same-save before/after phase comparison.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants

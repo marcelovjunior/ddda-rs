@@ -75,7 +75,21 @@ def movie_spans(events):
 def render(events):
     if not events:
         return "No load-log records. Legacy stage-probe clocks have no process-start anchor.\n"
-    out = ["| Milestone | Since process start (s) | Since preceding milestone (s) | Evidence |",
+    out = ["| Phase | Wall time (s) |", "|---|---:|"]
+    for label, begin, end in [
+        ("Boot to title", "process_start", "title_screen"),
+        ("Boot to main menu", "process_start", "main_menu"),
+        ("Load Game to loading end", "load_game_pressed", "loading_end"),
+        ("Loading screen", "loading_start", "loading_end"),
+        ("Runtime initialization", "runtime_init_begin", "runtime_init_end"),
+        ("GPU initialization", "gpu_init_begin", "gpu_init_end"),
+    ]:
+        start = next((e.time for e in events if e.name == begin), None)
+        finish = next((e.time for e in events if e.name == end and start is not None and e.time >= start), None)
+        duration = f"{finish - start:.3f}" if start is not None and finish is not None else "unmeasured"
+        out.append(f"| {label} | {duration} |")
+    out += ["", "First matching phase boundaries above; repeated movie lifetimes below.", "",
+           "| Milestone | Since process start (s) | Since preceding milestone (s) | Evidence |",
            "|---|---:|---:|---|"]
     for event, delta in phases(events):
         elapsed = f"{delta:.3f}" if delta is not None else "--"
@@ -121,13 +135,27 @@ def render(events):
     return "\n".join(out) + "\n"
 
 
+def render_legacy(text):
+    """Keep old stage-probe logs useful without mixing their different clocks."""
+    probes = re.findall(r"ddplay stage-probe t=([0-9.]+)s draws/frame=(\d+) fps=([0-9.]+)", text)
+    out = ["Legacy stage probes: seconds since autoplay started, NOT process start.",
+           "No reliable title/menu/Load Game/movie or service-time boundaries are present.",
+           "", "| Probe time (s) | Draws/frame | FPS |", "|---:|---:|---:|"]
+    for time, draws, fps in probes:
+        out.append(f"| {time} | {draws} | {fps} |")
+    return "\n".join(out) + "\n" if probes else render([])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log", type=Path)
     parser.add_argument("--mark", action="append", default=[])
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    events = parse(args.log.read_text(encoding="utf-8-sig", errors="replace"))
+    text = args.log.read_text(encoding="utf-8-sig", errors="replace")
+    events = parse(text)
+    if args.mark and not events:
+        parser.error("manual process-relative marks require load-log records; legacy clocks differ")
     if sum(e.name == "process_start" for e in events) > 1:
         parser.error("multiple process starts: split concatenated runs before comparison")
     for mark in args.mark:
@@ -135,7 +163,7 @@ def main():
             add_mark(events, mark)
         except ValueError as error:
             parser.error(str(error))
-    report = render(events)
+    report = render(events) if events else render_legacy(text)
     if args.output:
         args.output.write_text(report, encoding="utf-8")
     else:
