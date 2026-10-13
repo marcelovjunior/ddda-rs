@@ -930,6 +930,22 @@ waiting indefinitely. Test coverage and measurement limits are recorded in
 
 ## L110 native device checkpoint (2026-10-13)
 
+L133 follow-up: combo17 native enqueue counts overstated execution: the
+worker rejected 63,496 jobs (3,488,189 draws), beginning with unsupported
+indexed strips. `GraphicsBackend::native_or_draw` carries original DrawCalls
+through the same FIFO and executes them once on atomic worker rejection.
+Twelve transport CPU tests and seven worker GPU tests pass. Producer integration
+is in claude-2's `4bcef3fa`; combo19 reports 42,880 matching attachment/aspect
+summaries with zero mismatches for the accepted subset. `ab4318c9` accepts
+triangle strips only when the declared D3D9 index range excludes the restart
+sentinel (six host-driver cases pass; covers 99.954% of cap1 strips by metadata).
+Its gameplay gate remains with head. Worker diagnostics report actual native
+submissions/rejections. The raw-Vulkan `ash-interop` benchmark records into
+wgpu command buffers, sharing targets and vertex/index buffers with explicit
+tracked transitions and wgpu submission. Eight full-image comparisons pass;
+production pipeline/descriptor integration remains open. See
+`tasks/L133-native-next.md` for measurements and limits.
+
 `ddgpu::native` adds immutable state/resource handles, cached pipelines and
 texture sets, separate recorders with generation-aware constant rings,
 coalesced range updates and redundant draw-state filtering. The D3D9 path
