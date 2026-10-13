@@ -256,6 +256,8 @@ pub trait GraphicsBackend: Send + std::any::Any {
     /// Comparison markers default to unsupported, without side effects.
     fn native_compare_begin(&mut self, _begin: NativeCompareBegin) -> bool { false }
     fn native_compare_end(&mut self, _id: u64, job: NativeJob) -> Result<(), NativeJob> { Err(job) }
+    /// Advisory prefetch only: no guest-visible state and no completion required.
+    fn shader_created(&mut self, _tokens: std::sync::Arc<[u32]>) {}
     fn upload(&mut self, upload: Upload);
     fn draw(&mut self, draw: &DrawCall);
     /// `draw` with the call handed over: a backend that keeps it (a
