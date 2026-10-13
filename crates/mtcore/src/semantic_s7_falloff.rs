@@ -35,13 +35,13 @@ fn load(pg: Pages, m: &dyn Mem, address: u32) -> F {
 
 /// 0x00F2FFC0: see the module docs. Stack arguments: `[esp+4]` start
 /// position (two floats), `[esp+8]` velocity (two floats), `[esp+0xc]`
-/// total time, `[esp+0x10]` radius, `[esp+0x14]` scale, `[esp+0x18]`
-/// unused scratch.
+/// total time, `[esp+0x10]` radius, `[esp+0x14]` unused, `[esp+0x18]` scale
+/// (the original then reuses that slot as scratch).
 pub fn integrate_falloff(m: &mut dyn Mem, c: &mut Cpu) {
     let pg = Pages::of(m);
     let entry = c.esp;
     let this = c.ecx;
-    let inverse_scale = ONE / load(pg, m, entry.wrapping_add(0x14));
+    let inverse_scale = ONE / load(pg, m, entry.wrapping_add(0x18));
     let steps = pg.u32(m, this.wrapping_add(STEPS));
     // x87: time slice = total_time / steps (in extended precision), stored
     // as a float; the per-step displacement is velocity * the unrounded slice

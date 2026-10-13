@@ -58,7 +58,7 @@ class Oracle:
         uc.mem_write(STACK, bytes(rng.randrange(256) for _ in range(0x10000)))
         self.initial, self.written = {}, set()
         esp = SP - 28 - 4 * rng.randrange(4)
-        uc.mem_write(esp, struct.pack('<I', h.RET) + struct.pack('<II', POS, VEL) + f32(total) + f32(radius) + f32(scale) + struct.pack('<I', rng.randrange(1 << 32)))
+        uc.mem_write(esp, struct.pack('<I', h.RET) + struct.pack('<II', POS, VEL) + f32(total) + f32(radius) + f32(rng.uniform(-3, 3)) + f32(scale))
         start = [rng.randrange(1 << 32) for _ in range(8)]
         start[1], start[4] = THIS, esp
         for r, v in zip(REGS, start):
