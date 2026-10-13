@@ -846,6 +846,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             match c.by_content.get_mut(&key) {
                 Some((seen, p)) if same_part(p, &meta, alpha, &written, &banks) => {
                     *seen = c.frame;
+                    c.built[3] += 1;
                     p.clone()
                 }
                 _ => {
@@ -1510,6 +1511,9 @@ pub struct Caches {
     last: Option<LastDraw>,
     /// a copy of the D3D dirty index and its generation (`reads_dirty`)
     dirty: (u64, Vec<u32>),
+    /// since the last report: target parts and stream parts built, bindings
+    /// decoded, parts found by content (`report`)
+    built: [u64; 4],
     /// stream and target bindings by address, with the frame they were last
     /// built in (kept across frames: `kept_part`)
     streams: FxMap<u32, (u64, Result<Arc<StreamPart>, Refusal>)>,
@@ -1636,10 +1640,12 @@ fn kept_part<T: PartialEq>(
     frame: u64,
     key: u32,
     build: impl FnOnce() -> Result<T, Refusal>,
+    builds: &mut u64,
 ) -> Result<Arc<T>, Refusal> {
     match map.get_mut(&key) {
         Some((built, r)) if *built == frame => r.clone(),
         Some((built, r)) => {
+            *builds += 1;
             *built = frame;
             match (build(), &*r) {
                 (Ok(new), Ok(old)) if **old == new => {}
@@ -1648,6 +1654,7 @@ fn kept_part<T: PartialEq>(
             r.clone()
         }
         None => {
+            *builds += 1;
             let r = build().map(Arc::new);
             map.insert(key, (frame, r.clone()));
             r
@@ -1671,11 +1678,13 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     }
     let t = {
         let mut map = std::mem::take(&mut c.target_bindings);
-        let r = kept_part(&mut map, c.frame, targets, || target_part(&g, c, info, targets));
+        let mut builds = 0;
+        let r = kept_part(&mut map, c.frame, targets, || target_part(&g, c, info, targets), &mut builds);
+        c.built[0] += builds;
         c.target_bindings = map;
         r?
     };
-    let s = kept_part(&mut c.streams, c.frame, streams, || stream_part(&g, streams))?;
+    let s = kept_part(&mut c.streams, c.frame, streams, || stream_part(&g, streams), &mut c.built[1])?;
     // The constants as the original's apply (0x00DAA8B0) leaves them (L180):
     // it uploads nothing when the context already holds this binding, and
     // skips an upload whose value slot holds the same pointer as the
@@ -1741,6 +1750,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             // everything it writes is what the device holds
             let skipped = if previous == shader { b.written } else { [([0; 4], 0, 0); 2] };
             let (b, constants) = held_registers(b, skipped, held_constants.as_ref(), info.device)?;
+            c.built[2] += 1;
             (b, constants, false, true)
         }
     };
@@ -2347,6 +2357,8 @@ struct Frame {
 #[derive(Default)]
 struct Totals {
     frames: u64,
+    /// Caches::built
+    built: [u64; 4],
     kinds: [u64; 16],
     scene_draws: u64,
     other_draws: u64,
@@ -2678,6 +2690,9 @@ impl Inner {
         t.shaders += f.shaders.len() as u64;
         t.streams += f.streams.len() as u64;
         t.targets += f.targets.len() as u64;
+        for (total, n) in t.built.iter_mut().zip(std::mem::take(&mut g.caches.built)) {
+            *total += n;
+        }
         if g.since.elapsed() >= every {
             report(mode, t);
             if mode == Mode::Compare {
@@ -2704,6 +2719,10 @@ fn report(mode: Mode, t: &Totals) {
     let other: u64 = t.kinds[8..].iter().sum();
     out += &format!("  {:>18}: {:8.1}\n", "types 8-15", per(other));
     out += &format!("  draws into the largest colour target {:.1}, into others {:.1}\n", per(t.scene_draws), per(t.other_draws));
+    out += &format!(
+        "  built: target parts {:.1}, stream parts {:.1}, bindings decoded {:.1} (parts found by content {:.1})\n",
+        per(t.built[0]), per(t.built[1]), per(t.built[2]), per(t.built[3])
+    );
     out += &format!("  distinct objects: states {:.1}, shader bindings {:.1}, stream bindings {:.1}, target bindings {:.1}\n",
                     per(t.states), per(t.shaders), per(t.streams), per(t.targets));
     let decided = t.taken + t.refused.values().sum::<u64>();
@@ -2823,21 +2842,23 @@ mod tests {
     #[test]
     fn kept_parts_are_rebuilt_each_frame_and_reused_when_unchanged() {
         let mut map: FxMap<u32, (u64, Result<Arc<u32>, Refusal>)> = FxMap::default();
-        let first = kept_part(&mut map, 1, 7, || Ok(5)).unwrap();
+        let first = kept_part(&mut map, 1, 7, || Ok(5), &mut 0).unwrap();
         let mut built = false;
+        let mut builds = 0;
         let same = kept_part(&mut map, 1, 7, || {
             built = true;
             Ok(6)
-        })
+        }, &mut builds)
         .unwrap();
+        assert_eq!(builds, 0);
         assert!(!built && Arc::ptr_eq(&first, &same));
-        let unchanged = kept_part(&mut map, 2, 7, || Ok(5)).unwrap();
+        let unchanged = kept_part(&mut map, 2, 7, || Ok(5), &mut 0).unwrap();
         assert!(Arc::ptr_eq(&first, &unchanged));
-        let changed = kept_part(&mut map, 3, 7, || Ok(6)).unwrap();
+        let changed = kept_part(&mut map, 3, 7, || Ok(6), &mut 0).unwrap();
         assert_eq!(*changed, 6);
-        assert!(matches!(kept_part(&mut map, 4, 7, || Err(Refusal::Missing)), Err(Refusal::Missing)));
-        assert!(matches!(kept_part(&mut map, 4, 7, || Ok(1)), Err(Refusal::Missing)));
-        assert_eq!(*kept_part(&mut map, 5, 7, || Ok(1)).unwrap(), 1);
+        assert!(matches!(kept_part(&mut map, 4, 7, || Err(Refusal::Missing), &mut 0), Err(Refusal::Missing)));
+        assert!(matches!(kept_part(&mut map, 4, 7, || Ok(1), &mut 0), Err(Refusal::Missing)));
+        assert_eq!(*kept_part(&mut map, 5, 7, || Ok(1), &mut 0).unwrap(), 1);
     }
 
     #[test]
