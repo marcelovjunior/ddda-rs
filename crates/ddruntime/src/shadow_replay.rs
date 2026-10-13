@@ -34,6 +34,8 @@ static SAMPLE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_START: OnceLock<std::time::Instant> = OnceLock::new();
 #[path = "shadow_replay_file.rs"]
 mod capture_file;
+#[path = "shadow_replay_sequences.rs"]
+mod sequences;
 thread_local! {
     static IN_SHADOW: Cell<bool> = const { Cell::new(false) };
     static REPLAY: RefCell<Option<Rc<Replay>>> = const { RefCell::new(None) };
