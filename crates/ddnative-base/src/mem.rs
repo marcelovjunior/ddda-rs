@@ -323,8 +323,21 @@ impl dyn Mem + '_ {
     }
     #[inline(never)]
     pub fn fast_u32(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
+        if addr & 3 != 0 { return self.unaligned_u32(pt, addr); }
+        // Four-aligned words cannot cross a page. Querying one byte avoids a
+        // second straddle test; backing and read permission still apply.
+        match allowed(pt, addr, 1, READ) {
+            // SAFETY: pages are PAGE-aligned; this word is aligned and backed.
+            // Acquire is also valid before parallel mode and costs one host
+            // move on x86-64, without loading ATOMIC_ACCESSES.
+            Some(p) => unsafe { u32::from_le((*(p as *const AtomicU32)).load(Ordering::Acquire)) },
+            None => self.u32(addr),
+        }
+    }
+    #[inline]
+    fn unaligned_u32(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
         match allowed(pt, addr, 4, READ) {
-            // SAFETY: 4 bytes inside a backed page
+            // SAFETY: all four bytes are inside a backed page.
             Some(p) => unsafe { load_at(p, 4) },
             None => self.u32(addr),
         }
@@ -347,8 +360,17 @@ impl dyn Mem + '_ {
     }
     #[inline(never)]
     pub fn fast_set_u32(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u32) {
+        if addr & 3 != 0 { return self.unaligned_set_u32(pt, addr, v); }
+        match allowed(pt, addr, 1, WRITE) {
+            // SAFETY: as in fast_u32, an aligned word cannot straddle a page.
+            Some(p) => unsafe { (*(p as *const AtomicU32)).store(v.to_le(), Ordering::Release) },
+            None => self.set_u32(addr, v),
+        }
+    }
+    #[inline]
+    fn unaligned_set_u32(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u32) {
         match allowed(pt, addr, 4, WRITE) {
-            // SAFETY: 4 bytes inside a backed page
+            // SAFETY: all four bytes are inside a backed page.
             Some(p) => unsafe { store_at(p, 4, v) },
             None => self.set_u32(addr, v),
         }
