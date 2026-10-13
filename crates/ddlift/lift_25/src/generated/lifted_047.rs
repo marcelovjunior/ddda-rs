@@ -415,8 +415,8 @@ pub fn f_00cf90e0(m: &mut dyn Mem, cpu: &mut Cpu) {
             0xCF9135 => { cpu.ecx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x8)); cpu.eax = cpu.edx.wrapping_add(0x4); emit::push(cpu.eax, m, pt, cpu); { let t = cpu.esi; emit::push(0xCF913E, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
             0xCF9142 => { cpu.eax = m.fast_u32(pt, cpu.edx); cpu.esi = cpu.eax.wrapping_add(0x8); let l129_condition = (((cpu.eax) & (cpu.eax)) as i32) != 0; pc = if l129_condition { 0xCF914E } else { 0xCF914B }; continue; }
             0xCF914B => { cpu.esi = cpu.edx.wrapping_add(0x4); pc = 0xCF914E; continue; }
-            0xCF914E => { cpu.edx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x1C)); cpu.edx = cpu.fl.alu_add(cpu.edx, m.fast_u32(pt, cpu.ecx.wrapping_add(0xC)), 32); pc = 0xCF9154; continue; }
-            0xCF9154 => { cpu.eax = (cpu.eax & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.esi) as u32)) & 0xFF) << 0); m.fast_set_u8(pt, cpu.edx, (((cpu.eax >> 0) & 0xFF)) as u8); { let a = cpu.esi & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.fl.inc_dec(x86::INC, a, r, 32); cpu.esi = r; } cpu.edx = cpu.edx.wrapping_add(1); cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) != 0) { 0xCF9154 } else { 0xCF915E }; continue; }
+            0xCF914E => { cpu.edx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x1C)); cpu.edx = cpu.edx.wrapping_add(m.fast_u32(pt, cpu.ecx.wrapping_add(0xC))); pc = 0xCF9154; continue; }
+            0xCF9154 => { cpu.eax = (cpu.eax & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.esi) as u32)) & 0xFF) << 0); m.fast_set_u8(pt, cpu.edx, (((cpu.eax >> 0) & 0xFF)) as u8); cpu.esi = cpu.esi.wrapping_add(1); cpu.edx = cpu.edx.wrapping_add(1); cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) != 0) { 0xCF9154 } else { 0xCF915E }; continue; }
             0xCF915E => { cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return; }
             _ => unreachable!(),
         }

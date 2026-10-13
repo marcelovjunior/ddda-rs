@@ -199,7 +199,7 @@ pub fn f_010fa890(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x10FA890;
     loop {
         match pc {
-            0x10FA890 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x3C)); cpu.eax = cpu.eax >> 0xCu32; cpu.eax = cpu.fl.alu_and(cpu.eax, 0xFu32, 32); cpu.eax = cpu.eax.wrapping_sub(1); cpu.fl.alu_sub(cpu.eax, 0x5u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x10FA8AC } else { 0x10FA89F }; continue; }
+            0x10FA890 => { cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x3C)); cpu.eax = cpu.eax >> 0xCu32; cpu.eax = cpu.eax & 0xFu32; cpu.eax = cpu.eax.wrapping_sub(1); cpu.fl.alu_sub(cpu.eax, 0x5u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x10FA8AC } else { 0x10FA89F }; continue; }
             0x10FA89F => { pc = m.fast_u32(pt, cpu.eax.wrapping_mul(4).wrapping_add(0x10FA8B4)); continue; }
             0x10FA8A6 => { cpu.eax = 0x10u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             0x10FA8AC => { cpu.eax = 0x4u32; cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
@@ -486,7 +486,7 @@ pub fn f_010fb320(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x10FB320;
     loop {
         match pc {
-            0x10FB320 => { cpu.ecx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x3C)); cpu.edx = cpu.ecx; cpu.edx = cpu.edx >> 0xCu32; cpu.edx = cpu.fl.alu_and(cpu.edx, 0xFu32, 32); cpu.edx = cpu.edx.wrapping_sub(1); cpu.eax = cpu.eax ^ cpu.eax; cpu.fl.alu_sub(cpu.edx, 0x5u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x10FB3A9 } else { 0x10FB333 }; continue; }
+            0x10FB320 => { cpu.ecx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x3C)); cpu.edx = cpu.ecx; cpu.edx = cpu.edx >> 0xCu32; cpu.edx = cpu.edx & 0xFu32; cpu.edx = cpu.edx.wrapping_sub(1); cpu.eax = cpu.eax ^ cpu.eax; cpu.fl.alu_sub(cpu.edx, 0x5u32, 32); pc = if (cpu.fl.a > cpu.fl.b) { 0x10FB3A9 } else { 0x10FB333 }; continue; }
             0x10FB333 => { cpu.edx = (m.fast_u8(pt, cpu.edx.wrapping_add(0x10FB3B8)) as u32); pc = m.fast_u32(pt, cpu.edx.wrapping_mul(4).wrapping_add(0x10FB3B0)); continue; }
             0x10FB341 => { cpu.fl.alu_and(cpu.ecx, 0x10000000u32, 32); cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0x4)); pc = if cpu.fl.zf() { 0x10FB353 } else { 0x10FB34D }; continue; }
             0x10FB34D => { let l129_condition = (((((m.fast_u8(pt, cpu.ecx.wrapping_add(0xF)) as u32)) & 0xFF) & ((0x1u32) & 0xFF)) as i8) != 0; pc = if l129_condition { 0x10FB3A9 } else { 0x10FB353 }; continue; }
