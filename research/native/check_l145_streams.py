@@ -271,6 +271,46 @@ def record_guards(path):
     print(f'guards={len(records)} bytes={len(content)} sha256={hashlib.sha256(content).hexdigest()}',flush=True)
 
 
+def record_tables(path):
+    """Original cf30c0 leaf including malformed trees and table exhaustion."""
+    fixed=[8]*144+[9]*112+[7]*24+[8]*8
+    trees=[[],[0]*32,[1],[1,1],[1,1,1],[2,2],[2]*4,
+           [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,15],
+           fixed,[5]*32,[11]*2048]
+    records=[]
+    for kind in (0,1,2):
+        for index,lengths in enumerate(trees):
+            if (kind == 0 and len(lengths) > 19) or (kind == 2 and len(lengths) > 32): continue
+            for root in (1,9,15):
+                machine=Machine(b'',0x20000,1)
+                # Guard/padding bytes and all caller-saved state are nonzero.
+                machine.uc.mem_write(h.SCRATCH,random.Random(156).randbytes(0x10000))
+                machine.uc.mem_write(ESP-512,random.Random(157).randbytes(576))
+                lens,work,table=h.SCRATCH+0x100,h.SCRATCH+0x2000,OUTPUT
+                machine.uc.mem_write(lens,struct.pack('<'+'H'*len(lengths),*lengths))
+                machine.set_word(h.SCRATCH,table)
+                machine.set_word(h.SCRATCH+4,root)
+                for i,register in enumerate(REGS): machine.uc.reg_write(register,0x12340000+i*0x102)
+                machine.uc.reg_write(xc.UC_X86_REG_ESP,ESP)
+                machine.uc.mem_write(ESP,struct.pack('<7I',h.RET,kind,lens,len(lengths),h.SCRATCH,h.SCRATCH+4,work))
+                def snapshot():
+                    windows=[(h.SCRATCH,bytes(machine.uc.mem_read(h.SCRATCH,0x10000))),
+                             (ESP-512,bytes(machine.uc.mem_read(ESP-512,576))),
+                             (0x1403f00,bytes(machine.uc.mem_read(0x1403f00,0x1000))),
+                             (OUTPUT,bytes(machine.uc.mem_read(OUTPUT,0x20000)))]
+                    result=struct.pack('<41II',*machine.registers(),len(windows))
+                    for address,data in windows: result+=struct.pack('<II',address,len(data))+data
+                    return result
+                initial=snapshot()
+                try: machine.run_original(0xcf30c0,h.RET)
+                except Exception as error: raise RuntimeError(f"table kind={kind} tree={index} root={root}") from error
+                records.append(initial+snapshot())
+    content=b'L156TB01'+struct.pack('<I',len(records))+b''.join(records)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_bytes(content)
+    print(f'tables={len(records)} bytes={len(content)} sha256={hashlib.sha256(content).hexdigest()}',flush=True)
+
+
 def bench_image(path,root):
     def windows(pairs):
         content=struct.pack('<I',len(pairs))
@@ -298,10 +338,16 @@ def main():
     parser.add_argument('--install', type=Path, default=Path('E:/SteamLibrary/steamapps/common/DDDA/nativePC'))
     parser.add_argument('--original-lift', action='store_true')
     parser.add_argument('--fast', action='store_true', help='actual native fast leaf through page-backed guest memory')
+    parser.add_argument('--table', action='store_true', help='native exact Huffman builder')
+    parser.add_argument('--wide', action='store_true', help='L156 FAST=2 page-backed decoder')
     parser.add_argument('--extended', action='store_true')
+    parser.add_argument('--record-tables', type=Path)
     parser.add_argument('--record-guards', type=Path)
     parser.add_argument('--bench-image', type=Path)
     args = parser.parse_args()
+    if args.record_tables:
+        record_tables(args.record_tables)
+        return
     if args.record_guards:
         record_guards(args.record_guards)
         return
@@ -312,8 +358,8 @@ def main():
     bridge = dll.l145_inflate
     bridge.argtypes = [c.POINTER(Window), c.c_size_t, c.POINTER(c.c_uint32), CALLEE, c.c_uint32]
     bridge.restype = c.c_uint32
-    implementation=(0 if args.original_lift else 1)+(2 if args.fast else 0)
-    print(f'oracle implementation={implementation} fast_pages={args.fast} original_lift={args.original_lift} dll_sha256={hashlib.sha256(args.dll.read_bytes()).hexdigest()}',flush=True)
+    implementation=(0 if args.original_lift else 1)+(10 if args.wide else 2 if args.fast else 0)+(16 if args.table else 0)
+    print(f'oracle implementation={implementation} fast_pages={args.fast or args.wide} table_port={args.table} original_lift={args.original_lift} dll_sha256={hashlib.sha256(args.dll.read_bytes()).hexdigest()}',flush=True)
     cases = [(name,data,wrap,(8192,16384),0,0) for name,data,wrap in archives(args.install)]
     payload = b'original streaming boundary check' * 16
     for chunks in [(1,1),(5,257),(6,258),(4096,4096)]:
