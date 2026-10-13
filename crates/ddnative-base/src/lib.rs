@@ -2,6 +2,7 @@
 //! This crate has no dependency on the generated code.
 pub mod mem;
 pub mod execution;
+pub mod hooks;
 pub mod platform;
 pub mod x86;
 pub mod x87;

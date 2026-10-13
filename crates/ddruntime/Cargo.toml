@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 unicorn-engine = { version = "=2.0.1", optional = true }
 ddnative-base = { path = "../ddnative-base" }
+ddnative-host = { path = "../ddnative-host" }
 ddnative = { path = "../ddnative", optional = true }
 ddports = { path = "../ddports", optional = true }
 # `crt-check` (L67): only the two shards holding the CRT routines, for

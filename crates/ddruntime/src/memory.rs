@@ -362,7 +362,7 @@ impl Mem for GuestMemory {
         // the serial-mode preemption point (L57b; the title's Vorbis decoder
         // calls small call-free leaves directly and held the lock for
         // seconds). One relaxed load unless a runnable thread waits.
-        if ddnative_base::x86::PREEMPT.load(std::sync::atomic::Ordering::Relaxed) {
+        if ddnative_host::PREEMPT.load(std::sync::atomic::Ordering::Relaxed) {
             crate::threads::preempt_entry();
         }
         Some(std::ptr::NonNull::from(&*self.space))

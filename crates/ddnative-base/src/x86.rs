@@ -149,65 +149,15 @@ pub fn set_lifted_lookup(lookup: LiftLookup) {
 }
 
 /// Ordinary lifted call: the caller already performed any stack push.
-/// Copy the function pointer before calling, so nested calls are reentrant.
-#[inline]
-pub fn call_lifted(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
-    if PREEMPT.load(std::sync::atomic::Ordering::Relaxed) {
-        preempt_point();
-    }
-    let f = lifted_target(target);
-    f(m, cpu);
-}
-
-/// Set by the runtime while another guest thread waits for the guest lock
-/// (serial mode). Lifted calls are then preemption points: without them a
-/// thread whose loops make no service call (the game's Vorbis decoder)
-/// holds the lock for seconds and starves the main loop. The real OS may
-/// switch threads at any instruction, so a call boundary is a legal point.
-pub static PREEMPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static PREEMPT_HOOK: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
-
-/// The runtime's preemption check (it yields when the time slice is used).
-pub fn set_preempt_hook(hook: fn()) {
-    let _ = PREEMPT_HOOK.set(hook);
-}
-
-/// The preemption point: the runtime's hook decides (its own rate limit,
-/// the clock, the lock), so tuning it rebuilds only the runtime (L60).
-#[cold]
+/// What happens on the way to the callee (preemption points, the dispatch
+/// cache, the lookup) is the runtime's (crate::hooks, L74). Not inline:
+/// the shards (opt-level 0 or 1, where LLVM does not inline it anyway)
+/// call this one copy, compiled at the runtime's opt-level, instead of a
+/// local unoptimised copy of it and of `OnceLock::get` (hookbench: 29 ns
+/// per call inline at opt-level 0).
 #[inline(never)]
-fn preempt_point() {
-    if let Some(hook) = PREEMPT_HOOK.get() {
-        hook();
-    }
-}
-
-/// Slots of the per-thread cache of resolved lifted targets.
-const RESOLVED_SLOTS: usize = 4096;
-
-thread_local! {
-    /// Lifted targets already resolved on this thread, direct-mapped by
-    /// address: a cross-shard call resolves its target once instead of
-    /// searching the shard's table every time. The program's lookup never
-    /// changes once installed (set_lifted_lookup), so entries never go stale.
-    static RESOLVED: [std::cell::Cell<(u32, Option<LiftFn>)>; RESOLVED_SLOTS] =
-        const { [const { std::cell::Cell::new((0, None)) }; RESOLVED_SLOTS] };
-}
-
-/// The lifted function at `target` (what `call_lifted` calls).
-#[inline]
-pub fn lifted_target(target: u32) -> LiftFn {
-    // functions are mostly 16-byte aligned: drop those bits, fold the high ones in
-    let slot = ((target >> 4) ^ (target >> 16)) as usize & (RESOLVED_SLOTS - 1);
-    let hit = RESOLVED.with(|r| match r[slot].get() {
-        (t, Some(f)) if t == target => Some(f),
-        _ => None,
-    });
-    hit.unwrap_or_else(|| {
-        let f = lifted_target_uncached(target);
-        RESOLVED.with(|r| r[slot].set((target, Some(f))));
-        f
-    })
+pub fn call_lifted(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
+    (crate::hooks::get().call_lifted)(m, cpu, target)
 }
 
 /// The lifted function at `target`, from the program's lookup (no cache):

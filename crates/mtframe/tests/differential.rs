@@ -148,6 +148,7 @@ fn replay_lift_calls(c: &Value) -> Rc<RefCell<VecDeque<Value>>> {
 // verifies 0x0084CCC0 0x00A36DF0 0x00E6C260 0x00F0C160 0x00FB64D0 0x011E48E0
 #[test]
 fn ports_replay_the_lifted_vectors() {
+    ddnative_host::install();
     let Some(cases) = vectors("frame_lift") else { return };
     x86::set_lifted_lookup(lookup);
     let mut seen = std::collections::BTreeSet::new();
@@ -322,6 +323,7 @@ fn set_fpcw(cpu: &mut Cpu, cw: u16) {
 // verifies 0x0084CCC0 0x00A36DF0 0x00E6C260 0x00F0C160 0x00FB64D0 0x011E48E0
 #[test]
 fn ports_match_the_original_on_edge_cases() {
+    ddnative_host::install();
     let Some(cases) = vectors("frame_edge") else { return };
     x86::set_lifted_lookup(lookup);
     let mut seen = std::collections::BTreeSet::new();

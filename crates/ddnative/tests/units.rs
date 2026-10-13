@@ -21,6 +21,7 @@ mod x87_hardware {
 
     #[test]
     fn x87_copy_matches_the_cpu() {
+        ddnative_host::install();
         let mut cases = vec![0, 0x8000_0000, 0x3F80_0000, 0x7F80_0000, 0xFF80_0000,
             0x7F80_0001, 0xFFA0_0000, 0x7FBF_FFFF, 0x7FC0_0001, 0xFFC0_0000, 0x0000_0001];
         let mut x = 0x1234_5678u32;
@@ -41,6 +42,7 @@ mod alu {
 
     #[test]
     fn compact_binary_alu_matches_literal_templates() {
+        ddnative_host::install();
         let ops: [(u8, fn(&mut Flags, u32, u32, u32) -> u32); 5] = [
             (ADD, Flags::alu_add), (SUB, Flags::alu_sub),
             (LOGIC, Flags::alu_and), (LOGIC, Flags::alu_or), (LOGIC, Flags::alu_xor),
@@ -86,6 +88,7 @@ mod x87_exact {
     }
     #[test]
     fn extended_values_and_precision_control() {
+        ddnative_host::install();
         for (cw, want) in [(0x037f, 1), (0x027f, 0), (0x007f, 0)] {
             let mut x = X87::default(); control(&mut x, cw);
             load_i64(&mut x, 1i64 << 60); x.register::<0xe8d9>(); // fld1
@@ -97,6 +100,7 @@ mod x87_exact {
     }
     #[test]
     fn rounding_and_integer_indefinite() {
+        ddnative_host::install();
         for (rc, positive, negative) in [(0, 2, -2), (1, 1, -2), (2, 2, -1), (3, 1, -1)] {
             let mut x = X87::default(); control(&mut x, 0x037f | rc << 10);
             x.push(1.5f32.to_bits()); assert_eq!(integer(&mut x), positive);
@@ -107,6 +111,7 @@ mod x87_exact {
     }
     #[test]
     fn compare_status_top_and_flags() {
+        ddnative_host::install();
         assert_eq!(Flags::default().lahf(), 2);
         assert_eq!(Flags::new(ADD, 15, 1, 16, 32).lahf() & 0x10, 0x10);
         for (a, b, condition) in [(1., 2., 0x100), (2., 1., 0), (1., 1., 0x4000)] {
@@ -123,6 +128,7 @@ mod x87_exact {
     }
     #[test]
     fn qword_registers_sqrt_and_host_state() {
+        ddnative_host::install();
         let mut x = X87::default();
         let mut data = [0; 10]; data[..8].copy_from_slice(&(1.0f64 + f64::EPSILON).to_bits().to_le_bytes());
         x.exec::<0x00dd>(&mut data); x.register::<0xc0d9>(); // fld st(0)
@@ -138,6 +144,7 @@ mod x87_exact {
     }
     #[test]
     fn arithmetic_flags_compare() {
+        ddnative_host::install();
         let mut x = X87::default(); x.push(2f32.to_bits()); x.push(1f32.to_bits());
         let f = x.compare_flags::<0xf1df>(); // fcomip st(0),st(1)
         assert!(f.cf()); assert!(!f.zf()); assert!(!f.of()); assert!(!f.af());

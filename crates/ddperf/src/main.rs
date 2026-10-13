@@ -488,7 +488,7 @@ fn run_micro() {
         let mut acc = 0usize;
         for k in 0..N as usize {
             let a = targets[k % targets.len()];
-            let f = if cached { x86::lifted_target(a) } else { x86::lifted_target_uncached(a) };
+            let f = if cached { ddnative_host::lifted_target(a) } else { x86::lifted_target_uncached(a) };
             acc = acc.wrapping_add(f as usize);
         }
         let ns = t.elapsed().as_secs_f64() * 1e9 / N as f64;
@@ -518,6 +518,7 @@ fn run_micro() {
 
 fn main() {
     // the readable ports over their lifted bodies, as the runtime has them (L60)
+    ddnative_host::install();
     ddports::ensure();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flag = |name: &str| args.iter().any(|a| a == name);

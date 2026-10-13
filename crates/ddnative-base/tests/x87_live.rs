@@ -38,6 +38,7 @@ fn program(st: &mut X87, a: f32, b: f32, between: &mut dyn FnMut()) -> (u64, u64
 
 #[test]
 fn interleaved_states_equal_separate_runs() {
+    ddnative_host::install();
     let alone_a = program(&mut X87::default(), 1.5, 2.25, &mut || {});
     let alone_b = program(&mut X87::default(), -7.0, 0.1, &mut || {});
     assert_ne!(alone_a, alone_b);
@@ -59,6 +60,7 @@ fn interleaved_states_equal_separate_runs() {
 
 #[test]
 fn snapshots_while_live_change_nothing() {
+    ddnative_host::install();
     let mut st = X87::default();
     load(&mut st, 2.5);
     load(&mut st, 4.0);
@@ -80,6 +82,7 @@ fn snapshots_while_live_change_nothing() {
 
 #[test]
 fn fnsave_frstor_round_trip_while_live() {
+    ddnative_host::install();
     struct Buf([u8; 256]);
     impl ddnative_base::mem::Mem for Buf {
         fn u8(&self, a: u32) -> u8 { self.0[a as usize] }
@@ -101,6 +104,7 @@ fn fnsave_frstor_round_trip_while_live() {
 
 #[test]
 fn a_state_moved_to_another_thread_after_parking_is_refused() {
+    ddnative_host::install();
     let mut st = X87::default();
     load(&mut st, 1.0);
     let r = std::thread::spawn(move || {

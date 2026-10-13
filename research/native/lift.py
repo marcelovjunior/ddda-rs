@@ -3385,6 +3385,8 @@ impl ddnative::platform::Machine for Recorded {{
 #[test]
 fn every_lifted_function_matches_the_original() {{
     let Some(cases) = vectors("lift") else {{ return }};
+    // the lifted code's slow paths (dispatch cache, x87 state; L74)
+    ddnative_host::install();
     let all = lifted::all();
     let table = Rc::new(lifted::dispatch_table());
     let mut seen = std::collections::HashSet::new();

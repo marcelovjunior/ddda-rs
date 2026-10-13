@@ -1,0 +1,12 @@
+[package]
+name = "ddnative-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The runtime policy behind the lifted code's slow paths (L74): no shard
+# depends on this crate, so changing it rebuilds this crate and the
+# runtime, not the 32 ddlift shards (crates/ddnative-base/src/hooks.rs).
+[dependencies]
+ddnative-base = { path = "../ddnative-base" }

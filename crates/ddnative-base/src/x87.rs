@@ -17,12 +17,15 @@
 //! SSE/MXCSR are untouched. `X87` has no `Drop` (drop glue would give every
 //! lifted function an unwind cleanup): an X87 dropped while live leaves a
 //! stale table entry behind, which is harmless.
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+//!
+//! This file holds what the lifted code compiles against: the state, the
+//! instructions and the inline check whether a state is live (L74). The
+//! live/spill bookkeeping (acquiring, parking, the spill table, the TEB
+//! slot's allocation) is crates/ddnative-host's, behind [`crate::hooks`].
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The FNINIT state: control 037Fh (all exceptions masked), tags empty.
-const INIT: [u8; 108] = {
+pub const INIT: [u8; 108] = {
     let mut state = [0; 108];
     state[0] = 0x7f;
     state[1] = 0x03;
@@ -31,35 +34,25 @@ const INIT: [u8; 108] = {
     state
 };
 /// No X87 is live on this thread (ids start at 1).
-const NONE: u64 = 0;
+pub const NONE: u64 = 0;
 /// An X87 that was never live has no id yet.
-const UNASSIGNED: u64 = u64::MAX;
+pub const UNASSIGNED: u64 = u64::MAX;
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// The Windows TLS slot (TEB TlsSlots at gs:[0x1480], 64 slots) holding
+/// the id of the state live on the current thread: one instruction on the
+/// per-x87-instruction path. `thread_local!` costs a call there at
+/// opt-level 1 (L62 profile: 14% of the sound decoder thread). The host
+/// allocates it; 64 or more means unavailable, and the live id comes from
+/// the `x87_live` hook.
+pub static LIVE_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
 
-thread_local! {
-    /// The id of the X87 whose state is in this thread's FPU (where the
-    /// TEB slot below is unavailable).
-    static LIVE: Cell<u64> = const { Cell::new(NONE) };
-    /// States displaced from this thread's FPU, by X87 id.
-    static SPILLED: RefCell<HashMap<u64, [u8; 108]>> = RefCell::new(HashMap::new());
-    /// This thread's own control word, restored by [`park`].
-    static HOST_CW: Cell<Option<u16>> = const { Cell::new(None) };
-    static TOKEN: u64 = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-}
-
-/// The live id lives in a Windows TLS slot read straight from the TEB
-/// (TlsSlots at gs:[0x1480], 64 slots): one instruction on the per-x87
-/// instruction path. `thread_local!` costs a call there at opt-level 1
-/// (L62 profile: 14% of the sound decoder thread).
-static SLOT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
-
+/// The id of the state live on this thread's FPU (NONE if none).
 #[cfg(all(windows, target_arch = "x86_64"))]
 #[inline(always)]
-fn live() -> u64 {
-    let slot = SLOT.load(Ordering::Relaxed);
+pub fn live_id() -> u64 {
+    let slot = LIVE_SLOT.load(Ordering::Relaxed);
     if slot >= 64 {
-        return LIVE.with(Cell::get);
+        return (crate::hooks::get().x87_live)();
     }
     let v: u64;
     // SAFETY: TEB TlsSlots[slot] of the current thread, a slot this
@@ -69,53 +62,19 @@ fn live() -> u64 {
     v
 }
 
-#[cfg(all(windows, target_arch = "x86_64"))]
-fn set_live(v: u64) {
-    let mut slot = SLOT.load(Ordering::Relaxed);
-    if slot == u32::MAX {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn TlsAlloc() -> u32;
-        }
-        // SAFETY: plain Win32 call; one slot for the process, never freed
-        let new = unsafe { TlsAlloc() };
-        let new = if new < 64 { new } else { 64 }; // 64+: the thread_local fallback
-        slot = match SLOT.compare_exchange(u32::MAX, new, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => new,
-            Err(won) => won,
-        };
-    }
-    if slot >= 64 {
-        LIVE.with(|l| l.set(v));
-        return;
-    }
-    // SAFETY: as in live()
-    unsafe { std::arch::asm!("mov qword ptr gs:[{off}], {v}", v = in(reg) v, off = in(reg) 0x1480 + 8 * slot as u64,
-                             options(nostack, preserves_flags)) }
-}
-
 #[cfg(not(all(windows, target_arch = "x86_64")))]
 #[inline(always)]
-fn live() -> u64 {
-    LIVE.with(Cell::get)
-}
-
-#[cfg(not(all(windows, target_arch = "x86_64")))]
-fn set_live(v: u64) {
-    LIVE.with(|l| l.set(v))
-}
-
-fn token() -> u64 {
-    TOKEN.with(|t| *t)
+pub fn live_id() -> u64 {
+    (crate::hooks::get().x87_live)()
 }
 
 pub struct X87 {
     /// The state while `home` is 0; otherwise stale.
-    state: [u8; 108],
-    /// Identity in the live/spilled tables (UNASSIGNED: never live).
-    id: u64,
+    pub state: [u8; 108],
+    /// Identity in the host's live/spilled tables (UNASSIGNED: never live).
+    pub id: u64,
     /// The host thread whose FPU or spill table holds the state (0: none).
-    home: u64,
+    pub home: u64,
 }
 
 impl Default for X87 {
@@ -139,52 +98,12 @@ impl std::fmt::Debug for X87 {
 /// Displace this thread's live guest x87 state (if any) into the spill
 /// table and give the FPU back to host code (FNINIT state with the
 /// thread's own control word). The owner reloads it on its next
-/// instruction.
+/// instruction. Without hooks nothing was ever made live.
 pub fn park() {
-    let live = live();
-    if live == NONE {
-        return;
-    }
-    let mut image = [0u8; 108];
-    fnsave_host(&mut image);
-    image[12..28].fill(0);
-    SPILLED.with(|s| s.borrow_mut().insert(live, image));
-    set_live(NONE);
-    if let Some(cw) = HOST_CW.with(Cell::get) {
-        fldcw_host(cw);
+    if let Some(h) = crate::hooks::try_get() {
+        (h.x87_park)();
     }
 }
-
-#[cfg(target_arch = "x86_64")]
-fn fnsave_host(image: &mut [u8; 108]) {
-    unsafe { std::arch::asm!("fnsave [{}]", in(reg) image.as_mut_ptr()) }
-}
-
-#[cfg(target_arch = "x86_64")]
-fn frstor_host(image: &[u8; 108]) {
-    unsafe { std::arch::asm!("frstor [{}]", in(reg) image.as_ptr()) }
-}
-
-#[cfg(target_arch = "x86_64")]
-fn fldcw_host(cw: u16) {
-    unsafe { std::arch::asm!("fldcw [{}]", in(reg) &cw) }
-}
-
-#[cfg(target_arch = "x86_64")]
-fn fnstcw_host() -> u16 {
-    let mut cw = 0u16;
-    unsafe { std::arch::asm!("fnstcw [{}]", in(reg) &mut cw) }
-    cw
-}
-
-#[cfg(not(target_arch = "x86_64"))]
-fn fnsave_host(_: &mut [u8; 108]) { panic!("exact lifted x87 requires an x86-64 host") }
-#[cfg(not(target_arch = "x86_64"))]
-fn frstor_host(_: &[u8; 108]) { panic!("exact lifted x87 requires an x86-64 host") }
-#[cfg(not(target_arch = "x86_64"))]
-fn fldcw_host(_: u16) { panic!("exact lifted x87 requires an x86-64 host") }
-#[cfg(not(target_arch = "x86_64"))]
-fn fnstcw_host() -> u16 { panic!("exact lifted x87 requires an x86-64 host") }
 
 impl X87 {
     pub fn control(&self) -> u16 { let s = self.image(); u16::from_le_bytes([s[0], s[1]]) }
@@ -214,29 +133,13 @@ impl X87 {
         if self.home == 0 {
             return self.state;
         }
-        assert_eq!(self.home, token(), "x87 state used on another host thread than the one it is live on");
-        let mut image = if live() == self.id {
-            let mut image = [0u8; 108];
-            fnsave_host(&mut image);
-            frstor_host(&image);
-            image
-        } else {
-            SPILLED.with(|s| *s.borrow().get(&self.id).expect("spilled x87 state"))
-        };
-        image[12..28].fill(0);
-        image
+        (crate::hooks::get().x87_image)(self)
     }
 
     /// Replace the state (it is no longer live or spilled anywhere).
     fn set_image(&mut self, image: [u8; 108]) {
         if self.home != 0 {
-            assert_eq!(self.home, token(), "x87 state used on another host thread than the one it is live on");
-            if live() == self.id {
-                set_live(NONE);
-            } else {
-                SPILLED.with(|s| s.borrow_mut().remove(&self.id));
-            }
-            self.home = 0;
+            (crate::hooks::get().x87_release)(self);
         }
         self.state = image;
     }
@@ -245,25 +148,7 @@ impl X87 {
     #[cold]
     #[inline(never)]
     fn acquire(&mut self) {
-        let me = token();
-        if self.id == UNASSIGNED {
-            self.id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        }
-        let image = if self.home == 0 {
-            self.state
-        } else {
-            assert_eq!(self.home, me, "x87 state used on another host thread than the one it is live on");
-            SPILLED.with(|s| s.borrow_mut().remove(&self.id)).expect("spilled x87 state")
-        };
-        // Unmasked exceptions are unsupported (a guest trap must not trap Rust).
-        assert_eq!(image[0] & 0x3f, 0x3f, "unmasked guest x87 exceptions");
-        if HOST_CW.with(Cell::get).is_none() {
-            HOST_CW.with(|c| c.set(Some(fnstcw_host())));
-        }
-        park();
-        frstor_host(&image);
-        set_live(self.id);
-        self.home = me;
+        (crate::hooks::get().x87_acquire)(self)
     }
 
     /// Execute a statically selected x87 opcode. OP is the opcode byte plus
@@ -302,7 +187,7 @@ impl X87 {
         if OP == 0x28d9 {
             assert_eq!(data[0] & 0x3f, 0x3f, "unmasked guest x87 exceptions");
         }
-        if live() != self.id {
+        if live_id() != self.id {
             self.acquire();
         }
         let flags: u64;

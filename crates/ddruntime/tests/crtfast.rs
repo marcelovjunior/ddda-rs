@@ -133,7 +133,7 @@ fn run(s: &mut Session, setup: &dyn Fn(&mut dyn Mem), args: &[u32], regs: [u32; 
 }
 
 fn lifted(addr: u32) -> impl Fn(&mut dyn Mem, &mut Cpu) {
-    move |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::lifted_target(addr)(m, c)
+    move |m: &mut dyn Mem, c: &mut Cpu| ddnative_host::lifted_target(addr)(m, c)
 }
 
 /// Compare the service with the lifted original on `cases` random inputs;
@@ -195,6 +195,7 @@ fn string(rng: &mut Rng, max: u32) -> (u32, Vec<u8>) {
 
 #[test]
 fn strlen_equals_the_original() {
+    ddnative_host::install();
     differential("strlen", crtfast::STRLEN, crtfast::strlen, 3000, ALL, &|rng| {
         let (at, v) = string(rng, 300);
         (vec![(at, v)], vec![at])
@@ -203,6 +204,7 @@ fn strlen_equals_the_original() {
 
 #[test]
 fn wcslen_equals_the_original() {
+    ddnative_host::install();
     differential("wcslen", crtfast::WCSLEN, crtfast::wcslen, 2000, ALL, &|rng| {
         let n = rng.below(200);
         let at = SCRATCH + rng.below(SCRATCH_LEN - 2 * n - 2);
@@ -218,6 +220,7 @@ fn wcslen_equals_the_original() {
 
 #[test]
 fn memchr_equals_the_original() {
+    ddnative_host::install();
     differential("memchr", crtfast::MEMCHR, crtfast::memchr, 3000, ALL, &|rng| {
         let n = rng.below(400);
         let at = SCRATCH + rng.below(SCRATCH_LEN - n);
@@ -230,6 +233,7 @@ fn memchr_equals_the_original() {
 
 #[test]
 fn strncpy_equals_the_original() {
+    ddnative_host::install();
     differential("strncpy", crtfast::STRNCPY, crtfast::strncpy, 3000, ALL, &|rng| {
         let (src, v) = string(rng, 200);
         let n = rng.below(260);
@@ -240,6 +244,7 @@ fn strncpy_equals_the_original() {
 
 #[test]
 fn strstr_equals_the_original() {
+    ddnative_host::install();
     differential("strstr", crtfast::STRSTR, crtfast::strstr, 3000, ALL, &|rng| {
         let (hay, mut h) = string(rng, 200);
         // a needle cut from the haystack (often found) or random
@@ -283,6 +288,7 @@ fn pair(rng: &mut Rng, max: u32) -> (Vec<(u32, Vec<u8>)>, u32, u32) {
 
 #[test]
 fn stricmp_equals_the_original() {
+    ddnative_host::install();
     differential("stricmp", crtfast::STRICMP, crtfast::stricmp, 3000, ALL, &|rng| {
         let (w, a, b) = pair(rng, 120);
         (w, vec![a, b])
@@ -291,6 +297,7 @@ fn stricmp_equals_the_original() {
 
 #[test]
 fn strnicmp_equals_the_original() {
+    ddnative_host::install();
     differential("strnicmp", crtfast::STRNICMP, crtfast::strnicmp, 3000, ALL, &|rng| {
         let (w, a, b) = pair(rng, 120);
         let n = rng.below(140);
@@ -300,6 +307,7 @@ fn strnicmp_equals_the_original() {
 
 #[test]
 fn memmove_equals_the_original() {
+    ddnative_host::install();
     // L61's contract: eax, the callee-saved registers, esp, memory
     let mask = [true, false, false, true, true, true, true, true];
     differential("memmove", crtfast::MEMMOVE, crtfast::SERVICES.iter().find(|s| s.0 == crtfast::MEMMOVE).unwrap().1, 2000, mask, &|rng| {
@@ -320,6 +328,7 @@ fn memmove_equals_the_original() {
 /// service, on typical inputs (no assertion: timings vary).
 #[test]
 fn service_speed_against_the_lifted_originals() {
+    ddnative_host::install();
     let Some(mut s) = session() else { return };
     let text: Vec<u8> = br"sound\se\Stage\st100_PC_main_battle_02.sngw".iter().cycle().take(200).copied().chain([0]).collect();
     s.mem.poke(SCRATCH + 0x100, &text).unwrap();

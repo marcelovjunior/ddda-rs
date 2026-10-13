@@ -2806,6 +2806,7 @@ dependencies = [
  "ddlift-30",
  "ddlift-31",
  "ddnative-base",
+ "ddnative-host",
  "mtmath",
  "serde_json",
 ]
@@ -2813,6 +2814,16 @@ dependencies = [
 [[package]]
 name = "ddnative-base"
 version = "0.1.0"
+dependencies = [
+ "ddnative-host",
+]
+
+[[package]]
+name = "ddnative-host"
+version = "0.1.0"
+dependencies = [
+ "ddnative-base",
+]
 
 [[package]]
 name = "ddnav"
@@ -2899,6 +2910,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative",
  "ddnative-base",
+ "ddnative-host",
  "ddports",
  "ddruntime",
  "serde",
@@ -2981,6 +2993,7 @@ dependencies = [
  "ddlift-06",
  "ddnative",
  "ddnative-base",
+ "ddnative-host",
  "ddports",
  "ddsave",
  "hostdisplay",
@@ -4341,6 +4354,7 @@ name = "mtcore"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "ddnative-host",
  "serde_json",
 ]
 
@@ -4358,6 +4372,7 @@ name = "mtframe"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "ddnative-host",
  "mtcore",
  "mtmath",
  "serde_json",
@@ -4402,6 +4417,7 @@ name = "mtmath"
 version = "0.1.0"
 dependencies = [
  "ddnative-base",
+ "ddnative-host",
  "serde_json",
 ]
 
