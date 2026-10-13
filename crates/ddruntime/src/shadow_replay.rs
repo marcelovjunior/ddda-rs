@@ -1102,8 +1102,12 @@ fn compare_replays(
         let index = input.u32(render + 0x33db8);
         let base = input.u32(render + 0x33dc0 + index * 4);
         let (cursor, capacity) = (input.u32(render + 0x33dc8), input.u32(render + 0x33dcc));
-        // (the 256 KiB below ESP: deeper locals are not reached by the traversal)
-        vec![base.wrapping_add(cursor)..base.wrapping_add(capacity), stack.start.max(incoming.esp.saturating_sub(0x40000))..incoming.esp]
+        let below = std::env::var("DDRUNTIME_PARALLEL_SHADOW_POISON_STACK")
+            .ok()
+            .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0x40000);
+        eprintln!("parallel-shadow definedness: stack {:#x}..{:#x}, poisoning {below:#x} below ESP", stack.start, incoming.esp);
+        vec![base.wrapping_add(cursor)..base.wrapping_add(capacity), stack.start.max(incoming.esp.saturating_sub(below))..incoming.esp]
     };
     let poisoned = |input: &Arc<Snapshot>, fill: u8| -> Arc<Snapshot> {
         let bytes: BTreeMap<u32, u8> = residue
