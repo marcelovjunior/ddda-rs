@@ -73,8 +73,11 @@ then head's integration regeneration/gate and matched gameplay profile.
 without retaining the full 392 MB JSON. Reproduce with `--profile
 E:/ddda-re/notes/runs/profile_boot1.txt`; `--all` surveys all functions.
 The scratchpad `profile_combo9.txt` path was requested from head but has
-not been located. Initial verbose candidate source was 2% larger; final
-compact emission size and compilation effect still need measurement.
+not been located. Final compact emission recount confirms the same site
+counts: lowered sample source **753,183 -> 753,333 bytes (+0.020%)**
+relative to local L73 plus restored predicates. This does not include
+dispatcher wrappers or measure compiler work; compilation effect remains
+unmeasured. Private count receipt: `E:/ddda-re/notes/L129-flag-sample.jsonl`.
 
 **Not verified yet:** regenerated original lifted vectors, full native
 gate, shard compile time, original image/gameplay and FPS. Head requested
