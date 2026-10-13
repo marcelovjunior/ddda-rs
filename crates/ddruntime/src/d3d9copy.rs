@@ -218,10 +218,15 @@ pub fn query_issue(m: &mut dyn Mem, cpu: &mut Cpu) {
             query(q, |_, state, _| *state = QueryState::Ended);
         }
     } else if flags & ISSUE_END != 0 {
+        // an event completes when the commands recorded before it have run
+        // (L102: a mark of the deferred backend; immediate ones pass at once)
+        let mark = if ty == QUERY_EVENT { backend(|b| b.mark()) } else { 0 };
         query(q, |ty, state, value| {
             *state = QueryState::Ended;
             if *ty == QUERY_TIMESTAMP {
                 *value = crate::services::runtime_clock().as_nanos() as u64;
+            } else if *ty == QUERY_EVENT {
+                *value = mark;
             }
         });
     }
@@ -237,9 +242,13 @@ pub fn query_issue(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn query_get_data(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (q, data, size) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     let (ty, state, value) = query(q, |ty, state, value| (*ty, *state, *value));
-    // query_result itself is a FIFO round trip. Host-side query answers must
-    // also wait for recorded commands, without doubling occlusion round trips.
-    if ty != QUERY_OCCLUSION || state != QueryState::Ended {
+    // Host-side answers wait for the recorded commands, except the two the
+    // game polls (L102: a wait here held the D3D lock while the backend
+    // drained, and the render thread queued behind it): an event answers
+    // S_FALSE until the backend has passed its mark, an occlusion query
+    // until the backend has its count (query_result never waits).
+    let pending_event = ty == QUERY_EVENT && state == QueryState::Ended && !backend(|b| b.passed(value));
+    if ty != QUERY_EVENT && (ty != QUERY_OCCLUSION || state != QueryState::Ended) {
         backend(|b| b.fence());
     }
     let occlusion = if ty != QUERY_OCCLUSION {
@@ -251,7 +260,7 @@ pub fn query_get_data(m: &mut dyn Mem, cpu: &mut Cpu) {
             QueryState::Ended => Some(backend(|b| b.query_result(q))),
         }
     };
-    cpu.eax = if occlusion == Some(None) || (occlusion.is_none() && state != QueryState::Ended && ty != QUERY_TIMESTAMPFREQ) {
+    cpu.eax = if pending_event || occlusion == Some(None) || (occlusion.is_none() && state != QueryState::Ended && ty != QUERY_TIMESTAMPFREQ) {
         1
     } else {
         let v: u64 = match ty {

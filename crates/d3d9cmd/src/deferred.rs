@@ -3,6 +3,9 @@ use crate::*;
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 type Work = Box<dyn FnOnce(&mut dyn GraphicsBackend) + Send>;
 
@@ -15,6 +18,15 @@ pub struct DeferredBackend {
     sender: Option<SyncSender<Work>>,
     worker: Option<JoinHandle<()>>,
     presents: VecDeque<Receiver<()>>,
+    /// Commands recorded, and executed (the worker counts them): marks.
+    recorded: u64,
+    executed: Arc<AtomicU64>,
+    /// Occlusion results (L102): each query_end starts a new generation;
+    /// a result is asked of the worker once per generation and answered
+    /// from here when it is back, so GetData never waits on the queue.
+    generation: HashMap<u32, u64>,
+    asked: HashMap<u32, u64>,
+    results: Arc<Mutex<HashMap<u32, (u64, Option<u64>)>>>,
 }
 
 impl DeferredBackend {
@@ -27,12 +39,18 @@ impl DeferredBackend {
     pub fn with_capacity(mut backend: Box<dyn GraphicsBackend>, capacity: usize) -> Self {
         assert!(capacity > 0);
         let (sender, receiver) = mpsc::sync_channel::<Work>(capacity);
+        let executed = Arc::new(AtomicU64::new(0));
+        let counter = executed.clone();
         let worker = thread::Builder::new().name("d3d9-backend".into()).spawn(move || {
             while let Ok(work) = receiver.recv() {
                 work(backend.as_mut());
+                counter.fetch_add(1, Ordering::Release);
             }
         }).expect("start D3D9 backend worker");
-        Self { sender: Some(sender), worker: Some(worker), presents: VecDeque::new() }
+        Self {
+            sender: Some(sender), worker: Some(worker), presents: VecDeque::new(), recorded: 0, executed,
+            generation: HashMap::new(), asked: HashMap::new(), results: Default::default(),
+        }
     }
 
     fn enqueue(&mut self, work: impl FnOnce(&mut dyn GraphicsBackend) + Send + 'static) {
@@ -45,6 +63,7 @@ impl DeferredBackend {
         if self.sender.as_ref().unwrap().send(Box::new(work)).is_err() {
             panic!("D3D9 backend worker stopped");
         }
+        self.recorded += 1;
     }
 
     fn result<T: Send + 'static>(&mut self, work: impl FnOnce(&mut dyn GraphicsBackend) -> T + Send + 'static) -> T {
@@ -110,14 +129,40 @@ impl GraphicsBackend for DeferredBackend {
         self.result(move |b| b.read_back(&target))
     }
     fn query_begin(&mut self, query: u32) { self.enqueue(move |b| b.query_begin(query)); }
-    fn query_end(&mut self, query: u32) { self.enqueue(move |b| b.query_end(query)); }
-    fn query_result(&mut self, query: u32) -> Option<u64> { self.result(move |b| b.query_result(query)) }
+    fn query_end(&mut self, query: u32) {
+        *self.generation.entry(query).or_default() += 1;
+        self.enqueue(move |b| b.query_end(query));
+    }
+    /// Never waits (L102): the first call after a query_end asks the worker
+    /// for the count and answers None (GetData's S_FALSE, as a driver does
+    /// while the GPU has not finished); later calls answer the count once
+    /// the worker has put it here. A result is for one generation, so a
+    /// count arriving after the query was issued again is not answered.
+    fn query_result(&mut self, query: u32) -> Option<u64> {
+        let generation = self.generation.get(&query).copied().unwrap_or(0);
+        if let Some(&(g, v)) = self.results.lock().unwrap().get(&query) {
+            if g == generation {
+                return v;
+            }
+        }
+        if self.asked.get(&query) != Some(&generation) {
+            self.asked.insert(query, generation);
+            let results = self.results.clone();
+            self.enqueue(move |b| {
+                let v = b.query_result(query);
+                results.lock().unwrap().insert(query, (generation, v));
+            });
+        }
+        None
+    }
     fn gamma(&mut self, ramp: Option<&GammaRamp>) {
         let ramp = ramp.copied();
         self.enqueue(move |b| b.gamma(ramp.as_ref()));
     }
     fn release(&mut self, resource: u32) { self.enqueue(move |b| b.release(resource)); }
     fn fence(&mut self) { self.result(|b| b.fence()); }
+    fn mark(&mut self) -> u64 { self.recorded }
+    fn passed(&self, mark: u64) -> bool { self.executed.load(Ordering::Acquire) >= mark }
 }
 
 #[cfg(test)]
@@ -183,7 +228,12 @@ mod tests {
             b.present(&t);
             if let Some(unblock) = unblock { unblock.send(()).unwrap(); }
             assert_eq!(b.read_back(&t), Some(vec![42]));
-            assert_eq!(b.query_result(3), Some(7));
+            // a deferred backend answers None until the worker has the count
+            let r = loop {
+                if let Some(r) = b.query_result(3) { break r; }
+                b.fence();
+            };
+            assert_eq!(r, 7);
             b.release(2);
             b.upload(Upload::Buffer { resource: 2, bytes: vec![9] });
         }
