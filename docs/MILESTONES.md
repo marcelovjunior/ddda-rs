@@ -1,5 +1,14 @@
 # Milestones
 
+### L109 dynamic-Huffman oracle extension (2026-10-13)
+
+- **632 original fast-inflate cases pass**, up from 559: 73 entry/return
+  snapshots from 24 complete 8 KiB dynamic-Huffman streams. Original
+  outer inflate and table builder run unmocked; full plaintext matches.
+- The existing readable port needed no changes. All memory windows,
+  GPR/XMM registers and arithmetic flags still match byte-for-byte.
+- Next: head's matched game run; decoder benchmarks are not loading times.
+
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 
 - Head instr1: at 16.032 s, archive inflate **4.854 s**, file reads

@@ -13,7 +13,7 @@ opens, versus 0.056 s file-read and 0.007 s pipeline time at that sample.
 UI phase boundaries and a paired post-port run remain with head.
 
 The archive zlib fast loop (`0x00cf2cb0`) is a readable runtime port,
-verified against 559 original-instruction vectors including state,
+verified against 632 original-instruction vectors including state,
 output, registers, flags and stack spills. The original outer inflate and
 archive streaming functions still handle checksums, buffers and callbacks.
 `DDRUNTIME_ARCHIVE_INFLATE=0` selects the generated leaf for A/B runs;
