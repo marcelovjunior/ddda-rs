@@ -24,6 +24,18 @@
   regression checks acquisition counts and recorded commands. No game run.
 - Next: head's L82 redirect targets GetAsyncKeyState's measured lock convoy
   with atomic input snapshots; head owns gameplay/FPS comparison.
+### L81 audio source scratch (2026-10-12)
+
+- Cached voice decoder format and reused source byte/float/ADPCM buffers;
+  bit-exact synthetic stream/mixed-output comparison passes. Runtime: 134
+  tests initially pass (two unrelated lock-timing checks fail on loaded
+  reruns); ddaudio: five unit and all nine host XAudio2 oracles pass.
+- Optimized 480-frame feed medians improve 1.05-1.21x across three repeats;
+  removes two PCM / four ADPCM temporary allocations after warmup.
+- Profile correction: mixer runs on guest `0x103c`, not render `0x1034`;
+  the generic byte-vector symbol does not establish an audio caller.
+- No game/FPS comparison. Next: head caller-resolved render profile after
+  integration. Details: `docs/tasks/L81-audio-render-thread.md`.
 
 ### L66 hot/cold build (2026-10-12)
 

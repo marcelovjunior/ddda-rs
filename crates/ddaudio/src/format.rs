@@ -149,10 +149,23 @@ impl Format {
     /// buffer) and appends them, interleaved, to `out`.
     /// Frames past the end of `data` decode as silence.
     pub fn decode(&self, data: &[u8], first: u64, count: u64, out: &mut Vec<f32>) {
+        self.decode_with_scratch(data, first, count, out, &mut Vec::new());
+    }
+
+    /// Like `decode`, retaining the ADPCM block workspace between calls.
+    /// Neither workspace allocates again while its existing capacity suffices.
+    pub fn decode_with_scratch(
+        &self,
+        data: &[u8],
+        first: u64,
+        count: u64,
+        out: &mut Vec<f32>,
+        block: &mut Vec<i16>,
+    ) {
         let ch = self.channels as usize;
         out.reserve(count as usize * ch);
         match self.tag {
-            WAVE_FORMAT_ADPCM => self.decode_adpcm(data, first, count, out),
+            WAVE_FORMAT_ADPCM => self.decode_adpcm(data, first, count, out, block),
             _ => {
                 let align = self.block_align as usize;
                 for frame in first..first + count {
@@ -191,10 +204,10 @@ impl Format {
         }
     }
 
-    fn decode_adpcm(&self, data: &[u8], first: u64, count: u64, out: &mut Vec<f32>) {
+    fn decode_adpcm(&self, data: &[u8], first: u64, count: u64, out: &mut Vec<f32>, block: &mut Vec<i16>) {
         let spb = self.samples_per_block as u64;
         let ch = self.channels as usize;
-        let mut block = vec![0i16; spb as usize * ch];
+        block.resize(spb as usize * ch, 0);
         let mut frame = first;
         let end = first + count;
         while frame < end {
@@ -204,7 +217,7 @@ impl Format {
             let n = ((spb - frame % spb).min(end - frame)) as usize;
             match data.get(o..o + self.block_align as usize) {
                 Some(b) => {
-                    self.adpcm_block(b, &mut block);
+                    self.adpcm_block(b, block);
                     for s in &block[in_block * ch..(in_block + n) * ch] {
                         out.push(*s as f32 / 32768.0);
                     }
