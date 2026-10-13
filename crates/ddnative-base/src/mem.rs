@@ -320,7 +320,7 @@ pub unsafe fn atomic_u32_at<'a>(at: *mut u8) -> Option<&'a AtomicU32> {
 /// `perm` set. None sends the access through the trait (lazy or unmapped
 /// pages, page-crossing accesses, faults).
 #[inline(always)]
-fn allowed(pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, width: usize, perm: u8) -> Option<*mut u8> {
+pub(crate) fn allowed(pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, width: usize, perm: u8) -> Option<*mut u8> {
     let t = pt?;
     let off = (addr % PAGE) as usize;
     if off + width > PAGE as usize {
