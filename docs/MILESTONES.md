@@ -1,5 +1,23 @@
 # Milestones
 
+### L162c job distribution and host scheduling (2026-10-13)
+
+- c31 h0 150-frame census: main 65,186 callbacks, six workers
+  88,096 / 78,545 / 64,249 / 55,879 / 52,116 / 42,930. Main final-callback
+  solo tails add 2.661 ms/frame before its joins. Worst main/worker tails
+  start within 92..135 us but run 14.65..18.51 ms; late queue ordering is
+  not established as their cause. Shared atomic FIFO already distributes work.
+- Independent priority/ideal-processor opt-ins forward original Windows
+  requests previously ignored. Foreground requests CPU hints only; background
+  requests priority -1. No invented boost, affinity pin or callback reordering.
+- 19 parser and four host scheduling tests pass, including suspended guest
+  startup in both modes. Light 254 reported passes / zero failures / seven
+  ignored before final lifecycle refinement; final focused four pass.
+  No game/FPS gain measured. Details: `docs/tasks/L162-job-wake.md`.
+- Blocker: no post-fix p8 trace yet; old ctor-only run cannot prove eighth-lane
+  work. Next: head capture p8 per-thread callbacks, then independent scheduling
+  A/B with participant/hash/sync settings fixed and profile-off acceptance.
+
 ### L159 Vulkan default image gate (2026-10-13)
 
 - Same-run selected raw pass oracle copies attachment load state, replays
@@ -64,14 +82,21 @@
   after construction; original CPU/eight clamp and frame activation remain.
   No cap patch. Intended head A/B: seven vs eight participants, main included.
 - Wake analyzer reports per-batch jobs/participants, callback gaps,
-  final-job solo tails and join overlaps; **13 parser tests pass**.
+  final-job solo tails and join overlaps; **17 parser tests pass**.
   Signaled lanes are distinct from active participation (one-job bypass).
 - Full light gate **234 reported passes / two inherited failures / seven
   ignored**; Present timing passes its isolated retry, gamma remains.
-  Both new ABI/configuration tests pass. Actual wake latency and
-  performance/image acceptance pending. No speculative sync fix.
-- Next: head capture with L158 and this setter, exact env in
-  `docs/tasks/L162-job-wake.md`; analyze matched 7/8 joins and hashes.
+  First-frame follow-up: **242 reported passes / inherited Present timing
+  failure / seven ignored**, three focused ABI/configuration tests pass.
+- c31 h0/h1: 150 frames each, 62,100 paired wakes each, no selected-batch
+  rejects. Signal-to-wait p50/p95 **11.5/52.2 -> 10.6/25.0 us**;
+  final-callback solo overlap **7.086 -> 6.887 ms/frame** dominates wakes.
+  40 of 69 parallel batches/frame have >=8 jobs (h0).
+- Ctor-only p8 configured eight but seventh worker remains idle in profile.
+  First-frame original-setter reapplication candidate logs actual activation;
+  head acceptance remains pending. No speculative sync primitive change.
+- Next: instrumented p8 activation check and matched cache/futex A/B;
+  exact measurements, hashes and limitations: `docs/tasks/L162-job-wake.md`.
 
 ### L160 job worker sizing and wake analysis (2026-10-13)
 

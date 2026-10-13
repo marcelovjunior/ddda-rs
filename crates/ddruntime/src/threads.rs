@@ -49,6 +49,8 @@ use std::time::{Duration, Instant};
 
 #[path = "sync_profile.rs"]
 pub(crate) mod sync_profile;
+#[path = "thread_scheduling.rs"]
+mod scheduling;
 
 pub const WAIT_OBJECT_0: u32 = 0;
 pub const WAIT_ABANDONED_0: u32 = 0x80;
@@ -1031,6 +1033,10 @@ pub(crate) struct Kernel {
     next_stack: u32,
     /// thread id -> its object
     threads: HashMap<u32, u32>,
+    // Keep the OS handle alive for scheduling calls, including before the
+    // guest's first ResumeThread. Dropping a JoinHandle detaches; never join
+    // while holding the runtime lock. Released with the final guest handle.
+    host_threads: HashMap<u32, std::thread::JoinHandle<()>>,
     /// Queued asynchronous procedure calls per thread: (routine, three
     /// stdcall arguments), run at the thread's next alertable wait.
     apcs: HashMap<u32, std::collections::VecDeque<(u32, [u32; 3])>>,
@@ -1073,7 +1079,15 @@ pub fn faults() -> Vec<(u32, String)> {
 /// Close a kernel object handle; false if `h` is not one (CloseHandle
 /// then tries the file handles).
 pub(crate) fn close(h: u32) -> bool {
-    let closed = kernel(|k| k.handles.remove(&h).is_some());
+    let closed = kernel(|k| {
+        let Some(object) = k.handles.remove(&h) else { return false; };
+        if let Some(Object::Thread { tid, .. }) = k.objects.get(&object) {
+            if !k.handles.values().any(|&other| other == object) {
+                k.host_threads.remove(tid); // detach, never wait for the worker
+            }
+        }
+        true
+    });
     if closed {
         runtime::pin().lock.events.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         runtime::pin().lock.event_epoch.fetch_add(1, SeqCst);
@@ -1803,11 +1817,12 @@ pub fn create_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
         rt.lock.lock().suspended.insert(tid, 1);
     }
     let rt2 = rt.clone();
-    std::thread::Builder::new()
+    let host = std::thread::Builder::new()
         .name(format!("guest thread {tid:#x}"))
         .stack_size(64 << 20)
         .spawn(move || run_thread(rt2, memory, registry, tid, start, param, stack_top, reserve))
         .expect("host thread for a guest thread");
+    kernel(|k| { k.host_threads.insert(tid, host); });
     if tid_out != 0 {
         m.set_u32(tid_out, tid);
     }
@@ -1945,18 +1960,14 @@ pub fn get_exit_code_thread(m: &mut dyn Mem, cpu: &mut Cpu) {
     ret(m, cpu, 8);
 }
 
-/// SetThreadPriority(handle, priority): accepted (the host schedules the
-/// one running guest thread; priorities do not change which runs).
+/// Forward original priority requests when DDRUNTIME_THREAD_PRIORITY=1.
 pub fn set_thread_priority(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 1;
-    ret(m, cpu, 8);
+    scheduling::service(m, cpu, false, scheduling::priority_enabled());
 }
 
-/// SetThreadIdealProcessor(handle, processor) -> the previous ideal
-/// processor (0: the runtime reports one processor, GetSystemInfo).
+/// Forward processor hints when DDRUNTIME_THREAD_IDEAL=1; this is not affinity.
 pub fn set_thread_ideal_processor(m: &mut dyn Mem, cpu: &mut Cpu) {
-    cpu.eax = 0;
-    ret(m, cpu, 8);
+    scheduling::service(m, cpu, true, scheduling::ideal_enabled());
 }
 
 pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
