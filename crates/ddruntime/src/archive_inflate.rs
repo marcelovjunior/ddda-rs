@@ -1,18 +1,36 @@
-//! Readable archive zlib fast decoder. The outer inflate state machine,
-//! allocation, checksums, and archive's double-buffered stream remain original.
+//! Exact archive zlib decoder ports. The outer entry and page access policy
+//! are separately opt-in; allocation and the archive stream remain original.
 use ddnative_base::{mem::Mem, x86::Cpu};
+
+#[path = "zlib_access.rs"]
+mod access;
+#[path = "zlib_port.rs"]
+pub mod port;
+use access::Access;
 
 /// Install before diagnostic wrappers, preserving explicit ports/mods.
 pub fn install(ports: &mut Vec<(u32, ddnative_base::x86::LiftFn)>) {
+    if std::env::var("DDRUNTIME_ZLIB_PORT").as_deref() == Ok("1")
+        && !ports.iter().any(|&(address, _)| address == 0x00cf_02e0)
+    {
+        ports.push((0x00cf_02e0, port::inflate));
+    }
     if std::env::var("DDRUNTIME_ZLIB_ADLER").as_deref() == Ok("1")
-        && !ports.iter().any(|&(address, _)| address == 0x00cf_34d0) {
+        && !ports.iter().any(|&(address, _)| address == 0x00cf_34d0)
+    {
         ports.push((0x00cf_34d0, adler32));
     }
     if std::env::var("DDRUNTIME_ARCHIVE_INFLATE").is_ok_and(|value| value == "0") {
         return;
     }
     if !ports.iter().any(|&(address, _)| address == 0x00cf_2cb0) {
-        ports.push((0x00cf_2cb0, inflate_fast));
+        let decoder: ddnative_base::x86::LiftFn =
+            if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("1") {
+                inflate_fast_pages
+            } else {
+                inflate_fast
+            };
+        ports.push((0x00cf_2cb0, decoder));
     }
 }
 
@@ -71,14 +89,14 @@ struct Bits {
     count: u32,
 }
 impl Bits {
-    fn byte(&mut self, m: &dyn Mem) {
+    fn byte<const FAST: bool>(&mut self, m: &Access<FAST>) {
         self.input = self.input.wrapping_add(1);
         self.hold = self
             .hold
             .wrapping_add((m.u8(self.input) as u32).wrapping_shl(self.count));
         self.count += 8;
     }
-    fn pair_if_needed(&mut self, m: &dyn Mem) {
+    fn pair_if_needed<const FAST: bool>(&mut self, m: &Access<FAST>) {
         if self.count < 15 {
             self.byte(m);
             self.byte(m);
@@ -90,21 +108,10 @@ impl Bits {
         self.count = self.count.wrapping_sub(count);
         value
     }
-    fn code(&mut self, m: &dyn Mem, table: u32, index: u32) -> u32 {
+    fn code<const FAST: bool>(&mut self, m: &Access<FAST>, table: u32, index: u32) -> u32 {
         let code = m.u32(table.wrapping_add(index.wrapping_mul(4)));
         self.take((code >> 8) & 255);
         code
-    }
-}
-
-fn copy(m: &mut dyn Mem, output: &mut u32, source: &mut u32, count: u32) {
-    // Byte order matters: matches can overlap by one or two bytes.
-    let pages = m.page_table();
-    for _ in 0..count {
-        *source = source.wrapping_add(1);
-        *output = output.wrapping_add(1);
-        let byte = m.fast_u8(pages, *source);
-        m.fast_set_u8(pages, *output, byte);
     }
 }
 
@@ -114,6 +121,16 @@ fn copy(m: &mut dyn Mem, output: &mut u32, source: &mut u32, count: u32) {
 /// decode tables and a non-aliasing stream/state/window/stack. Preserves the
 /// original's argument spill, stack locals and final general registers.
 pub fn inflate_fast(m: &mut dyn Mem, cpu: &mut Cpu) {
+    inflate_decoder(&mut Access::<false>::new(m), cpu);
+}
+
+/// Same original decoder and ABI, with page-wise forward copies and local
+/// checked scalar accesses. Opt-in DDRUNTIME_ZLIB_FAST=1 (head L145).
+pub fn inflate_fast_pages(m: &mut dyn Mem, cpu: &mut Cpu) {
+    inflate_decoder(&mut Access::<true>::new(m), cpu);
+}
+
+fn inflate_decoder<const FAST: bool>(m: &mut Access<FAST>, cpu: &mut Cpu) {
     let frame = cpu.esp.wrapping_sub(4);
     let stream = m.u32(cpu.esp.wrapping_add(4));
     let start = m.u32(cpu.esp.wrapping_add(8));
@@ -217,7 +234,7 @@ pub fn inflate_fast(m: &mut dyn Mem, cpu: &mut Cpu) {
                         source = source.wrapping_add(window_size_20.wrapping_sub(back));
                         if back < length {
                             length -= back;
-                            copy(m, &mut output, &mut source, back);
+                            m.copy(&mut output, &mut source, back);
                             source = output.wrapping_sub(distance);
                         }
                     } else if window_write_28 < back {
@@ -227,12 +244,12 @@ pub fn inflate_fast(m: &mut dyn Mem, cpu: &mut Cpu) {
                         let tail = back - window_write_28;
                         if tail < length {
                             length -= tail;
-                            copy(m, &mut output, &mut source, tail);
+                            m.copy(&mut output, &mut source, tail);
                             source = window_2c.wrapping_sub(1);
                             if window_write_28 < length {
                                 length -= window_write_28;
                                 m.set_u32(frame.wrapping_sub(0x18), window_write_28);
-                                copy(m, &mut output, &mut source, window_write_28);
+                                m.copy(&mut output, &mut source, window_write_28);
                                 source = output.wrapping_sub(distance);
                             }
                         }
@@ -240,7 +257,7 @@ pub fn inflate_fast(m: &mut dyn Mem, cpu: &mut Cpu) {
                         source = source.wrapping_add(window_write_28 - back);
                         if back < length {
                             length -= back;
-                            copy(m, &mut output, &mut source, back);
+                            m.copy(&mut output, &mut source, back);
                             source = output.wrapping_sub(distance);
                         }
                     }
@@ -250,9 +267,9 @@ pub fn inflate_fast(m: &mut dyn Mem, cpu: &mut Cpu) {
                 // The original unrolls the remaining copy in triples and
                 // leaves only its remainder in the caller's second argument.
                 let triples = length / 3 * 3;
-                copy(m, &mut output, &mut source, triples);
+                m.copy(&mut output, &mut source, triples);
                 length -= triples;
-                copy(m, &mut output, &mut source, length);
+                m.copy(&mut output, &mut source, length);
                 break;
             }
             if operation & 64 != 0 {
