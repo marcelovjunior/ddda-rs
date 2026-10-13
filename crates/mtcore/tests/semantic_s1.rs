@@ -42,6 +42,8 @@ fn call_inputs(target: u32) -> &'static [usize] {
         0x0042_3b80 => &[6],                                   // ESI = state
         0x0081_f280 | 0x0080_b450 | 0x0042_19a0 | 0x0042_15e0 | 0x00ca_de50 => &[0], // EAX
         0x00b8_09d0 => &[1, 2],
+        0x3000_0100 | 0x0041_9210 => &[1],
+        0x004c_9b80 | 0x0076_f660 => &[0],
         0x0088_6210 | 0x3000_0000 => &[1],
         _ => &[],
     }
@@ -54,6 +56,9 @@ fn stack_args(target: u32) -> u32 {
         0x0042_3b80 | 0x0081_f280 | 0x0080_b450 | 0x0088_6210 | 0x00b8_09d0 => 0,
         0x3000_0000 | 0x3000_0010 | 0x3000_0020 => 1, // tuning virtual, Enter/LeaveCriticalSection
         0x0042_19a0 => 4,
+        0x3000_0100 => 0, // controller virtual method 4
+        0x0041_9210 | 0x0076_f430 | 0x004c_9b80 => 1,
+        0x0076_f660 => 2,
         0x0042_15e0 => 3,
         0x00ca_de50 => 2,
         0x0042_9680 => 3, // effect request sink (0x005D1AF0)
@@ -187,4 +192,13 @@ fn semantic_character_frame_matches_original() {
     let n = abi_cases_full("E:/ddda-re/notes/native-L184/character_frame.json", mtcore::semantic_s1::update_character_frame, false, &[]);
     assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
     eprintln!("{n} ABI-level character-frame cases passed");
+}
+
+// verifies 0x0076f2d0 (ABI level; void)
+#[test]
+fn semantic_actor_slots_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L184/actor_slots.json", mtcore::semantic_s1::refresh_actor_slots, false, &[]);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
+    eprintln!("{n} ABI-level actor-slot cases passed");
 }

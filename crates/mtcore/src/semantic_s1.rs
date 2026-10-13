@@ -442,3 +442,93 @@ pub fn update_character_frame(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4);
 }
+
+// Translated from 0x0076f2d0 (DDDA.exe 2017-12-13 Steam).
+/// 0x0076F2D0, `refresh_slots(actor)` (stdcall, `ret 4`): for an actor whose
+/// controller object (`actor[0xCD0]`) derives from the class `[0x018D2D10]`
+/// (found by walking the parent links, +0x10, of the DTI node the object's
+/// virtual method 4 returns) either hand the actor to 0x0076F430 (the
+/// controller is also an uActorModel, DTI 0x018D2108) or, when the byte
+/// `actor[0xD99]` is set, refresh the actor's 8 equipment slots
+/// (`actor[0xC3C + 4 s]`, each with a model id at +0x70).
+///
+/// The slot ids are 16 groups of u16 values at `actor[(0x1C + 0x10 g + k) * 4]`
+/// (g = 0..7, k = 0..15), used when bit g of `actor[0xD3C]` is set and the
+/// presence byte at `actor + 0x72 + 0x40 g + 4 k` is non-zero. An id divided
+/// by 1000 names the equipment model; the first slot holding that model, if
+/// its flag byte (+0x50) bit 0 is set and 0x004C9B80 `(actor, slot)` accepts
+/// it, is then updated through 0x0076F660 `(actor, slot)`.
+pub fn refresh_actor_slots(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let actor = pg.u32(m, entry.wrapping_add(4));
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    let finish = |c: &mut Cpu| {
+        (c.ebx, c.ebp, c.esi, c.edi) = saved;
+        c.esp = entry.wrapping_add(8);
+    };
+    // the original's frame after its prologue (sub esp,0x10 and four pushes)
+    let frame = entry.wrapping_sub(0x20);
+    c.ebp = actor;
+    let controller = pg.u32(m, actor.wrapping_add(0xcd0));
+    if controller == 0 {
+        return finish(c);
+    }
+    let method = pg.u32(m, pg.u32(m, controller).wrapping_add(0x10));
+    let mut node = call_from(m, c, pg, frame, controller, &[], 0x0076_f2f0, |m, c| ddnative_base::x86::call_ext(m, c, method));
+    let class = pg.u32(m, 0x018d_2d10);
+    while pg.u32(m, node.wrapping_add(4)) != class {
+        node = pg.u32(m, node.wrapping_add(0x10));
+        if node == 0 {
+            return finish(c);
+        }
+    }
+    let controller = pg.u32(m, actor.wrapping_add(0xcd0));
+    let is_model = call_from(m, c, pg, frame, controller, &[0x018d_2108], 0x0076_f32c, |m, c| {
+        ddnative_base::x86::call_ext(m, c, 0x0041_9210)
+    });
+    if is_model != 0 {
+        call_from(m, c, pg, frame, 0, &[actor], 0x0076_f336, |m, c| ddnative_base::x86::call_ext(m, c, 0x0076_f430));
+        return finish(c);
+    }
+    if pg.u8(m, actor.wrapping_add(0xd99)) == 0 {
+        return finish(c);
+    }
+    let mut groups = pg.u32(m, actor.wrapping_add(0xd3c));
+    for group in 0..8u32 {
+        if groups & 1 != 0 {
+            for k in 0..16u32 {
+                let present = actor.wrapping_add(0x72 + 0x40 * group + 4 * k);
+                if pg.u8(m, present) == 0 {
+                    continue;
+                }
+                let id = pg.u16(m, actor.wrapping_add((0x1c + 0x10 * group + k) * 4)) as u32;
+                let model = id / 1000;
+                c.ebx = k;
+                for slot in 0..8u32 {
+                    let equipment = pg.u32(m, actor.wrapping_add(0xc3c + 4 * slot));
+                    c.esi = slot;
+                    c.edi = equipment;
+                    if equipment == 0 || pg.u32(m, equipment.wrapping_add(0x70)) != model {
+                        continue;
+                    }
+                    let equipment = pg.u32(m, actor.wrapping_add(0xc3c + 4 * slot));
+                    if equipment != 0 && pg.u8(m, equipment.wrapping_add(0x50)) & 1 != 0 {
+                        c.eax = actor;
+                        let ok = call_from(m, c, pg, frame, 0, &[slot], 0x0076_f3e4, |m, c| {
+                            ddnative_base::x86::call_ext(m, c, 0x004c_9b80)
+                        });
+                        if ok != 0 {
+                            call_from(m, c, pg, frame, 0, &[actor, slot], 0x0076_f3ef, |m, c| {
+                                ddnative_base::x86::call_ext(m, c, 0x0076_f660)
+                            });
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        groups >>= 1;
+    }
+    finish(c)
+}
