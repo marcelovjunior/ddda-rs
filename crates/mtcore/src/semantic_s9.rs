@@ -1888,3 +1888,122 @@ pub fn crt_log(m: &dyn Mem, pg: Pages, input: f64) -> f64 {
         return product[0] + product[1] + high + acc[0];
     }
 }
+
+/// 0x00F11610, `renderer->draw_with_resources(ctx, group, kind)` (thiscall,
+/// `ret 0xc`, void): bind three resources of a draw group into the draw
+/// context, commit the primitive state and append one draw packet.
+///
+/// The renderer counts its draws (`this + 0x198`) and the count, in the
+/// high bits, becomes the context's sort key (`ctx + 0x164`). The three
+/// resource slots (`ctx + 0x1F40`, `+0x1F48`, `+0x1F58`) are bound from the
+/// renderer's tables (`this + 0x80` -> +0x60 for the first, `this + 0xAB4`
+/// for the others, row `kind * 0x54`, column `kind * 0x15 + group`) like
+/// the model upload does (see `Upload::bind_resource`). The first
+/// argument of the material call 0x00FEFB90 comes from the fourth table
+/// entry; then 0x00FEEF20 (primitive state flush, called natively) and,
+/// unless the context only collects shadows (mode bits 0x50 without 0x100),
+/// a 32-byte draw packet and its sort slot are appended; 0x00FF1920
+/// submits.
+// Translated from 0x00F11610 (DDDA.exe 2017-12-13 Steam)
+pub fn draw_with_resources(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let (ctx, group, kind) = (arg(m, 0), arg(m, 1), arg(m, 2));
+    // The original's frame at its calls: four saved registers.
+    let frame = entry.wrapping_sub(16);
+    let count = pg.u32(m, this.wrapping_add(0x198));
+    pg.set_u32(m, this.wrapping_add(0x198), count.wrapping_add(1));
+    let sort = (count << 5) | (pg.u32(m, ctx.wrapping_add(0x164)) & 0x1f);
+    pg.set_u32(m, ctx.wrapping_add(0x164), sort);
+    let row = kind.wrapping_mul(0x15);
+    let first_table = pg.u32(m, pg.u32(m, this.wrapping_add(0x80)).wrapping_add(0x60));
+    let first = pg.u32(
+        m,
+        first_table
+            .wrapping_add(0x10)
+            .wrapping_add(row.wrapping_add(group).wrapping_mul(4)),
+    );
+    let mut u = Upload {
+        m,
+        c,
+        pg,
+        frame,
+        ctx,
+        model: 0,
+    };
+    u.bind_resource(0x1f40, first, 0x2d4e_f000, 0x3a9);
+    let base = kind.wrapping_mul(0x54);
+    let table = u.word(this.wrapping_add(0xab4));
+    let column = u.word(table.wrapping_add(base).wrapping_add(8)).wrapping_add(row);
+    let second = u.word(table.wrapping_add(0x24).wrapping_add(column.wrapping_mul(4)));
+    u.bind_resource(0x1f48, second, 0xb855_5000, 0x3aa);
+    let table = u.word(this.wrapping_add(0xab4));
+    let third = u.word(table.wrapping_add(base).wrapping_add(0x14));
+    u.bind_resource(0x1f58, third, 0x8206_0000, 0x3ac);
+    let table = u.word(this.wrapping_add(0xab4));
+    let column = u
+        .word(table.wrapping_add(base).wrapping_add(0xc))
+        .wrapping_add(row);
+    let object = u.word(table.wrapping_add(0x24).wrapping_add(column.wrapping_mul(4)));
+    let material = u.word(u.word(object.wrapping_add(0x44)));
+    u.call(0x00fe_fb90, ctx, &[material, 0, 0, 0], 0x00f1_18bb);
+    let (m, c) = (u.m, u.c);
+    crate::semantic_draw::flush_primitive_state(m, c, pg, frame, ctx);
+    let mode = pg.u32(m, ctx.wrapping_add(0x5c));
+    if mode & 0x100 != 0 || mode & 0x50 == 0 {
+        if pg.u32(m, ctx.wrapping_add(0x24)).wrapping_add(0x20) > pg.u32(m, ctx.wrapping_add(0x28)) {
+            crate::semantic::call_from(
+                m,
+                c,
+                pg,
+                frame,
+                ctx,
+                &[0x20],
+                0x00f1_18e8,
+                |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, 0x00fe_d890),
+            );
+        }
+        let packet = pg.u32(m, ctx.wrapping_add(0x24));
+        pg.set_u32(m, ctx.wrapping_add(0x24), packet.wrapping_add(0x20));
+        let head = pg.u32(m, packet) & 0xfff0_ffff;
+        let serial = pg.u32(m, ctx.wrapping_add(0x74));
+        let head = ((serial ^ head) & 0x7fff) ^ head;
+        pg.set_u32(m, ctx.wrapping_add(0x74), serial.wrapping_add(1));
+        let transparent = (pg.u8(m, ctx.wrapping_add(0x5c)) & 0x50 != 0) as u32;
+        let head = head ^ (((transparent << 15) ^ head) & 0x8000);
+        let head = (pg.u32(m, ctx.wrapping_add(0x6c)) << 20) | (head & 0xfffff);
+        pg.set_u32(m, packet, head);
+        let fields = [(8, 0x194), (0xc, 0x198), (0x10, 0x19c), (4, 0x1a0)];
+        for (offset, field) in fields {
+            let v = pg.u32(m, ctx.wrapping_add(field));
+            pg.set_u32(m, packet.wrapping_add(offset), v);
+        }
+        pg.set_u32(m, packet.wrapping_add(0x14), 4);
+        pg.set_u32(m, packet.wrapping_add(0x18), 0);
+        let index = pg.u32(m, ctx.wrapping_add(0x48));
+        let slot = pg
+            .u32(m, ctx.wrapping_add(0x44))
+            .wrapping_add(index.wrapping_mul(8));
+        pg.set_u32(m, ctx.wrapping_add(0x48), index.wrapping_add(1));
+        let key = pg.u32(m, ctx.wrapping_add(0x164));
+        let first = (pg.u32(m, slot) & 0x7ff_ffff) | (key << 27);
+        pg.set_u32(m, slot, first);
+        let order =
+            (pg.u32(m, ctx.wrapping_add(0x164)) >> 5).wrapping_add(pg.u32(m, ctx.wrapping_add(0x178)));
+        pg.set_u32(m, slot, ((order ^ first) & 0x7ff_ffff) ^ first);
+        pg.set_u32(m, slot.wrapping_add(4), packet);
+    }
+    crate::semantic::call_from(
+        m,
+        c,
+        pg,
+        frame,
+        ctx,
+        &[],
+        0x00f1_19b1,
+        |m: &mut dyn Mem, c: &mut Cpu| ddnative_base::x86::call_ext(m, c, 0x00ff_1920),
+    );
+    c.esp = entry.wrapping_add(4 + 0xc);
+}
