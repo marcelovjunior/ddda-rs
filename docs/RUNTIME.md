@@ -10,15 +10,17 @@ and repeated ranges improved. Loading logs include cache hit/miss/fetched
 byte counters and all-zlib counters alongside archive-scoped inflate.
 Head's instr1 baseline records 4.854 s archive inflate before the movie
 opens, versus 0.056 s file-read and 0.007 s pipeline time at that sample.
-UI phase boundaries and a paired post-port run remain with head.
+Head's combo6 runs reduce the same 2,979 boot archive inflates from 4.85 s
+to 1.39 s; first Present remains 5.84–5.86 s. Visible phase timings remain
+with head. Original logo/movie timing is retained (no fast-boot option).
 
 The archive zlib fast loop (`0x00cf2cb0`) is a readable runtime port,
-verified against 559 original-instruction vectors including state,
+verified against 632 original-instruction vectors including state,
 output, registers, flags and stack spills. The original outer inflate and
 archive streaming functions still handle checksums, buffers and callbacks.
 `DDRUNTIME_ARCHIVE_INFLATE=0` selects the generated leaf for A/B runs;
 explicit mods at that address retain precedence. Isolated leaf timings
-improved 2.30–8.06x; whole-game loading is awaiting head comparison.
+improved 2.30–8.06x; the port is enabled by default.
 
 `DDRUNTIME_LOAD_LOG=1` adds process-relative startup/movie/file/archive/GPU
 timing and frame counters. `scripts/load_timeline.py` produces a timeline;

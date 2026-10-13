@@ -56,4 +56,20 @@ measure the per-draw cost.
   DrawCall equals the D3D9 path's (render states: the backend-read subset
   with equal values; constants: every register the shaders read), and the
   NativeDraw/pass grouping built from it.
-- Not yet: an in-game run, the per-pass pixel comparison, the per-draw cost.
+- combo13 (head run, d5bc371d, `drawcall`): 3,425 scene draws taken per
+  frame, 134 refused (90 instanced, 44 FloatsUncovered); images normal;
+  but 22-28 us per decided draw (7.9 fps avg vs 14.7 default): ~38% of
+  the render thread was heap allocation (mtstate's Vec per call, every
+  draw decoded from scratch).
+- Step 2c: decode cached. Across frames by identity: fixed-state objects
+  (address + hash at +0xC, raster variant), shader metadata (address;
+  its shaders/declaration re-checked against the runtime once a frame),
+  SamplerStates (address + hash), shader read sets, render-state lists.
+  Per frame by address: target, stream and shader bindings (the shader
+  binding with its textures and both constant banks assembled). A draw
+  does four lookups, its own parameters and the flush; guest reads go
+  through the page table. Debug-build cost from the caches: 2.5 us per
+  draw (oracle test). Also: RS15 for an alpha-test-off binding is 0 (the
+  executor's context init sets 15/24/25 each frame, so the device holds
+  what the last apply set), not the device's value.
+- Not yet: the per-pass pixel comparison.

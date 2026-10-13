@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 
 LINE = re.compile(r"load-log t=([0-9.]+) event=(\w+)(.*)")
-TOTALS = {"io_totals", "gpu_totals", "archive_totals", "frame_totals"}
+TOTALS = {"io_totals", "gpu_totals", "archive_totals", "frame_totals", "boot_cpu_totals"}
 FIELDS = re.compile(r"(\w+)=([^\s]+)")
 
 

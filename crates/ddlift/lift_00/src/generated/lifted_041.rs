@@ -11,7 +11,7 @@ pub fn f_0107f120(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x107F120 => { cpu.edx = m.fast_u32(pt, cpu.ecx.wrapping_add(0xEC)); cpu.fl.alu_and(cpu.edx, cpu.edx, 32); pc = if cpu.fl.cond("e") { 0x107F154 } else { 0x107F12A }; continue; }
-            0x107F12A => { cpu.xmm[1] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0xD0)), 0, 0, 0]; { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } cpu.fl = x86::comiss_hw::<false>(cpu.xmm[1][0], cpu.xmm[0][0]); cpu.eax = (cpu.eax & !0xff00) | ((cpu.fl.lahf() as u32) << 8); cpu.fl.alu_and(((cpu.eax >> 8) & 0xFF), 0x44u32, 8); pc = if cpu.fl.cond("np") { 0x107F154 } else { 0x107F13E }; continue; }
+            0x107F12A => { cpu.xmm[1] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0xD0)), 0, 0, 0]; { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } let float_cmp = x86::comiss_hw::<false>(cpu.xmm[1][0], cpu.xmm[0][0]); let float_ah = match float_cmp.r { 0 => 0x42u32, 1 => 0x02, 2 => 0x03, _ => 0x47 }; cpu.eax = (cpu.eax & !0xff00) | (float_ah << 8); cpu.fl = Flags { kind: x86::LOGIC, a: float_ah, b: 0x44, r: float_ah & 0x44, bits: 8, cf_in: false }; pc = if matches!(float_cmp.r, 0) { 0x107F154 } else { 0x107F13E }; continue; }
             0x107F13E => { emit::push(0x0u32, m, pt, cpu); emit::push(cpu.ecx, m, pt, cpu); m.fast_set_u32(pt, cpu.esp, cpu.xmm[0][0]); emit::push(cpu.edx, m, pt, cpu); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0xD0), cpu.xmm[0][0]); emit::push(0x107F154, m, pt, cpu); x86::call_ext(m, cpu, 0x107C250u32); pc = 0x107F154; continue; }
             0x107F154 => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
