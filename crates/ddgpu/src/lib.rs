@@ -317,7 +317,7 @@ pub struct WgpuBackend {
     surfaces: cache::FxMap<u32, Rt>,
     /// translated shaders by (shader hash, linked vertex shader hash, depth
     /// bias, channels sampled as 1)
-    modules: cache::FxMap<ModuleKey, (wgpu::ShaderModule, d3d9wgsl::Interface)>,
+    modules: cache::FxMap<ModuleKey, (wgpu::ShaderModule, std::sync::Arc<d3d9wgsl::Interface>)>,
     samplers: cache::FxMap<[u32; 14], wgpu::Sampler>,
     blits: HashMap<(wgpu::TextureFormat, u32), (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// clears of part of a target, by (colour formats per slot, depth
@@ -357,7 +357,7 @@ pub struct WgpuBackend {
     open: RefCell<Option<wgpu::CommandEncoder>>,
     open_draws: Cell<u32>,
     /// buffers and textures the open draws read
-    open_uses: RefCell<HashSet<u32>>,
+    open_uses: RefCell<cache::FxSet<u32>>,
     /// per stage (0 pixel, 1 vertex): the last block's constants and extra
     /// vec4s, its uniform ring offset and the ring generation it was
     /// written in (L78)
@@ -535,7 +535,7 @@ impl WgpuBackend {
             passes_begun: Cell::new(0),
             open: RefCell::new(None),
             open_draws: Cell::new(0),
-            open_uses: RefCell::new(HashSet::new()),
+            open_uses: RefCell::new(cache::FxSet::default()),
             last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX), (Default::default(), Vec::new(), 0, u64::MAX)]),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
@@ -1342,10 +1342,14 @@ impl WgpuBackend {
         Ok(s)
     }
 
-    fn module(&mut self, tokens: &[u32], options: d3d9wgsl::Options, key: ModuleKey) -> Result<(wgpu::ShaderModule, d3d9wgsl::Interface), String> {
+    /// A translated shader, from the cache or translated now; `options` is
+    /// built only for a translation (L94: a cache hit allocates nothing and
+    /// shares the interface).
+    fn module(&mut self, tokens: &[u32], options: impl FnOnce(&Self) -> d3d9wgsl::Options, key: ModuleKey) -> Result<(wgpu::ShaderModule, std::sync::Arc<d3d9wgsl::Interface>), String> {
         if let Some((m, i)) = self.modules.get(&key) {
             return Ok((m.clone(), i.clone()));
         }
+        let options = options(self);
         let started = std::time::Instant::now();
         let shader = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
         let t = d3d9wgsl::translate_with(&shader, options).map_err(|e| e.to_string())?;
@@ -1355,9 +1359,10 @@ impl WgpuBackend {
         if let Some(e) = block_on(scope.pop()) {
             return Err(format!("{e}"));
         }
-        self.modules.insert(key, (module.clone(), t.interface.clone()));
+        let interface = std::sync::Arc::new(t.interface);
+        self.modules.insert(key, (module.clone(), interface.clone()));
         pipelines::module_created(started);
-        Ok((module, t.interface))
+        Ok((module, interface))
     }
 
     fn buffer(&mut self, resource: u32) -> Option<wgpu::Buffer> {
@@ -1413,13 +1418,7 @@ impl WgpuBackend {
         if d.declaration.is_empty() {
             return Err("FVF draws are not implemented".into());
         }
-        let hash = |t: &[u32]| {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            t.hash(&mut h);
-            h.finish()
-        };
-        let (vh, ph) = (hash(vs_tokens), hash(ps_tokens));
+        let (vh, ph) = (cache::token_hash(vs_tokens), cache::token_hash(ps_tokens));
         // the shaders' input declarations (usage, index), parsed once
         let dcl_inputs = |tokens: &[u32]| -> Result<Vec<(u32, u32)>, String> {
             let shader = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;
@@ -1451,16 +1450,18 @@ impl WgpuBackend {
             types.push(ty);
             elements.push((u16::from_le_bytes([e[0], e[1]]) as u32, u16::from_le_bytes([e[2], e[3]]) as u64, format, k as u32));
         }
-        let (vs_module, vs_iface) = self.module(vs_tokens, d3d9wgsl::Options { vs_input_types: Some(types), half_pixel: true, ..Default::default() }, (vh, 0, false, 0))?;
-        // link the pixel inputs to the vertex outputs
-        let locations: Vec<Option<u32>> = self.ps_inputs[&ph].iter()
-            .map(|&(u, n)| vs_iface.outputs_vs.iter().position(|o| o.0 == u && o.1 == n).map(|p| p as u32)).collect();
+        let (vs_module, vs_iface) = self.module(vs_tokens, |_| d3d9wgsl::Options { vs_input_types: Some(types), half_pixel: true, ..Default::default() }, (vh, 0, false, 0))?;
+        // link the pixel inputs to the vertex outputs (built only for a
+        // translation)
+        let locations = |b: &Self| -> Vec<Option<u32>> {
+            b.ps_inputs[&ph].iter().map(|&(u, n)| vs_iface.outputs_vs.iter().position(|o| o.0 == u && o.1 == n).map(|p| p as u32)).collect()
+        };
         // D3D9's depth bias in the pixel shader (see d3d9wgsl Options::depth_bias)
         let depth_bias = d.depth.is_some() && state(7) != 0 && (state(195) != 0 || state(175) != 0);
         // render-target textures lack channels D3D9 samples as 1
         let ones = d.textures.iter().filter(|t| t.sampler < 16 && t.usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL) != 0)
             .fold(0u64, |m, t| m | (missing_channels(t.format) as u64) << (4 * t.sampler));
-        let ps_options = d3d9wgsl::Options { ps_input_locations: Some(locations), alpha_test: true, lod_bias: true, depth_bias, sampler_ones: ones, ..Default::default() };
+        let ps_options = |b: &Self| d3d9wgsl::Options { ps_input_locations: Some(locations(b)), alpha_test: true, lod_bias: true, depth_bias, sampler_ones: ones, ..Default::default() };
         let (ps_module, ps_iface) = self.module(ps_tokens, ps_options, (ph, vh, depth_bias, ones))?;
 
         // targets
@@ -1675,11 +1676,14 @@ impl WgpuBackend {
         // draw); wgpu forbids one texture as both binding and attachment in
         // a pass. The draw samples a copy made just before it, recorded on
         // the same encoder (L59).
-        let attached: std::collections::HashSet<u32> = d.targets.iter().chain(std::iter::once(&d.depth)).flatten()
-            .filter_map(|t| t.texture.map(|x| x.resource)).collect();
+        let attached: [Option<u32>; 5] = std::array::from_fn(|k| match k {
+            0..4 => d.targets[k].as_ref().and_then(|t| t.texture.map(|x| x.resource)),
+            _ => d.depth.as_ref().and_then(|t| t.texture.map(|x| x.resource)),
+        });
+        let attached = |r: u32| attached.contains(&Some(r));
         let mut snapshots: HashMap<u32, wgpu::Texture> = HashMap::new();
         for b in &d.textures {
-            if attached.contains(&b.resource) && !snapshots.contains_key(&b.resource) {
+            if attached(b.resource) && !snapshots.contains_key(&b.resource) {
                 let Some(tx) = self.texture_for(b) else { continue };
                 let src = tx.texture.clone();
                 let copy = self.device.create_texture(&wgpu::TextureDescriptor {

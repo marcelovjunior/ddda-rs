@@ -1,8 +1,10 @@
 //! What the wgpu backend costs the drawing thread per draw for draws like
 //! the game's (L78): shaders of the game's size, six mipmapped textures
 //! with their sampler states, the device's ~200 render states, both
-//! constant blocks; the constants change every draw and the textures
-//! alternate between two sets. `draw_cost` measures a minimal draw.
+//! constant blocks; the constants change every draw. L94: 8 shader
+//! pairs, 40 texture sets of 6 (96 textures), a quarter of the draws
+//! blended, the same stream every frame (the steady state of a scene).
+//! `draw_cost` measures a minimal draw.
 //!
 //!     cargo run --release -p ddgpu --example draw_cost_game [draws frames]
 use d3d9cmd::{ClearCall, Constants, DrawCall, GraphicsBackend, Indices, Target, TexKind, TextureBinding, Upload, Vertices};
@@ -56,8 +58,8 @@ fn main() {
     gpu.upload(Upload::Buffer { resource: 0x300, bytes: vb });
     let ib: Vec<u8> = (0..192u16).flat_map(|i| i.to_le_bytes()).collect();
     gpu.upload(Upload::Buffer { resource: 0x301, bytes: ib });
-    // twelve 64x64 textures with 7 levels: two sets of six
-    for t in 0..12u32 {
+    // 96 64x64 textures with 7 levels
+    for t in 0..96u32 {
         for level in 0..7u32 {
             let size = 64 >> level;
             let texels: Vec<u8> = (0..size * size).flat_map(|k| [(k * 3 + t * 20) as u8, (k * 5) as u8, (k * 7) as u8, 255]).collect();
@@ -73,13 +75,20 @@ fn main() {
     for (k, v) in [(7, 1), (14, 1), (23, 4), (22, 3), (8, 3), (27, 0), (168, 0xF), (190, 0xF), (191, 0xF), (192, 0xF), (174, 0), (162, !0), (58, 0xFF), (59, 0xFF)] {
         states.iter_mut().find(|s| s.0 == k).unwrap().1 = v;
     }
-    let (vs, ps) = (vertex_shader(150), pixel_shader(100));
+    let shaders: Vec<(Vec<u32>, Vec<u32>)> = (0..8).map(|v| (vertex_shader(140 + v), pixel_shader(90 + v))).collect();
     let draw = |k: u32| {
+        let (vs, ps) = &shaders[(k % 8) as usize];
+        let mut states = states.clone();
+        if k % 4 == 0 {
+            for (s, v) in [(27, 1), (19, 5), (20, 6)] {
+                states.iter_mut().find(|e| e.0 == s).unwrap().1 = v;
+            }
+        }
         let mut vs_c = Constants { f: vec![[0; 4]; 256], ..Default::default() };
         vs_c.f[(k % 200) as usize] = [1f32.to_bits(); 4];
         let mut ps_c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
         ps_c.f[0] = [((k % 7) as f32 / 7.0).to_bits(), 0.5f32.to_bits(), 1f32.to_bits(), 1f32.to_bits()];
-        let set = 6 * (k % 2);
+        let set = (k * 7) % 40 * 2;
         DrawCall {
             primitive: 4, primitives: 1, start: 3 * (k % 64), base_vertex: 0, min_index: 0, vertex_count: 192,
             vertices: Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]),
@@ -91,7 +100,7 @@ fn main() {
             vs_constants: vs_c,
             ps_constants: ps_c,
             textures: (0..6).map(|s| TextureBinding { sampler: s, resource: 0x200 + set + s, kind: TexKind::Flat, format: 21, width: 64, height: 64, depth: 1, levels: 7, usage: 0, states: sampler }).collect(),
-            render_states: states.clone(),
+            render_states: states,
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],
             scissor: [0, 0, w as i32, h as i32],
             targets: [Some(bb.clone()), None, None, None],

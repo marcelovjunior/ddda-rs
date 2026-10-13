@@ -106,6 +106,30 @@ impl std::hash::Hasher for FxHasher {
 }
 
 pub(crate) type FxMap<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<FxHasher>>;
+pub(crate) type FxSet<K> = std::collections::HashSet<K, std::hash::BuildHasherDefault<FxHasher>>;
+
+/// A shader's identity for the backend's caches (L94: it was SipHash over
+/// the tokens, a few kilobytes, twice per draw): a multiply-fold hash over
+/// 64-bit words with a final mix, ~8 bytes a cycle. A backend cache key
+/// only; nothing the guest sees depends on it.
+pub(crate) fn token_hash(tokens: &[u32]) -> u64 {
+    const K: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut h = (tokens.len() as u64).wrapping_mul(K);
+    let mut words = tokens.chunks_exact(2);
+    for w in &mut words {
+        let v = w[0] as u64 | (w[1] as u64) << 32;
+        h = (h ^ v).wrapping_mul(K).rotate_left(29);
+    }
+    if let [w] = words.remainder() {
+        h = (h ^ *w as u64).wrapping_mul(K).rotate_left(29);
+    }
+    // fmix64 (MurmurHash3's finaliser)
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xC4CE_B9FE_1A85_EC53);
+    h ^ (h >> 33)
+}
 
 /// One vertex buffer of a pipeline: stride, step mode, attributes
 /// (format, offset, shader location).
