@@ -1119,7 +1119,7 @@ every call between lifted functions goes through overridable dispatch:
 
 | call | generated as | cost when not overridden |
 |---|---|---|
-| to another shard | `x86::call_lifted(m, cpu, ADDR)` | the per-thread resolved-target cache (unchanged) |
+| to another shard | `x86::call_lifted(m, cpu, ADDR)` | the per-thread resolved-target cache, behind the `call_lifted` hook (L74) |
 | within the shard | `x86::call_local(m, cpu, ADDR, f_X)` | one bit test (a predictable branch), then the direct call |
 | to a platform model | `x86::call_local(m, cpu, ADDR, platform::X)` | the same |
 | indirect, through the runtime | `Registry` from `lifted::all()` | none (resolved when the registry is built) |
@@ -1154,11 +1154,62 @@ recompiles every shard, so it holds only mechanism; the policy is
 installed at run time:
 - the lifted program's resolver (`set_lifted_lookup`) and the overrides;
 - the preemption point: `call_lifted` calls the runtime's hook while
-  `x86::PREEMPT` is set, and the hook keeps its own rate
+  `ddnative_host::PREEMPT` is set, and the hook keeps its own rate
   (`ddruntime::threads::preempt`, once per 1,024 calls);
 - the platform models: called through `call_local` at their addresses,
   so a runtime service registered there replaces a model; the per-thread
   `platform::redirect` to `call_ext` works as before.
+- the slow paths of calls and x87 state, in `crates/ddnative-host`
+  (next section).
+
+### The stable kernel and ddnative-host (L74)
+
+Cargo rebuilds every crate that depends on a crate whenever any of its
+source changes, inline code or not. Before L74 the x87 live/park fixes
+(L62, L62b), the preemption point (L57) and the dispatch cache lived in
+`ddnative-base`, so each of them rebuilt the 32 shards (about 6 minutes
+of `play-fast`). Now `ddnative-base` holds only what the shards compile
+against, and `ddnative_base::hooks` declares the rest as function
+pointers that `crates/ddnative-host` installs at startup:
+
+| stays in ddnative-base (inline in the shards or their ABI) | in ddnative-host (behind `hooks::Hooks`) |
+|---|---|
+| `Cpu`, `Flags` and the flag semantics, `Mem` and the page-table fast accessors | `call_lifted`: the preemption point, the per-thread dispatch cache, the miss path |
+| x87 instruction execution, with the inline check that the state is live (TEB slot `x87::LIVE_SLOT`) | x87 `acquire`, `park`, the spill table, the image of a held state, the TEB slot's allocation |
+| `call_local`'s override bit test, the override registry, `lifted_target_uncached` | `ddnative_host::lifted_target` (the cached resolver), `PREEMPT`, `set_preempt_hook` |
+| the platform models and `platform::redirect` (the runtime picks what to redirect) | |
+
+Editing `ddnative-host` rebuilds it, `ddruntime` and the binary; no
+shard. Changing a hook's signature, or anything left in `ddnative-base`,
+still rebuilds every shard, so keep tuning out of it.
+
+Every process that runs lifted code calls `ddnative_host::install()`
+first (idempotent): the runtime's `Registry::install`, ddperf, and every
+test that runs lifted code or x87 instructions. Without it, lifted code
+panics with a message that says so. The single-file rustc harnesses in
+`research/native` take both crates as `#[path]` modules
+(`research/native/rust_base.py`).
+
+Hook cost (`research/native/hookbench`, a stand-in shard at the shard's
+opt-level, ddnative-base and ddnative-host at 3, best of 15 runs of
+10 million calls; the call loop alone is 8.4 ns at opt-level 0, 1.5 ns
+at opt-level 1):
+
+| a cross-shard call, caller at | before (inline cache) | before, not inlined | after (hook) |
+|---|---|---|---|
+| opt-level 0 | 22.9 ns | 24.2 ns | 8.4 ns |
+| opt-level 1 | 1.5 ns | 2.6 ns | 2.8 ns |
+
+`x86::call_lifted` is a non-inline trampoline. With the caller at
+opt-level 0 it now runs at opt-level 3, instead of as unoptimised local
+copies of itself, the cache lookup and `LocalKey::with`. At opt-level 1
+LLVM did not inline the old `#[inline]` version either: the load-game
+profile shows `call_lifted` as its own symbol in ddlift_15. So the
+opt-level-1 shards pay about 0.2 ns per call more than before. The
+dispatch cache is found through a TEB TLS slot, as the x87 live check
+(L62b) is. With a `thread_local!` the same hook cost 4.9 ns at
+opt-level 1. x87 instructions take the same inline path as before; only
+the slow paths (acquiring and parking a state) are indirect calls.
 
 ## Exact x87 arithmetic (L05)
 
