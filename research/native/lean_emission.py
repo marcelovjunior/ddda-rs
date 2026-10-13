@@ -22,6 +22,7 @@ idioms: push/pop/return-address pushes become calls to the tiny helpers in
 ddnative_base::emit, and the closure wrappers around call targets become
 direct calls.
 """
+import os
 import re
 
 STRING = r'"(?:\\.|[^"\\])*"'
@@ -173,6 +174,20 @@ def _scan(arm):
 
 def dead_flags(arm):
     """Drop flag writes that the same arm overwrites before any reader."""
+    # Independent generation-time train switch; preserve existing output by default.
+    if os.environ.get("LIFT_FLAG_FIXED_POINT", "0") != "1":
+        return _dead_flags_once(arm)
+    # Removing a dead INC/DEC also removes its input-CF observation. That
+    # can make the preceding producer dead, including another INC/DEC.
+    # Iterate to a fixed point; each successful pass removes a flag write.
+    while True:
+        reduced = _dead_flags_once(arm)
+        if reduced == arm:
+            return arm
+        arm = reduced
+
+
+def _dead_flags_once(arm):
     if "cpu.fl" not in arm:
         return arm
     events = _scan(arm)
