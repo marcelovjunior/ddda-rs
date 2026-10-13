@@ -157,3 +157,48 @@ impl Drop for Pinned {
 pub(crate) fn with<R>(f: impl FnOnce(&Runtime) -> R) -> R {
     f(&pin())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pinned_helpers_avoid_retains_and_keep_replaced_runtimes_alive() {
+        let original = current();
+        let a = Arc::new(Runtime::default());
+        let b = Arc::new(Runtime::default());
+        enter(a.clone());
+        let retained = Arc::strong_count(&a);
+        with(|outer| {
+            assert_eq!(Arc::strong_count(&a), retained);
+            with(|inner| assert!(std::ptr::eq(inner, outer)));
+            enter(b.clone());
+            with(|changed| assert!(std::ptr::eq(changed, b.as_ref())));
+            assert!(std::ptr::eq(outer, a.as_ref()));
+            assert_eq!(Arc::strong_count(&a), retained);
+        });
+        assert_eq!(Arc::strong_count(&a), 1);
+        CURRENT.with(|c| { assert_eq!(c.depth.get(), 0); assert!(c.retired.borrow().is_empty()); });
+        enter(original);
+    }
+
+    #[test]
+    fn nested_pins_release_retired_runtimes_on_unwind() {
+        let original = current();
+        let a = Arc::new(Runtime::default());
+        let b = Arc::new(Runtime::default());
+        enter(a.clone());
+        with(|outer| {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with(|_| { enter(b.clone()); panic!("nested service"); });
+            }));
+            assert!(result.is_err());
+            assert!(std::ptr::eq(outer, a.as_ref()));
+            with(|rt| assert!(std::ptr::eq(rt, b.as_ref())));
+            CURRENT.with(|c| assert_eq!(c.depth.get(), 1));
+        });
+        assert_eq!(Arc::strong_count(&a), 1);
+        CURRENT.with(|c| { assert_eq!(c.depth.get(), 0); assert!(c.retired.borrow().is_empty()); });
+        enter(original);
+    }
+}

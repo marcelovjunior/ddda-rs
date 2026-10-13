@@ -176,6 +176,9 @@ pub struct Registry {
     entries: Entries,
     bound: usize,
     names: HashMap<u32, String>,
+    /// Dense resolved COM tokens. Built once after registration; mutation
+    /// invalidates the entire cache, including indexed interior step entries.
+    methods: std::sync::OnceLock<Vec<Option<Entry>>>,
 }
 
 impl Registry {
@@ -220,6 +223,7 @@ impl Registry {
     /// Bind `addr` to `b`, replacing what was there (the runtime's own
     /// services over platform models, e.g. fastmem's memcpy).
     pub fn replace(&mut self, addr: u32, b: Binding) {
+        self.methods.take();
         match self.entries.get_mut(&addr) {
             Some(e) => {
                 // its step entry is resolved already (with the lookup set)
@@ -248,6 +252,7 @@ impl Registry {
     /// Install the generated, exact instruction-address resolver. Services
     /// retain precedence; whole-function lifts are not instruction fallbacks.
     pub fn set_instruction_lookup(&mut self, lookup: Lookup) {
+        self.methods.take();
         self.instructions = Some(lookup);
         // resolve the step entries again, from every bound address
         self.entries.retain(|_, e| e.binding.is_some());
@@ -276,13 +281,37 @@ impl Registry {
         self.bound == 0
     }
 
+    fn method_slot(addr: u32) -> Option<usize> {
+        // interfaces::Tokens allocates aligned 16-byte tokens in the reserved
+        // method region below image::IMPORT_TOKENS. Other addresses stay hashed.
+        let offset = addr.wrapping_sub(crate::interfaces::METHOD_TOKENS);
+        (offset < crate::image::IMPORT_TOKENS - crate::interfaces::METHOD_TOKENS
+            && offset & 15 == 0).then_some((offset / 16) as usize)
+    }
+
+    fn call_entry(&self, target: u32) -> Option<&Entry> {
+        if let Some(slot) = Self::method_slot(target) {
+            let methods = self.methods.get_or_init(|| {
+                let len = self.entries.keys().filter_map(|&addr| Self::method_slot(addr))
+                    .max().map_or(0, |slot| slot + 1);
+                let mut methods = vec![None; len];
+                for (&addr, &entry) in &self.entries {
+                    if let Some(slot) = Self::method_slot(addr) { methods[slot] = Some(entry); }
+                }
+                methods
+            });
+            return methods.get(slot).and_then(Option::as_ref);
+        }
+        self.entries.get(&target)
+    }
+
     /// Run whatever is bound at `target` (return address already pushed),
     /// or report it as unbound.
     pub fn call(&self, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) -> Result<(), Unbound> {
         // The step executor only where gen emitted restartable instruction
         // entries (L27b, LIFT_INSTRUCTIONS); whole-function bindings run
         // directly below.
-        let binding = match self.entries.get(&target) {
+        let binding = match self.call_entry(target) {
             Some(Entry { step: Some(_), .. }) => None,
             Some(Entry { binding: Some(b), .. }) => Some(*b),
             // not indexed: no binding, and a step entry only if the
@@ -301,7 +330,7 @@ impl Registry {
 
     /// The binding a call of `target` runs directly (not the step executor).
     fn direct(&self, target: u32) -> Option<Binding> {
-        match self.entries.get(&target) {
+        match self.call_entry(target) {
             Some(Entry { step: None, binding: Some(b) }) => Some(*b),
             _ => None,
         }
@@ -628,6 +657,62 @@ mod tests {
 
     fn same(a: Option<Step>, b: Option<Step>) -> bool {
         a.map(|f| f as usize) == b.map(|f| f as usize)
+    }
+
+    #[test]
+    fn dense_method_entries_preserve_rebinding_steps_holes_and_registries() {
+        const BASE: u32 = crate::interfaces::METHOD_TOKENS;
+        fn lookup(ip: u32) -> Option<Step> {
+            (ip == BASE || ip == BASE + 16).then_some(step)
+        }
+        fn no_steps(_: u32) -> Option<Step> { None }
+        let mut r = Registry::new();
+        r.insert(BASE, Binding::Device(ret, false)).unwrap();
+        r.insert(BASE + 32, Binding::Service(ret)).unwrap();
+        assert!(matches!(r.call_entry(BASE).unwrap().binding, Some(Binding::Device(_, false))));
+        assert!(r.call_entry(BASE + 16).is_none());
+        assert!(r.call_entry(BASE + 1).is_none());
+        assert!(r.call_entry(crate::image::IMPORT_TOKENS).is_none());
+        r.replace(BASE, Binding::LockFree(ret));
+        assert!(matches!(r.call_entry(BASE).unwrap().binding, Some(Binding::LockFree(_))));
+        assert!(r.insert(BASE, Binding::Service(ret)).is_err());
+        r.set_instruction_lookup(lookup);
+        assert!(same(r.call_entry(BASE).unwrap().step, Some(step)));
+        assert!(same(r.call_entry(BASE + 16).unwrap().step, Some(step)));
+        assert!(r.call_entry(BASE + 16).unwrap().binding.is_none());
+        r.set_instruction_lookup(no_steps);
+        assert!(r.call_entry(BASE).unwrap().step.is_none());
+        assert!(r.call_entry(BASE + 16).is_none());
+        let mut other = Registry::new();
+        other.insert(BASE, Binding::ServiceTail(ret)).unwrap();
+        assert!(matches!(other.call_entry(BASE).unwrap().binding, Some(Binding::ServiceTail(_))));
+        assert!(matches!(r.call_entry(BASE).unwrap().binding, Some(Binding::LockFree(_))));
+        // A late bound method grows the dense table after its first call.
+        r.insert(BASE + 4096, Binding::Service(ret)).unwrap();
+        assert!(r.call_entry(BASE + 4096).unwrap().binding.is_some());
+        assert_eq!(r.len(), 3);
+    }
+
+    #[test]
+    fn method_lookup_cost() {
+        let mut r = Registry::new();
+        let base = crate::interfaces::METHOD_TOKENS;
+        for slot in 0..1024 { r.insert(base + slot * 16, Binding::Device(ret, false)).unwrap(); }
+        r.call_entry(base); // exclude one-time resolution
+        let n = 1_000_000;
+        for _ in 0..3 {
+            let t = Instant::now();
+            for k in 0..n {
+                std::hint::black_box(r.entries.get(&std::hint::black_box(base + (k % 1024) * 16)));
+            }
+            let hash = t.elapsed().as_secs_f64() * 1e9 / n as f64;
+            let t = Instant::now();
+            for k in 0..n {
+                std::hint::black_box(r.call_entry(std::hint::black_box(base + (k % 1024) * 16)));
+            }
+            let dense = t.elapsed().as_secs_f64() * 1e9 / n as f64;
+            eprintln!("COM method lookup: hash {hash:.2} ns, dense {dense:.2} ns");
+        }
     }
 
     /// The registry answers exactly as the program's lookup and its

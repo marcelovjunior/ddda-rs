@@ -957,3 +957,21 @@ and resolves 17 -> 1; median copy CPU costs 138.2 -> 17.6 / 146.0 -> 26.8 /
 external Present sinks); `ddgpu --example copy_cost` provides the comparison.
 These are synthetic backend results, not a gameplay FPS claim. See
 [scope, complete timings and verification](tasks/L121-copy-no-flush.md).
+### L118 step 3: clean snapshots and COM dispatch (2026-10-13)
+
+The snapshot checks the resource dirty index during its existing device borrow.
+Clean resources skip read-list population; dirty reads use the same objects
+borrow. Clean state groups populate draws directly without taking/restoring the
+cache; constants, render states, viewport and scissor remain current. The debug
+dirty-index audit remains active. Registry resolves COM tokens densely for
+calls and direct-binding cache misses, invalidating on binding or instruction
+lookup mutation. L101's ext-call cache, runtime pin/retirement and D3dCell
+implementation are retained, with new runtime lifetime/unwind regressions.
+
+On the L101 base, three alternating debug draw-path pairs give clean medians
+12.29 -> 11.00 us and changed-sampler 24.00 -> 20.39 us, with unchanged 3 / 6
+allocations. Overlapping shared-load ranges and mixed clean pairs limit these
+numbers. Light suite: 177 pass, one inherited fullscreen gamma Reset failure,
+three ignored; all 48 active unit tests pass. Six resource/draw audit tests and
+ten command/frame tests pass. Implemented and synthetically tested; game/image
+comparison remains with the head. Full evidence: L118 task Results.
