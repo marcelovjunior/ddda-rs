@@ -4,6 +4,16 @@
 //! differential tests run it over the byte image the original ran on and
 //! compare the whole result. (docs/NATIVE_PIPELINE.md, "Memory-model ports")
 pub trait Mem {
+    /// Lifted-function scheduling boundary, independent of backing format.
+    fn entry(&self) {}
+    /// Opt-in flat view. As with page_table, the view must outlive the
+    /// lifted call and its admitted accesses must equal this Mem's bytes.
+    fn flat_base(&self) -> Option<FlatBase> { None }
+    /// Entry hook for newly generated shards. Old shards retain page_table.
+    fn access_context(&self) -> Option<std::ptr::NonNull<PageTable>> {
+        self.entry();
+        self.page_table()
+    }
     /// Preflight an instruction access without reading or publishing bytes.
     /// Returns the first inaccessible byte. Runtime adapters must forward
     /// this hook; legacy vector memories deliberately do not opt in.
@@ -60,6 +70,11 @@ pub const PAGES: usize = 1 << 20;
 pub const READ: u8 = 1;
 pub const WRITE: u8 = 2;
 
+/// Opaque view token, with the same call-lifetime contract as page_table.
+#[derive(Clone, Copy)]
+#[allow(dead_code)] // opaque placeholder when the opt-in backend is disabled
+pub struct FlatBase(pub(crate) std::num::NonZeroUsize);
+
 use std::sync::atomic::{AtomicUsize, AtomicU16, AtomicU32, AtomicU8, Ordering};
 
 /// Where a page's bytes live: a zeroed host allocation of PAGE bytes,
@@ -108,6 +123,11 @@ pub struct PageTable {
     // still mean unbacked even when a lazy page has permission bits set.
     entries: Box<[AtomicUsize; PAGES]>,
     retired: std::sync::Mutex<Vec<usize>>,
+    #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+    flat: Option<crate::flat::Arena>,
+    // Only opt-in flat mapping mutations take this lock. Accesses do not.
+    #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+    mapping: std::sync::Mutex<()>,
 }
 
 /// A zero-filled heap value of type `T`, in one allocation (the OS hands
@@ -132,6 +152,10 @@ impl Default for PageTable {
             // SAFETY: zero is a valid AtomicUsize.
             entries: unsafe { zeroed_box() },
             retired: Default::default(),
+            #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+            flat: None,
+            #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+            mapping: Default::default(),
         }
     }
 }
@@ -141,6 +165,8 @@ impl Drop for PageTable {
         let retired = std::mem::take(self.retired.get_mut().unwrap_or_else(|e| e.into_inner()));
         let live = self.entries.iter().map(|p| p.load(Ordering::Relaxed) & POINTER_MASK).filter(|&p| p != 0);
         for p in live.chain(retired) {
+            #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+            if self.flat.as_ref().is_some_and(|arena| arena.owns(p)) { continue; }
             // SAFETY: every non-null page came from alloc_zero_page and is
             // freed once (a retired page is no longer in the table)
             unsafe { std::alloc::dealloc(p as *mut u8, page_layout()) };
@@ -149,6 +175,17 @@ impl Drop for PageTable {
 }
 
 impl PageTable {
+    /// Explicit constructor: tests never change process-wide environment.
+    #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+    pub fn new_flat() -> std::io::Result<Self> {
+        let mut table = Self::default();
+        table.flat = Some(crate::flat::Arena::new()?);
+        Ok(table)
+    }
+    #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+    pub fn flat_base(&self) -> Option<FlatBase> {
+        self.flat.as_ref().map(|arena| arena.base())
+    }
     /// Page `p`'s permission bits.
     #[inline(always)]
     pub fn perm(&self, p: usize) -> u8 {
@@ -156,6 +193,12 @@ impl PageTable {
     }
     /// Set page `p`'s permission bits (after its page pointer, if any).
     pub fn set_perm(&self, p: usize, v: u8) {
+        #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+        let _mapping = self.flat.as_ref().map(|arena| {
+            let lock = self.mapping.lock().unwrap_or_else(|e| e.into_inner());
+            arena.protect(p, v);
+            lock
+        });
         // Preserve backing if another guest thread materialises concurrently.
         let mut entry = self.entries[p].load(Ordering::Relaxed);
         loop {
@@ -184,6 +227,17 @@ impl PageTable {
     #[cold]
     #[inline(never)]
     fn materialise(&self, p: usize) -> *mut u8 {
+        #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+        let _mapping = if let Some(arena) = &self.flat {
+            let lock = self.mapping.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = self.entries[p].load(Ordering::Acquire);
+            if entry & POINTER_MASK != 0 { return (entry & POINTER_MASK) as *mut u8; }
+            if let Some(ptr) = arena.materialise(p, entry as u8) {
+                self.entries[p].store(tagged_page(ptr as usize, entry as u8), Ordering::Release);
+                return ptr;
+            }
+            Some(lock)
+        } else { None };
         let fresh = alloc_zero_page();
         // Converting the allocation to an integer exposes its provenance;
         // masking the tag off later recovers an address in that allocation.
@@ -205,6 +259,12 @@ impl PageTable {
     /// Take page `p`'s bytes away (it reads as unbacked again); the old
     /// bytes are kept until the table is dropped.
     pub fn unback(&self, p: usize) {
+        #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+        let _mapping = self.flat.as_ref().map(|arena| {
+            let lock = self.mapping.lock().unwrap_or_else(|e| e.into_inner());
+            arena.retire(p);
+            lock
+        });
         let old = self.entries[p].fetch_and(u8::MAX as usize, Ordering::AcqRel) & POINTER_MASK;
         if old != 0 {
             self.retired.lock().unwrap_or_else(|e| e.into_inner()).push(old);
@@ -396,6 +456,79 @@ impl dyn Mem + '_ {
 /// Where Sparse hands out fresh blocks: research/native/harness.py uses the
 /// same base and rounding, so a replay gets the addresses the vector saw.
 pub const HEAP_BASE: u32 = 0x0C00_0000;
+
+// Cross-page stores must preflight the entire operation before publishing a
+// byte; wrapping and parallel unaligned operations keep the bytewise model.
+#[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+#[inline]
+fn flat_admitted(addr: u32, width: u32) -> bool {
+    addr % PAGE + width <= PAGE
+        && (addr % width == 0 || !ATOMIC_ACCESSES.load(Ordering::Relaxed))
+}
+
+macro_rules! flat_read {
+    ($name:ident, $fast:ident, $raw:ident, $ty:ty, $width:expr) => {
+        impl dyn Mem + '_ {
+            #[inline]
+            pub fn $name(&self, flat: Option<FlatBase>, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> $ty {
+                #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+                if let Some(base) = flat {
+                    if flat_admitted(addr, $width) {
+                        if let Some(value) = unsafe { crate::flat::$raw(base, addr) } { return value as $ty; }
+                    }
+                    // Go straight to the original trait on a host fault;
+                    // never retry an invalid access in the exception handler.
+                    return self.$raw(addr);
+                }
+                let _ = flat;
+                self.$fast(pt, addr)
+            }
+        }
+    };
+}
+macro_rules! flat_write {
+    ($name:ident, $fast:ident, $raw:ident, $ty:ty, $width:expr) => {
+        impl dyn Mem + '_ {
+            #[inline]
+            pub fn $name(&mut self, flat: Option<FlatBase>, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, value: $ty) {
+                #[cfg(all(windows, target_arch = "x86_64", feature = "flat-memory"))]
+                if let Some(base) = flat {
+                    if flat_admitted(addr, $width) && unsafe { crate::flat::$raw(base, addr, value as u32) } { return; }
+                    return self.$raw(addr, value);
+                }
+                let _ = flat;
+                self.$fast(pt, addr, value)
+            }
+        }
+    };
+}
+flat_read!(flat_u8, fast_u8, u8, u8, 1);
+flat_read!(flat_u16, fast_u16, u16, u16, 2);
+flat_read!(flat_u32, fast_u32, u32, u32, 4);
+flat_write!(flat_set_u8, fast_set_u8, set_u8, u8, 1);
+flat_write!(flat_set_u16, fast_set_u16, set_u16, u16, 2);
+flat_write!(flat_set_u32, fast_set_u32, set_u32, u32, 4);
+
+// Opt-level 0 callers must not instantiate the admission/Option scaffolding
+// at opt 0 (L77). These alternatives keep one optimized body in the base
+// crate, while opt-level 1 callers can select the inlinable forms above.
+macro_rules! flat_outlined {
+    ($read:ident, $inline_read:ident, $write:ident, $inline_write:ident, $ty:ty) => {
+        impl dyn Mem + '_ {
+            #[inline(never)]
+            pub fn $read(&self, flat: Option<FlatBase>, addr: u32) -> $ty {
+                self.$inline_read(flat, None, addr)
+            }
+            #[inline(never)]
+            pub fn $write(&mut self, flat: Option<FlatBase>, addr: u32, v: $ty) {
+                self.$inline_write(flat, None, addr, v)
+            }
+        }
+    };
+}
+flat_outlined!(flat_o_u8, flat_u8, flat_o_set_u8, flat_set_u8, u8);
+flat_outlined!(flat_o_u16, flat_u16, flat_o_set_u16, flat_set_u16, u16);
+flat_outlined!(flat_o_u32, flat_u32, flat_o_set_u32, flat_set_u32, u32);
 
 /// A Mem over one contiguous image starting at `base` (tests, tools).
 pub struct Image {

@@ -33,6 +33,7 @@ hostdisplay = { path = "../hostdisplay" }
 # runtime builds and tests its services alone: a session still loads the exe
 # and binds every service, and a call into game code stops as untranslated.
 default = ["game"]
+flat-memory = ["ddnative-base/flat-memory"]
 game = ["dep:ddnative", "dep:ddports"]
 crt-check = ["dep:ddlift-05", "dep:ddlift-06"]
 # `emu`: the diagnostic emulator fallback for untranslated functions

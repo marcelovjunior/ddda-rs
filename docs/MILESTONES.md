@@ -1,5 +1,20 @@
 # Milestones
 
+### L142 flat guest-memory prototype (2026-10-13)
+
+- Opt-in Windows x64 4 GiB reserved guest view with privileged alias,
+  page protections and VEH scalar recovery to the existing checked path.
+  Default backing/generated source remain unchanged; no game run.
+- Seven focused Rust tests and 28 emitter/lean tests pass: lazy pages,
+  permissions, original fault payloads, non-partial crossing stores,
+  wrapping, retirement/remapping and concurrent guest handles/alias access.
+- Hot-page microbenchmark: opt-1 inline write32 3.50 -> 2.47 ns, unaligned
+  read32 3.67 -> 2.89 ns; opt-0 inline regresses, outlined results mixed.
+  No whole-game performance or original-image acceptance claim.
+- Next: head/codex-7 select a separate generated-source native-gate pin,
+  measure shard compile time, then head compares gameplay. Opt-0 and
+  retired-slot costs remain blockers. `docs/tasks/L142-flat-memory.md`.
+
 ### L109d memory ownership diagnostics (2026-10-13)
 
 - Head's c18 run reaches 17.05 GiB private memory with only ~0.64 GiB live
