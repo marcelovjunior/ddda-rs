@@ -19,19 +19,34 @@ fn source_at(wgsl: String, dir: Option<&Path>) -> Result<wgpu::ShaderSource<'sta
     let Some(dir) = dir else {
         return Ok(wgpu::ShaderSource::Wgsl(wgsl.into()));
     };
+    Ok(wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(cached_module(&wgsl, dir)?)))
+}
+
+/// The naga module of `wgsl`: from the cache when it holds it, else parsed
+/// (and saved); parsed without a cache. The Vulkan path's shader modules
+/// come through here too (L179: it parsed every WGSL source again on every
+/// launch, 57% of the backend thread during a save load).
+pub fn module(wgsl: &str) -> Result<naga::Module, String> {
+    match default_dir() {
+        Some(dir) => cached_module(wgsl, &dir),
+        None => naga::front::wgsl::parse_str(wgsl).map_err(|e| e.emit_to_string(wgsl)),
+    }
+}
+
+fn cached_module(wgsl: &str, dir: &Path) -> Result<naga::Module, String> {
     let started = std::time::Instant::now();
-    let cached = load(dir, &wgsl);
+    let cached = load(dir, wgsl);
     let hit = cached.is_some();
     let module = match cached {
         Some(module) => module,
         None => {
-            let module = naga::front::wgsl::parse_str(&wgsl).map_err(|e| e.emit_to_string(&wgsl))?;
-            let _ = save(dir, &wgsl, &module);
+            let module = naga::front::wgsl::parse_str(wgsl).map_err(|e| e.emit_to_string(wgsl))?;
+            let _ = save(dir, wgsl, &module);
             module
         }
     };
     crate::pipeline_log::event("ir", if hit { "hit" } else { "miss" }, started);
-    Ok(wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)))
+    Ok(module)
 }
 
 pub fn default_dir() -> Option<PathBuf> {
