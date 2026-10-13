@@ -6,6 +6,7 @@
 //! Minimal shaders and tiny triangles, NOT a gameplay/FPS prediction.
 //! `native_draw_cost [frames=20] [draws=5000] [mode] [passes=1]`
 //! Modes: all/core/bundles/ash/native/compact/delta/interop; L123 adds
+//! ash-interop (raw drawing + wgpu resources/submit/image oracle) and
 //! churn/resident/resident-bundles (same full ABI, cap1-sized synthetic churn).
 use std::{
     future::Future,
@@ -47,7 +48,7 @@ struct C {{ colour: vec4<f32> }};
     )
 }
 fn vertices() -> Vec<u8> {
-    [[-1.0f32, -1.0], [-1.0, -0.875], [-0.875, -1.0]]
+    [[-1.0f32, -1.0], [-1.0, -0.75], [-0.75, -1.0]]
         .into_iter()
         .flatten()
         .flat_map(f32::to_le_bytes)
@@ -102,6 +103,7 @@ fn main() {
                 | "compact"
                 | "delta"
                 | "interop"
+                | "ash-interop"
                 | "churn"
                 | "resident"
                 | "resident-bundles"
@@ -136,9 +138,11 @@ fn main() {
         return;
     }
     println!("backend floor: uniform data prefilled, update copies excluded");
-    if mode == "all" || mode == "ash" {
-        vulkan::run(&device, frames, draws, passes);
-    }
+    let native_pixels = if mode == "all" || mode == "ash" || mode == "ash-interop" {
+        vulkan::run(&device, &queue, frames, draws, passes, mode == "ash-interop")
+    } else {
+        None
+    };
     if mode == "ash" {
         return;
     }
@@ -243,7 +247,7 @@ fn main() {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let view = target.create_view(&Default::default());
@@ -271,7 +275,7 @@ fn main() {
         started.elapsed().as_secs_f64() * 1e6 / draws as f64
     );
     for bundles in [false, true] {
-        if (mode == "core" && bundles) || (mode == "bundles" && !bundles) {
+        if ((mode == "core" || mode == "ash-interop") && bundles) || (mode == "bundles" && !bundles) {
             continue;
         }
         let mut samples = vec![];
@@ -324,6 +328,18 @@ fn main() {
                 samples.push([record, finish, submit]);
             }
         }
+        if let Some(expected) = &native_pixels {
+            let actual = read_pixels(&device, &queue, &target);
+            assert_eq!(&actual, expected, "raw Vulkan vs wgpu image");
+            assert!(
+                actual.chunks_exact(4).any(|p| p[1] != 0),
+                "must exercise rasterization"
+            );
+            println!(
+                "interop image: all {} RGBA bytes equal wgpu; drawn pixels present",
+                actual.len()
+            );
+        }
         report(
             if bundles {
                 "wgpu reused bundles"
@@ -335,6 +351,50 @@ fn main() {
             passes,
         );
     }
+}
+
+/// A normal wgpu consumer after native drawing; also exercises the next frame's
+/// COPY_SRC -> COLOR_TARGET transition. Readback is outside all CPU timings.
+fn read_pixels(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture) -> Vec<u8> {
+    let read = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("interop readback"),
+        size: 256 * SIZE as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &read,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256),
+                rows_per_image: Some(SIZE),
+            },
+        },
+        wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+    );
+    let index = queue.submit([encoder.finish()]);
+    read.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(index),
+            timeout: Some(std::time::Duration::from_secs(10)),
+        })
+        .unwrap();
+    let mapped = read.slice(..).get_mapped_range();
+    let bytes = mapped
+        .chunks_exact(256)
+        .flat_map(|row| row[..SIZE as usize * 4].iter().copied())
+        .collect();
+    drop(mapped);
+    read.unmap();
+    bytes
 }
 
 /// wgpu -> native Vulkan/hal -> wgpu readback, with the same wgpu-owned
@@ -704,11 +764,13 @@ fn native_workload(gpu: &wgpu::Device, queue: &wgpu::Queue, frames: usize, draws
         .unwrap();
         if frame == 3 && realistic {
             println!("synthetic sequential register payload {changes} bytes/frame");
-            println!("steady frame: upload={} bytes, dirty={} float4 slots, bundle builds={} hits={}",
+            println!(
+                "steady frame: upload={} bytes, dirty={} float4 slots, bundle builds={} hits={}",
                 recorder.stats.upload_bytes - before.upload_bytes,
                 recorder.stats.dirty_registers - before.dirty_registers,
                 recorder.stats.bundle_builds - before.bundle_builds,
-                recorder.stats.bundle_hits - before.bundle_hits);
+                recorder.stats.bundle_hits - before.bundle_hits
+            );
         }
         if frame >= 3 {
             samples.push([record, 0.0, submit]);
@@ -756,16 +818,28 @@ mod vulkan {
         )
         .unwrap()
     }
-    pub fn run(device: &wgpu::Device, frames: usize, draws: usize, passes: usize) {
+    pub fn run(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frames: usize,
+        draws: usize,
+        passes: usize,
+        interop: bool,
+    ) -> Option<Vec<u8>> {
         // SAFETY: all raw resources are exclusively owned by this benchmark;
         // no wgpu work is in flight or submitted concurrently on this queue.
         // Every frame waits its fence before resetting its pool or destroying
         // resources. The hal guard and wgpu Device outlive every raw handle.
-        unsafe {
-            run_raw(device, frames, draws, passes);
-        }
+        unsafe { run_raw(device, queue, frames, draws, passes, interop) }
     }
-    unsafe fn run_raw(device: &wgpu::Device, frames: usize, draws: usize, passes: usize) {
+    unsafe fn run_raw(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frames: usize,
+        draws: usize,
+        passes: usize,
+        interop: bool,
+    ) -> Option<Vec<u8>> {
         let hal = device.as_hal::<wgpu::hal::api::Vulkan>().expect("Vulkan device");
         let raw = hal.raw_device();
         let memory = hal
@@ -812,6 +886,54 @@ mod vulkan {
         let (ub, um) = buffer(&constants(draws), vk::BufferUsageFlags::UNIFORM_BUFFER);
         let (vb, vm) = buffer(&vertices(), vk::BufferUsageFlags::VERTEX_BUFFER);
         let (ib, im) = buffer(&[0, 0, 1, 0, 2, 0], vk::BufferUsageFlags::INDEX_BUFFER);
+        let shared_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &vertices(),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let shared_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &[0, 0, 1, 0, 2, 0],
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let shared_target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        // Raw writes do not update wgpu's initialization tracker. Initialize
+        // with a normal pass, submitted before the native workload.
+        if interop {
+            let view = shared_target.create_view(&Default::default());
+            let mut init = device.create_command_encoder(&Default::default());
+            drop(init.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            }));
+            queue.submit([init.finish()]);
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        }
+        let shared_image = shared_target
+            .as_hal::<wgpu::hal::api::Vulkan>()
+            .unwrap()
+            .raw_handle();
         let image = raw
             .create_image(
                 &vk::ImageCreateInfo::default()
@@ -847,7 +969,7 @@ mod vulkan {
         let view = raw
             .create_image_view(
                 &vk::ImageViewCreateInfo::default()
-                    .image(image)
+                    .image(if interop { shared_image } else { image })
                     .view_type(vk::ImageViewType::TYPE_2D)
                     .format(vk::Format::R8G8B8A8_UNORM)
                     .subresource_range(vk::ImageSubresourceRange {
@@ -865,7 +987,11 @@ mod vulkan {
             .samples(vk::SampleCountFlags::TYPE_1)
             .load_op(vk::AttachmentLoadOp::CLEAR)
             .store_op(vk::AttachmentStoreOp::STORE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .initial_layout(if interop {
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+            } else {
+                vk::ImageLayout::UNDEFINED
+            })
             .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
         let colour_ref = [vk::AttachmentReference {
             attachment: 0,
@@ -1070,69 +1196,173 @@ mod vulkan {
         let mut samples = vec![];
         for frame in 0..frames + 3 {
             let start = Instant::now();
-            raw.reset_command_pool(pool, vk::CommandPoolResetFlags::empty())
-                .unwrap();
-            raw.begin_command_buffer(
-                cmd,
-                &vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-            )
-            .unwrap();
-            let clear = [vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 1.0],
-                },
-            }];
-            for part in 0..passes {
-                raw.cmd_begin_render_pass(
-                    cmd,
-                    &vk::RenderPassBeginInfo::default()
-                        .render_pass(render_pass)
-                        .framebuffer(framebuffer)
-                        .render_area(vk::Rect2D {
-                            offset: vk::Offset2D { x: 0, y: 0 },
-                            extent: vk::Extent2D {
-                                width: SIZE,
-                                height: SIZE,
-                            },
-                        })
-                        .clear_values(&clear),
-                    vk::SubpassContents::INLINE,
+            let mut native_encoder = interop.then(|| device.create_command_encoder(&Default::default()));
+            let before = if interop {
+                let mut transition = device.create_command_encoder(&Default::default());
+                transition.transition_resources(
+                    [
+                        wgpu::BufferTransition {
+                            buffer: &shared_vb,
+                            state: wgpu::BufferUses::VERTEX,
+                        },
+                        wgpu::BufferTransition {
+                            buffer: &shared_ib,
+                            state: wgpu::BufferUses::INDEX,
+                        },
+                    ]
+                    .into_iter(),
+                    [wgpu::TextureTransition {
+                        texture: &shared_target,
+                        selector: None,
+                        state: wgpu::TextureUses::COLOR_TARGET,
+                    }]
+                    .into_iter(),
                 );
-                for k in part * draws / passes..(part + 1) * draws / passes {
-                    raw.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipelines[k % PIPELINES]);
-                    raw.cmd_bind_descriptor_sets(
+                Some(transition.finish())
+            } else {
+                None
+            };
+            if !interop {
+                raw.reset_command_pool(pool, vk::CommandPoolResetFlags::empty())
+                    .unwrap();
+                raw.begin_command_buffer(
+                    cmd,
+                    &vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )
+                .unwrap();
+            }
+            let record_commands = |cmd, hal_encoder: Option<&mut wgpu::hal::vulkan::CommandEncoder>| {
+                // Resource guards take the device snatch read lock. Release them
+                // before finish/submit/poll, which may need its write lock.
+                let vertex_guard = interop.then(|| shared_vb.as_hal::<wgpu::hal::api::Vulkan>().unwrap());
+                let index_guard = interop.then(|| shared_ib.as_hal::<wgpu::hal::api::Vulkan>().unwrap());
+                let clear = [vk::ClearValue {
+                    color: vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 1.0],
+                    },
+                }];
+                let mut hal_encoder = hal_encoder;
+                for part in 0..passes {
+                    raw.cmd_begin_render_pass(
                         cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        layout,
-                        0,
-                        &[groups[k % GROUPS]],
-                        &[(k as u64 * STRIDE) as u32],
+                        &vk::RenderPassBeginInfo::default()
+                            .render_pass(render_pass)
+                            .framebuffer(framebuffer)
+                            .render_area(vk::Rect2D {
+                                offset: vk::Offset2D { x: 0, y: 0 },
+                                extent: vk::Extent2D {
+                                    width: SIZE,
+                                    height: SIZE,
+                                },
+                            })
+                            .clear_values(&clear),
+                        vk::SubpassContents::INLINE,
                     );
-                    raw.cmd_bind_vertex_buffers(cmd, 0, &[vb], &[0]);
-                    raw.cmd_bind_index_buffer(cmd, ib, 0, vk::IndexType::UINT16);
-                    raw.cmd_draw_indexed(cmd, 3, 1, 0, 0, 0);
+                    for k in part * draws / passes..(part + 1) * draws / passes {
+                        raw.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipelines[k % PIPELINES]);
+                        raw.cmd_bind_descriptor_sets(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            layout,
+                            0,
+                            &[groups[k % GROUPS]],
+                            &[(k as u64 * STRIDE) as u32],
+                        );
+                        if let Some(h) = hal_encoder.as_deref_mut() {
+                            use wgpu::hal::{BufferBinding, CommandEncoder};
+                            h.set_vertex_buffer(
+                                0,
+                                BufferBinding::new_unchecked(
+                                    &**vertex_guard.as_ref().unwrap(),
+                                    0,
+                                    std::num::NonZeroU64::new(24),
+                                ),
+                            );
+                            h.set_index_buffer(
+                                BufferBinding::new_unchecked(
+                                    &**index_guard.as_ref().unwrap(),
+                                    0,
+                                    std::num::NonZeroU64::new(6),
+                                ),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                        } else {
+                            raw.cmd_bind_vertex_buffers(cmd, 0, &[vb], &[0]);
+                            raw.cmd_bind_index_buffer(cmd, ib, 0, vk::IndexType::UINT16);
+                        }
+                        raw.cmd_draw_indexed(cmd, 3, 1, 0, 0, 0);
+                    }
+                    raw.cmd_end_render_pass(cmd);
                 }
-                raw.cmd_end_render_pass(cmd);
+            };
+            // SAFETY: all borrowed resources and raw objects outlive GPU
+            // completion. A separate tracked encoder declares the exact usage;
+            // raw passes preserve COLOR_ATTACHMENT_OPTIMAL. Only wgpu submits
+            // shared work, so queue locking/fences/lifetimes stay under wgpu.
+            if interop {
+                native_encoder
+                    .as_mut()
+                    .unwrap()
+                    .as_hal_mut::<wgpu::hal::api::Vulkan, _, _>(|h| {
+                        let h = h.unwrap();
+                        record_commands(h.raw_handle(), Some(h));
+                    });
+            } else {
+                record_commands(cmd, None);
             }
             let record = start.elapsed().as_secs_f64();
             let start = Instant::now();
-            raw.end_command_buffer(cmd).unwrap();
+            let native = if interop {
+                Some(native_encoder.unwrap().finish())
+            } else {
+                raw.end_command_buffer(cmd).unwrap();
+                None
+            };
             let finish = start.elapsed().as_secs_f64();
             let start = Instant::now();
-            raw.reset_fences(&[fence]).unwrap();
-            raw.queue_submit(
-                hal.raw_queue(),
-                &[vk::SubmitInfo::default().command_buffers(&[cmd])],
-                fence,
-            )
-            .unwrap();
+            let submission = if interop {
+                Some(queue.submit(before.into_iter().chain(native)))
+            } else {
+                raw.reset_fences(&[fence]).unwrap();
+                raw.queue_submit(
+                    hal.raw_queue(),
+                    &[vk::SubmitInfo::default().command_buffers(&[cmd])],
+                    fence,
+                )
+                .unwrap();
+                None
+            };
             let submit = start.elapsed().as_secs_f64();
-            raw.wait_for_fences(&[fence], true, 10_000_000_000).unwrap();
+            if interop {
+                device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: submission,
+                        timeout: Some(std::time::Duration::from_secs(10)),
+                    })
+                    .unwrap();
+                // Alternate a normal wgpu consumer with native writes every
+                // frame, not just one initial transition.
+                let pixels = read_pixels(device, queue, &shared_target);
+                assert!(pixels.chunks_exact(4).any(|p| p[1] != 0));
+            } else {
+                raw.wait_for_fences(&[fence], true, 10_000_000_000).unwrap();
+            }
             if frame >= 3 {
                 samples.push([record, finish, submit]);
             }
         }
-        report("ash Vulkan direct", &mut samples, draws, passes);
+        report(
+            if interop {
+                "ash + wgpu resources/submit"
+            } else {
+                "ash Vulkan direct"
+            },
+            &mut samples,
+            draws,
+            passes,
+        );
+        let pixels = interop.then(|| read_pixels(device, queue, &shared_target));
         raw.destroy_fence(fence, None);
         raw.destroy_command_pool(pool, None);
         for p in pipelines {
@@ -1150,5 +1380,6 @@ mod vulkan {
             raw.destroy_buffer(b, None);
             raw.free_memory(m, None);
         }
+        pixels
     }
 }
