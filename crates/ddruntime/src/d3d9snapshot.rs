@@ -51,8 +51,15 @@ pub(super) fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32,
         if indices.is_none() { read(s.indices); }
         for &rt in &d.render_targets { read(rt); }
         if dirty & STREAMS != 0 {
-            groups.streams = s.streams.iter().enumerate().filter(|(_, v)| v.0 != 0)
-                .map(|(k, v)| (k as u32, v.0, v.1, v.2, s.stream_freq[k])).collect();
+            let mut streams = [(0, 0, 0, 0, 0); 16];
+            let mut count = 0;
+            for (k, v) in s.streams.iter().enumerate() {
+                if v.0 != 0 {
+                    streams[count] = (k as u32, v.0, v.1, v.2, s.stream_freq[k]);
+                    count += 1;
+                }
+            }
+            groups.streams = Arc::from(&streams[..count]);
         }
         let [vs_constants, ps_constants] = s.draw_constants(s.shader_float_counts);
         let draw = DrawCall {
@@ -73,14 +80,21 @@ pub(super) fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32,
     flush_reads(m, reads[..read_count].iter().copied());
     if dirty & TEXTURES != 0 {
         textures[..texture_count].sort_unstable_by_key(|t| t.0);
-        groups.textures = objects(|o| textures[..texture_count].iter().filter_map(|&(sampler, resource, states)| {
-            match o.live.get(&resource).map(|o| &o.kind) {
-                Some(Kind::Texture { data, .. }) => Some(TextureBinding { sampler, resource, states,
-                    kind: data.kind, format: data.format, width: data.width, height: data.height,
-                    depth: data.depth, levels: data.levels, usage: data.usage }),
-                _ => None,
+        groups.textures = objects(|o| {
+            // Build in stack storage, then collect an exact-length iterator
+            // directly into Arc. A filter_map collector first grows a Vec.
+            let mut bindings: [Option<TextureBinding>; 21] = std::array::from_fn(|_| None);
+            let mut count = 0;
+            for &(sampler, resource, states) in &textures[..texture_count] {
+                if let Some(Kind::Texture { data, .. }) = o.live.get(&resource).map(|o| &o.kind) {
+                    bindings[count] = Some(TextureBinding { sampler, resource, states,
+                        kind: data.kind, format: data.format, width: data.width, height: data.height,
+                        depth: data.depth, levels: data.levels, usage: data.usage });
+                    count += 1;
+                }
             }
-        }).collect());
+            bindings.into_iter().take(count).map(|binding| binding.unwrap()).collect()
+        });
     }
     if dirty & SHADERS != 0 { groups.shaders = shaders.map(shader_tokens); }
     if dirty & DECLARATION != 0 { groups.declaration = declaration(decl); }

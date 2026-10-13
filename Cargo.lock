@@ -2470,6 +2470,7 @@ version = "0.1.0"
 name = "ddgpu"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "bincode",
  "blake3",
  "d3d9cmd",
@@ -4512,6 +4513,13 @@ dependencies = [
  "mtarc",
  "mtxfs",
  "symphonia",
+]
+
+[[package]]
+name = "mtstate"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

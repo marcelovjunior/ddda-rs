@@ -27,6 +27,23 @@
   alternating 1,000-call rounds. No whole-loading speedup claim.
 - Next: head's load-log/same-save comparison, baseline `45b89e6f`,
   readable leaf selectable with `DDRUNTIME_ARCHIVE_INFLATE=0/1`.
+### L110 native backend floor (2026-10-13)
+
+- Optimized 5,000-draw/40-pipeline/200-group synthetic Vulkan floor,
+  including finish + submit: **wgpu 0.884, reused bundles 0.386, ash 0.326
+  us/draw**. Uniform data prefilled; no texture sampling/gameplay claim.
+- 900 one-draw clear passes: **7.146 / 7.151 / 1.351 us/pass**, respectively.
+  Bundles reduce repeated draw processing but do not remove pass overhead.
+- Native API: **4 GPU tests pass**, including full/compact exact D3D9/host
+  comparisons and texture/constants/ring checks; **5 CPU tests pass**.
+- Matched 5,000-draw native workload: full **3.839**, compact **1.692**,
+  compact range updates **1.433 us/draw**, including upload/finish/submit
+  (three alternating repeats). Minimal shaders; no gameplay/FPS claim.
+- wgpu-owned texture/buffer -> raw Vulkan/hal -> wgpu readback passes with
+  separate ordered encoders; mixing raw and normal encoding in one fails.
+- Current-base runtime light suite **167 pass / 1 existing gamma-reset
+  failure / 2 ignored**. Next: L119 integration and one captured-pass oracle.
+  Details and limitations: `docs/tasks/L110-native-device.md`.
 
 ### L111 nDraw executor observer (2026-10-13)
 
@@ -61,6 +78,30 @@
   `docs/tasks/L109-loading.md`.
 - Next: head-run unskipped boot/menu/save baseline using
   `DDRUNTIME_LOAD_LOG=1`, then same-save before/after phase comparison.
+### L118 dense D3D9 state and snapshot access (2026-10-13)
+
+- Dense sampler/stage banks and render-state indices preserve presence, unusual
+  IDs and immutable draw payloads. Scoped device borrows avoid repeated lock
+  bookkeeping; dirty snapshots avoid temporary Vec growth.
+- Three paired debug dirty-sampler draw medians **49.71 -> 29.97 us**, allocations
+  **8 -> 6** including COM test buffers. Clean draw timings overlap; no FPS claim.
+- Runtime light suite **158 passed / one fullscreen-gamma Reset failure /
+  one ignored**; new map-equivalence, snapshot-retention and lock-unwind checks
+  pass. No game/shard/GPU runs. Details: `docs/tasks/L118-d3d9-render-thread.md`.
+- Next: head combo4 gameplay/image comparison and renewed render-thread profile.
+### L117 nDraw state semantics (2026-10-13)
+
+- New standalone mtstate decoder: four descriptor constructors, eight
+  applies and InputLayout/declaration synthesis compared with original
+  Unicorn vectors. **3,584 cases / 17,928 D3D9 calls** and checked memory
+  match; four contract tests and strict crate clippy pass.
+- Raster depth-bias multiplier is `0x33800001`; sampler max-mip conversion
+  truncates. This is a call-level semantic decoder, not an ABI override.
+- NDRAW section9 maps descriptors to D3D9/wgpu and lists native gaps.
+  Runtime light serial:155 pass,1 inherited fullscreen gamma Reset failure,
+  1 ignored (initial parallel lock-timing failure passes serially).
+- Next: L112/L110 integration and head-run frame comparison. No GPU/game
+  run or image/FPS claim. Details: `docs/tasks/L117-state-semantics.md`.
 
 ### L90 shared draw payloads (2026-10-13)
 
