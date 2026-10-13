@@ -104,6 +104,7 @@ class CodegenTests(unittest.TestCase):
             #[path = "{(root / 'crates/ddnative-base/src/mem.rs').as_posix()}"] mod mem;
             #[path = "{(root / 'crates/ddnative-base/src/x86.rs').as_posix()}"] mod x86;
             #[path = "{(root / 'crates/ddnative-base/src/x87.rs').as_posix()}"] mod x87;
+            #[path = "{(root / 'crates/ddnative-base/src/emit.rs').as_posix()}"] mod emit;
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod reference {{ use super::*; pub(super) fn run(m: &mut dyn Mem, c: &mut Cpu) {{ f_00001000(m,c); }} {reference} }}
             mod generated {{ use super::*; {generated} }}
@@ -187,6 +188,7 @@ class CodegenTests(unittest.TestCase):
             #[path = "{(root / 'crates/ddnative-base/src/mem.rs').as_posix()}"] mod mem;
             #[path = "{(root / 'crates/ddnative-base/src/x86.rs').as_posix()}"] mod x86;
             #[path = "{(root / 'crates/ddnative-base/src/x87.rs').as_posix()}"] mod x87;
+            #[path = "{(root / 'crates/ddnative-base/src/emit.rs').as_posix()}"] mod emit;
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod generated {{ use super::*; {generated} }}
         ''' + r'''

@@ -55,6 +55,7 @@ class TerminalReplay(unittest.TestCase):
         self.assertTrue(case['terminal'])
         source = lift.lifted_test_source('// verifies 0x00400000')
         stub = ('mod lifted {\n    use ddnative_base::mem::Mem;\n    use ddnative_base::x86::{self, Cpu, Flags};\n'
+                 '    use ddnative_base::emit;\n'
                 + function + '\n'
                 '    pub fn all() -> Vec<(u32, fn(&mut dyn Mem, &mut Cpu))> { vec![(0x400000, f_00400000)] }\n'
                 '    pub fn dispatch_table() -> std::collections::HashMap<u32, fn(&mut dyn Mem, &mut Cpu)> { Default::default() }\n'

@@ -87,7 +87,7 @@ class IntegerSseTests(unittest.TestCase):
                    '0f140510104000','660f760510104000','660ffe0510104000','0f2b0500300000'):
             programs.append(load+op+store)
         root=Path(__file__).resolve().parents[2]
-        source='#![allow(warnings)]\n'+''.join(f'#[path="{(root/f"crates/ddnative-base/src/{m}.rs").as_posix()}"] mod {m};\n' for m in ('mem','x86','x87'))
+        source='#![allow(warnings)]\n'+''.join(f'#[path="{(root/f"crates/ddnative-base/src/{m}.rs").as_posix()}"] mod {m};\n' for m in ('mem','x86','x87','emit'))
         source+='use mem::Mem; use x86::{Cpu,Flags};\n'
         for k,hexcode in enumerate(programs):
             code=bytes.fromhex(hexcode)
