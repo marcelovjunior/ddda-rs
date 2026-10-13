@@ -110,6 +110,17 @@ pub enum Indices {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RenderStateList(std::sync::Arc<Vec<(u32, u32)>>);
 
+impl RenderStateList {
+    /// The same shared list (not merely equal states).
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+    /// Where the shared list lives, for a cache slot.
+    pub fn address(&self) -> u64 {
+        std::sync::Arc::as_ptr(&self.0) as usize as u64
+    }
+}
+
 impl std::ops::Deref for RenderStateList {
     type Target = Vec<(u32, u32)>;
     fn deref(&self) -> &Vec<(u32, u32)> {
