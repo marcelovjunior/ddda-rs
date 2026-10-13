@@ -155,6 +155,16 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Capture format v3 now saves bounded diagnostic fixtures even when preseed or
+stream capture rejects. The journal retains its first failure while recording
+later valid serial input/writes. The file contains the rejection reason;
+offline replay can diagnose it but ALWAYS returns rejection, even if the
+synthetic stream/memory comparison succeeds. Live execution does not replay
+or publish rejected captures. Twelve focused replay tests pass, including
+round-trip rejection metadata and diagnostic-match-cannot-accept coverage.
+Head must rebuild both binaries with v3 for the queued capture.
+
+
 First actual cap172 run (#14314/14315) confirms hooks and sample300 entry,
 but rejects capture at address0 before writing a file. The old failure word
 conflated host allocations with unreadable seeded pages and overwrote first

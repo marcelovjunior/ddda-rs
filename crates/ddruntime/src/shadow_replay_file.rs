@@ -3,7 +3,7 @@
 use super::*;
 use std::io::{self, Read, Write};
 
-const MAGIC: &[u8; 8] = b"DDSH172\x02";
+const MAGIC: &[u8; 8] = b"DDSH172\x03";
 const CPU_WORDS: usize = 84;
 
 pub(super) struct Fixture {
@@ -16,6 +16,8 @@ pub(super) struct Fixture {
     pub scheduler: u32,
     pub stack: Range<u32>,
     pub writes: BTreeMap<u32, u8>,
+    /// Incomplete captures are diagnostic artifacts, never accepted proofs.
+    pub rejection: Option<String>,
 }
 
 fn invalid() -> io::Error {
@@ -97,6 +99,12 @@ impl Fixture {
         }
         write_cpu(out, &self.incoming, self.mxcsr)?;
         write_cpu(out, &self.outgoing, self.result_mxcsr)?;
+        let rejection = self.rejection.as_deref().unwrap_or("").as_bytes();
+        if rejection.len() > 4096 {
+            return Err(invalid());
+        }
+        put(out, rejection.len() as u32)?;
+        out.write_all(rejection)?;
         self.input.write_to(out)?;
         put(out, self.writes.len() as u32)?;
         for (&address, &value) in &self.writes {
@@ -114,6 +122,17 @@ impl Fixture {
         let (context, scheduler, low, high) = (word(input)?, word(input)?, word(input)?, word(input)?);
         let (incoming, mxcsr) = read_cpu(input)?;
         let (outgoing, result_mxcsr) = read_cpu(input)?;
+        let rejection_len = word(input)? as usize;
+        if rejection_len > 4096 {
+            return Err(invalid());
+        }
+        let mut rejection = vec![0; rejection_len];
+        input.read_exact(&mut rejection)?;
+        let rejection = if rejection.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8(rejection).map_err(|_| invalid())?)
+        };
         if low >= incoming.esp || incoming.esp >= high || outgoing.esp > high || high - low > 8 << 20 {
             return Err(invalid());
         }
@@ -145,6 +164,7 @@ impl Fixture {
             scheduler,
             stack: low..high,
             writes,
+            rejection,
         })
     }
 }
@@ -179,6 +199,7 @@ mod tests {
             scheduler: 0x1100,
             stack: 0x1000..0x2000,
             writes: BTreeMap::from([(0x1100, 5)]),
+            rejection: Some("synthetic diagnostic capture only".into()),
         };
         let mut bytes = Vec::new();
         fixture.write(&mut bytes).unwrap();
@@ -188,6 +209,7 @@ mod tests {
         assert_eq!(decoded.result_mxcsr, 0x3f80);
         assert_ne!(decoded.result_mxcsr, decoded.outgoing.mxcsr.0);
         assert_eq!(decoded.writes, fixture.writes);
+        assert_eq!(decoded.rejection, fixture.rejection);
         assert_eq!(decoded.input.u32(0x1100), 0);
         let mut again = Vec::new();
         decoded.write(&mut again).unwrap();
