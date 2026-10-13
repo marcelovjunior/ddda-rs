@@ -2,6 +2,10 @@
 
 ### L158 critical scheduler jobs (2026-10-13)
 
+- Exact E0E5E0 hash candidate: **528 original returns** match port and
+  isolated lift; **672 paired fault/access cases** pass. All **105 paired
+  CPU samples improve**, median **1.63–2.01x**. Opt-in JOB_HASH=1;
+  combined native gate and head per-job A/B remain pending.
 - Late c26s1 main-only callback leaders: DB7620 **10.679 ms/Present**,
   4B9FF0 **5.179**, 1090F70 **3.933**. These dispatch virtual methods;
   old worker coverage/tail duplication prevents per-join critical ranking.
