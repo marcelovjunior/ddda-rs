@@ -361,7 +361,8 @@ fn encode_shader(m: &dyn Mem, binding: u32, max_bytes: usize) -> Result<(Vec<u8>
                         let source = Capture::address(value & !15, ((d >> 6) & 1023) * 4)?;
                         // BOOL uploads count scalar words; integer/float count vec4s.
                         let stride = if section == 3 { 4 } else { 16 };
-                        let at = r.out.len() as u32;
+                        // `block` writes the size word, then the bytes
+                        let at = r.out.len() as u32 + 4;
                         r.block(source, count * stride)?;
                         for i in 0..count * stride {
                             layout.push((at + i, ConstByte {
