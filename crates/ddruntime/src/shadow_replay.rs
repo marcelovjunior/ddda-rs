@@ -1222,10 +1222,15 @@ fn compare_replays(
     // (d3d9shader::Shader::float_reads, conservative). The original's own
     // parallel branch of DB63E0 allocates from the lanes too, so this residue
     // differs between its serial and parallel executions as well.
-    let reads: BTreeMap<u32, Option<d3d9shader::FloatReads>> = shaders
+    // (strict reads, reads with relative indexing kept inside its declared
+    // array: an ASSUMPTION, counted and logged separately)
+    let reads: BTreeMap<u32, Option<(d3d9shader::FloatReads, d3d9shader::FloatReads)>> = shaders
         .iter()
-        .map(|(&handle, tokens)| (handle, d3d9shader::parse(tokens).ok().map(|s| s.float_reads())))
+        .map(|(&handle, tokens)| {
+            (handle, d3d9shader::parse(tokens).ok().map(|s| (s.float_reads(), s.float_reads_in_bounds())))
+        })
         .collect();
+    let mut in_bounds_only = 0usize;
     let mut residue: Vec<(Vec<usize>, mtcore::shadow_lanes::ConstByte, u8, u8)> = Vec::new();
     let mut refused = 0;
     let mut residue_allowed = |path: &[usize],
@@ -1257,8 +1262,15 @@ fn compare_replays(
         if handle != other {
             return Err(format!("shader handles differ {handle:#x} / {other:#x}"));
         }
-        let Some(Some(r)) = reads.get(&handle) else { return Err(format!("shader {handle:#x} not captured or not parsed")) };
-        if r.reads(ca.register as usize, (ca.byte / 4) as usize) {
+        let Some(Some((strict, bounded))) = reads.get(&handle) else {
+            return Err(format!("shader {handle:#x} not captured or not parsed"))
+        };
+        let (register, component) = (ca.register as usize, (ca.byte / 4) as usize);
+        if strict.reads(register, component) && !bounded.reads(register, component) {
+            in_bounds_only += 1;
+        }
+        let r = bounded;
+        if r.reads(register, component) {
             // the instructions that read the register (or any, relatively)
             let lines: Vec<String> = shaders
                 .get(&handle)
@@ -1306,8 +1318,8 @@ fn compare_replays(
     if !residue.is_empty() {
         let first = &residue[0];
         eprintln!(
-            "parallel-shadow unread residue bytes allowed={} (first: path {:?} stage {} c{} byte {} serial={:#04x} parallel={:#04x})",
-            residue.len(), first.0, first.1.stage, first.1.register, first.1.byte, first.2, first.3
+            "parallel-shadow unread residue bytes allowed={} (of which {} unread only if relative indexing stays in its array; first: path {:?} stage {} c{} byte {} serial={:#04x} parallel={:#04x})",
+            residue.len(), in_bounds_only, first.0, first.1.stage, first.1.register, first.1.byte, first.2, first.3
         );
     }
     if let Some(diff) = first {

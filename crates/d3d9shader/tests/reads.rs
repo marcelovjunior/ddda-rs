@@ -91,3 +91,44 @@ fn unknown_operations_read_every_selected_component() {
     let t = [VS_3_0, ins(37, 2), param(TEMP, 0, 0b0011), param(CONST, 7, YZZZ), END];
     assert_eq!(parse(&t).unwrap().float_reads().direct[7], 0b0110);
 }
+
+/// A vs_3_0 shader with a constant table declaring `fWinds` at c9..c17
+/// (eight float4s), then `rcp r2.z, c9[a0.x].w`.
+fn indexed_array_shader() -> Vec<u32> {
+    let mut d = vec![0u8; 84];
+    let put = |d: &mut Vec<u8>, at: usize, v: u32, n: usize| d[at..at + n].copy_from_slice(&v.to_le_bytes()[..n]);
+    put(&mut d, 0, 28, 4); // size
+    put(&mut d, 4, 72, 4); // creator
+    put(&mut d, 8, VS_3_0, 4);
+    put(&mut d, 12, 1, 4); // one constant
+    put(&mut d, 16, 28, 4); // its info
+    put(&mut d, 24, 76, 4); // target
+    put(&mut d, 28, 64, 4); // name
+    put(&mut d, 32, 2, 2); // float4 set
+    put(&mut d, 34, 9, 2); // c9
+    put(&mut d, 36, 8, 2); // eight registers
+    put(&mut d, 40, 48, 4); // type info
+    put(&mut d, 48, 2, 2); // vector
+    put(&mut d, 50, 3, 2); // float
+    put(&mut d, 52, 1, 2);
+    put(&mut d, 54, 4, 2);
+    put(&mut d, 56, 8, 2); // eight elements
+    d[64..71].copy_from_slice(b"fWinds\0");
+    d[72..74].copy_from_slice(b"x\0");
+    d[76..83].copy_from_slice(b"vs_3_0\0");
+    let mut t = vec![VS_3_0, 0xFFFE | (1 + 21) << 16, 0x4241_5443];
+    t.extend(d.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())));
+    t.extend([ins(6, 3), param(TEMP, 2, 0b0100), param(CONST, 9, WWWW) | RELATIVE, param(ADDR, 0, XXXX), END]);
+    t
+}
+
+#[test]
+fn in_bounds_relative_reads_stay_in_their_declared_array() {
+    let s = parse(&indexed_array_shader()).unwrap();
+    // without the table's bounds: w of any register
+    assert!(s.float_reads().reads(28, 3));
+    let r = s.float_reads_in_bounds();
+    assert_eq!(r.any, 0);
+    assert!((9..17).all(|k| r.direct[k] == 0b1000));
+    assert!(!r.reads(8, 3) && !r.reads(17, 3) && !r.reads(28, 3));
+}
