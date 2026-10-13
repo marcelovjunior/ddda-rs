@@ -1214,29 +1214,61 @@ fn compare_replays(
             word(&results[1].2)
         );
     }
-    // Uninitialized constant components (claude-9, docs/tasks/L172): a shader
-    // constant byte may differ only when neither traversal wrote its source
-    // (both executions upload arena residue the producer never set, e.g.
-    // CBSkinning's w, which 0x00FE4960's caller leaves unwritten) and the
-    // bound shader of that stage provably never reads the component
-    // (d3d9shader::Shader::float_reads, conservative). The original's own
-    // parallel branch of DB63E0 allocates from the lanes too, so this residue
-    // differs between its serial and parallel executions as well.
-    // (strict reads, reads with relative indexing kept inside its declared
-    // array: an ASSUMPTION, counted and logged separately)
+    // Unread shader constant components (claude-9, docs/tasks/L172). A float
+    // constant byte uploaded by a shader binding may differ between the two
+    // executions only when (1) the binding's own shader for that stage never
+    // reads the component and (2) no later draw of the stream reads it before
+    // a binding uploads that register again (constants persist on the D3D9
+    // device). Such bytes cannot change a draw of the stream. Examples:
+    // CBSkinning's w, which 0x00FE4960's caller never writes (arena residue
+    // that differs with allocation, as in the original's own parallel branch
+    // of DB63E0), and float constants padded to a float4 (fWindNum's y z w).
+    // The categories are counted and reported: residue in both executions,
+    // written but unread, unread only if relative indexing stays inside its
+    // declared array (an ASSUMPTION, d3d9shader float_reads_in_bounds), and
+    // components whose value persists past the end of the stream.
     let reads: BTreeMap<u32, Option<(d3d9shader::FloatReads, d3d9shader::FloatReads)>> = shaders
         .iter()
         .map(|(&handle, tokens)| {
             (handle, d3d9shader::parse(tokens).ok().map(|s| (s.float_reads(), s.float_reads_in_bounds())))
         })
         .collect();
-    let mut in_bounds_only = 0usize;
+    // the serial stream in executor order (a record, then its nested entries)
+    fn flatten(
+        entries: &[mtcore::shadow_lanes::Entry],
+        path: &mut Vec<usize>,
+        out: &mut Vec<(Vec<usize>, Vec<mtcore::shadow_lanes::Binding>)>,
+    ) {
+        for (i, e) in entries.iter().enumerate() {
+            path.push(i);
+            let shaders = e
+                .record
+                .bindings
+                .iter()
+                .filter(|b| b.kind == mtcore::shadow_lanes::BindingKind::Shader)
+                .cloned()
+                .collect();
+            out.push((path.clone(), shaders));
+            flatten(&e.record.children, path, out);
+            path.pop();
+        }
+    }
+    let mut order = Vec::new();
+    flatten(&results[0].1.entries, &mut Vec::new(), &mut order);
+    // the stage's shader handle: metadata (+0x10 vertex, +0x14 pixel), encoded
+    // after the binding's 12 header bytes (each block after its size word)
+    let handle_of = |x: &mtcore::shadow_lanes::Binding, stage: u8| {
+        let at = 4 + 12 + 4 + 0x10 + 4 * stage as usize;
+        x.bytes.get(at..at + 4).map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+    };
+    let mut counts = [0usize; 4]; // residue in both, written, in-bounds assumption, persisting
     let mut residue: Vec<(Vec<usize>, mtcore::shadow_lanes::ConstByte, u8, u8)> = Vec::new();
     let mut refused = 0;
     let mut residue_allowed = |path: &[usize],
-                     a: &mtcore::shadow_lanes::Binding,
-                     b: &mtcore::shadow_lanes::Binding,
-                     offset: usize| -> Result<(), String> {
+                               a: &mtcore::shadow_lanes::Binding,
+                               b: &mtcore::shadow_lanes::Binding,
+                               offset: usize|
+     -> Result<(), String> {
         let at = offset as u32;
         let origin = |x: &mtcore::shadow_lanes::Binding| x.constants.iter().find(|(o, _)| *o == at).map(|&(_, c)| c);
         let (Some(ca), Some(cb)) = (origin(a), origin(b)) else {
@@ -1245,52 +1277,33 @@ fn compare_replays(
         if ca.section != 1 || (ca.stage, ca.register, ca.byte) != (cb.stage, cb.register, cb.byte) {
             return Err(format!("origins differ or not float: {ca:x?} / {cb:x?}"));
         }
-        if results[0].2.contains_key(&ca.source) || results[1].2.contains_key(&cb.source) {
-            let word = |x: &mtcore::shadow_lanes::Binding| {
-                let w = offset & !3;
-                x.bytes.get(w..w + 4).map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-            };
-            return Err(format!(
-                "written by a traversal: stage {} section {} c{} byte {}: serial {:#x} {} ({:?}) parallel {:#x} {} ({:?})",
-                ca.stage, ca.section, ca.register, ca.byte,
-                ca.source, results[0].2.contains_key(&ca.source), word(a),
-                cb.source, results[1].2.contains_key(&cb.source), word(b)
-            ));
-        }
-        // the stage's shader handle: metadata (+0x10 vertex, +0x14 pixel),
-        // encoded after the binding's 12 header bytes (each block after its
-        // size word), equal on both sides
-        let handle_at = 4 + 12 + 4 + 0x10 + 4 * ca.stage as usize;
-        let handle = |x: &mtcore::shadow_lanes::Binding| {
-            x.bytes.get(handle_at..handle_at + 4).map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+        let (Some(handle), Some(other)) = (handle_of(a, ca.stage), handle_of(b, ca.stage)) else {
+            return Err("no shader handle".into());
         };
-        let (Some(handle), Some(other)) = (handle(a), handle(b)) else { return Err("no shader handle".into()) };
         if handle != other {
             return Err(format!("shader handles differ {handle:#x} / {other:#x}"));
         }
-        let Some(Some((strict, bounded))) = reads.get(&handle) else {
-            return Err(format!("shader {handle:#x} not captured or not parsed"))
-        };
         let (register, component) = (ca.register as usize, (ca.byte / 4) as usize);
-        if strict.reads(register, component) && !bounded.reads(register, component) {
-            in_bounds_only += 1;
-        }
-        let r = bounded;
-        if r.reads(register, component) {
-            // the instructions that read the register (or any, relatively)
-            let lines: Vec<String> = shaders
-                .get(&handle)
-                .and_then(|t| d3d9shader::parse(t).ok())
-                .map(|s| d3d9shader::disasm::disassemble(&s))
+        let reader = |handle: u32| -> Result<(bool, bool), String> {
+            match reads.get(&handle) {
+                Some(Some((strict, bounded))) => Ok((strict.reads(register, component), bounded.reads(register, component))),
+                _ => Err(format!("shader {handle:#x} not captured or not parsed")),
+            }
+        };
+        let (strict, bounded) = reader(handle)?;
+        if bounded {
+            let parsed = shaders.get(&handle).and_then(|t| d3d9shader::parse(t).ok());
+            let lines: Vec<String> = parsed
+                .as_ref()
+                .map(d3d9shader::disasm::disassemble)
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|l| l.contains(&format!("c{}", ca.register)) || l.contains("[a0") || l.contains("[aL"))
+                .filter(|l| l.contains(&format!("c{register}")) || l.contains("[a0") || l.contains("[aL"))
                 .take(8)
                 .collect();
-            let table: Vec<String> = shaders
-                .get(&handle)
-                .and_then(|t| d3d9shader::parse(t).ok())
-                .and_then(|s| d3d9shader::ctab::table(&s))
+            let table: Vec<String> = parsed
+                .as_ref()
+                .and_then(d3d9shader::ctab::table)
                 .map(|t| {
                     t.constants
                         .iter()
@@ -1300,9 +1313,36 @@ fn compare_replays(
                 })
                 .unwrap_or_default();
             return Err(format!(
-                "shader {handle:#x} may read c{} component {} (direct mask {:#x}, relative mask {:#x}): {lines:?}; float constants {table:?}",
-                ca.register, ca.byte / 4, r.direct.get(ca.register as usize).copied().unwrap_or(0xff), r.any
+                "shader {handle:#x} may read c{register} component {component}: {lines:?}; float constants {table:?}"
             ));
+        }
+        // later draws of the stream, until the register is uploaded again
+        let start = order.iter().position(|(p, _)| p.as_slice() == path).ok_or("entry not in the stream")?;
+        let mut persists = true;
+        'later: for (later_path, bindings) in &order[start + 1..] {
+            for binding in bindings {
+                let Some(h) = handle_of(binding, ca.stage) else { continue };
+                if h == 0 {
+                    continue;
+                }
+                if reader(h)?.1 {
+                    return Err(format!(
+                        "a later draw {later_path:?} (shader {h:#x}) may read c{register} component {component} before it is uploaded again"
+                    ));
+                }
+                if binding.constants.iter().any(|(_, c)| c.stage == ca.stage && c.section == 1 && c.register == ca.register) {
+                    persists = false;
+                    break 'later;
+                }
+            }
+        }
+        let written = results[0].2.contains_key(&ca.source) || results[1].2.contains_key(&cb.source);
+        counts[if written { 1 } else { 0 }] += 1;
+        if strict {
+            counts[2] += 1;
+        }
+        if persists {
+            counts[3] += 1;
         }
         residue.push((path.to_vec(), ca, a.bytes[offset], b.bytes[offset]));
         Ok(())
@@ -1324,8 +1364,9 @@ fn compare_replays(
     if !residue.is_empty() {
         let first = &residue[0];
         eprintln!(
-            "parallel-shadow unread residue bytes allowed={} (of which {} unread only if relative indexing stays in its array; first: path {:?} stage {} c{} byte {} serial={:#04x} parallel={:#04x})",
-            residue.len(), in_bounds_only, first.0, first.1.stage, first.1.register, first.1.byte, first.2, first.3
+            "parallel-shadow unread constant bytes allowed={} (residue in both {}, written {}, unread only if relative indexing stays in its array {}, persisting past the stream {}; first: path {:?} stage {} c{} byte {} serial={:#04x} parallel={:#04x})",
+            residue.len(), counts[0], counts[1], counts[2], counts[3],
+            first.0, first.1.stage, first.1.register, first.1.byte, first.2, first.3
         );
     }
     if let Some(diff) = first {
