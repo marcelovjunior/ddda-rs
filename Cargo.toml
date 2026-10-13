@@ -841,3 +841,138 @@ opt-level = 1
 opt-level = 1
 incremental = false
 # END generated hot shards
+
+[profile.play-o2]
+inherits = "play"
+
+[profile.play-o2.package.ddlift-00]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-01]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-02]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-03]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-04]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-05]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-06]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-07]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-08]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-09]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-10]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-11]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-12]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-13]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-14]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-15]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-16]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-17]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-18]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-19]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-20]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-21]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-22]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-23]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-24]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-25]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-26]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-27]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-28]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-29]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-30]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-31]
+opt-level = 2
+incremental = false
+
+[profile.play-o2.package.ddlift-hot-00]
+opt-level = 2
+incremental = false
