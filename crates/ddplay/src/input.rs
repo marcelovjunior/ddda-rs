@@ -219,13 +219,37 @@ fn autokeys(events: EventSender) {
 /// DDPLAY_AUTOPLAY=1 (L92): play unattended into gameplay. Every 1.5 s it
 /// logs a stage probe (draws per frame and frames per second, from the
 /// runtime's counters). From the first presented frame it presses Enter
-/// every 1.5 s, the game's own skip (logos, the intro movie, PRESS ANY
+/// with 80 ms down/up phases, the game's own skip (logos, the intro movie, PRESS ANY
 /// BUTTON, and the menus' first entry: Continue/Load Game), until the
 /// frames draw like the world (1,000 or more draws per frame for two probes
 /// in a row). Then it logs "ddplay stage: gameplay" and stops pressing; the
 /// probes go on. (It waited 40 s before pressing until 2026-10-13.)
-/// The autoplay's probe and key interval.
+/// Probe cadence is independent of key cadence. These are host automation
+/// settings, not translated game timing or a claim that a screen is ready.
 const PROBE_MS: u64 = 1500;
+const AUTOPLAY_KEY_MS: u64 = 80;
+
+/// Require a presented frame between edges: queued down/up together can
+/// disappear before the guest polls. World-like frames suspend new presses
+/// immediately while the slower stage probes confirm gameplay.
+#[derive(Default)]
+struct AutoplayKey {
+    down: bool,
+    present: u64,
+}
+
+impl AutoplayKey {
+    fn next(&mut self, present: u64, allowed: bool) -> Option<bool> {
+        if present == self.present { return None; }
+        self.present = present;
+        if self.down || allowed {
+            self.down = !self.down;
+            Some(self.down)
+        } else {
+            None
+        }
+    }
+}
 
 fn autoplay(events: EventSender) {
     if std::env::var_os("DDPLAY_AUTOPLAY").is_none() {
@@ -234,16 +258,33 @@ fn autoplay(events: EventSender) {
     let _ = std::thread::Builder::new().name("autoplay".into()).spawn(move || {
         let start = std::time::Instant::now();
         let (mut d0, mut p0) = ddruntime::d3d9draw::counts();
+        let (mut key_draws, mut key_presents) = (d0, p0);
+        let mut key = AutoplayKey { down: false, present: p0 };
+        let mut last_probe = start;
+        let mut world_like = false;
         let mut high = 0;
         let mut playing = false;
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(PROBE_MS));
+            std::thread::sleep(std::time::Duration::from_millis(AUTOPLAY_KEY_MS));
             let (d, p) = ddruntime::d3d9draw::counts();
+            if p > key_presents {
+                world_like = (d - key_draws) / (p - key_presents) >= 1000;
+                (key_draws, key_presents) = (d, p);
+            }
+            if let Some(down) = key.next(p, !playing && !world_like) {
+                if events.send(Event::Key { hwnd: 0, vk: 0x0d, scan: 0x1c, down, extended: false, system: false }).is_err() {
+                    return;
+                }
+            }
+            let now = std::time::Instant::now();
+            let probe_elapsed = now.duration_since(last_probe);
+            if probe_elapsed < std::time::Duration::from_millis(PROBE_MS) { continue; }
+            last_probe = now;
             let (draws, frames) = (d - d0, p - p0);
             (d0, p0) = (d, p);
             let per = if frames > 0 { draws / frames } else { 0 };
             let t = start.elapsed().as_secs_f64();
-            eprintln!("ddplay stage-probe t={t:.0}s draws/frame={per} fps={:.1}", frames as f64 * 1000.0 / PROBE_MS as f64);
+            eprintln!("ddplay stage-probe t={t:.0}s draws/frame={per} fps={:.1}", frames as f64 / probe_elapsed.as_secs_f64());
             ddruntime::load_log::event("stage_probe", format_args!("draws_per_frame={per} frames={frames} source=autoplay"));
             if playing {
                 continue;
@@ -254,12 +295,23 @@ fn autoplay(events: EventSender) {
                 playing = true;
                 continue;
             }
-            if p > 0 {
-                for down in [true, false] {
-                    let _ = events.send(Event::Key { hwnd: 0, vk: 0x0d, scan: 0x1c, down, extended: false, system: false });
-                    std::thread::sleep(std::time::Duration::from_millis(80));
-                }
-            }
         }
     });
+}
+
+#[cfg(test)]
+mod autoplay_tests {
+    use super::AutoplayKey;
+
+    #[test]
+    fn edges_wait_for_present_and_release_when_play_starts() {
+        let mut key = AutoplayKey::default();
+        assert_eq!(key.next(0, true), None);
+        assert_eq!(key.next(1, true), Some(true));
+        assert_eq!(key.next(1, true), None);
+        assert_eq!(key.next(2, false), Some(false));
+        assert_eq!(key.next(3, false), None);
+        assert_eq!(key.next(4, true), Some(true));
+        assert_eq!(key.next(5, true), Some(false));
+    }
 }

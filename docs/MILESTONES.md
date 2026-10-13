@@ -1,5 +1,17 @@
 # Milestones
 
+### L165 autoplay proposal (2026-10-13)
+
+- Separate host input cadence from stage probes: existing 80 ms down/up
+  phases allow approximately 160 ms Enter attempts versus 1.66 s. Normal
+  game input gates remain; new Presents separate edges and world-like
+  frames suspend new presses. No exact readiness detection is claimed.
+- No-shard real frontend compile and key-edge regression pass. Head's
+  route/boot acceptance and combo32 loader ranking remain pending;
+  details: `docs/tasks/L165-load-next.md`.
+- Next: head reviews isolated autoplay commit and runs BOOT_DETAIL once;
+  consume combo32 skip A/B and loader/backend raw stacks when available.
+
 ### L159 Vulkan default image gate (2026-10-13)
 
 - Same-run selected raw pass oracle copies attachment load state, replays
