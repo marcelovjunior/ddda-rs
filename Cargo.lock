@@ -2471,6 +2471,7 @@ version = "0.1.0"
 name = "ddgpu"
 version = "0.1.0"
 dependencies = [
+ "ash",
  "bincode",
  "blake3",
  "d3d9cmd",
@@ -2480,7 +2481,9 @@ dependencies = [
  "d3d9wgsl",
  "mtarc",
  "naga",
+ "serde",
  "wgpu",
+ "wgpu-types",
 ]
 
 [[package]]
@@ -2958,6 +2961,7 @@ version = "0.1.0"
 dependencies = [
  "ddnative-base",
  "mtcore",
+ "mtdraw",
  "mtframe",
  "mtmath",
 ]
@@ -3020,6 +3024,8 @@ dependencies = [
  "ddsave",
  "hostdisplay",
  "mtarc",
+ "mtdraw",
+ "mtstate",
  "unicorn-engine",
  "windows",
  "windows-core",
@@ -4382,6 +4388,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mtdraw"
+version = "0.1.0"
+dependencies = [
+ "ddlift-hot-00",
+ "ddnative-base",
+ "ddnative-host",
+ "mtcore",
+ "mtstate",
+ "serde_json",
+]
+
+[[package]]
 name = "mteffect"
 version = "0.1.0"
 dependencies = [
@@ -4500,6 +4518,13 @@ dependencies = [
  "mtarc",
  "mtxfs",
  "symphonia",
+]
+
+[[package]]
+name = "mtstate"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

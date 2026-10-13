@@ -21,6 +21,38 @@ constant blocks from them again. That re-derivation is the cost:
 | auto5 (2026-10-13 01:30) | 4.7 | |
 | combo2 (L89 worker, L94, L97, L99, L102) | 8.9 | shards at opt-level 0 |
 | o1b (all shards opt-level 1, L104) | 15.4-17.7 | fewer draws in that scene |
+| combo3 (+L95 L96 L98 L105 L106, opt-level 1) | 8.0 / 9.3-10 | heavy scene, ~5,250 draws; bound: backend worker |
+| combo4 (+L90 compact constants, L94b, L100) | 10.9 / 12.3-12.7 | bound: render thread again |
+| combo5 (+L112 executor port, L118 step 1) | 12.3 / 12.7-13.7 | ~5,500 draws |
+| combo6b (+L120 async occlusion, L116 warm pipelines, L109 inflate port) | 12.8 / 13.7-14.0 | gameplay reached at 86 s (was 105-112) |
+| combo8 (+L118 step 2, L124 finisher thread) | 10.9 / 13.0-13.7 | backend worker 47% + finisher 47%: the bound is the game's render thread again |
+| combo9 (+L101 cheaper D3D9 calls) | 13.7 / 13.7-14.7 | render thread 88%: snapshot 26%, draw calls 20%, flush_reads 16% |
+| combo11 (+L121 copies in the open encoder; autoplay presses Enter early) | 14.1 / 15.3 | gameplay reached at 59 s |
+| combo12 (+L118 step 3) | 14.7 / 15.3-16.7 | render thread 89% (snapshot 24%, draw calls 31%) |
+| combo14 (+float-compare fusion, regenerated shards) | 14.4 / 14.0-15.3 | first Present at 3.7 s (was 5.8 s) |
+| combo15, DDDRAW_NATIVE=drawcall (L119: scene draws from the nDraw objects, no D3D9 services/snapshot) | 14.2 / 15.3-16.0 | the render thread waits 90% on the main thread: the game's own code is the bound now |
+| combo16, drawcall (+L125 apply ports) | 15.3 / 16.0 | main thread 64% busy, waiting 38% in the job scheduler (0x00DBE560) for the game-logic job threads (~45% each); render thread 48%: game logic is the bound |
+| combo17, drawcall (+L129 dead flags, L132 helpers, L130 port, boot geometry port) | 17.4 / 21.3-22.0 | no thread saturated: main 52%, render 48%, wgpu-finish 55% |
+| combo17, DDDRAW_NATIVE=1 | (15.0 / 16.7-19.3, not valid) | NOT rendering: the worker rejected the jobs and they were lost (63,496 jobs / 3.49M draws over the run; the sink counted them at send time); fallback ef160b59 + rejection cause pending |
+| combo19 verify | - | 0 mismatches: the drawcall decode equals the D3D9 path's DrawCalls (~420,000 draws compared per 10 s) |
+| combo19 compare | - | native passes pixel-exact: 9,984 matched, 0 mismatched (most jobs still rejected: strip restart) |
+| combo19 drawcall | 16.2 / 15.3-16.0 | exact sampler/texture section per taken draw (verify fix) |
+| combo19 DDDRAW_NATIVE=1 with fallback | 15.4 / 16.0-16.7 | 69 jobs, 3,507 draws/frame; rejected jobs drawn as DrawCalls |
+
+(average / end of the run; L114, inlining the memory and flag helpers into
+the shards, gave no gain for 2.5x the compile time and was dropped.)
+
+An nDraw-level count (L111, run instr1): a gameplay frame issues ~5,200
+commands but uses only 67 distinct state objects, 222 vertex and 183 pixel
+shaders, 52 input layouts and 23 samplers. A pipeline cache keyed by
+object identity has a tiny working set.
+
+The wgpu floor (L110, 5,000 draws, everything pre-created, CPU per draw
+including finish and submit): wgpu 0.88 us, wgpu render bundles 0.39 us,
+raw Vulkan (ash) 0.33 us; a render pass costs ~7 us in wgpu and ~1 us in
+ash. So: native device on wgpu first (100+ fps once the ~900 tiny
+simulation passes are gone, L113), raw Vulkan for the hot path later
+(240+).
 
 DXVK runs the original exe well above 100 fps on the same machine, so a
 translation can be fast. The native renderer goes further: it hooks above

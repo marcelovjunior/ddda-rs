@@ -13,6 +13,8 @@
 //! faults, and a call to code that is neither translated nor modelled stops
 //! with its address instead of returning something made up.
 pub mod audio;
+pub mod archive_inflate;
+pub mod procedural_geometry;
 pub mod input;
 pub mod d3d9;
 pub mod d3d9copy;
@@ -29,6 +31,8 @@ pub mod fasthash;
 pub mod crtfast;
 pub mod fastmem;
 pub mod files;
+mod file_cache;
+pub mod load_log;
 pub mod image;
 pub mod interfaces;
 pub mod machine;
@@ -47,6 +51,9 @@ pub mod user32;
 pub mod win32;
 pub mod movies;
 pub mod net;
+pub mod ndraw_stats;
+/// L119: the native path through the nDraw executor port
+pub mod ndraw_native;
 
 /// Take the TEB TLS slots the lifted code's hot paths read now, first thing
 /// in a host's main (L103, L103b): the x87 live id and the dispatch cache.

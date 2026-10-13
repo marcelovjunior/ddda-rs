@@ -255,6 +255,34 @@ CALL_CONST = re.compile(PLAIN + r"\{ let t = (0x[0-9A-F]+u32); (emit::push\(0x[0
 ABSOLUTE = re.compile(r"\b0u32\.wrapping_add\((0x[0-9A-F]+)\)")  # 0 + disp: an absolute address
 
 
+# Flags::cond (ddnative-base x86.rs) per condition code, with the same
+# predicate calls in the same order: at opt-level 0 cond() compares the
+# condition string on every evaluation.
+CONDITIONS = {
+    ("e", "z"): "f.zf()", ("ne", "nz"): "!f.zf()",
+    ("b", "c", "nae"): "f.cf()", ("ae", "nb", "nc"): "!f.cf()",
+    ("be", "na"): "f.cf() || f.zf()", ("a", "nbe"): "!f.cf() && !f.zf()",
+    ("s",): "f.sf()", ("ns",): "!f.sf()",
+    ("l", "nge"): "f.sf() != f.of()", ("ge", "nl"): "f.sf() == f.of()",
+    ("le", "ng"): "f.zf() || f.sf() != f.of()", ("g", "nle"): "!f.zf() && f.sf() == f.of()",
+    ("o",): "f.of()", ("no",): "!f.of()",
+    ("p", "pe"): "f.pf()", ("np", "po"): "!f.pf()",
+}
+PREDICATE = {cc: e for codes, e in CONDITIONS.items() for cc in codes}
+COND = re.compile(r'\bcpu\.fl\.cond\("(\w+)"\)')
+
+
+def predicates(arm):
+    """`cpu.fl.cond("be")` -> `(cpu.fl.cf() || cpu.fl.zf())`."""
+    def replace(m):
+        e = PREDICATE.get(m[1])
+        if e is None:
+            return m[0]  # unknown code: keep cond()'s panic
+        e = e.replace("f.", "cpu.fl.")
+        return e if re.fullmatch(r"cpu\.fl\.\w+\(\)", e) else f"({e})"
+    return COND.sub(replace, arm)
+
+
 def idioms(arm):
     """Push/pop through ddnative_base::emit, direct call targets."""
     arm = PUSH.sub(lambda m: f"emit::push({m[1]}, m, pt, cpu);", arm)
@@ -264,7 +292,7 @@ def idioms(arm):
     arm = CLOSURE.sub(lambda m: m[1], arm)
     arm = CALL_CONST.sub(lambda m: f"{m[2]} x86::call_ext(m, cpu, {m[1]});", arm)
     arm = ABSOLUTE.sub(lambda m: f"{m[1]}u32", arm)
-    return sse(arm)
+    return predicates(sse(arm))
 
 
 LOAD128 = re.compile(r"\[m\.fast_u32\(pt, a(?:\.wrapping_add\(0\))?\), m\.fast_u32\(pt, a\.wrapping_add\(4\)\), "
@@ -310,6 +338,158 @@ def sse(arm):
 def lean(arm):
     """All lean passes, in order, for one lowered whole-function arm."""
     return idioms(tidy(fold_results(dead_flags(const_shifts(arm)))))
+
+
+# L129: successor proofs are deliberately limited to literal dispatcher edges.
+# In particular call_ext/call_lifted share Cpu (including flags); no ABI
+# clobber assumption is valid here. Unknown transfers and exits stay live.
+EDGE = re.compile(r'pc = (?:0x([0-9A-Fa-f]+)|if [^;]+? \{ 0x([0-9A-Fa-f]+) \} else \{ 0x([0-9A-Fa-f]+) \}); continue;\s*\}\s*$')
+KILL_SENTINEL = ' cpu.fl = Flags::new(x86::LOGIC, a, b, r, 32);'
+
+
+def _flow(arm):
+    edge = EDGE.search(arm)
+    if edge is None:
+        return arm, ()
+    # Keep the branch condition as a reader, but remove its final continue.
+    return arm[:arm.rfind('continue;')], tuple(int(x, 16) for x in edge.groups() if x)
+
+
+def _kills_before_read(text, at_exit=False):
+    for kind, *_ in _scan(text):
+        if kind == 'read':
+            return False
+        if kind == 'kill':
+            return True
+    return at_exit
+
+
+def entry_kills(arms):
+    """Least fixed point: every path overwrites before any observation.
+
+    Starting false retains flag state on cycles with no proven overwrite.
+    Conditional writes, INC/DEC and variable shifts cannot prove a kill.
+    """
+    bodies = {}
+    for arm in arms:
+        head = ARM_HEAD.match(arm)
+        if head is not None:
+            bodies[int(head[1], 16)] = _flow(arm)
+    proven = set()
+    changed = True
+    while changed:
+        changed = False
+        for address, (body, successors) in bodies.items():
+            if address not in proven and _kills_before_read(
+                    body, bool(successors) and all(s in proven for s in successors)):
+                proven.add(address)
+                changed = True
+    return proven
+
+
+# Both literal cond() and L73's expanded predicates are accepted. Match
+# longest first so compound conditions are one observation, not two.
+CONDITION_FORMS = {}
+for _cc in PREDICATE:
+    CONDITION_FORMS[predicates(f'cpu.fl.cond("{_cc}")')] = _cc
+    CONDITION_FORMS[f'cpu.fl.cond("{_cc}")'] = _cc
+CONDITION_SITE = re.compile('|'.join(re.escape(s) for s in sorted(CONDITION_FORMS, key=len, reverse=True)))
+
+
+def _condition_sites(arm):
+    return [(m.start(), m.end(), CONDITION_FORMS[m[0]]) for m in CONDITION_SITE.finditer(arm)]
+
+
+def direct_compare(op, bits, cc):
+    """Native CMP/TEST predicates; inputs a,b are already width-masked.
+
+    Derived from Flags::alu_sub/alu_and and Flags::cond (x86.rs), preserving
+    signed overflow through signed operand comparisons, not signed result.
+    Unsupported conditions leave the flag materialisation intact.
+    """
+    canonical = next((codes[0] for codes in CONDITIONS if cc in codes), None)
+    if op == 'sub':
+        unsigned = {'e': '==', 'ne': '!=', 'b': '<', 'ae': '>=', 'be': '<=', 'a': '>'}
+        signed = {'l': '<', 'ge': '>=', 'le': '<=', 'g': '>'}
+        if canonical in unsigned:
+            return f'a {unsigned[canonical]} b'
+        if canonical in signed:
+            return f'(a as i{bits}) {signed[canonical]} (b as i{bits})'
+    if op == 'and' and canonical in ('e', 'ne', 's', 'ns', 'l', 'ge', 'le', 'g'):
+        result = f'((a & b) as i{bits})'
+        relation = {'e': '==', 'ne': '!=', 's': '<', 'ns': '>=', 'l': '<', 'ge': '>=', 'le': '<=', 'g': '>'}[canonical]
+        return f'{result} {relation} 0'
+    return None
+
+
+def _fuse_compare(arm, exit_dead):
+    # Only the exact CMP/TEST template (no destination) and an immediately
+    # following Jcc/SETcc/CMOVcc. All operand loads remain once, in order.
+    candidates = [e for e in _scan(arm) if e[0] == 'kill' and e[4] is not None]
+    for _, start, end, _, info in reversed(candidates):
+        op, a, b, bits = info
+        prefix = arm[:start]
+        block = re.search(r'\{ let r = $', prefix)
+        if block is not None:
+            begin = block.start()
+            tail = re.match(r'; \}\s*', arm[end:])
+        else:
+            begin = start
+            tail = re.match(r';\s*', arm[end:])
+        if tail is None or (block is None and not prefix.rstrip().endswith(('{', ';', '}'))):
+            continue
+        after = end + tail.end()
+        sites = _condition_sites(arm[after:])
+        if not sites:
+            continue
+        cs, ce, cc = sites[0]
+        # Exact instruction prefixes. A CMOV memory source is read eagerly
+        # by the original template, including when its condition is false.
+        gap = arm[after:after + cs]
+        if not (gap == 'pc = if ' or
+                re.fullmatch(r'cpu\.(?:eax|ebx|ecx|edx|esi|edi|ebp|esp) = [^;{}]*', gap) or
+                re.fullmatch(r'\{ let v = [^;{}]+; if ', gap)):
+            continue
+        cs, ce = after + cs, after + ce
+        expression = direct_compare(op, bits, cc)
+        if expression is None:
+            continue
+        _, successors = _flow(arm)
+        suffix = arm[ce:arm.rfind('continue;')] if successors else arm[ce:]
+        if not _kills_before_read(suffix, exit_dead and bool(successors)):
+            continue
+        # Each supported comparison uses a and b exactly once, in order.
+        # Inline the operands without a temporary Flags or duplicate loads.
+        operands = {name: f'({value})' if bits == '32' else f'(({value}) & {MASK[bits]})'
+                    for name, value in (('a', a), ('b', b))}
+        expression = re.sub(r'\b[ab]\b', lambda m: operands[m[0]], expression)
+        binding = f'let l129_condition = {expression}; '
+        arm = arm[:begin] + binding + arm[after:cs] + 'l129_condition' + arm[ce:]
+    return arm
+
+
+def function_flags(arms):
+    """Eliminate cross-block dead stores and fuse single-use CMP/TEST.
+
+    Only whole-function arms call this pass; restartable instruction entries
+    must expose literal machine state at every instruction boundary.
+    """
+    proven = entry_kills(arms)
+    result = []
+    for arm in arms:
+        body, successors = _flow(arm)
+        exit_dead = bool(successors) and all(s in proven for s in successors)
+        arm = _fuse_compare(arm, exit_dead)
+        body, successors = _flow(arm)
+        if exit_dead:
+            # The synthetic kill encodes the successor proof for the existing
+            # local pass; retain the original transfer and never emit it.
+            end = arm.rfind('continue;')
+            prefix = dead_flags(arm[:end] + KILL_SENTINEL)
+            assert prefix.endswith(KILL_SENTINEL)
+            arm = prefix[:-len(KILL_SENTINEL)] + arm[end:]
+        result.append(arm)
+    return result
 
 
 # Whole functions whose arms exceed this many bytes are split into part

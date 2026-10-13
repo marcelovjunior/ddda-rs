@@ -63,6 +63,8 @@ pub struct Files {
     /// The guest's current directory, relative to the install root.
     cwd: PathBuf,
     handles: HashMap<u32, Open>,
+    archive_reads: std::collections::HashSet<u32>,
+    read_cache: crate::file_cache::Shared,
     next: u32,
 }
 
@@ -183,11 +185,17 @@ fn new_handle(f: &mut Files, o: Open) -> u32 {
 
 /// CreateFileA/W(name, access, share, security, disposition, flags, template).
 fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
+    let load_started = crate::load_log::begin();
     let name = if wide { guest_str_w(m, arg(m, cpu, 0)) } else { guest_str_a(m, arg(m, cpu, 0)) };
     let (access, disposition) = (arg(m, cpu, 1), arg(m, cpu, 4));
     let result = with_files(|f| -> Result<u32, u32> {
         let pl = place_in(f, &name).ok_or(ERROR_ACCESS_DENIED)?;
         let write = access & GENERIC_WRITE != 0 || matches!(disposition, 1 | 2 | 5);
+        // Opt-in until head's paired loading runs establish the I/O benefit.
+        // Overlay/home files never enter a content cache.
+        let cache_archive = !write && pl.install.as_ref() == Some(&pl.read)
+            && pl.read.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("arc"))
+            && std::env::var("DDRUNTIME_FILE_READ_AHEAD").is_ok_and(|v| v == "1");
         let file = if write {
             // writes go to the overlay; existing install contents are copied first
             let over = pl.write.clone();
@@ -228,8 +236,11 @@ fn create_file(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
                 ERROR_PATH_NOT_FOUND
             })?
         };
-        Ok(new_handle(f, Open::File(file)))
+        let h = new_handle(f, Open::File(file));
+        if cache_archive { f.archive_reads.insert(h); }
+        Ok(h)
     });
+    crate::load_log::open_done(load_started, &name, result.is_ok());
     cpu.eax = match result {
         Ok(h) => h,
         Err(e) => {
@@ -251,9 +262,59 @@ fn put_bytes(m: &mut dyn Mem, at: u32, data: &[u8]) {
     crate::fastmem::write_bulk(m, at, data);
 }
 
+// Host scratch only: no file contents survive as a cache. Each read still
+// reaches the host file and copies only the bytes the read actually returned.
+// 128 KiB is the input-buffer size used by rArchive::DecompressStream's read
+// (0x00e0d320, DDDA.exe 2017-12-13 Steam). Retention is a host memory policy,
+// not a guest limit: larger requests use a temporary allocation as before.
+const READ_SCRATCH_LIMIT: usize = 128 * 1024;
+thread_local! {
+    static READ_SCRATCH: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+fn with_read_scratch<R>(size: usize, use_buffer: impl FnOnce(&mut [u8]) -> R) -> R {
+    READ_SCRATCH.with(|scratch| {
+        if size <= READ_SCRATCH_LIMIT {
+            // A nested callback must not alias or panic on an outer read's
+            // buffer. Such a read gets its own allocation instead.
+            if let Ok(mut buffer) = scratch.try_borrow_mut() {
+                if buffer.len() < size {
+                    let additional = size - buffer.len();
+                    buffer.reserve_exact(additional);
+                    buffer.resize(size, 0);
+                }
+                return use_buffer(&mut buffer[..size]);
+            }
+        }
+        use_buffer(&mut vec![0; size])
+    })
+}
+
+#[cfg(test)]
+mod read_scratch_tests {
+    use super::*;
+
+    #[test]
+    fn nested_reads_and_unwind_do_not_alias_or_poison_scratch() {
+        with_read_scratch(128, |outer| {
+            outer.fill(0x55);
+            with_read_scratch(128, |inner| inner.fill(0xaa));
+            assert!(outer.iter().all(|&b| b == 0x55));
+        });
+        let caught = std::panic::catch_unwind(|| with_read_scratch(128, |_| panic!("guest fault")));
+        assert!(caught.is_err());
+        with_read_scratch(128, |buffer| buffer.fill(0x33));
+        READ_SCRATCH.with(|buffer| assert_eq!(buffer.borrow()[0], 0x33));
+        with_read_scratch(100_000, |_| {});
+        with_read_scratch(READ_SCRATCH_LIMIT, |_| {});
+        with_read_scratch(READ_SCRATCH_LIMIT + 1, |buffer| buffer.fill(0xff));
+        READ_SCRATCH.with(|buffer| assert!(buffer.borrow().capacity() <= READ_SCRATCH_LIMIT));
+    }
+}
+
 /// ReadFile(handle, buffer, count, read*, overlapped): synchronous reads
 /// only (an OVERLAPPED argument is refused until asynchronous I/O exists).
 pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let load_started = crate::load_log::begin();
     let (h, buf, count, read_out, overlapped) =
         (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     assert_eq!(overlapped, 0, "ReadFile with OVERLAPPED: asynchronous I/O is not implemented");
@@ -265,13 +326,14 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
     });
     let read = file.map(|mut file| {
         crate::threads::unlocked(|| {
-            let mut v = vec![0u8; count as usize];
-            let n = file.read(&mut v).unwrap_or(0);
-            v.truncate(n);
-            put_bytes(m, buf, &v);
-            n as u32
+            with_read_scratch(count as usize, |v| {
+                let n = file.read(v).unwrap_or(0);
+                put_bytes(m, buf, &v[..n]);
+                n as u32
+            })
         })
     });
+    crate::load_log::read_done(load_started, read.unwrap_or(0) as u64);
     cpu.eax = match read {
         Some(n) => {
             if read_out != 0 {
@@ -296,25 +358,34 @@ pub fn read_file(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// reaches the end completes with the bytes there were. The game's reader
 /// is MtFile::vf08 (0x00D0D440) with completion 0x00D0D430.
 pub fn read_file_ex(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let load_started = crate::load_log::begin();
     let (h, buf, count, ov, routine) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     let offset = m.u32(ov + 8) as u64 | (m.u32(ov + 12) as u64) << 32;
-    let file = with_files(|f| match f.handles.get_mut(&h) {
-        Some(Open::File(file)) => file.try_clone().map_err(|_| ERROR_INVALID_HANDLE),
+    let file = with_files(|f| match f.handles.get(&h) {
+        Some(Open::File(file)) => file.try_clone()
+            .map(|file| (file, f.archive_reads.contains(&h).then(|| f.read_cache.clone())))
+            .map_err(|_| ERROR_INVALID_HANDLE),
         _ => Err(ERROR_INVALID_HANDLE),
     });
     // L64: the host read and the copy without the guest lock (parallel mode)
-    let data = file.and_then(|mut file| {
+    let data = file.and_then(|(mut file, cache)| {
         crate::threads::unlocked(|| {
             let size = file.metadata().map(|md| md.len()).unwrap_or(0);
             if offset >= size {
                 return Err(ERROR_HANDLE_EOF);
             }
-            let mut v = vec![0u8; count.min((size - offset) as u32) as usize];
-            file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(&mut v)).map_err(|_| ERROR_HANDLE_EOF)?;
-            put_bytes(m, buf, &v);
-            Ok(v.len() as u32)
+            with_read_scratch((count as u64).min(size - offset) as usize, |v| {
+                if let Some(cache) = &cache {
+                    crate::file_cache::read(cache, &mut file, h, offset, size, v)
+                } else {
+                    file.seek(SeekFrom::Start(offset)).and_then(|_| file.read_exact(v))
+                }.map_err(|_| ERROR_HANDLE_EOF)?;
+                put_bytes(m, buf, v);
+                Ok(v.len() as u32)
+            })
         })
     });
+    crate::load_log::read_done(load_started, data.as_ref().copied().unwrap_or(0) as u64);
     cpu.eax = match data {
         Ok(n) => {
             m.set_u32(ov, 0); // Internal: STATUS_SUCCESS
@@ -403,7 +474,10 @@ pub fn get_file_size(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// CloseHandle(handle): files and find handles; unknown handles fail.
 pub fn close_handle(m: &mut dyn Mem, cpu: &mut Cpu) {
     let h = arg(m, cpu, 0);
-    cpu.eax = (crate::threads::close(h) || with_files(|f| f.handles.remove(&h).is_some())) as u32;
+    cpu.eax = (crate::threads::close(h) || with_files(|f| {
+        if f.archive_reads.remove(&h) { f.read_cache.lock().unwrap().remove(h); }
+        f.handles.remove(&h).is_some()
+    })) as u32;
     if cpu.eax == 0 {
         set_error(ERROR_INVALID_HANDLE);
     }

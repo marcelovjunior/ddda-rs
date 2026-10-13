@@ -1,5 +1,235 @@
 # Milestones
 
+### L109d memory ownership diagnostics (2026-10-13)
+
+- Head reports 2.6 -> 15.7–17 GB private memory at save load; cause remains
+  unmeasured. L109c process/guest counters are ready in `e7099da7`.
+- New opt-in `DDPLAY_ALLOC_LOG=1` measures live Rust requested bytes and
+  4 KiB aligned allocations through the unchanged System allocator.
+  Standalone off/on tests cover allocation, zeroing, realloc and real global
+  allocator startup. No game run by agent.
+- Next: head's combined process/guest/Rust counter run, then an attributed
+  memory fix; save-load time follows. `docs/tasks/L109d-memory.md`.
+
+### L129 combined integer/float flag fusion gate (2026-10-13)
+
+- Merged FPS-line `05b35e35` with both lifter emitters and regenerated
+  **59,734 functions / 33 crates**, preserving 44 scoped step functions.
+- **178,130 original lifted cases pass; zero failing lifted functions**.
+  Full required-vector native gate: **49 tests pass**, readable ports and
+  inventory checks pass; **26 focused Python tests** also pass.
+- Corrected one pre-L62 x87 test to use documented `park()` host boundaries;
+  host assertions retained, guest continuity assertions added. No runtime
+  change or weakened fixture checks. Existing 5 coverage gaps remain.
+- Clean shard compilation: **264.95 s wall span**, **434.82 MiB rlibs**;
+  generated source **+0.2194%**. No comparative compile-speed/FPS claim.
+- Next: head's same-scene loading/image/FPS measurement. Details and
+  timing/profile limits: `docs/tasks/L129-dead-flags.md`.
+
+### L119 native sink: drawcall is the default (2026-10-13)
+
+- The executor's scene-pass draw records are decoded straight from the
+  nDraw objects (mtstate on cache misses, identity and per-frame binding
+  caches, 0x00DAA8B0's history-dependent sampler section made on the
+  context and device) into the D3D9 path's DrawCall: the applies, the
+  D3D9 services and the snapshot are skipped for them
+  (crates/ddruntime/src/ndraw_native.rs).
+- **Compared with the original path in game**: combo19, `DDDRAW_NATIVE=verify`,
+  ~420,000 draws per 10 s compared field by field with the DrawCalls the
+  D3D9 path made, all equal (run_c19ver.log). Tests: the sink's DrawCall
+  equals the runtime D3D9 path's (tests/ndraw_native.rs, real D3D9
+  objects), the sampler section equals mtstate::shader on 3,000 random
+  cases, decode unit tests.
+- So `DDDRAW_NATIVE` unset now means `drawcall`; `0`/`off` is the escape
+  hatch (everything through the D3D9 path); `verify`, `compare`, `census`
+  and `1`/`native` (native device jobs, L126) as before.
+- combo15 (`drawcall`): 14.2 fps avg, equal to the D3D9 path; the render
+  thread is no longer the bound (the main thread's game code and sMain's
+  job join 0x00DBE560 are). Details: docs/tasks/L119-native-executor.md.
+- Next: native jobs (`1`) as the scene path once compare is clean.
+
+### L126 native job transport checkpoint (2026-10-13)
+
+- Owned NativeJob/Pass/Draw transport with effective D3D9 values, identity
+  keys, resource IDs and register ranges; same DeferredBackend FIFO.
+  One-time capability check; supported jobs enqueue without a round trip.
+  Unexpected worker rejection is logged loudly (head-approved contract).
+- **8 transport tests pass**, including upload/native/query ordering and
+  unsupported-job ownership. Worker and game comparison pending.
+- Worker now executes through native::Device with immutable state/shader /
+  texture-group identity caches on the same device/queue. **4 Vulkan GPU tests
+  pass** (16 backend/host-driver image cases plus FIFO/resource/rejection tests),
+  **14 ddgpu CPU tests pass**. Per-job compact recorder; persistent resident /
+  bundle reuse and game/FPS comparison remain separate work.
+- L127 shadow hooks compiled; next: end-to-end shadow gate and head N2 run.
+  **14 ddgpu CPU tests pass**. Persistent resident recorder and finisher
+  handoff now compile; focused GPU gate pending shared HEAVY_BIG availability.
+- L127 five shadow integration tests pass; runtime light **182 pass / one
+  inherited gamma-reset failure / three ignored**. Next: final resident /
+  finisher GPU gate, then head N2 image/FPS run.
+  **14 ddgpu CPU tests pass**. Final resident-recorder/finisher gate:
+  **16 Vulkan tests pass** (six API, five worker, five shadow), including
+  zero-reupload for identical jobs and async shadow submission ordering.
+- Persistent source `e3599f42` + ordering fix `542111eb`; bundles opt-in.
+  Runtime light **182 pass / one inherited gamma-reset failure / three
+  ignored**. Next: head N2 image/FPS run.
+  Details: `docs/tasks/L126-native-worker.md`.
+
+### L123 native resident constants and bundles (2026-10-13)
+
+- Stable constant snapshots upload changed 16-byte registers in one packed
+  transfer + ordered compute scatter. Exact repeated draw sequences reuse
+  render bundles; dynamic state splits sequences. Persistent texture/sampler
+  groups retain identity keys. Existing direct API remains available.
+- Matched optimized 5,000 draws / 40 pipelines / 200 sampled sets, synthetic
+  8,200 VS + 7,300 PS register writes/frame: full **1.644**, resident **1.264**,
+  resident + bundles **0.843 us/draw**, including upload/finish/submit.
+  Three alternating repeats; bundle range 0.822–0.868. Uploads **15.67 MB ->
+  340 KB/frame**. Minimal shaders; no gameplay/FPS claim.
+- **6 GPU tests / 11 CPU tests pass**; runtime light **171 pass / 1 inherited
+  fullscreen gamma-reset failure / 3 ignored**. Core `e062d80a`.
+- Next: head-assigned L126 owned NativeJob FIFO + WgpuBackend worker adapter
+  for L119 N2. Exact conditions and limitations: `docs/tasks/L123-native-device-2.md`.
+
+### L122 gameplay pass map (2026-10-13)
+
+- Frame7539: **951 target runs / 5,295 draws**, including **864 SoftBody
+  simulation runs**; full target sequence, eight copies and sampled-resource
+  dependencies in `docs/FRAME_PASSES.md`.
+- **402 shader identities (225 VS / 177 PS)** in 50 sets; 334 byte-exact
+  root-package matches. Shader reflection identifies sky-scattering half-float
+  targets, material mip chains, God Rays, DOF, color-correction LUT and GUI.
+  These correct the earlier size-only tone-map/bloom/luminance guesses.
+- Draw offsets/counts, shader END boundaries, hash uniqueness and the
+  108,502-command slice digest checked. Static issuers cited with DTI/Ghidra
+  evidence; dynamic object-to-command joins remain unresolved. No runtime
+  changes, game/GPU/shard runs, image-equivalence or FPS claim.
+- Next: head's same-run capture with producer tags; existing L111 stats alone
+  lack caller/class identities. L113 retains SoftBody replacement ownership.
+### L109c boot attribution and inflate default (2026-10-13)
+
+- Head combo6: boot archive inflate **4.85 -> 1.39 s**, first Present still
+  **5.84–5.86 s**. Cold run has zero shader modules/pipelines through 5.02 s.
+- **632 exact inflate cases** pass again; default-on and explicit-off
+  registration tested. Read-ahead remains default-off. Per head's updated
+  brief, no fast-boot option: original timing/input paths remain unchanged.
+- Boot profile implicates scene/geometry setup; a nested Vorbis symbol is
+  inconsistent with original callers. Exact opt-in FE9580/12EB690 counters
+  added; wrapper-effects regression and eight parser tests pass.
+- Float compare/LAHF/TEST/Jcc fusion covers **1,537 sites / 701 functions**,
+  nine in FE9580. Three tests pass, including **401,408 native oracle
+  cases** preserving AH, flags and MXCSR. Whole-function original replay
+  also passes before/after fusion (three fixtures, **6,155 call boundaries**).
+  Whole geometry port now passes **12 cases / 18,499 boundaries**, including
+  NaNs/subnormals, with original SSE executed on hardware for exact MXCSR.
+  Finite-position indexing removes redundant scans; opt-in via
+  `DDRUNTIME_GEOMETRY_PORT=1`, off pending head A/B.
+  Next: head integration regeneration/gate and geometry A/B; UI timings
+  need head marks. No measured geometry or first-Present speedup yet.
+
+### L109 loading baseline, cache experiment and original waits (2026-10-13)
+
+- Head instr1: at 16.032 s, archive inflate **4.854 s**, file reads
+  **0.056 s**, pipelines **0.007 s**; first Present **6.002 s**.
+  Final archive inflate **5.482 s**. UI phase marks remain unobserved.
+- Bounded install-archive read-ahead implemented and tested, **off by
+  default**: warm sequential 128 KiB **7.601 -> 12.903 us** (regression),
+  repeated 128 KiB **7.559 -> 4.352 us**; host I/O microbench only.
+- Light suite **168 pass / 1 existing gamma failure / 2 ignored**;
+  final cache/APC/overlay/budget checks pass after buffer reuse.
+- Original logo/disclaimer timers unchanged: **2 s / 4 s** nominal
+  holds; alternative regional lists total **2 / 6 / 10 s**, plus GUI
+  transitions. Source addresses and reachability limits in L109 brief.
+- Next: head's matched run with inflate port `9093ace7`, observed UI
+  timestamps and all-zlib telemetry; keep cache disabled for this A/B.
+
+### L109 readable archive inflate fast loop (2026-10-13)
+
+- Whole `0x00cf2cb0` fast decoder port; original outer inflate/streaming
+  state machines retain headers, checksums, buffering and callbacks.
+- **559 original Unicorn cases pass**: all scratch/stack/heap bytes,
+  GPR/XMM registers and arithmetic flags. No shard or game build/run.
+- Isolated opt1 generated / opt3 readable leaf: **18.209 -> 2.260 us**
+  for 349 output bytes, **16.274 -> 3.239 us** for 512 bytes; three
+  alternating 1,000-call rounds. No whole-loading speedup claim.
+- Next: head's load-log/same-save comparison, baseline `45b89e6f`,
+  readable leaf selectable with `DDRUNTIME_ARCHIVE_INFLATE=0/1`.
+### L110 native backend floor (2026-10-13)
+
+- Optimized 5,000-draw/40-pipeline/200-group synthetic Vulkan floor,
+  including finish + submit: **wgpu 0.884, reused bundles 0.386, ash 0.326
+  us/draw**. Uniform data prefilled; no texture sampling/gameplay claim.
+- 900 one-draw clear passes: **7.146 / 7.151 / 1.351 us/pass**, respectively.
+  Bundles reduce repeated draw processing but do not remove pass overhead.
+- Native API: **4 GPU tests pass**, including full/compact exact D3D9/host
+  comparisons and texture/constants/ring checks; **5 CPU tests pass**.
+- Matched 5,000-draw native workload: full **3.839**, compact **1.692**,
+  compact range updates **1.433 us/draw**, including upload/finish/submit
+  (three alternating repeats). Minimal shaders; no gameplay/FPS claim.
+- wgpu-owned texture/buffer -> raw Vulkan/hal -> wgpu readback passes with
+  separate ordered encoders; mixing raw and normal encoding in one fails.
+- Current-base runtime light suite **167 pass / 1 existing gamma-reset
+  failure / 2 ignored**. Next: L119 integration and one captured-pass oracle.
+  Details and limitations: `docs/tasks/L110-native-device.md`.
+
+### L111 nDraw executor observer (2026-10-13)
+
+- Opt-in read-only executor wrapper plus Present-selected frame counters;
+  off registers no new execution/Present hooks. Nested command decoder,
+  state/shader/sampler/buffer identities and ordered surface target runs
+  sourced to DAB480/DA6DA0 and apply helpers. Counts are raw records.
+- Seven synthetic regressions pass; enabled light unit suite 35 pass /
+  1 existing ignored. Full suite 158 pass / 2 existing timing failures /
+  1 ignored; both failures pass isolated reruns (160 verified across runs).
+  Fullscreen gamma fails with switch off too on current desktop; recorded
+  L34 display resolves it. No tests/checks weakened.
+- cap1 last20 analytical extraction preserves 108,502 command payloads
+  and 50,507 referenced blobs (284 MB raw vs 19.79 GB whole-capture blobs).
+  Unchanged frame_stats completed: 107,544 draws / 19,704 passes.
+- Mean 5,377.2 draws / 985.2 passes per frame, including 898.2 single-draw
+  tiny float32 target passes. Constants change 248,722 bytes/frame;
+  fixed-state lists differ for 4.898% of predecessor comparisons.
+- Next: head-run DDRUNTIME_NDRAW_STATS=1, EVERY=1 for executor/capture
+  correlation; no game, image-equivalence or FPS claim from this batch.
+  Details: docs/tasks/L111-executor-stats.md.
+### L109 loading instrumentation and read scratch (2026-10-13)
+
+- Opt-in process-relative init/movie/file/archive/GPU/frame telemetry;
+  original archive read/inflate bodies retained. Timeline parser keeps
+  unobserved title/menu/loading phases explicitly unmeasured.
+- Synthetic optimized warm 128 KiB ReadFile: **11.569 -> 9.643 us/call**,
+  **1 -> 0 allocations** (three alternating pairs, five samples each).
+  Small reads have no reliable timing win; no game loading speedup claim.
+- Light runtime serial suite: **153 passed, 1 existing gamma failure,
+  2 ignored**. Parser **8 pass**, ddports **1 pass**. Details:
+  `docs/tasks/L109-loading.md`.
+- Next: head-run unskipped boot/menu/save baseline using
+  `DDRUNTIME_LOAD_LOG=1`, then same-save before/after phase comparison.
+### L118 dense D3D9 state and snapshot access (2026-10-13)
+
+- Dense sampler/stage banks and render-state indices preserve presence, unusual
+  IDs and immutable draw payloads. Scoped device borrows avoid repeated lock
+  bookkeeping; dirty snapshots avoid temporary Vec growth.
+- Three paired debug dirty-sampler draw medians **49.71 -> 29.97 us**, allocations
+  **8 -> 6** including COM test buffers. Clean draw timings overlap; no FPS claim.
+- Runtime light suite **158 passed / one fullscreen-gamma Reset failure /
+  one ignored**; new map-equivalence, snapshot-retention and lock-unwind checks
+  pass. No game/shard/GPU runs. Details: `docs/tasks/L118-d3d9-render-thread.md`.
+- Next: head combo4 gameplay/image comparison and renewed render-thread profile.
+### L117 nDraw state semantics (2026-10-13)
+
+- New standalone mtstate decoder: four descriptor constructors, eight
+  applies and InputLayout/declaration synthesis compared with original
+  Unicorn vectors. **3,584 cases / 17,928 D3D9 calls** and checked memory
+  match; four contract tests and strict crate clippy pass.
+- Raster depth-bias multiplier is `0x33800001`; sampler max-mip conversion
+  truncates. This is a call-level semantic decoder, not an ABI override.
+- NDRAW section9 maps descriptors to D3D9/wgpu and lists native gaps.
+  Runtime light serial:155 pass,1 inherited fullscreen gamma Reset failure,
+  1 ignored (initial parallel lock-timing failure passes serially).
+- Next: L112/L110 integration and head-run frame comparison. No GPU/game
+  run or image/FPS claim. Details: `docs/tasks/L117-state-semantics.md`.
+
 ### L90 shared draw payloads (2026-10-13)
 
 - Shader tokens/declarations are shared immutable allocations; constants
@@ -2029,3 +2259,80 @@ opening (codex-31), route perf (codex-29).
 - Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+### L127 asynchronous native comparison reduction (2026-10-13)
+
+- GPU color/depth/stencil summaries retain pass and target identity; exact loaded-channel comparisons, differing pixels and maximum difference. Bounded async MAP_READ returns 16 bytes per target without a GPU wait.
+- Four focused Vulkan tests and one CPU summary test pass. Scale fixture: 128 pending targets, 16,650,240 pixels, 2,048 readback bytes; 58.73 ms synthetic diagnostic (no gameplay/FPS claim).
+- Next: integrate L119 compare sink and L126 pre-oracle shadow lifecycle, run light runtime suite, then head-run in-game comparison. Details: docs/tasks/L127-native-compare.md.
+
+
+
+### L121 copy submission boundaries (2026-10-13)
+
+- All StretchRect paths record into the open encoder; matching single-sample
+  depth/stencil surfaces copy both aspects directly. MSAA sample selection,
+  sRGB resolves and blit filtering remain unchanged; upload hazards tracked.
+- Vulkan: **35 distinct GPU tests pass** (38 invocations with all four target
+  shards), three existing exploratory tests ignored; **9 CPU units pass**.
+  Final expanded copy regressions pass; runtime light **171 pass / 3 ignored**.
+- Paired synthetic eight-copy frames: scaled/conversion/depth **9 -> 1**
+  submits, resolves **17 -> 1**. Median CPU us/copy: **138.2 -> 17.6** scaled,
+  **146.0 -> 26.8** conversion, **990.5 -> 2.7** D24S8, **186.2 -> 12.1** resolve.
+- No game or shard run. Next: head integrates and compares gameplay image,
+  submit count and copy/FPS profile. Details: `docs/tasks/L121-copy-no-flush.md`.
+### L118 step 3: clean draw and COM dispatch (2026-10-13)
+
+- Clean resource index skips read-list population; dirty reads share the device
+  borrow. Clean snapshots reuse cached groups without a restore lookup. Dense
+  COM lookup preserves rebinding and step precedence; L101 runtime/lock changes
+  remain intact, with new nested-switch and unwind lifetime coverage.
+- On combo9/L101, three alternating debug pairs: clean median **12.29 -> 11.00
+  us**, changed sampler **24.00 -> 20.39 us**; allocations stay **3 / 6**.
+  Wide overlapping ranges and mixed clean pairs: no gameplay/FPS claim.
+- Light suite **177 pass / one inherited gamma Reset failure / three ignored**;
+  all 48 active unit tests pass. Six draw/resource audit tests and ten command/
+  frame tests pass. No GPU, game or shard runs.
+- Next: head combo9 gameplay/image comparison and render-thread profile after
+  integration. Details: `docs/tasks/L118-d3d9-render-thread.md`.
+### L125 apply ABI ports, first batch (2026-10-13)
+
+- Targets, fixed-state and stream wrappers match **384 original Unicorn
+  cases** and isolated lifted-body replay, including ordered calls, all
+  GPR/XMM state, x87 control/status/depth and written bytes at call/return.
+- Pure binding decoders agreed with L119; three wrappers enter ddports
+  through mtdraw::abi::PORTS. No shard or game build/run, no FPS claim.
+- Next: complete shader/constants wrapper, expand coverage and measure.
+  Details: docs/tasks/L125-apply-ports.md.
+
+### L125 four apply wrappers and native decoders (2026-10-13)
+
+- DA6FE0/DAA5F0/DAA7C0/DAA8B0 registered through mtdraw/ddports;
+  **1,568 Unicorn ABI cases / 15,892 calls** match readable and extracted
+  lifted bodies, with host x87 status oracle. All feasible branch edges
+  covered. Pure allocation-free decoders checked against **811** L117 cases;
+  L117's **3,584 cases** still pass. Details/contract: L125 brief.
+- Synthetic opt1/opt3 transition medians (us): targets **0.651/0.167**,
+  fixed **0.263/0.158**, streams **0.472/0.243**, shaders **1.395/0.412**.
+  The 96-call shader workload has mixed regressions: no reliable gain there.
+- Light runtime **171 pass / one existing gamma Reset failure / three
+  ignored**; ddports test passes. No game, GPU, shard build or FPS claim.
+- Next: head's matched boot/save/frame/profile comparison and L119 adoption
+  of the pure shader/constant source iterators.
+### L127 asynchronous native comparison reduction (2026-10-13)
+
+### L127 integrated comparison gate (2026-10-13)
+
+
+### L127 compare producer (2026-10-13)
+
+- DDDRAW_NATIVE=compare now emits pre-oracle begin and single-pass end markers from the L119 sink. Real targets receive D3D9 exactly once; rejected comparisons never redraw them. Attachment/fallback/frame boundaries and dirty uploads close pending comparisons.
+- Three pure transport tests pass, including DeferredBackend FIFO and rejection recovery. Earlier light runtime:173 pass,1 inherited fullscreen-gamma failure,3 ignored. Backend-path oracle shares L119 decoder, separately checked against runtime D3D9 calls.
+- Next: validate synthetic NativeJobs after L126 shadow hooks land, then head's in-game run. No gameplay equivalence claim.
+
+### L127 integrated comparison gate (2026-10-13)
+
+- DDDRAW_NATIVE=compare producer, L126 shadow worker and asynchronous GPU reduction integrated with L119 cache-2c. Five end-to-end GPU tests pass (nine GPU cases total), one summary CPU test, three producer tests and eight transport tests pass.
+- 42 matched and three intentional mismatched target summaries; five explicit rejection diagnostics. Blended pre-pass loads, repeated shadows, mip attachments and D24S8 isolation checked; real targets unchanged, zero pending comparisons on test shutdown.
+- Runtime: 180 distinct passes across full suite plus isolated timing retry; one inherited fullscreen-gamma failure, three ignored. No checks weakened; no game/shard run or game image/FPS claim.
+- Next: head-run DDDRAW_NATIVE=compare gameplay and inspect mismatch/unverified/pending counts. Details: docs/tasks/L127-native-compare.md.

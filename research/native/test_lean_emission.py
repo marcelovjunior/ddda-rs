@@ -3,6 +3,7 @@ rustc differential test (same Cpu, memory and memory-event order with and
 without the passes) over lift.py's cached templates. No private data.
 """
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -89,6 +90,13 @@ class DeadFlags(unittest.TestCase):
 
 
 class Idioms(unittest.TestCase):
+    def test_direct_predicates(self):
+        for codes, expression in le.CONDITIONS.items():
+            for cc in codes:
+                result = le.predicates(f'cpu.fl.cond("{cc}")')
+                self.assertIn(expression.replace('f.', 'cpu.fl.'), result)
+        self.assertEqual(le.predicates('cpu.fl.cond("unknown")'), 'cpu.fl.cond("unknown")')
+
     def test_sse_lane_loop_needs_its_destination_as_first_operand(self):
         arm = "for k in 0..4 { cpu.xmm[1][k] = x86::mulss(cpu.xmm[2][k], cpu.xmm[3][k]); }"
         self.assertEqual(le.idioms(arm), arm)
@@ -265,13 +273,14 @@ class Differential(unittest.TestCase):
             #[path = "{(base / 'x86.rs').as_posix()}"] mod x86;
             #[path = "{(base / 'x87.rs').as_posix()}"] mod x87;
             #[path = "{(base / 'emit.rs').as_posix()}"] mod emit;
+            #[path = "{(base / 'hooks.rs').as_posix()}"] mod hooks;
             use mem::Mem; use x86::{{Cpu, Flags}};
             mod plain {{ use super::*; {plain} }}
             mod lean {{ use super::*; {lean} }}
             mod split {{ use super::*; {split} }}
         ''' + FIXTURE
-        target = root / "target"
-        target.mkdir(exist_ok=True)
+        target = Path(os.environ.get("CARGO_TARGET_DIR", "C:/ddda-targets/L129"))
+        target.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="lean-test-", dir=target) as tmp:
             src, exe = Path(tmp) / "fixture.rs", Path(tmp) / "fixture.exe"
             src.write_text(source)

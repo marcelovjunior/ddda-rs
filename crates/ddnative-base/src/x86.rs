@@ -272,8 +272,16 @@ pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
 impl Flags {
     #[inline]
     fn defined(&self, bit: u32) {
-        assert!(self.kind != PARTIAL || self.a & bit != 0, "read of undefined x86 flag {bit:#x}");
-        assert!(self.kind != IMUL || bit & 0x801 != 0, "read of undefined IMUL flag {bit:#x}");
+        if (self.kind == PARTIAL && self.a & bit == 0)
+            || (self.kind == IMUL && bit & 0x801 == 0) {
+            self.undefined(bit);
+        }
+    }
+    #[cold]
+    #[inline(never)]
+    fn undefined(&self, bit: u32) -> ! {
+        if self.kind == IMUL { panic!("read of undefined IMUL flag {bit:#x}"); }
+        panic!("read of undefined x86 flag {bit:#x}");
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn af(&self) -> bool {
@@ -283,8 +291,8 @@ impl Flags {
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn lahf(&self) -> u8 {
-        2 | self.cf() as u8 | ((self.pf() as u8) << 2) | ((self.af() as u8) << 4)
-            | ((self.zf() as u8) << 6) | ((self.sf() as u8) << 7)
+        2 | self.cf_value() as u8 | ((self.pf_value() as u8) << 2) | ((self.af() as u8) << 4)
+            | ((self.zf_value() as u8) << 6) | ((self.sf_value() as u8) << 7)
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn sahf(&mut self, ah: u8) {
@@ -301,7 +309,7 @@ impl Flags {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
         let r = a.wrapping_add(b) & mask;
-        *self = Self::new(ADD, a, b, r, bits);
+        *self = Self::from_parts(ADD, a, b, r, bits);
         r
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
@@ -309,7 +317,7 @@ impl Flags {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
         let r = a.wrapping_sub(b) & mask;
-        *self = Self::new(SUB, a, b, r, bits);
+        *self = Self::from_parts(SUB, a, b, r, bits);
         r
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
@@ -317,7 +325,7 @@ impl Flags {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
         let r = (a & b) & mask;
-        *self = Self::new(LOGIC, a, b, r, bits);
+        *self = Self::from_parts(LOGIC, a, b, r, bits);
         r
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
@@ -325,7 +333,7 @@ impl Flags {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
         let r = (a | b) & mask;
-        *self = Self::new(LOGIC, a, b, r, bits);
+        *self = Self::from_parts(LOGIC, a, b, r, bits);
         r
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
@@ -333,11 +341,17 @@ impl Flags {
         let mask = u32::MAX >> (32 - bits);
         let (a, b) = (a & mask, b & mask);
         let r = (a ^ b) & mask;
-        *self = Self::new(LOGIC, a, b, r, bits);
+        *self = Self::from_parts(LOGIC, a, b, r, bits);
         r
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn new(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
+        Self::from_parts(kind, a, b, r, bits)
+    }
+    // Internal construction avoids an out-of-line sret temporary/copy in each
+    // ALU helper. The public constructor remains out of line for the shards.
+    #[inline]
+    fn from_parts(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
         Flags { kind, a, b, r, bits, cf_in: false }
     }
     /// imul (2/3-operand, 32-bit): CF = OF = the signed product does not fit.
@@ -350,16 +364,25 @@ impl Flags {
     #[inline]
     fn sign(&self, v: u32) -> bool { (v >> (self.bits - 1)) & 1 != 0 }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
-    pub fn zf(&self) -> bool {
+    pub fn zf(&self) -> bool { self.zf_value() }
+    // Only helper-to-helper composition inlines; shard calls stay out of line.
+    #[inline]
+    fn zf_value(&self) -> bool {
         self.defined(0x40);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x40 != 0; }
         if self.kind == COMISS { return self.r != 1 && self.r != 2 } // r: 0 equal, 1 greater, 2 less, 3 unordered
         self.r & self.mask() == 0
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
-    pub fn sf(&self) -> bool { self.defined(0x80); if matches!(self.kind, RAW | PARTIAL) { self.r & 0x80 != 0 } else { self.kind != COMISS && self.sign(self.r) } }
+    pub fn sf(&self) -> bool { self.sf_value() }
+    // Only helper-to-helper composition inlines; shard calls stay out of line.
+    #[inline]
+    fn sf_value(&self) -> bool { self.defined(0x80); if matches!(self.kind, RAW | PARTIAL) { self.r & 0x80 != 0 } else { self.kind != COMISS && self.sign(self.r) } }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
-    pub fn cf(&self) -> bool {
+    pub fn cf(&self) -> bool { self.cf_value() }
+    // Only helper-to-helper composition inlines; shard calls stay out of line.
+    #[inline]
+    fn cf_value(&self) -> bool {
         self.defined(1);
         let m = self.mask();
         match self.kind {
@@ -376,7 +399,10 @@ impl Flags {
         }
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
-    pub fn of(&self) -> bool {
+    pub fn of(&self) -> bool { self.of_value() }
+    // Only helper-to-helper composition inlines; shard calls stay out of line.
+    #[inline]
+    fn of_value(&self) -> bool {
         self.defined(0x800);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x800 != 0; }
         let (a, b, r) = (self.sign(self.a), self.sign(self.b), self.sign(self.r));
@@ -385,14 +411,17 @@ impl Flags {
             SUB => a != b && r != a,
             INC => !a && r,
             DEC => a && !r,
-            SHL => self.b == 1 && (r != self.cf()),
+            SHL => self.b == 1 && (r != self.cf_value()),
             SHR => self.b == 1 && a,
             IMUL => self.imul_overflow(),
             _ => false, // logic, sar
         }
     }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
-    pub fn pf(&self) -> bool {
+    pub fn pf(&self) -> bool { self.pf_value() }
+    // Only helper-to-helper composition inlines; shard calls stay out of line.
+    #[inline]
+    fn pf_value(&self) -> bool {
         self.defined(4);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 4 != 0; }
         if self.kind == COMISS { return self.r == 3 }
@@ -402,14 +431,14 @@ impl Flags {
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn cond(&self, cc: &str) -> bool {
         match cc {
-            "e" | "z" => self.zf(), "ne" | "nz" => !self.zf(),
-            "b" | "c" | "nae" => self.cf(), "ae" | "nb" | "nc" => !self.cf(),
-            "be" | "na" => self.cf() || self.zf(), "a" | "nbe" => !self.cf() && !self.zf(),
-            "s" => self.sf(), "ns" => !self.sf(),
-            "l" | "nge" => self.sf() != self.of(), "ge" | "nl" => self.sf() == self.of(),
-            "le" | "ng" => self.zf() || self.sf() != self.of(), "g" | "nle" => !self.zf() && self.sf() == self.of(),
-            "o" => self.of(), "no" => !self.of(),
-            "p" | "pe" => self.pf(), "np" | "po" => !self.pf(),
+            "e" | "z" => self.zf_value(), "ne" | "nz" => !self.zf_value(),
+            "b" | "c" | "nae" => self.cf_value(), "ae" | "nb" | "nc" => !self.cf_value(),
+            "be" | "na" => self.cf_value() || self.zf_value(), "a" | "nbe" => !self.cf_value() && !self.zf_value(),
+            "s" => self.sf_value(), "ns" => !self.sf_value(),
+            "l" | "nge" => self.sf_value() != self.of_value(), "ge" | "nl" => self.sf_value() == self.of_value(),
+            "le" | "ng" => self.zf_value() || self.sf_value() != self.of_value(), "g" | "nle" => !self.zf_value() && self.sf_value() == self.of_value(),
+            "o" => self.of_value(), "no" => !self.of_value(),
+            "p" | "pe" => self.pf_value(), "np" | "po" => !self.pf_value(),
             _ => panic!("condition {cc}"),
         }
     }

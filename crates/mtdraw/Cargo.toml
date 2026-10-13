@@ -1,0 +1,18 @@
+[package]
+name = "mtdraw"
+version = "0.1.0"
+description = "MT Framework's nDraw command executor of DDDA.exe as readable Rust (docs/NDRAW.md, L112)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ddnative-base = { path = "../ddnative-base" }
+mtcore = { path = "../mtcore" }
+mtstate = { path = "../mtstate" }
+
+[dev-dependencies]
+serde_json = "1"
+ddnative-host = { path = "../ddnative-host" }
+# the lifted executor, the differential test's reference
+ddlift-hot-00 = { path = "../ddlift/lift_hot_00" }

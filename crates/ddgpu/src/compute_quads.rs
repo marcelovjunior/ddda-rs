@@ -551,8 +551,8 @@ impl WgpuBackend {
         self.quads.dispatches += 1;
         self.draws_recorded.set(self.draws_recorded.get() + 1);
         self.open_draws.set(self.open_draws.get() + 1);
-        if self.open_draws.get() >= DRAWS_PER_SUBMIT {
-            self.flush();
+        if self.open_draws.get() >= self.draws_per_submit {
+            self.flush_async();
         }
         Ok(())
     }

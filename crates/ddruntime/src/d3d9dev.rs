@@ -140,69 +140,94 @@ pub(crate) fn objects<R>(f: impl FnOnce(&mut Objects) -> R) -> R {
 
 /// A value behind the D3D lock: re-entrant on one thread, so a method can
 /// reach the objects through any helper; a RefCell inside still catches a
-/// nested mutable borrow.
+/// nested mutable borrow. Taking it uncontended is one compare-exchange on
+/// `owner` (L101: a mutex and a condvar per D3D call before); `lock` and
+/// `free` are only for threads that wait.
 pub(crate) struct D3dCell<T> {
-    lock: std::sync::Mutex<bool>,
+    lock: std::sync::Mutex<()>,
     free: std::sync::Condvar,
-    /// the holder (a per-thread key; 0: none) and its depth (only the
-    /// holder changes it)
+    /// the holder (a per-thread key; 0: none)
     owner: std::sync::atomic::AtomicU64,
+    /// threads waiting in `acquire`
+    waiting: std::sync::atomic::AtomicU32,
+    /// the holder's depth (only the holder changes it)
     depth: std::cell::Cell<u32>,
     cell: std::cell::RefCell<T>,
 }
 
 // SAFETY: `cell` and `depth` are only touched by the thread that holds the
-// lock (`owner`), and taking and giving the lock goes through the mutex.
+// lock (`owner`), which it takes and gives with acquire/release ordering.
 unsafe impl<T: Send> Sync for D3dCell<T> {}
 
 impl<T: Default> Default for D3dCell<T> {
     fn default() -> Self {
         D3dCell {
-            lock: std::sync::Mutex::new(false),
+            lock: std::sync::Mutex::new(()),
             free: std::sync::Condvar::new(),
             owner: std::sync::atomic::AtomicU64::new(0),
+            waiting: std::sync::atomic::AtomicU32::new(0),
             depth: std::cell::Cell::new(0),
             cell: Default::default(),
         }
     }
 }
 
+/// This thread's key for D3dCell::owner, and the D3D locks it holds.
+struct ThreadKey {
+    key: u64,
+    held: std::cell::Cell<u32>,
+}
+
 thread_local! {
-    /// This thread's key for D3dCell::owner, and the D3D locks it holds.
-    static THREAD_KEY: u64 = {
+    static THREAD_KEY: ThreadKey = {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ThreadKey { key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), held: std::cell::Cell::new(0) }
     };
-    static HELD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 impl<T> D3dCell<T> {
     fn acquire(&self) {
-        let me = THREAD_KEY.with(|k| *k);
-        if self.owner.load(std::sync::atomic::Ordering::Acquire) != me {
-            let mut locked = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-            while *locked {
-                locked = self.free.wait(locked).unwrap_or_else(|e| e.into_inner());
+        use std::sync::atomic::Ordering::{Acquire, Relaxed, SeqCst};
+        let me = THREAD_KEY.with(|k| {
+            k.held.set(k.held.get() + 1);
+            k.key
+        });
+        if self.owner.load(Relaxed) != me && self.owner.compare_exchange(0, me, Acquire, Relaxed).is_err() {
+            // contended: wait for a release (which notifies while anyone waits)
+            self.waiting.fetch_add(1, SeqCst);
+            let mut guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+            while self.owner.compare_exchange(0, me, SeqCst, Relaxed).is_err() {
+                guard = self.free.wait(guard).unwrap_or_else(|e| e.into_inner());
             }
-            *locked = true;
-            self.owner.store(me, std::sync::atomic::Ordering::Release);
+            drop(guard);
+            self.waiting.fetch_sub(1, SeqCst);
         }
         self.depth.set(self.depth.get() + 1);
-        HELD.with(|h| h.set(h.get() + 1));
     }
 
     fn release(&self) {
-        HELD.with(|h| h.set(h.get() - 1));
+        use std::sync::atomic::Ordering::SeqCst;
+        THREAD_KEY.with(|k| k.held.set(k.held.get() - 1));
         let d = self.depth.get() - 1;
         self.depth.set(d);
         if d == 0 {
-            self.owner.store(0, std::sync::atomic::Ordering::Release);
-            *self.lock.lock().unwrap_or_else(|e| e.into_inner()) = false;
-            self.free.notify_one();
+            self.owner.store(0, SeqCst);
+            // a waiter counts itself before it tries the lock under the
+            // mutex, so it either sees the lock free or gets this notify
+            if self.waiting.load(SeqCst) > 0 {
+                let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+                self.free.notify_one();
+            }
         }
     }
 
     pub(crate) fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        // A surrounding DeviceLock already keeps this cell alive and locked.
+        // Borrow checking remains active; no depth/HELD bookkeeping is needed
+        // for a borrow whose lifetime ends before that surrounding guard.
+        if self.owner.load(std::sync::atomic::Ordering::Acquire) == THREAD_KEY.with(|k| k.key) {
+            return f(&mut self.cell.borrow_mut());
+        }
         struct Release<'a, T>(&'a D3dCell<T>);
         impl<T> Drop for Release<'_, T> {
             fn drop(&mut self) {
@@ -211,29 +236,33 @@ impl<T> D3dCell<T> {
         }
         self.acquire();
         let _release = Release(self);
-        f(&mut self.cell.borrow_mut())
+        // a local, so the borrow ends before `_release` gives the lock up (a
+        // temporary in the tail expression would outlive it: another thread
+        // could take the lock and borrow while this borrow still stood)
+        let mut cell = self.cell.borrow_mut();
+        f(&mut cell)
     }
 }
 
 /// Whether this thread holds the D3D lock.
 pub(crate) fn holds_device_lock() -> bool {
-    HELD.with(|h| h.get()) > 0
+    THREAD_KEY.with(|k| k.held.get()) > 0
 }
 
 /// The D3D lock for one D3D method (dispatch::Binding::Device). With the
 /// guest lock also held, the destructions deferred by methods without it
 /// run first.
-pub(crate) struct DeviceLock(std::sync::Arc<crate::runtime::Runtime>);
+pub(crate) struct DeviceLock(crate::runtime::Pinned);
 
 pub(crate) fn device_lock() -> DeviceLock {
-    let rt = crate::runtime::current();
+    let rt = crate::runtime::pin();
     rt.d3d.acquire();
-    let lock = DeviceLock(rt);
     // (the deferred list first: asking about the guest lock takes its mutex)
-    if objects(|o| !o.deferred.is_empty()) && crate::threads::holds_guest_lock() {
+    if rt.d3d_deferred.load(std::sync::atomic::Ordering::Relaxed) && crate::threads::holds_guest_lock() {
+        rt.d3d_deferred.store(false, std::sync::atomic::Ordering::Relaxed);
         destroy_deferred();
     }
-    lock
+    DeviceLock(rt)
 }
 
 impl Drop for DeviceLock {
@@ -288,6 +317,9 @@ pub(crate) fn release_of(object: u32) -> u32 {
         } else { (x.refs, None) }
     });
     if let Some(x) = gone {
+        // a DeviceState method (dispatch) runs with the guest's x87 state
+        // in the FPU; host code may run from here on
+        ddnative_base::x87::park();
         if crate::threads::holds_guest_lock() {
             destroy(object, x);
         } else {
@@ -295,6 +327,7 @@ pub(crate) fn release_of(object: u32) -> u32 {
             // freed, and what the object holds released, by the next D3D
             // method that has it (the object is no longer the guest's)
             objects(|o| o.deferred.push((object, x)));
+            crate::runtime::with(|rt| rt.d3d_deferred.store(true, std::sync::atomic::Ordering::Relaxed));
         }
     }
     left
@@ -390,10 +423,15 @@ fn surface(m: &mut dyn Mem, device: u32, desc: SurfaceDesc, container: u32) -> u
 /// The object whose reference count `object` uses (a texture's level
 /// surfaces count on the texture).
 fn counted(object: u32) -> u32 {
-    objects(|o| match o.live.get(&object).map(|x| &x.kind) {
+    objects(|o| counted_in(o, object))
+}
+
+/// [`counted`] inside an access to the objects.
+pub(crate) fn counted_in(o: &Objects, object: u32) -> u32 {
+    match o.live.get(&object).map(|x| &x.kind) {
         Some(Kind::Surface { owner, .. }) if *owner != 0 => *owner,
         _ => object,
-    })
+    }
 }
 
 /// Complete windowed present parameters as D3D9 does: a zero back buffer
@@ -475,6 +513,7 @@ pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
             with_device(device, |d| d.swap_chains.push(chain));
             bind_implicit(m, device, chain, pp);
             m.set_u32(out, device);
+            crate::load_log::event("d3d_device_created", format_args!("device={device:#x}"));
             D3D_OK
         }
     };
@@ -772,6 +811,19 @@ fn present(m: &mut dyn Mem, cpu: &mut Cpu) {
     let chain = with_device(arg(m, cpu, 0), |d| d.swap_chains[0]);
     cpu.eax = present_chain(m, chain);
     ret(m, cpu, 20);
+}
+
+// Selected at registration only. The disabled path has no per-Present check.
+fn present_ndraw_stats(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let device = arg(m, cpu, 0);
+    present(m, cpu);
+    if cpu.eax == D3D_OK { crate::ndraw_stats::present(device); }
+}
+
+fn chain_present_ndraw_stats(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let device = with_chain(arg(m, cpu, 0), |d, _, _, _| d);
+    chain_present(m, cpu);
+    if cpu.eax == D3D_OK { crate::ndraw_stats::present(device); }
 }
 
 /// SetGammaRamp(this, swap chain, flags, D3DGAMMARAMP*): returns nothing.
@@ -1128,6 +1180,22 @@ const DEVICE_ONLY_SLOTS: &[u32] = &[
     107, 108, 109, 110, 111, 112, 113, 114,
 ];
 
+/// The IDirect3DDevice9 methods of DEVICE_ONLY_SLOTS that only set or read
+/// device state, bound as dispatch::Binding::DeviceState (L101: the guest's
+/// x87 state stays in the FPU): Set/GetTransform, Set/GetViewport,
+/// Set/GetRenderState, Get/SetTexture, Get/SetTextureStageState,
+/// Get/SetSamplerState, Set/GetScissorRect, Set/GetVertexDeclaration,
+/// Set/GetFVF, Set/GetVertexShader, the vertex constants, Set/Get
+/// StreamSource(Freq), Set/GetIndices, Set/GetPixelShader, the pixel
+/// constants. They run no host code but the runtime's; the one way out is
+/// a Release to zero, and release_of parks the x87 state before it
+/// destroys anything. Not here: AddRef/Release, Present, the render
+/// targets, Begin/EndScene, Clear and the draws.
+const STATE_SLOTS: &[u32] = &[
+    44, 45, 47, 48, 57, 58, 64, 65, 66, 67, 68, 69, 75, 76, 87, 88, 89, 90, 92, 93, 94, 95, 96, 97, 98, 99,
+    100, 101, 102, 103, 104, 105, 107, 108, 109, 110, 111, 112, 113, 114,
+];
+
 /// Build the vtables (before the registry is frozen); objects are created
 /// at run time.
 pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) -> Result<(), Conflict> {
@@ -1137,9 +1205,21 @@ pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) ->
         // L93: every D3D method holds the D3D lock; the hot device methods
         // that touch only the D3D objects and the backend take no guest lock
         for &(slot, f) in spec.methods {
+            let f = if crate::ndraw_stats::enabled() {
+                match (spec.name, slot) {
+                    ("IDirect3DDevice9", 17) => present_ndraw_stats as ddnative_base::x86::LiftFn,
+                    ("IDirect3DSwapChain9", 3) => chain_present_ndraw_stats as ddnative_base::x86::LiftFn,
+                    _ => f,
+                }
+            } else { f };
             let only_d3d = spec.name == "IDirect3DDevice9" && DEVICE_ONLY_SLOTS.contains(&slot)
                 || spec.name == "IDirect3DSwapChain9" && slot == 3;
-            registry.replace(m.u32(v + 4 * slot), crate::dispatch::Binding::Device(f, !only_d3d));
+            let b = if spec.name == "IDirect3DDevice9" && STATE_SLOTS.contains(&slot) {
+                crate::dispatch::Binding::DeviceState(f)
+            } else {
+                crate::dispatch::Binding::Device(f, !only_d3d)
+            };
+            registry.replace(m.u32(v + 4 * slot), b);
         }
         // (L82 bound Clear and the two draws as ServiceTail, the guest lock
         // given up for their backend tail; L93 runs them without it)
@@ -1156,9 +1236,67 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
 
+    #[test]
+    fn scoped_cell_borrows_preserve_outer_lock_and_unwind_checks() {
+        let cell = D3dCell::<u32>::default();
+        cell.acquire();
+        let depth = cell.depth.get();
+        let held = THREAD_KEY.with(|k| k.held.get());
+        cell.with(|value| *value = 7);
+        assert_eq!(cell.depth.get(), depth);
+        assert_eq!(THREAD_KEY.with(|k| k.held.get()), held);
+        let nested = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cell.with(|_| cell.with(|_| ()));
+        }));
+        assert!(nested.is_err(), "nested mutable borrows must still fail");
+        assert_eq!(cell.with(|v| *v), 7);
+        assert_eq!(cell.depth.get(), depth);
+        cell.release();
+        assert_eq!(cell.owner.load(Ordering::Acquire), 0);
+        assert_eq!(THREAD_KEY.with(|k| k.held.get()), held - 1);
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cell.with(|_| panic!("unwind an outer borrow"));
+        })).is_err());
+        assert_eq!(cell.owner.load(Ordering::Acquire), 0);
+        assert_eq!(cell.with(|v| *v), 7);
+    }
+
     const SCRATCH: u32 = 0x7EFF_0000;
     const PP: u32 = SCRATCH + 0x200;
     const OUT: u32 = SCRATCH + 0x300;
+
+    /// L101: the D3D lock (an atomic owner, the mutex only for waiters)
+    /// excludes other threads, re-enters on one thread and loses no wakeup.
+    #[test]
+    fn the_d3d_lock_excludes_reenters_and_wakes_waiters() {
+        let cell: Arc<D3dCell<(u64, u64)>> = Arc::new(D3dCell::default());
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let cell = cell.clone();
+                std::thread::spawn(move || {
+                    for k in 0..20_000u64 {
+                        cell.with(|v| {
+                            // a non-atomic read-modify-write: lost updates show a race
+                            let x = v.0;
+                            if k % 1000 == 0 {
+                                std::thread::yield_now();
+                            }
+                            v.0 = x + 1;
+                        });
+                        // re-entered on the same thread
+                        cell.acquire();
+                        cell.with(|v| v.1 += 1);
+                        cell.release();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(cell.with(|v| *v), (80_000, 80_000));
+        assert!(!holds_device_lock());
+    }
 
     fn token(s: &Session, name: &str) -> u32 {
         s.imports.iter().find(|i| i.full_name() == name).unwrap().token

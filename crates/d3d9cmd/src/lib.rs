@@ -4,6 +4,8 @@
 //! that backends (crates/ddgpu, wgpu) do not depend on the runtime.
 
 mod deferred;
+mod native;
+pub use native::*;
 pub use deferred::DeferredBackend;
 
 /// A texture's dimensionality.
@@ -229,6 +231,30 @@ pub trait GraphicsBackend: Send + std::any::Any {
     /// execute as they record: every mark has passed.
     fn mark(&mut self) -> u64 { 0 }
     fn passed(&self, _mark: u64) -> bool { true }
+    /// Capability is stable for this backend's lifetime. Producers must also
+    /// meet the native adapter's eligibility contract before sending a job.
+    fn native_supported(&self) -> bool { false }
+    /// Ordered native job. Immediate backends return Err before native target
+    /// writes. A supported DeferredBackend returns Ok after enqueue; unexpected
+    /// worker rejection is logged loudly and cannot trigger producer fallback.
+    fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> { Err(job) }
+    /// Submit a draw-only native job with its equivalent original DrawCalls.
+    /// Worker rejection executes those calls exactly once, in the same FIFO
+    /// position. No native target writes may occur before an Err from native.
+    /// Deferred implementations enqueue both alternatives without waiting;
+    /// return does not imply the worker accepted the native representation.
+    /// Clears/copies must remain separate ordered commands, not part of job.
+    fn native_or_draw(&mut self, job: NativeJob, fallback: Vec<DrawCall>) {
+        assert!(job.passes.iter().all(|p| p.clear_colour.is_none()
+            && p.clear_depth.is_none() && p.clear_stencil.is_none()),
+            "native_or_draw requires a draw-only job");
+        if self.native(job).is_err() {
+            for draw in fallback { self.draw(&draw); }
+        }
+    }
+    /// Comparison markers default to unsupported, without side effects.
+    fn native_compare_begin(&mut self, _begin: NativeCompareBegin) -> bool { false }
+    fn native_compare_end(&mut self, _id: u64, job: NativeJob) -> Result<(), NativeJob> { Err(job) }
     fn upload(&mut self, upload: Upload);
     fn draw(&mut self, draw: &DrawCall);
     fn clear(&mut self, clear: &ClearCall);

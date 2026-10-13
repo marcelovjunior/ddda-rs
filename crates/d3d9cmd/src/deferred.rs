@@ -15,6 +15,7 @@ type Work = Box<dyn FnOnce(&mut dyn GraphicsBackend) + Send>;
 /// Two outstanding Presents bound frame latency independently of queue length.
 /// Dropping the adapter drains the stream and joins the worker.
 pub struct DeferredBackend {
+    native_supported: bool,
     sender: Option<SyncSender<Work>>,
     worker: Option<JoinHandle<()>>,
     presents: VecDeque<Receiver<()>>,
@@ -38,6 +39,7 @@ impl DeferredBackend {
     /// A full queue blocks the producer; no command is dropped or reordered.
     pub fn with_capacity(mut backend: Box<dyn GraphicsBackend>, capacity: usize) -> Self {
         assert!(capacity > 0);
+        let native_supported = backend.native_supported();
         let (sender, receiver) = mpsc::sync_channel::<Work>(capacity);
         let executed = Arc::new(AtomicU64::new(0));
         let counter = executed.clone();
@@ -48,7 +50,7 @@ impl DeferredBackend {
             }
         }).expect("start D3D9 backend worker");
         Self {
-            sender: Some(sender), worker: Some(worker), presents: VecDeque::new(), recorded: 0, executed,
+            native_supported, sender: Some(sender), worker: Some(worker), presents: VecDeque::new(), recorded: 0, executed,
             generation: HashMap::new(), asked: HashMap::new(), results: Default::default(),
         }
     }
@@ -106,6 +108,29 @@ impl Drop for DeferredBackend {
 }
 
 impl GraphicsBackend for DeferredBackend {
+    fn native_supported(&self) -> bool { self.native_supported }
+    fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> {
+        if !self.native_supported { return Err(job); }
+        self.enqueue(move |b| {
+            if let Err(job) = b.native(job) {
+                eprintln!("ERROR: accepted native job rejected on backend worker: {} passes / {} draws; producer eligibility contract violated",
+                    job.passes.len(), job.passes.iter().map(|p| p.draws.len()).sum::<usize>());
+            }
+        });
+        Ok(())
+    }
+    fn native_or_draw(&mut self, job: NativeJob, fallback: Vec<DrawCall>) {
+        // Decide on the worker, where resource/query state is authoritative.
+        // In particular, never return enqueue success and discard a later
+        // rejection (L133: indexed strips rejected whole multi-pass jobs).
+        self.enqueue(move |b| b.native_or_draw(job, fallback));
+    }
+    fn native_compare_begin(&mut self, begin: NativeCompareBegin) -> bool {
+        self.result(move |b| b.native_compare_begin(begin))
+    }
+    fn native_compare_end(&mut self, id: u64, job: NativeJob) -> Result<(), NativeJob> {
+        self.result(move |b| b.native_compare_end(id, job))
+    }
     fn upload(&mut self, upload: Upload) { self.enqueue(move |b| b.upload(upload)); }
     fn draw(&mut self, draw: &DrawCall) {
         let draw = draw.clone();
@@ -140,9 +165,18 @@ impl GraphicsBackend for DeferredBackend {
     /// count arriving after the query was issued again is not answered.
     fn query_result(&mut self, query: u32) -> Option<u64> {
         let generation = self.generation.get(&query).copied().unwrap_or(0);
-        if let Some(&(g, v)) = self.results.lock().unwrap().get(&query) {
-            if g == generation {
-                return v;
+        {
+            let mut results = self.results.lock().unwrap();
+            if let Some(&(g, v)) = results.get(&query) {
+                if g == generation && v.is_some() {
+                    return v;
+                }
+                if g == generation {
+                    // the backend had no count yet (L120: it does not wait
+                    // for the GPU): ask again
+                    results.remove(&query);
+                    self.asked.remove(&query);
+                }
             }
         }
         if self.asked.get(&query) != Some(&generation) {
@@ -313,4 +347,143 @@ mod tests {
         deferred.enqueue(|_| panic!("backend failed"));
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || deferred.drain())).is_err());
     }
+
+    #[test]
+    fn unsupported_native_job_returns_owned_payload_after_prior_uploads() {
+        let (mut backend, log) = queue(4);
+        backend.upload(Upload::Buffer { resource: 42, bytes: vec![1, 2, 3] });
+        let job = NativeJob { passes: vec![NativePass { colours: [Some(target()), None, None, None], clear_colour: Some(17), ..Default::default() }] };
+        assert_eq!(backend.native(job.clone()), Err(job.clone()));
+        assert!(!backend.native_compare_begin(NativeCompareBegin { id: 7, ..Default::default() }));
+        assert_eq!(backend.native_compare_end(7, job.clone()), Err(job));
+        backend.release(42);
+        backend.drain();
+        let entries = log.lock().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].starts_with("upload:"));
+        assert_eq!(entries[1], "release:42");
+    }
+    struct NativeLog(Log, bool);
+    impl GraphicsBackend for NativeLog {
+        fn native_supported(&self) -> bool { true }
+        fn native(&mut self, job: NativeJob) -> Result<(), NativeJob> {
+            self.0.add(format!("native:{}", job.passes.len()));
+            if self.1 { Err(job) } else { Ok(()) }
+        }
+        fn upload(&mut self, u: Upload) { self.0.upload(u); }
+        fn draw(&mut self, d: &DrawCall) { self.0.draw(d); }
+        fn clear(&mut self, c: &ClearCall) { self.0.clear(c); }
+        fn present(&mut self, t: &Target) { self.0.present(t); }
+        fn copy(&mut self, c: &CopyCall) { self.0.copy(c); }
+        fn fill(&mut self, c: &FillCall) { self.0.fill(c); }
+        fn read_back(&mut self, t: &Target) -> Option<Vec<u8>> { self.0.read_back(t) }
+        fn query_begin(&mut self, q: u32) { self.0.query_begin(q); }
+        fn query_end(&mut self, q: u32) { self.0.query_end(q); }
+        fn query_result(&mut self, q: u32) -> Option<u64> { self.0.query_result(q) }
+        fn gamma(&mut self, g: Option<&GammaRamp>) { self.0.gamma(g); }
+        fn release(&mut self, r: u32) { self.0.release(r); }
+    }
+    #[test]
+    fn accepted_native_job_shares_resource_and_query_fifo() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = DeferredBackend::with_capacity(Box::new(NativeLog(Log(log.clone()), false)), 4);
+        backend.upload(Upload::Buffer { resource: 42, bytes: vec![9] });
+        assert_eq!(backend.native(NativeJob { passes: vec![NativePass::default()] }), Ok(()));
+        backend.query_begin(7);
+        backend.release(42);
+        backend.drain();
+        let entries = log.lock().unwrap();
+        assert!(entries[0].starts_with("upload:"));
+        assert_eq!(&entries[1..], ["native:1", "begin:7", "release:42"]);
+    }
+
+    #[test]
+    fn supported_native_enqueue_does_not_wait_for_prior_work() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = DeferredBackend::with_capacity(Box::new(NativeLog(Log(log.clone()), false)), 4);
+        assert!(backend.native_supported());
+        let (unblock, blocked) = mpsc::channel();
+        backend.enqueue(move |_| { blocked.recv().unwrap(); });
+        let (sent, received) = mpsc::channel();
+        let producer = thread::spawn(move || {
+            let result = backend.native(NativeJob::default());
+            sent.send(result).unwrap(); backend
+        });
+        let result = received.recv_timeout(Duration::from_secs(2));
+        unblock.send(()).unwrap();
+        drop(producer.join().unwrap());
+        assert_eq!(result.unwrap(), Ok(()), "native enqueue must not drain worker");
+        assert_eq!(*log.lock().unwrap(), ["native:0"]);
+    }
+    fn fallback_draw() -> DrawCall {
+        DrawCall {
+            primitive: 5, primitives: 1, start: 0, base_vertex: 0,
+            min_index: 0, vertex_count: 3,
+            vertices: Vertices::Inline { bytes: vec![12; 36], stride: 12 },
+            indices: Indices::Inline { bytes: vec![0, 0, 1, 0, 2, 0], format: 101 },
+            vertex_shader: Some(vec![1, 2].into()), pixel_shader: Some(vec![3, 4].into()),
+            declaration: vec![].into(), fvf: 0,
+            vs_constants: Constants::default().into(), ps_constants: Constants::default().into(),
+            textures: vec![].into(), render_states: vec![(7, 1)].into(),
+            viewport: [0; 6], scissor: [0; 4],
+            targets: [Some(target()), None, None, None], depth: None,
+        }
+    }
+    #[test]
+    fn rejected_native_worker_runs_original_draws_once_in_fifo() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = DeferredBackend::with_capacity(Box::new(NativeLog(Log(log.clone()), true)), 4);
+        backend.upload(Upload::Buffer { resource: 42, bytes: vec![7] });
+        backend.query_begin(9);
+        let first = fallback_draw();
+        let mut second = first.clone();
+        second.start = 3;
+        let expected = [format!("draw:{first:?}"), format!("draw:{second:?}")];
+        backend.native_or_draw(NativeJob { passes: vec![NativePass::default(), NativePass::default()] }, vec![first, second]);
+        backend.query_end(9);
+        backend.release(42);
+        backend.drain();
+        let entries = log.lock().unwrap();
+        assert_eq!(entries.len(), 7);
+        assert!(entries[0].starts_with("upload:"));
+        assert_eq!(&entries[1..3], ["begin:9", "native:2"]);
+        assert_eq!(&entries[3..5], &expected);
+        assert_eq!(&entries[5..], ["end:9", "release:42"]);
+    }
+    #[test]
+    fn native_with_fallback_is_async_and_acceptance_does_not_duplicate() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = DeferredBackend::with_capacity(Box::new(NativeLog(Log(log.clone()), false)), 4);
+        let (unblock, blocked) = mpsc::channel();
+        backend.enqueue(move |_| { blocked.recv().unwrap(); });
+        let (sent, received) = mpsc::channel();
+        let producer = thread::spawn(move || {
+            backend.native_or_draw(NativeJob::default(), vec![fallback_draw()]);
+            sent.send(()).unwrap(); backend
+        });
+        let result = received.recv_timeout(Duration::from_secs(2));
+        unblock.send(()).unwrap();
+        drop(producer.join().unwrap());
+        assert!(result.is_ok(), "fallback transport must not drain worker");
+        assert_eq!(*log.lock().unwrap(), ["native:0"]);
+    }
+    #[test]
+    fn unsupported_backend_executes_fallback_once() {
+        let (mut backend, log) = queue(4);
+        let draw = fallback_draw();
+        let expected = format!("draw:{draw:?}");
+        backend.native_or_draw(NativeJob::default(), vec![draw]);
+        backend.drain();
+        assert_eq!(*log.lock().unwrap(), [expected]);
+    }
+    #[test]
+    #[should_panic(expected = "draw-only job")]
+    fn draw_fallback_refuses_jobs_containing_clears() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let mut backend = NativeLog(Log(log), true);
+        backend.native_or_draw(NativeJob { passes: vec![NativePass {
+            clear_colour: Some(0), ..Default::default()
+        }] }, vec![fallback_draw()]);
+    }
+
 }

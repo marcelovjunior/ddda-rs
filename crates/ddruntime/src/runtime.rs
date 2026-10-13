@@ -55,6 +55,9 @@ pub struct Runtime {
     pub(crate) desktop: GuestCell<crate::user32::Desktop>,
     /// behind their own lock, not the guest lock (L93: crate::d3d9dev::D3dCell)
     pub(crate) d3d: crate::d3d9dev::D3dCell<crate::d3d9dev::Objects>,
+    /// whether `d3d` holds destructions deferred by a method without the
+    /// guest lock (L101: the D3D lock's per-call check reads only this)
+    pub(crate) d3d_deferred: std::sync::atomic::AtomicBool,
     /// The display the adapter answers from (crate::d3d9::display).
     pub(crate) display: GuestCell<Option<crate::d3d9::Display>>,
     /// The graphics backend, behind its own lock (not a GuestCell): draws
@@ -63,23 +66,139 @@ pub struct Runtime {
     pub(crate) graphics: std::sync::Mutex<crate::d3d9draw::Graphics>,
 }
 
+/// This host thread's runtime. `ptr` is the runtime `current` holds, for
+/// [`with`]'s fast path (L101: an Arc clone per access was a tenth of a D3D
+/// call). A runtime replaced by [`enter`] while a `with` on this thread
+/// still uses it is kept in `retired` until the outermost `with` returns.
+struct Current {
+    current: RefCell<Option<Arc<Runtime>>>,
+    ptr: std::cell::Cell<*const Runtime>,
+    depth: std::cell::Cell<u32>,
+    retired: RefCell<Vec<Arc<Runtime>>>,
+}
+
 thread_local! {
-    static CURRENT: RefCell<Option<Arc<Runtime>>> = const { RefCell::new(None) };
+    static CURRENT: Current = const {
+        Current {
+            current: RefCell::new(None),
+            ptr: std::cell::Cell::new(std::ptr::null()),
+            depth: std::cell::Cell::new(0),
+            retired: RefCell::new(Vec::new()),
+        }
+    };
 }
 
 /// Make `rt` this host thread's runtime (a new session, or a guest thread
 /// starting).
 pub fn enter(rt: Arc<Runtime>) {
-    CURRENT.with(|c| *c.borrow_mut() = Some(rt));
+    CURRENT.with(|c| {
+        c.ptr.set(Arc::as_ptr(&rt));
+        let old = c.current.borrow_mut().replace(rt);
+        if let Some(old) = old.filter(|_| c.depth.get() > 0) {
+            c.retired.borrow_mut().push(old);
+        }
+    });
 }
 
 /// This host thread's runtime (a fresh one if it never entered one).
 pub fn current() -> Arc<Runtime> {
-    CURRENT.with(|c| c.borrow_mut().get_or_insert_with(|| Arc::new(Runtime::default())).clone())
+    CURRENT.with(|c| {
+        if let Some(rt) = c.current.borrow().as_ref() {
+            return rt.clone();
+        }
+        let rt = Arc::new(Runtime::default());
+        c.ptr.set(Arc::as_ptr(&rt));
+        *c.current.borrow_mut() = Some(rt.clone());
+        rt
+    })
+}
+
+/// This thread's runtime, held until the guard drops (no reference count:
+/// [`enter`] keeps a replaced runtime alive while a guard exists).
+pub(crate) struct Pinned {
+    ptr: *const Runtime,
+}
+
+pub(crate) fn pin() -> Pinned {
+    let ptr = CURRENT.with(|c| {
+        if c.ptr.get().is_null() {
+            drop(current());
+        }
+        c.depth.set(c.depth.get() + 1);
+        c.ptr.get()
+    });
+    Pinned { ptr }
+}
+
+impl std::ops::Deref for Pinned {
+    type Target = Runtime;
+    fn deref(&self) -> &Runtime {
+        // SAFETY: the Arc in CURRENT.current, or one `enter` moved to
+        // `retired` while a guard exists; either lives until this one drops
+        unsafe { &*self.ptr }
+    }
+}
+
+impl Drop for Pinned {
+    fn drop(&mut self) {
+        // (at thread exit the runtime has already gone with CURRENT)
+        let _ = CURRENT.try_with(|c| {
+            c.depth.set(c.depth.get() - 1);
+            if c.depth.get() == 0 && !c.retired.borrow().is_empty() {
+                let retired = std::mem::take(&mut *c.retired.borrow_mut());
+                drop(retired);
+            }
+        });
+    }
 }
 
 /// Run `f` with this thread's runtime (the pointer is not borrowed while
-/// `f` runs, so `f` may reenter).
+/// `f` runs, so `f` may reenter, also [`enter`]).
 pub(crate) fn with<R>(f: impl FnOnce(&Runtime) -> R) -> R {
-    f(&current())
+    f(&pin())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pinned_helpers_avoid_retains_and_keep_replaced_runtimes_alive() {
+        let original = current();
+        let a = Arc::new(Runtime::default());
+        let b = Arc::new(Runtime::default());
+        enter(a.clone());
+        let retained = Arc::strong_count(&a);
+        with(|outer| {
+            assert_eq!(Arc::strong_count(&a), retained);
+            with(|inner| assert!(std::ptr::eq(inner, outer)));
+            enter(b.clone());
+            with(|changed| assert!(std::ptr::eq(changed, b.as_ref())));
+            assert!(std::ptr::eq(outer, a.as_ref()));
+            assert_eq!(Arc::strong_count(&a), retained);
+        });
+        assert_eq!(Arc::strong_count(&a), 1);
+        CURRENT.with(|c| { assert_eq!(c.depth.get(), 0); assert!(c.retired.borrow().is_empty()); });
+        enter(original);
+    }
+
+    #[test]
+    fn nested_pins_release_retired_runtimes_on_unwind() {
+        let original = current();
+        let a = Arc::new(Runtime::default());
+        let b = Arc::new(Runtime::default());
+        enter(a.clone());
+        with(|outer| {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with(|_| { enter(b.clone()); panic!("nested service"); });
+            }));
+            assert!(result.is_err());
+            assert!(std::ptr::eq(outer, a.as_ref()));
+            with(|rt| assert!(std::ptr::eq(rt, b.as_ref())));
+            CURRENT.with(|c| assert_eq!(c.depth.get(), 1));
+        });
+        assert_eq!(Arc::strong_count(&a), 1);
+        CURRENT.with(|c| { assert_eq!(c.depth.get(), 0); assert!(c.retired.borrow().is_empty()); });
+        enter(original);
+    }
 }

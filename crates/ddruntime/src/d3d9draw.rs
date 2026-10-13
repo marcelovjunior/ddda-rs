@@ -170,24 +170,30 @@ pub(crate) fn flush(m: &dyn Mem, resource: u32) {
 /// All of a draw's reads share one objects access. Preserve read order,
 /// duplicates, and the old per-resource volume/face/mip upload order.
 pub(crate) fn flush_reads(m: &dyn Mem, reads: impl IntoIterator<Item = u32>) {
-    let out = objects(|o| {
-        let mut out = Vec::new(); // no allocation unless an image needs upload
+    let out = objects(|o| collect_reads(o, reads));
+    upload_reads(m, out);
+}
+
+pub(super) fn collect_reads(o: &mut crate::d3d9dev::Objects, reads: impl IntoIterator<Item = u32>) -> Vec<(u32, u32, u32, Image)> {
+    let mut out = Vec::new(); // no allocation unless an image needs upload
+    #[cfg(debug_assertions)]
+    let verify = verify_dirty_flush();
+    for resource in reads {
+        let dirty = o.dirty.remove(&resource);
+        // Opt-in slow audit, including dirty images without a shadow:
+        // the old walk would clear those too, even though it emits nothing.
         #[cfg(debug_assertions)]
-        let verify = verify_dirty_flush();
-        for resource in reads {
-            let dirty = o.dirty.remove(&resource);
-            // Opt-in slow audit, including dirty images without a shadow:
-            // the old walk would clear those too, even though it emits nothing.
-            #[cfg(debug_assertions)]
-            if verify && !dirty {
-                assert!(!resource_has_dirty(o, resource), "unindexed dirty D3D resource {resource:#x}");
-            }
-            if dirty {
-                collect_dirty(o, resource, &mut out);
-            }
+        if verify && !dirty {
+            assert!(!resource_has_dirty(o, resource), "unindexed dirty D3D resource {resource:#x}");
         }
-        out
-    });
+        if dirty {
+            collect_dirty(o, resource, &mut out);
+        }
+    }
+    out
+}
+
+pub(super) fn upload_reads(m: &dyn Mem, out: Vec<(u32, u32, u32, Image)>) {
     for (resource, index, format, img) in out {
         let u = if index == u32::MAX {
             Upload::Buffer { resource, bytes: read_bytes(m, img.shadow, img.size) }
@@ -196,6 +202,14 @@ pub(crate) fn flush_reads(m: &dyn Mem, reads: impl IntoIterator<Item = u32>) {
         };
         backend(|b| b.upload(u));
     }
+}
+
+/// Consult under the same object borrow used to read device state. The audit
+/// deliberately bypasses this shortcut so missing dirty-index entries still fail.
+pub(super) fn needs_flush(o: &crate::d3d9dev::Objects) -> bool {
+    #[cfg(debug_assertions)]
+    if verify_dirty_flush() { return true; }
+    !o.dirty.is_empty()
 }
 
 #[cfg(debug_assertions)]
@@ -333,6 +347,7 @@ pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) => {
             let d = snapshot(m, dev, ty, count, start, 0, 0, n, None, Some(Indices::None));
+            crate::ndraw_native::observe(&d);
             backend_unlocked(|b| b.draw(&d));
             D3D_OK
         }
@@ -348,8 +363,9 @@ pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     let (dev, ty) = (a[0], a[1]);
     cpu.eax = match vertex_count(ty, a[6]) {
-        Some(_) if in_scene(dev) && with_device(dev, |d| d.state.indices != 0) => {
+        Some(_) if with_device(dev, |d| d.state.in_scene && d.state.indices != 0) => {
             let d = snapshot(m, dev, ty, a[6], a[5], a[2] as i32, a[3], a[4], None, None);
+            crate::ndraw_native::observe(&d);
             backend_unlocked(|b| b.draw(&d));
             D3D_OK
         }
@@ -436,6 +452,8 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// Present the swap chain's first back buffer.
 pub fn present_back_buffer(m: &dyn Mem, back_buffer: u32) {
+    static FIRST_PRESENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    crate::load_log::once(&FIRST_PRESENT, "first_present");
     PRESENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     flush(m, back_buffer);
     if let Some(t) = target(back_buffer) {
@@ -504,6 +522,12 @@ mod deferred_tests {
 /// from draws per frame (title, menus and loading screens draw a few
 /// hundred things per frame, the world over a thousand).
 static DRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Count draws made outside the D3D9 draw services (the native paths, L119):
+/// the stage probes and the autoplay's gameplay detection read these counts.
+pub(crate) fn count_draws(n: u64) {
+    DRAWS.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+}
 static PRESENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// (draw calls, Presents) so far.

@@ -18,7 +18,7 @@ fn zsp(r: u32, bits: u32) -> u32 {
 impl Flags {
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn partial(value: u32, defined: u32) -> Self {
-        Self::new(PARTIAL, defined, 0, value, 32)
+        Self::from_parts(PARTIAL, defined, 0, value, 32)
     }
     /// INC/DEC (Intel SDM vol. 2): OF, SF, ZF, AF and PF from the operation,
     /// CF kept. A CF that is undefined (after DIV, MUL or a partial SAHF)
@@ -29,11 +29,11 @@ impl Flags {
     pub fn inc_dec(&mut self, kind: u8, a: u32, r: u32, bits: u32) {
         let cf_defined = self.kind != PARTIAL || self.a & 1 != 0;
         if cf_defined {
-            let cf = self.cf();
-            *self = Self::new(kind, a, 1, r, bits);
+            let cf = self.cf_value();
+            *self = Self::from_parts(kind, a, 1, r, bits);
             self.cf_in = cf;
         } else {
-            let (value, _) = Self::new(kind, a, 1, r, bits).snapshot();
+            let (value, _) = Self::from_parts(kind, a, 1, r, bits).snapshot();
             *self = Self::partial(value & ARITH_FLAGS & !1, ARITH_FLAGS & !1);
         }
     }
@@ -67,7 +67,7 @@ impl Flags {
             !(a ^ b) & (a ^ r)
         }) >> (bits - 1)
             & 1;
-        *self = Self::new(
+        *self = Self::from_parts(
             RAW,
             0,
             0,

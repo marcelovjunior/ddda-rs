@@ -1,0 +1,1385 @@
+//! L110 native cost: 5,000 indexed draws, 40 pipeline handles, 200 texture
+//! sets, changed constants every draw. Default mode is compact range updates.
+//! `all` additionally measures prefilled wgpu/bundles/ash backend floors.
+//! Run optimized with WGPU_BACKEND=vulkan. CPU timing includes pass end,
+//! encoder finish, and queue submit; GPU completion waits are outside timing.
+//! Minimal shaders and tiny triangles, NOT a gameplay/FPS prediction.
+//! `native_draw_cost [frames=20] [draws=5000] [mode] [passes=1]`
+//! Modes: all/core/bundles/ash/native/compact/delta/interop; L123 adds
+//! ash-interop (raw drawing + wgpu resources/submit/image oracle) and
+//! churn/resident/resident-bundles (same full ABI, cap1-sized synthetic churn).
+use std::{
+    future::Future,
+    sync::Arc,
+    task::{Context, Poll, Wake, Waker},
+    time::Instant,
+};
+use wgpu::util::DeviceExt;
+const PIPELINES: usize = 40;
+const GROUPS: usize = 200;
+const STRIDE: u64 = 256;
+const SIZE: u32 = 16;
+fn block_on<F: Future>(f: F) -> F::Output {
+    struct Thread(std::thread::Thread);
+    impl Wake for Thread {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(Arc::new(Thread(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut f = std::pin::pin!(f);
+    loop {
+        match f.as_mut().poll(&mut cx) {
+            Poll::Ready(v) => return v,
+            Poll::Pending => std::thread::park(),
+        }
+    }
+}
+fn shader(n: usize) -> String {
+    format!(
+        r#"
+struct C {{ colour: vec4<f32> }};
+@group(0) @binding(0) var<uniform> c: C;
+@vertex fn vs_main(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> {{ return vec4<f32>(p, 0.0, 1.0); }}
+@fragment fn fs_main() -> @location(0) vec4<f32> {{ return c.colour * {}; }}
+"#,
+        1.0 + n as f32 * 0.00001
+    )
+}
+fn vertices() -> Vec<u8> {
+    [[-1.0f32, -1.0], [-1.0, -0.75], [-0.75, -1.0]]
+        .into_iter()
+        .flatten()
+        .flat_map(f32::to_le_bytes)
+        .collect()
+}
+fn constants(draws: usize) -> Vec<u8> {
+    let mut b = vec![0; (draws + GROUPS) * STRIDE as usize];
+    for (i, chunk) in b.chunks_exact_mut(STRIDE as usize).enumerate() {
+        for (dst, f) in
+            chunk[..16]
+                .chunks_exact_mut(4)
+                .zip([i as f32 / (draws + GROUPS) as f32, 0.2, 0.5, 1.0])
+        {
+            dst.copy_from_slice(&f.to_le_bytes());
+        }
+    }
+    b
+}
+fn report(name: &str, samples: &mut [[f64; 3]], draws: usize, passes: usize) {
+    samples.sort_by(|a, b| a.iter().sum::<f64>().total_cmp(&b.iter().sum::<f64>()));
+    let m = samples[samples.len() / 2];
+    let scale = 1e6 / draws as f64;
+    println!(
+        "{name}: {:.3} us/draw total (record {:.3}, finish {:.3}, submit {:.3}); {} frames, {} draws/frame, {} pipelines, {} groups",
+        m.iter().sum::<f64>() * scale,
+        m[0] * scale,
+        m[1] * scale,
+        m[2] * scale,
+        samples.len(),
+        draws,
+        PIPELINES,
+        GROUPS
+    );
+    println!(
+        "  {passes} passes/frame, {:.3} us/pass total CPU (includes draws)",
+        m.iter().sum::<f64>() * 1e6 / passes as f64
+    );
+}
+fn main() {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let frames: usize = args.first().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let draws: usize = args.get(1).and_then(|v| v.parse().ok()).unwrap_or(5000);
+    let mode = args.get(2).map(String::as_str).unwrap_or("delta");
+    assert!(
+        matches!(
+            mode,
+            "all"
+                | "core"
+                | "bundles"
+                | "ash"
+                | "native"
+                | "compact"
+                | "delta"
+                | "interop"
+                | "ash-interop"
+                | "churn"
+                | "resident"
+                | "resident-bundles"
+        ),
+        "unknown benchmark mode"
+    );
+    let passes: usize = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(1);
+    assert!(frames > 0 && draws > 0 && passes > 0 && passes <= draws);
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::VULKAN;
+    let instance = wgpu::Instance::new(descriptor);
+    let adapter = block_on(instance.request_adapter(&Default::default())).expect("Vulkan adapter");
+    println!(
+        "adapter {:?}; build {}; tiny triangle 16x16",
+        adapter.get_info(),
+        if cfg!(debug_assertions) {
+            "debug (NOT acceptance)"
+        } else {
+            "optimized"
+        }
+    );
+    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    if mode == "interop" {
+        interop_probe(&device, &queue);
+        return;
+    }
+    if matches!(
+        mode,
+        "native" | "compact" | "delta" | "churn" | "resident" | "resident-bundles"
+    ) {
+        native_workload(&device, &queue, frames, draws, mode);
+        return;
+    }
+    println!("backend floor: uniform data prefilled, update copies excluded");
+    let native_pixels = if mode == "all" || mode == "ash" || mode == "ash-interop" {
+        vulkan::run(&device, &queue, frames, draws, passes, mode == "ash-interop")
+    } else {
+        None
+    };
+    if mode == "ash" {
+        return;
+    }
+    let ub = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: &constants(draws),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: &vertices(),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: &[0, 0, 1, 0, 2, 0],
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: None,
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: true,
+                min_binding_size: std::num::NonZeroU64::new(16),
+            },
+            count: None,
+        }],
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&bgl)],
+        immediate_size: 0,
+    });
+    let groups: Vec<_> = (0..GROUPS)
+        .map(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &ub,
+                        offset: i as u64 * STRIDE,
+                        size: std::num::NonZeroU64::new(16),
+                    }),
+                }],
+            })
+        })
+        .collect();
+    let pipelines: Vec<_> = (0..PIPELINES)
+        .map(|i| {
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(shader(i).into()),
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: 8,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        }],
+                    }],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        })
+        .collect();
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let started = Instant::now();
+    let mut bundles_by_pass = vec![];
+    for part in 0..passes {
+        let mut bundle = device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+            label: None,
+            color_formats: &[Some(wgpu::TextureFormat::Rgba8Unorm)],
+            depth_stencil: None,
+            sample_count: 1,
+            multiview: None,
+        });
+        for k in part * draws / passes..(part + 1) * draws / passes {
+            bundle.set_pipeline(&pipelines[k % PIPELINES]);
+            bundle.set_bind_group(0, &groups[k % GROUPS], &[(k as u64 * STRIDE) as u32]);
+            bundle.set_vertex_buffer(0, vb.slice(..));
+            bundle.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
+            bundle.draw_indexed(0..3, 0, 0..1);
+        }
+        bundles_by_pass.push(bundle.finish(&Default::default()));
+    }
+    println!(
+        "bundle construction {:.3} us/draw (one time)",
+        started.elapsed().as_secs_f64() * 1e6 / draws as f64
+    );
+    for bundles in [false, true] {
+        if ((mode == "core" || mode == "ash-interop") && bundles) || (mode == "bundles" && !bundles) {
+            continue;
+        }
+        let mut samples = vec![];
+        for frame in 0..frames + 3 {
+            let start = Instant::now();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            for part in 0..passes {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                if bundles {
+                    pass.execute_bundles([&bundles_by_pass[part]]);
+                } else {
+                    for k in part * draws / passes..(part + 1) * draws / passes {
+                        pass.set_pipeline(&pipelines[k % PIPELINES]);
+                        pass.set_bind_group(0, &groups[k % GROUPS], &[(k as u64 * STRIDE) as u32]);
+                        pass.set_vertex_buffer(0, vb.slice(..));
+                        pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint16);
+                        pass.draw_indexed(0..3, 0, 0..1);
+                    }
+                }
+            }
+            let record = start.elapsed().as_secs_f64();
+            let start = Instant::now();
+            let cmd = encoder.finish();
+            let finish = start.elapsed().as_secs_f64();
+            let start = Instant::now();
+            let index = queue.submit([cmd]);
+            let submit = start.elapsed().as_secs_f64();
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(index),
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                })
+                .unwrap();
+            if frame >= 3 {
+                samples.push([record, finish, submit]);
+            }
+        }
+        if let Some(expected) = &native_pixels {
+            let actual = read_pixels(&device, &queue, &target);
+            assert_eq!(&actual, expected, "raw Vulkan vs wgpu image");
+            assert!(
+                actual.chunks_exact(4).any(|p| p[1] != 0),
+                "must exercise rasterization"
+            );
+            println!(
+                "interop image: all {} RGBA bytes equal wgpu; drawn pixels present",
+                actual.len()
+            );
+        }
+        report(
+            if bundles {
+                "wgpu reused bundles"
+            } else {
+                "wgpu direct"
+            },
+            &mut samples,
+            draws,
+            passes,
+        );
+    }
+}
+
+/// A normal wgpu consumer after native drawing; also exercises the next frame's
+/// COPY_SRC -> COLOR_TARGET transition. Readback is outside all CPU timings.
+fn read_pixels(device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::Texture) -> Vec<u8> {
+    let read = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("interop readback"),
+        size: 256 * SIZE as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &read,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256),
+                rows_per_image: Some(SIZE),
+            },
+        },
+        wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+    );
+    let index = queue.submit([encoder.finish()]);
+    read.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(index),
+            timeout: Some(std::time::Duration::from_secs(10)),
+        })
+        .unwrap();
+    let mapped = read.slice(..).get_mapped_range();
+    let bytes = mapped
+        .chunks_exact(256)
+        .flat_map(|row| row[..SIZE as usize * 4].iter().copied())
+        .collect();
+    drop(mapped);
+    read.unmap();
+    bytes
+}
+
+/// wgpu -> native Vulkan/hal -> wgpu readback, with the same wgpu-owned
+/// resources. This is a feasibility probe, not a production synchronization
+/// abstraction. In particular we never submit directly to the raw queue here.
+fn interop_probe(device: &wgpu::Device, queue: &wgpu::Queue) {
+    use ash::vk;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("interop texture"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    // Initialize through wgpu so its initialization tracker knows these bytes
+    // are defined. Raw writes alone do not update that tracker.
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &[0, 0, 0, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("interop buffer"),
+        contents: &[255; 4],
+        usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+    });
+    let read = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 512,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.transition_resources(
+        std::iter::once(wgpu::BufferTransition {
+            buffer: &buffer,
+            state: wgpu::BufferUses::COPY_DST,
+        }),
+        std::iter::once(wgpu::TextureTransition {
+            texture: &texture,
+            selector: None,
+            state: wgpu::TextureUses::COPY_DST,
+        }),
+    );
+    let before = encoder.finish();
+    // wgpu 29 forbids mixing raw and normal encoding on one encoder. Keep
+    // transition, native, and consumer work in ordered command buffers.
+    let mut encoder = device.create_command_encoder(&Default::default());
+    // SAFETY: guards retain the resources; wgpu owns all lifetimes and queue
+    // submission. The callback only records, never ends/submits/destroys its
+    // command buffer. transition_resources declares the exact native usages,
+    // and the native commands preserve those layouts for the subsequent copy.
+    unsafe {
+        let device_hal = device.as_hal::<wgpu::hal::api::Vulkan>().unwrap();
+        let texture_hal = texture.as_hal::<wgpu::hal::api::Vulkan>().unwrap();
+        let buffer_hal = buffer.as_hal::<wgpu::hal::api::Vulkan>().unwrap();
+        encoder.as_hal_mut::<wgpu::hal::api::Vulkan, _, _>(|hal| {
+            let hal = hal.unwrap();
+            device_hal.raw_device().cmd_clear_color_image(
+                hal.raw_handle(),
+                texture_hal.raw_handle(),
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &vk::ClearColorValue {
+                    float32: [1.0, 0.0, 0.0, 1.0],
+                },
+                &[vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                }],
+            );
+            // Vulkan Buffer's raw field is private in wgpu-hal 29.0.4; its
+            // public hal encoder operations still accept the borrowed buffer.
+            wgpu::hal::CommandEncoder::clear_buffer(hal, &buffer_hal, 0..4);
+        });
+    }
+    let native = encoder.finish();
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &read,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256),
+                rows_per_image: Some(1),
+            },
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    encoder.copy_buffer_to_buffer(&buffer, 0, &read, 256, 4);
+    let index = queue.submit([before, native, encoder.finish()]);
+    read.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(index),
+            timeout: Some(std::time::Duration::from_secs(10)),
+        })
+        .unwrap();
+    let mapped = read.slice(..).get_mapped_range();
+    assert_eq!(
+        &mapped[..4],
+        &[255, 0, 0, 255],
+        "raw Vulkan clear survives wgpu copy/readback"
+    );
+    assert_eq!(
+        &mapped[256..260],
+        &[0; 4],
+        "hal clear of wgpu-owned buffer survives wgpu copy/readback"
+    );
+    drop(mapped);
+    read.unmap();
+    println!(
+        "INTEROP PASS: wgpu initialization -> native Vulkan texture clear + hal buffer clear -> wgpu copy/readback"
+    );
+}
+
+/// Game-shaped object churn, minimal synthetic shaders: 40 pipeline handles,
+/// 200 distinct sampled textures, full VS/PS blocks changed every draw. This
+/// measures our API and uploads as well as wgpu, unlike the prefilled floor.
+fn native_workload(gpu: &wgpu::Device, queue: &wgpu::Queue, frames: usize, draws: usize, mode: &str) {
+    use ddgpu::native::*;
+    let realistic = matches!(mode, "churn" | "resident" | "resident-bundles");
+    let compact = !realistic && mode != "native";
+    let delta = realistic || mode == "delta";
+    let resident = matches!(mode, "resident" | "resident-bundles");
+    let mut device = Device::new(gpu.clone(), queue.clone());
+    let make_shader = if compact {
+        Device::create_compact_shader
+    } else {
+        Device::create_shader
+    };
+    let vertex_shader = make_shader(
+        &mut device,
+        &[
+            0xfffe0300, 0x0200001f, 0x80000000, 0x900f0000, 0x0200001f, 0x80000000, 0xe00f0000, 0x02000001,
+            0xe00f0000, 0x90e40000, 0xffff,
+        ],
+        Stage::Vertex,
+    )
+    .unwrap();
+    let pixel_shader = make_shader(
+        &mut device,
+        &[
+            0xffff0300, 0x0200001f, 0x90000000, 0xa00f0800, 0x02000001, 0x800f0001, 0xa0e40000, 0x03000042,
+            0x800f0000, 0x80e40001, 0xa00f0800, 0x03000002, 0x800f0800, 0x80e40000, 0xa0e40000, 0xffff,
+        ],
+        Stage::Pixel,
+    )
+    .unwrap();
+    let input = device
+        .create_input_layout(InputLayoutDesc {
+            streams: vec![InputStream {
+                stride: 16,
+                step: wgpu::VertexStepMode::Vertex,
+            }],
+            elements: vec![InputElement {
+                stream: 0,
+                offset: 0,
+                format: wgpu::VertexFormat::Float32x4,
+                semantic: (0, 0),
+                location: 0,
+            }],
+        })
+        .unwrap();
+    let rasterizer = device.create_rasterizer(Default::default());
+    let depth_stencil = device.create_depth_stencil(Default::default());
+    let mut pipelines = vec![];
+    for _ in 0..PIPELINES {
+        let blend = device.create_blend(Default::default());
+        pipelines.push(
+            device
+                .create_pipeline(PipelineDesc {
+                    vertex_shader,
+                    pixel_shader,
+                    input,
+                    blend,
+                    rasterizer,
+                    depth_stencil,
+                    colours: [Some(wgpu::TextureFormat::Rgba8Unorm), None, None, None],
+                    depth: None,
+                    samples: 1,
+                    sample_mask: !0,
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index: None,
+                })
+                .unwrap(),
+        );
+    }
+    let texture_desc = wgpu::TextureDescriptor {
+        label: Some("native benchmark texture"),
+        size: wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    };
+    let target = device.create_texture(&texture_desc);
+    let target = device.create_view(target, &Default::default());
+    let sampler = device.create_sampler(&Default::default()).unwrap();
+    let mut groups = vec![];
+    for _ in 0..GROUPS {
+        let tex = device.create_texture(&texture_desc);
+        let view = device.create_view(tex, &Default::default());
+        groups.push(
+            device
+                .create_texture_set(
+                    pipelines[0],
+                    Stage::Pixel,
+                    &[TextureBinding {
+                        slot: 0,
+                        view,
+                        sampler,
+                    }],
+                )
+                .unwrap(),
+        );
+    }
+    let empty = device
+        .create_texture_set(pipelines[0], Stage::Vertex, &[])
+        .unwrap();
+    let verts: Vec<u8> = [
+        [-1.0f32, -1.0, 0.0, 1.0],
+        [-1.0, -0.875, 0.0, 1.0],
+        [-0.875, -1.0, 0.0, 1.0],
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(f32::to_le_bytes)
+    .collect();
+    let vb = device.create_buffer(&verts, wgpu::BufferUsages::VERTEX);
+    let ib = device.create_buffer(&[0, 0, 1, 0, 2, 0], wgpu::BufferUsages::INDEX);
+    let pl = device.shader_constant_layout(pixel_shader);
+    let vl = device.shader_constant_layout(vertex_shader);
+    let bytes = ((pl.byte_len + vl.byte_len + 512) * draws + constant_block_size(Stage::Vertex)) as u64;
+    let mut recorder = Recorder::with_resident_constants(&device, bytes, resident);
+    recorder.enable_bundles(mode == "resident-bundles");
+    let pc = recorder.create_constant_buffer_for_shader(pixel_shader);
+    let vc = recorder.create_constant_buffer_for_shader(vertex_shader);
+    recorder.set_constants(pc);
+    recorder.set_constants(vc);
+    recorder.set_texture_set(empty);
+    let mut pb = vec![0u8; pl.byte_len];
+    let mut vb_bytes = vec![0u8; vl.byte_len];
+    vb_bytes[vl.extra_offset..vl.extra_offset + 4].copy_from_slice(&(1.0f32 / SIZE as f32).to_le_bytes());
+    vb_bytes[vl.extra_offset + 4..vl.extra_offset + 8]
+        .copy_from_slice(&(-1.0f32 / SIZE as f32).to_le_bytes());
+    if delta {
+        recorder.update_constants(pc, &pb).unwrap();
+        recorder.update_constants(vc, &vb_bytes).unwrap();
+    }
+    let mut samples = vec![];
+    for frame in 0..frames + 3 {
+        let mut changes = 0;
+        let before = recorder.stats;
+        let start = Instant::now();
+        recorder
+            .begin_pass(PassDesc {
+                colours: [Some(target), None, None, None],
+                depth: None,
+                clear_colour: Some(wgpu::Color::BLACK),
+                clear_depth: None,
+                clear_stencil: None,
+            })
+            .unwrap();
+        for k in 0..draws {
+            recorder.set_pipeline(pipelines[k % PIPELINES]);
+            recorder.set_texture_set(groups[k % GROUPS]);
+            recorder.set_vertex_buffer(
+                0,
+                BufferSlice {
+                    buffer: vb,
+                    offset: 0,
+                    size: 48,
+                },
+            );
+            recorder.set_index_buffer(
+                BufferSlice {
+                    buffer: ib,
+                    offset: 0,
+                    size: 6,
+                },
+                wgpu::IndexFormat::Uint16,
+            );
+            if realistic {
+                // cap1-sized synthetic churn: 1,700 changed draws, 8,200 VS +
+                // 7,300 PS registers per 5,000 draws (248,000 payload bytes).
+                // Draw order/resources repeat; every changed register varies
+                // across frames. No claim that cap1 has this slot stability.
+                let event = k * 1700 / draws;
+                if k == 0 || event != (k - 1) * 1700 / draws {
+                    let vs_regs = if event < 1400 { 5 } else { 4 };
+                    let ps_regs = if event < 500 { 5 } else { 4 };
+                    for (j, byte) in pb[..ps_regs * 16].iter_mut().enumerate() {
+                        *byte = ((event + frame + j) % 127) as u8;
+                    }
+                    for (j, byte) in vb_bytes[..vs_regs * 16].iter_mut().enumerate() {
+                        *byte = ((event + frame + j + 1) % 127) as u8;
+                    }
+                    recorder
+                        .update_constant_range(pc, 0, &pb[..ps_regs * 16])
+                        .unwrap();
+                    recorder
+                        .update_constant_range(vc, 0, &vb_bytes[..vs_regs * 16])
+                        .unwrap();
+                    changes += (vs_regs + ps_regs) * 16;
+                }
+            } else {
+                pb[..4].copy_from_slice(&((k % 256) as f32 / 255.0).to_le_bytes());
+                vb_bytes[..4].copy_from_slice(&(k as f32).to_le_bytes());
+                if delta {
+                    recorder.update_constant_range(pc, 0, &pb[..4]).unwrap();
+                    recorder.update_constant_range(vc, 0, &vb_bytes[..4]).unwrap();
+                } else {
+                    recorder.update_constants(pc, &pb).unwrap();
+                    recorder.update_constants(vc, &vb_bytes).unwrap();
+                }
+            }
+            recorder.draw_indexed(0..3, 0, 0..1).unwrap();
+        }
+        let record = start.elapsed().as_secs_f64();
+        let start = Instant::now();
+        let submission = recorder.submit().unwrap();
+        let submit = start.elapsed().as_secs_f64();
+        gpu.poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: Some(std::time::Duration::from_secs(10)),
+        })
+        .unwrap();
+        if frame == 3 && realistic {
+            println!("synthetic sequential register payload {changes} bytes/frame");
+            println!(
+                "steady frame: upload={} bytes, dirty={} float4 slots, bundle builds={} hits={}",
+                recorder.stats.upload_bytes - before.upload_bytes,
+                recorder.stats.dirty_registers - before.dirty_registers,
+                recorder.stats.bundle_builds - before.bundle_builds,
+                recorder.stats.bundle_hits - before.bundle_hits
+            );
+        }
+        if frame >= 3 {
+            samples.push([record, 0.0, submit]);
+        }
+    }
+    println!(
+        "native includes constant updates + uploads; compact={compact}, delta={delta}, PS={} VS={} bytes; finish included in submit column; {:?}",
+        pl.byte_len, vl.byte_len, recorder.stats
+    );
+    report(
+        if realistic {
+            mode
+        } else if delta {
+            "native compact deltas (minimal shaders)"
+        } else if compact {
+            "native compact (minimal shaders)"
+        } else {
+            "native full (minimal shaders)"
+        },
+        &mut samples,
+        draws,
+        1,
+    );
+}
+
+mod vulkan {
+    use super::*;
+    use ash::vk;
+    fn spirv(n: usize, stage: naga::ShaderStage, entry: &str) -> Vec<u32> {
+        let module = naga::front::wgsl::parse_str(&shader(n)).unwrap();
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap();
+        naga::back::spv::write_vec(
+            &module,
+            &info,
+            &Default::default(),
+            Some(&naga::back::spv::PipelineOptions {
+                shader_stage: stage,
+                entry_point: entry.into(),
+            }),
+        )
+        .unwrap()
+    }
+    pub fn run(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frames: usize,
+        draws: usize,
+        passes: usize,
+        interop: bool,
+    ) -> Option<Vec<u8>> {
+        // SAFETY: all raw resources are exclusively owned by this benchmark;
+        // no wgpu work is in flight or submitted concurrently on this queue.
+        // Every frame waits its fence before resetting its pool or destroying
+        // resources. The hal guard and wgpu Device outlive every raw handle.
+        unsafe { run_raw(device, queue, frames, draws, passes, interop) }
+    }
+    unsafe fn run_raw(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frames: usize,
+        draws: usize,
+        passes: usize,
+        interop: bool,
+    ) -> Option<Vec<u8>> {
+        let hal = device.as_hal::<wgpu::hal::api::Vulkan>().expect("Vulkan device");
+        let raw = hal.raw_device();
+        let memory = hal
+            .shared_instance()
+            .raw_instance()
+            .get_physical_device_memory_properties(hal.raw_physical_device());
+        let memory_type = |bits: u32, flags: vk::MemoryPropertyFlags| {
+            (0..memory.memory_type_count)
+                .find(|&i| {
+                    bits & (1 << i) != 0 && memory.memory_types[i as usize].property_flags.contains(flags)
+                })
+                .expect("memory type")
+        };
+        let buffer = |bytes: &[u8], usage: vk::BufferUsageFlags| {
+            let b = raw
+                .create_buffer(
+                    &vk::BufferCreateInfo::default()
+                        .size(bytes.len() as u64)
+                        .usage(usage)
+                        .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                    None,
+                )
+                .unwrap();
+            let req = raw.get_buffer_memory_requirements(b);
+            let mem = raw
+                .allocate_memory(
+                    &vk::MemoryAllocateInfo::default()
+                        .allocation_size(req.size)
+                        .memory_type_index(memory_type(
+                            req.memory_type_bits,
+                            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                        )),
+                    None,
+                )
+                .unwrap();
+            raw.bind_buffer_memory(b, mem, 0).unwrap();
+            let ptr = raw
+                .map_memory(mem, 0, bytes.len() as u64, vk::MemoryMapFlags::empty())
+                .unwrap();
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
+            raw.unmap_memory(mem);
+            (b, mem)
+        };
+        let (ub, um) = buffer(&constants(draws), vk::BufferUsageFlags::UNIFORM_BUFFER);
+        let (vb, vm) = buffer(&vertices(), vk::BufferUsageFlags::VERTEX_BUFFER);
+        let (ib, im) = buffer(&[0, 0, 1, 0, 2, 0], vk::BufferUsageFlags::INDEX_BUFFER);
+        let shared_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &vertices(),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let shared_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &[0, 0, 1, 0, 2, 0],
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let shared_target = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        // Raw writes do not update wgpu's initialization tracker. Initialize
+        // with a normal pass, submitted before the native workload.
+        if interop {
+            let view = shared_target.create_view(&Default::default());
+            let mut init = device.create_command_encoder(&Default::default());
+            drop(init.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            }));
+            queue.submit([init.finish()]);
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        }
+        let shared_image = shared_target
+            .as_hal::<wgpu::hal::api::Vulkan>()
+            .unwrap()
+            .raw_handle();
+        let image = raw
+            .create_image(
+                &vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(vk::Format::R8G8B8A8_UNORM)
+                    .extent(vk::Extent3D {
+                        width: SIZE,
+                        height: SIZE,
+                        depth: 1,
+                    })
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                None,
+            )
+            .unwrap();
+        let req = raw.get_image_memory_requirements(image);
+        let image_mem = raw
+            .allocate_memory(
+                &vk::MemoryAllocateInfo::default()
+                    .allocation_size(req.size)
+                    .memory_type_index(memory_type(
+                        req.memory_type_bits,
+                        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    )),
+                None,
+            )
+            .unwrap();
+        raw.bind_image_memory(image, image_mem, 0).unwrap();
+        let view = raw
+            .create_image_view(
+                &vk::ImageViewCreateInfo::default()
+                    .image(if interop { shared_image } else { image })
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(vk::Format::R8G8B8A8_UNORM)
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    }),
+                None,
+            )
+            .unwrap();
+        let attachments = [vk::AttachmentDescription::default()
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .initial_layout(if interop {
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+            } else {
+                vk::ImageLayout::UNDEFINED
+            })
+            .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)];
+        let colour_ref = [vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        }];
+        let subpasses = [vk::SubpassDescription::default()
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .color_attachments(&colour_ref)];
+        let dependencies = [vk::SubpassDependency::default()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .dst_subpass(0)
+            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+            .dependency_flags(vk::DependencyFlags::BY_REGION)];
+        let render_pass = raw
+            .create_render_pass(
+                &vk::RenderPassCreateInfo::default()
+                    .attachments(&attachments)
+                    .subpasses(&subpasses)
+                    .dependencies(&dependencies),
+                None,
+            )
+            .unwrap();
+        let views = [view];
+        let framebuffer = raw
+            .create_framebuffer(
+                &vk::FramebufferCreateInfo::default()
+                    .render_pass(render_pass)
+                    .attachments(&views)
+                    .width(SIZE)
+                    .height(SIZE)
+                    .layers(1),
+                None,
+            )
+            .unwrap();
+        let bindings = [vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+        let set_layout = raw
+            .create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
+                None,
+            )
+            .unwrap();
+        let set_layouts = [set_layout];
+        let layout = raw
+            .create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts),
+                None,
+            )
+            .unwrap();
+        let sizes = [vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
+            descriptor_count: GROUPS as u32,
+        }];
+        let descriptors = raw
+            .create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(GROUPS as u32)
+                    .pool_sizes(&sizes),
+                None,
+            )
+            .unwrap();
+        let group_layouts = vec![set_layout; GROUPS];
+        let groups = raw
+            .allocate_descriptor_sets(
+                &vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(descriptors)
+                    .set_layouts(&group_layouts),
+            )
+            .unwrap();
+        for (n, &set) in groups.iter().enumerate() {
+            let info = [vk::DescriptorBufferInfo {
+                buffer: ub,
+                offset: n as u64 * STRIDE,
+                range: 16,
+            }];
+            raw.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC)
+                    .buffer_info(&info)],
+                &[],
+            );
+        }
+        let mut pipelines = vec![];
+        for n in 0..PIPELINES {
+            let vs = raw
+                .create_shader_module(
+                    &vk::ShaderModuleCreateInfo::default().code(&spirv(
+                        n,
+                        naga::ShaderStage::Vertex,
+                        "vs_main",
+                    )),
+                    None,
+                )
+                .unwrap();
+            let ps = raw
+                .create_shader_module(
+                    &vk::ShaderModuleCreateInfo::default().code(&spirv(
+                        n,
+                        naga::ShaderStage::Fragment,
+                        "fs_main",
+                    )),
+                    None,
+                )
+                .unwrap();
+            let stages = [
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::VERTEX)
+                    .module(vs)
+                    .name(c"vs_main"),
+                vk::PipelineShaderStageCreateInfo::default()
+                    .stage(vk::ShaderStageFlags::FRAGMENT)
+                    .module(ps)
+                    .name(c"fs_main"),
+            ];
+            let binding = [vk::VertexInputBindingDescription {
+                binding: 0,
+                stride: 8,
+                input_rate: vk::VertexInputRate::VERTEX,
+            }];
+            let attribute = [vk::VertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: 0,
+            }];
+            let input = vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&binding)
+                .vertex_attribute_descriptions(&attribute);
+            let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+                .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+            let viewport = [vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: SIZE as f32,
+                height: SIZE as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            }];
+            let scissor = [vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: SIZE,
+                    height: SIZE,
+                },
+            }];
+            let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+                .viewports(&viewport)
+                .scissors(&scissor);
+            let raster = vk::PipelineRasterizationStateCreateInfo::default()
+                .polygon_mode(vk::PolygonMode::FILL)
+                .cull_mode(vk::CullModeFlags::NONE)
+                .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+                .line_width(1.0);
+            let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+                .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+            let blend_attachment = [vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)];
+            let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&blend_attachment);
+            let info = vk::GraphicsPipelineCreateInfo::default()
+                .stages(&stages)
+                .vertex_input_state(&input)
+                .input_assembly_state(&assembly)
+                .viewport_state(&viewport_state)
+                .rasterization_state(&raster)
+                .multisample_state(&multisample)
+                .color_blend_state(&blend)
+                .layout(layout)
+                .render_pass(render_pass)
+                .subpass(0);
+            pipelines.push(
+                raw.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None)
+                    .unwrap()[0],
+            );
+            raw.destroy_shader_module(vs, None);
+            raw.destroy_shader_module(ps, None);
+        }
+        let pool = raw
+            .create_command_pool(
+                &vk::CommandPoolCreateInfo::default()
+                    .queue_family_index(hal.queue_family_index())
+                    .flags(vk::CommandPoolCreateFlags::TRANSIENT),
+                None,
+            )
+            .unwrap();
+        let cmd = raw
+            .allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::default()
+                    .command_pool(pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+            .unwrap()[0];
+        let fence = raw.create_fence(&vk::FenceCreateInfo::default(), None).unwrap();
+        let mut samples = vec![];
+        for frame in 0..frames + 3 {
+            let start = Instant::now();
+            let mut native_encoder = interop.then(|| device.create_command_encoder(&Default::default()));
+            let before = if interop {
+                let mut transition = device.create_command_encoder(&Default::default());
+                transition.transition_resources(
+                    [
+                        wgpu::BufferTransition {
+                            buffer: &shared_vb,
+                            state: wgpu::BufferUses::VERTEX,
+                        },
+                        wgpu::BufferTransition {
+                            buffer: &shared_ib,
+                            state: wgpu::BufferUses::INDEX,
+                        },
+                    ]
+                    .into_iter(),
+                    [wgpu::TextureTransition {
+                        texture: &shared_target,
+                        selector: None,
+                        state: wgpu::TextureUses::COLOR_TARGET,
+                    }]
+                    .into_iter(),
+                );
+                Some(transition.finish())
+            } else {
+                None
+            };
+            if !interop {
+                raw.reset_command_pool(pool, vk::CommandPoolResetFlags::empty())
+                    .unwrap();
+                raw.begin_command_buffer(
+                    cmd,
+                    &vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )
+                .unwrap();
+            }
+            let record_commands = |cmd, hal_encoder: Option<&mut wgpu::hal::vulkan::CommandEncoder>| {
+                // Resource guards take the device snatch read lock. Release them
+                // before finish/submit/poll, which may need its write lock.
+                let vertex_guard = interop.then(|| shared_vb.as_hal::<wgpu::hal::api::Vulkan>().unwrap());
+                let index_guard = interop.then(|| shared_ib.as_hal::<wgpu::hal::api::Vulkan>().unwrap());
+                let clear = [vk::ClearValue {
+                    color: vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 1.0],
+                    },
+                }];
+                let mut hal_encoder = hal_encoder;
+                for part in 0..passes {
+                    raw.cmd_begin_render_pass(
+                        cmd,
+                        &vk::RenderPassBeginInfo::default()
+                            .render_pass(render_pass)
+                            .framebuffer(framebuffer)
+                            .render_area(vk::Rect2D {
+                                offset: vk::Offset2D { x: 0, y: 0 },
+                                extent: vk::Extent2D {
+                                    width: SIZE,
+                                    height: SIZE,
+                                },
+                            })
+                            .clear_values(&clear),
+                        vk::SubpassContents::INLINE,
+                    );
+                    for k in part * draws / passes..(part + 1) * draws / passes {
+                        raw.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipelines[k % PIPELINES]);
+                        raw.cmd_bind_descriptor_sets(
+                            cmd,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            layout,
+                            0,
+                            &[groups[k % GROUPS]],
+                            &[(k as u64 * STRIDE) as u32],
+                        );
+                        if let Some(h) = hal_encoder.as_deref_mut() {
+                            use wgpu::hal::{BufferBinding, CommandEncoder};
+                            h.set_vertex_buffer(
+                                0,
+                                BufferBinding::new_unchecked(
+                                    &**vertex_guard.as_ref().unwrap(),
+                                    0,
+                                    std::num::NonZeroU64::new(24),
+                                ),
+                            );
+                            h.set_index_buffer(
+                                BufferBinding::new_unchecked(
+                                    &**index_guard.as_ref().unwrap(),
+                                    0,
+                                    std::num::NonZeroU64::new(6),
+                                ),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                        } else {
+                            raw.cmd_bind_vertex_buffers(cmd, 0, &[vb], &[0]);
+                            raw.cmd_bind_index_buffer(cmd, ib, 0, vk::IndexType::UINT16);
+                        }
+                        raw.cmd_draw_indexed(cmd, 3, 1, 0, 0, 0);
+                    }
+                    raw.cmd_end_render_pass(cmd);
+                }
+            };
+            // SAFETY: all borrowed resources and raw objects outlive GPU
+            // completion. A separate tracked encoder declares the exact usage;
+            // raw passes preserve COLOR_ATTACHMENT_OPTIMAL. Only wgpu submits
+            // shared work, so queue locking/fences/lifetimes stay under wgpu.
+            if interop {
+                native_encoder
+                    .as_mut()
+                    .unwrap()
+                    .as_hal_mut::<wgpu::hal::api::Vulkan, _, _>(|h| {
+                        let h = h.unwrap();
+                        record_commands(h.raw_handle(), Some(h));
+                    });
+            } else {
+                record_commands(cmd, None);
+            }
+            let record = start.elapsed().as_secs_f64();
+            let start = Instant::now();
+            let native = if interop {
+                Some(native_encoder.unwrap().finish())
+            } else {
+                raw.end_command_buffer(cmd).unwrap();
+                None
+            };
+            let finish = start.elapsed().as_secs_f64();
+            let start = Instant::now();
+            let submission = if interop {
+                Some(queue.submit(before.into_iter().chain(native)))
+            } else {
+                raw.reset_fences(&[fence]).unwrap();
+                raw.queue_submit(
+                    hal.raw_queue(),
+                    &[vk::SubmitInfo::default().command_buffers(&[cmd])],
+                    fence,
+                )
+                .unwrap();
+                None
+            };
+            let submit = start.elapsed().as_secs_f64();
+            if interop {
+                device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: submission,
+                        timeout: Some(std::time::Duration::from_secs(10)),
+                    })
+                    .unwrap();
+                // Alternate a normal wgpu consumer with native writes every
+                // frame, not just one initial transition.
+                let pixels = read_pixels(device, queue, &shared_target);
+                assert!(pixels.chunks_exact(4).any(|p| p[1] != 0));
+            } else {
+                raw.wait_for_fences(&[fence], true, 10_000_000_000).unwrap();
+            }
+            if frame >= 3 {
+                samples.push([record, finish, submit]);
+            }
+        }
+        report(
+            if interop {
+                "ash + wgpu resources/submit"
+            } else {
+                "ash Vulkan direct"
+            },
+            &mut samples,
+            draws,
+            passes,
+        );
+        let pixels = interop.then(|| read_pixels(device, queue, &shared_target));
+        raw.destroy_fence(fence, None);
+        raw.destroy_command_pool(pool, None);
+        for p in pipelines {
+            raw.destroy_pipeline(p, None);
+        }
+        raw.destroy_pipeline_layout(layout, None);
+        raw.destroy_descriptor_pool(descriptors, None);
+        raw.destroy_descriptor_set_layout(set_layout, None);
+        raw.destroy_framebuffer(framebuffer, None);
+        raw.destroy_render_pass(render_pass, None);
+        raw.destroy_image_view(view, None);
+        raw.destroy_image(image, None);
+        raw.free_memory(image_mem, None);
+        for (b, m) in [(ub, um), (vb, vm), (ib, im)] {
+            raw.destroy_buffer(b, None);
+            raw.free_memory(m, None);
+        }
+        pixels
+    }
+}

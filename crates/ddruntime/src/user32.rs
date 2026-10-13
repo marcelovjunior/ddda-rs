@@ -324,6 +324,8 @@ fn create_window(m: &mut dyn Mem, cpu: &mut Cpu, wide: bool) {
     if style & WS_VISIBLE != 0 {
         show(m, cpu, hwnd, 1);
     }
+    static FIRST_WINDOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    crate::load_log::once(&FIRST_WINDOW, "first_guest_window");
     cpu.eax = hwnd;
     ret(m, cpu, 48);
 }

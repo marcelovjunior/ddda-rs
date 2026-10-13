@@ -216,13 +216,17 @@ fn autokeys(events: EventSender) {
     });
 }
 
-/// DDPLAY_AUTOPLAY=1 (L92): play unattended into gameplay. Every 3 s it
+/// DDPLAY_AUTOPLAY=1 (L92): play unattended into gameplay. Every 1.5 s it
 /// logs a stage probe (draws per frame and frames per second, from the
-/// runtime's counters). After 40 s it presses Enter every 3 s (skipping the
-/// movie, PRESS ANY BUTTON, and the menus' first entry: Continue/Load Game)
-/// until the frames draw like the world (1,000 or more draws per frame for
-/// two probes in a row). Then it logs "ddplay stage: gameplay" and stops
-/// pressing; the probes go on.
+/// runtime's counters). From the first presented frame it presses Enter
+/// every 1.5 s, the game's own skip (logos, the intro movie, PRESS ANY
+/// BUTTON, and the menus' first entry: Continue/Load Game), until the
+/// frames draw like the world (1,000 or more draws per frame for two probes
+/// in a row). Then it logs "ddplay stage: gameplay" and stops pressing; the
+/// probes go on. (It waited 40 s before pressing until 2026-10-13.)
+/// The autoplay's probe and key interval.
+const PROBE_MS: u64 = 1500;
+
 fn autoplay(events: EventSender) {
     if std::env::var_os("DDPLAY_AUTOPLAY").is_none() {
         return;
@@ -233,13 +237,14 @@ fn autoplay(events: EventSender) {
         let mut high = 0;
         let mut playing = false;
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            std::thread::sleep(std::time::Duration::from_millis(PROBE_MS));
             let (d, p) = ddruntime::d3d9draw::counts();
             let (draws, frames) = (d - d0, p - p0);
             (d0, p0) = (d, p);
             let per = if frames > 0 { draws / frames } else { 0 };
             let t = start.elapsed().as_secs_f64();
-            eprintln!("ddplay stage-probe t={t:.0}s draws/frame={per} fps={:.1}", frames as f64 / 3.0);
+            eprintln!("ddplay stage-probe t={t:.0}s draws/frame={per} fps={:.1}", frames as f64 * 1000.0 / PROBE_MS as f64);
+            ddruntime::load_log::event("stage_probe", format_args!("draws_per_frame={per} frames={frames} source=autoplay"));
             if playing {
                 continue;
             }
@@ -249,7 +254,7 @@ fn autoplay(events: EventSender) {
                 playing = true;
                 continue;
             }
-            if t > 40.0 {
+            if p > 0 {
                 for down in [true, false] {
                     let _ = events.send(Event::Key { hwnd: 0, vk: 0x0d, scan: 0x1c, down, extended: false, system: false });
                     std::thread::sleep(std::time::Duration::from_millis(80));

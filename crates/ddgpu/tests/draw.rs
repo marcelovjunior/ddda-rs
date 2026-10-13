@@ -229,6 +229,49 @@ fn frames_match_the_d3d9_driver() {
     assert!(max <= 1, "blended: ours {:?} / D3D9 {:?}", &ours[..4], &theirs[..4]);
 }
 
+/// L124: with async submits (a finisher thread finishes and submits each
+/// batch) after every draw, a frame that re-uploads a texture between draws
+/// that sample it reads back exactly as with synchronous submits: the
+/// first draw sees the old texels, the later one the new.
+#[test]
+fn async_submits_keep_the_order_of_uploads_and_draws() {
+    let (Some(mut sync), Some(mut asynchronous)) = (ddgpu::WgpuBackend::headless(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    asynchronous.set_async_submit(true);
+    asynchronous.draws_per_submit = 1;
+    let mut states = [0u32; 14];
+    for (k, v) in [(1, 1), (2, 1), (3, 1), (5, 1), (6, 1)] {
+        states[k] = v;
+    }
+    let binding = TextureBinding { sampler: 0, resource: 0x200, kind: TexKind::Flat, format: 21, width: 2, height: 2, depth: 1, levels: 1, usage: 0, states };
+    let upload = |texels: [[u8; 4]; 4]| Upload::Image { resource: 0x200, index: 0, format: 21, width: 2, height: 2, depth: 1, pitch: 8, slice: 16, bytes: texels.concat() };
+    let textured = draw(ps_texture(), Constants { f: vec![[0; 4]; 224], ..Default::default() }, vec![binding]);
+    let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    c.f[0] = [1f32.to_bits(), 0.0f32.to_bits(), 0.0f32.to_bits(), 0.25f32.to_bits()];
+    let mut blended = draw(ps_constant(), c, vec![]);
+    blended.render_states.extend([(27, 1), (19, 5), (20, 6), (171, 1)]);
+    blended.render_states.sort();
+    blended.render_states.dedup_by_key(|s| s.0);
+    let mut images = Vec::new();
+    for gpu in [&mut sync, &mut asynchronous] {
+        gpu.clear(&blue_clear());
+        gpu.upload(upload([[0, 0, 255, 255], [0, 255, 0, 255], [255, 0, 0, 255], [255, 255, 255, 255]]));
+        gpu.draw(&textured);
+        gpu.draw(&blended);
+        gpu.upload(upload([[9, 9, 9, 255], [99, 99, 99, 255], [199, 199, 199, 255], [255, 0, 255, 255]]));
+        let mut later = textured.clone();
+        later.render_states.extend([(27, 1), (19, 5), (20, 6), (171, 1)]);
+        later.render_states.sort();
+        later.render_states.dedup_by_key(|s| s.0);
+        gpu.draw(&later);
+        images.push(gpu.read_back(&back_buffer()).expect("read back"));
+        assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    }
+    assert_eq!(images[0], images[1], "async / sync submits");
+}
+
 /// xorshift32
 struct Rng(u32);
 impl Rng {
@@ -428,6 +471,17 @@ fn counted(gpu: &mut ddgpu::WgpuBackend, draws: &[DrawCall], spans: &[std::ops::
         issue(gpu, k + 1, true);
     }
     issue(gpu, draws.len(), false);
+    if gpu.async_queries {
+        // L120: no count until the read-back is mapped; ask again
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        return ids.iter().map(|&q| loop {
+            if let Some(n) = gpu.query_result(q) {
+                break n as u32;
+            }
+            assert!(std::time::Instant::now() < deadline, "query {q:#x}: no count after 20 s");
+            std::thread::yield_now();
+        }).collect();
+    }
     ids.iter().map(|&q| gpu.query_result(q).expect("count") as u32).collect()
 }
 
@@ -458,6 +512,27 @@ fn occlusion_counts_match_the_d3d9_driver() {
     assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
     eprintln!("occlusion counts: D3D9 {theirs:?}, wgpu {ours:?}");
     assert_eq!(ours, theirs, "occlusion counts (wgpu / D3D9)");
+}
+
+/// L120: with async_queries the backend never waits for the GPU in
+/// query_result (None until the count is read back); the counts it then
+/// gives equal the blocking ones.
+#[test]
+fn async_occlusion_counts_equal_blocking_ones() {
+    let (Some(mut blocking), Some(mut nonblocking)) = (ddgpu::WgpuBackend::headless(), ddgpu::WgpuBackend::headless()) else {
+        eprintln!("skipped: no adapter");
+        return;
+    };
+    nonblocking.async_queries = true;
+    let clear = ClearCall { flags: 1 | 2 | 4, z: 0.5, depth: Some(depth_target()), ..blue_clear() };
+    let draws = vec![depth_draw(0.25, 1.0, &[]), depth_draw(0.75, 1.0, &[]), depth_draw(0.75, 1.0, &[(7, 0)])];
+    let spans = vec![0..1, 1..2, 2..3, 3..3];
+    blocking.clear(&clear);
+    let want = counted(&mut blocking, &draws, &spans);
+    nonblocking.clear(&clear);
+    let got = counted(&mut nonblocking, &draws, &spans);
+    assert!(nonblocking.errors.is_empty(), "{:?}", nonblocking.errors);
+    assert_eq!(got, want, "async / blocking occlusion counts");
 }
 
 /// vs_3_0: o0 = v0 + v1 (v1: texcoord1, the per-instance offset; one

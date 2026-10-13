@@ -132,6 +132,14 @@ pub(crate) fn arg(m: &dyn Mem, cpu: &Cpu, k: u32) -> u32 {
     m.u32(cpu.esp.wrapping_add(4 + 4 * k))
 }
 
+/// The first `N` stack arguments, as [`arg`] reads them: one page-table
+/// fetch, then the lifted code's inline fast path (L101).
+#[inline]
+pub(crate) fn args<const N: usize>(m: &dyn Mem, cpu: &Cpu) -> [u32; N] {
+    let pt = m.page_table();
+    std::array::from_fn(|k| m.fast_u32(pt, cpu.esp.wrapping_add(4 + 4 * k as u32)))
+}
+
 /// Where guest code the runtime calls (window procedures, I/O completion
 /// routines, thread starts) returns to (never executed).
 pub const CALLBACK_RETURN: u32 = 0xFFFF_FFE0;
