@@ -4,10 +4,29 @@
 //! game's size, a full constant block, and 16 vertex constants set before
 //! each draw. The backend does nothing, so this is the service side only
 //! (the state snapshot and the flushes). Needs the installed game
-//! (DDDA_EXE); numbers with `-- --nocapture`.
+//! (DDDA_EXE); numbers with `-- --nocapture --test-threads=1` (allocation
+//! counts include this test's COM argument buffers).
 use ddnative_base::mem::Mem;
 use ddruntime::session::{Outcome, Session};
 use std::time::Instant;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+struct CountAlloc;
+static ALLOCS: AtomicU64 = AtomicU64::new(0);
+#[global_allocator]
+static ALLOCATOR: CountAlloc = CountAlloc;
+unsafe impl GlobalAlloc for CountAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) { unsafe { System.dealloc(ptr, layout) } }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        ALLOCS.fetch_add(1, Ordering::Relaxed);
+        unsafe { System.realloc(ptr, layout, size) }
+    }
+}
 
 const SCRATCH: u32 = 0x7EFF_0000;
 const PP: u32 = SCRATCH + 0x200;
@@ -168,10 +187,66 @@ fn a_draw_costs_the_services() {
     }
     let constants = t.elapsed().as_secs_f64() * 1e6 / n as f64;
     let t = Instant::now();
+    let allocations = ALLOCS.load(Ordering::Relaxed);
     for _ in 0..n {
         assert_eq!(com(&mut s, dev, 82, &[4, 0, 0, 1000, 0, 300]), 0);
     }
     let draw = t.elapsed().as_secs_f64() * 1e6 / n as f64;
+    let allocations = (ALLOCS.load(Ordering::Relaxed) - allocations) as f64 / n as f64;
     eprintln!("per call (us): a service call {call:.2}, SetVertexShaderConstantF(16) {constants:.2}, DrawIndexedPrimitive {draw:.2}");
+    eprintln!("allocations per indexed draw (including test COM arguments): {allocations:.2}");
     assert_eq!(com(&mut s, dev, 42, &[]), 0); // EndScene
+}
+
+#[test]
+fn draws_share_immutable_payloads_and_detach_changed_constants() {
+    use std::sync::Arc;
+    let Some((mut s, dev)) = device_session() else { return; };
+    put(&mut s, DATA, &vertex_shader(8));
+    let vs = out(&mut s, dev, 91, &[DATA, OUT]);
+    put(&mut s, DATA, &pixel_shader(8));
+    let ps = out(&mut s, dev, 106, &[DATA, OUT]);
+    put(&mut s, DATA, &[0, 3, 0xff, 17]);
+    let decl = out(&mut s, dev, 86, &[DATA, OUT]);
+    for (slot, obj) in [(92, vs), (107, ps), (87, decl)] {
+        assert_eq!(com(&mut s, dev, slot, &[obj]), 0);
+    }
+    put(&mut s, DATA, &[1, 2, 3, 4]);
+    assert_eq!(com(&mut s, dev, 94, &[0, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 41, &[]), 0);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    // Redundant setter must keep the current shared block.
+    assert_eq!(com(&mut s, dev, 94, &[0, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    put(&mut s, DATA, &[5, 6, 7, 8]);
+    assert_eq!(com(&mut s, dev, 94, &[0, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    assert_eq!(com(&mut s, dev, 111, &[0, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 113, &[0, DATA, 1]), 0);
+    assert_eq!(com(&mut s, dev, 81, &[4, 0, 1]), 0);
+    // Commands remain valid after their guest shader/declaration objects die.
+    for (slot, obj) in [(92, vs), (107, ps), (87, decl)] {
+        assert_eq!(com(&mut s, dev, slot, &[0]), 0);
+        assert_eq!(com(&mut s, obj, 2, &[]), 0);
+    }
+    ddruntime::d3d9draw::recorded(|r| {
+        let (a, b, c) = (&r.draws[0], &r.draws[1], &r.draws[2]);
+        assert_eq!(a, b);
+        assert!(Arc::ptr_eq(a.vertex_shader.as_ref().unwrap(), c.vertex_shader.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(a.pixel_shader.as_ref().unwrap(), c.pixel_shader.as_ref().unwrap()));
+        assert_eq!(a.vertex_shader.as_deref().unwrap(), vertex_shader(8));
+        assert_eq!(a.pixel_shader.as_deref().unwrap(), pixel_shader(8));
+        assert!(Arc::ptr_eq(&a.declaration, &c.declaration));
+        assert!(Arc::ptr_eq(&a.vs_constants, &b.vs_constants));
+        assert!(Arc::ptr_eq(&a.ps_constants, &c.ps_constants));
+        assert!(!Arc::ptr_eq(&a.vs_constants, &c.vs_constants));
+        assert_eq!(a.vs_constants.f[0], [1, 2, 3, 4]);
+        assert_eq!(c.vs_constants.f[0], [5, 6, 7, 8]);
+        let d = &r.draws[3];
+        assert_eq!(c.ps_constants.i[0], [0; 4]);
+        assert_eq!(c.ps_constants.b[0], 0);
+        assert_eq!(d.ps_constants.i[0], [5, 6, 7, 8]);
+        assert_eq!(d.ps_constants.b[0], 5);
+        assert!(Arc::ptr_eq(&c.vs_constants, &d.vs_constants));
+    }).unwrap();
 }

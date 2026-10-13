@@ -98,7 +98,7 @@ fn readable(t: &Target) -> bool {
 
 /// A one-line description of a command for reports.
 pub fn describe(c: &Command) -> String {
-    let hash = |t: &Option<Vec<u32>>| match t {
+    let hash = |t: &Option<std::sync::Arc<[u32]>>| match t {
         Some(t) => {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();

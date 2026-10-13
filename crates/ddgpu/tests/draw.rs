@@ -69,12 +69,12 @@ fn draw(ps: Vec<u32>, ps_constants: Constants, textures: Vec<TextureBinding>) ->
         vertex_count: 3,
         vertices: Vertices::Inline { bytes: triangle(), stride: 24 },
         indices: Indices::None,
-        vertex_shader: Some(vs()),
-        pixel_shader: Some(ps),
-        declaration: declaration(),
+        vertex_shader: Some((vs()).into()),
+        pixel_shader: Some((ps).into()),
+        declaration: declaration().into(),
         fvf: 0,
-        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() },
-        ps_constants,
+        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
+        ps_constants: ps_constants.into(),
         textures,
         render_states: render_states(),
         viewport: [0, 0, 4, 4, 0f32.to_bits(), 1f32.to_bits()],
@@ -466,8 +466,8 @@ fn instanced_draws_match_the_d3d9_driver() {
     c.f[0] = [1f32.to_bits(), 1f32.to_bits(), 0, 1f32.to_bits()];
     for (indexed, start) in [(false, 0), (true, 3), (false, 3)] {
         let mut d = draw(ps_constant(), c.clone(), vec![]);
-        d.vertex_shader = Some(vs_offset());
-        d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [1, 0, 0, 0, 3, 0, 5, 1]];
+        d.vertex_shader = Some((vs_offset()).into());
+        d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [1, 0, 0, 0, 3, 0, 5, 1]].into();
         let geometry = if start == 0 { 0x403 } else { 0x400 };
         d.vertices = Vertices::Streams(vec![(0, geometry, 0, 16, 0x4000_0003), (1, 0x401, 0, 16, 0x8000_0001)]);
         if indexed {

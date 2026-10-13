@@ -246,7 +246,7 @@ fn texture_binding(sampler: u32, resource: u32, states: [u32; 14]) -> Option<Tex
     })
 }
 
-fn shader_tokens(shader: u32) -> Option<Vec<u32>> {
+fn shader_tokens(shader: u32) -> Option<std::sync::Arc<[u32]>> {
     if shader == 0 {
         return None;
     }
@@ -256,10 +256,10 @@ fn shader_tokens(shader: u32) -> Option<Vec<u32>> {
     })
 }
 
-fn declaration(decl: u32) -> Vec<[u8; 8]> {
+fn declaration(decl: u32) -> std::sync::Arc<[[u8; 8]]> {
     objects(|o| match o.live.get(&decl).map(|x| &x.kind) {
         Some(Kind::Declaration { elements, .. }) => elements.clone(),
-        _ => vec![],
+        _ => Default::default(),
     })
 }
 
@@ -303,8 +303,8 @@ fn snapshot(m: &dyn Mem, dev: u32, primitive: u32, primitives: u32, start: u32, 
         shaders: (u32, u32),
         declaration: u32,
         fvf: u32,
-        vs: d3d9cmd::Constants,
-        ps: d3d9cmd::Constants,
+        vs: std::sync::Arc<d3d9cmd::Constants>,
+        ps: std::sync::Arc<d3d9cmd::Constants>,
         viewport: [u32; 6],
         scissor: [i32; 4],
     }

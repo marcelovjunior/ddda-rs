@@ -28,6 +28,7 @@ mod shader_cache;
 pub mod present;
 pub use pipelines::{default_cache_dir, pipeline_stats, report_pipeline_stats_every, save_pipeline_caches, PipelineStats};
 use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
+mod shader_identity;
 use std::future::Future;
 
 fn block_on<F: Future>(f: F) -> F::Output {
@@ -307,6 +308,7 @@ pub struct Frame {
 }
 
 pub struct WgpuBackend {
+    shader_identities: shader_identity::ShaderIdentities,
     device: wgpu::Device,
     queue: wgpu::Queue,
     textures: cache::FxMap<u32, Tex>,
@@ -316,7 +318,7 @@ pub struct WgpuBackend {
     /// standalone surfaces used as targets (back buffers, render targets,
     /// depth-stencil)
     surfaces: cache::FxMap<u32, Rt>,
-    /// translated shaders by (shader hash, linked vertex shader hash, depth
+    /// translated shaders by (shader identity, linked vertex identity, depth
     /// bias, channels sampled as 1)
     modules: cache::FxMap<ModuleKey, (wgpu::ShaderModule, d3d9wgsl::Interface)>,
     samplers: cache::FxMap<[u32; 14], wgpu::Sampler>,
@@ -362,7 +364,7 @@ pub struct WgpuBackend {
     /// per stage (0 pixel, 1 vertex): the last block's constants and extra
     /// vec4s, its uniform ring offset and the ring generation it was
     /// written in (L78)
-    last_constants: RefCell<[(d3d9cmd::Constants, Vec<[u32; 4]>, u32, u64); 2]>,
+    last_constants: RefCell<[(std::sync::Arc<d3d9cmd::Constants>, Vec<[u32; 4]>, u32, u64); 2]>,
     uniforms: RefCell<Ring>,
     inline: RefCell<Ring>,
     /// group 0: the constant blocks in the uniform ring (dynamic offsets)
@@ -541,6 +543,7 @@ impl WgpuBackend {
             open: RefCell::new(None),
             open_draws: Cell::new(0),
             open_uses: RefCell::new(HashSet::new()),
+            shader_identities: Default::default(),
             last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX), (Default::default(), Vec::new(), 0, u64::MAX)]),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
@@ -626,13 +629,13 @@ impl WgpuBackend {
     /// into a new Vec, then copied), and a stage's block whose constants
     /// equal the previous draw's, still in the ring, is not written again:
     /// the draw uses its offset.
-    fn constants(&self, c: &d3d9cmd::Constants, floats: usize, extra: &[[u32; 4]], block: u64, stage: usize) -> u32 {
+    fn constants(&self, c: &std::sync::Arc<d3d9cmd::Constants>, floats: usize, extra: &[[u32; 4]], block: u64, stage: usize) -> u32 {
         let len = 16 * (floats + 16 + 16 + extra.len());
         assert!(len as u64 <= block, "constant block of {len} bytes");
         let generation = self.uniforms.borrow().generation;
         let mut last = self.last_constants.borrow_mut();
         let last = &mut last[stage];
-        if last.3 == generation && last.0 == *c && last.1[..] == *extra {
+        if last.3 == generation && (std::sync::Arc::ptr_eq(&last.0, c) || last.0 == *c) && last.1[..] == *extra {
             return last.2;
         }
         let off = self.ring_fill(&self.uniforms, block, UNIFORM_ALIGN, |dst| {
@@ -1421,13 +1424,7 @@ impl WgpuBackend {
         if d.declaration.is_empty() {
             return Err("FVF draws are not implemented".into());
         }
-        let hash = |t: &[u32]| {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            t.hash(&mut h);
-            h.finish()
-        };
-        let (vh, ph) = (hash(vs_tokens), hash(ps_tokens));
+        let (vh, ph) = (self.shader_identities.key(vs_tokens), self.shader_identities.key(ps_tokens));
         // the shaders' input declarations (usage, index), parsed once
         let dcl_inputs = |tokens: &[u32]| -> Result<Vec<(u32, u32)>, String> {
             let shader = d3d9shader::parse(tokens).map_err(|e| e.to_string())?;

@@ -69,12 +69,12 @@ fn draw(c: &[[f32; 4]], targets: [Option<Target>; 4], z: f32, extra: &[(u32, u32
         vertex_count: 3,
         vertices: Vertices::Inline { bytes: triangle(z), stride: 16 },
         indices: Indices::None,
-        vertex_shader: Some(vs()),
-        pixel_shader: Some(ps(c.len() as u32)),
-        declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]],
+        vertex_shader: Some((vs()).into()),
+        pixel_shader: Some((ps(c.len() as u32)).into()),
+        declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]].into(),
         fvf: 0,
-        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() },
-        ps_constants,
+        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
+        ps_constants: ps_constants.into(),
         textures: vec![],
         render_states: states(extra),
         viewport: [0, 0, 4, 4, 0f32.to_bits(), 1f32.to_bits()],
@@ -428,9 +428,9 @@ fn sample_draw(binding: d3d9cmd::TextureBinding, out: Target, extra: &[(u32, u32
     let v: [[f32; 6]; 3] = [[-1.0, -1.0, 0.5, 1.0, 0.0, 1.0], [-1.0, 3.0, 0.5, 1.0, 0.0, -1.0], [3.0, -1.0, 0.5, 1.0, 2.0, 1.0]];
     let mut d = draw(&[], [Some(out), None, None, None], 0.5, extra);
     d.vertices = Vertices::Inline { bytes: v.iter().flatten().flat_map(|f| f.to_le_bytes()).collect(), stride: 24 };
-    d.vertex_shader = Some(vs_textured());
-    d.pixel_shader = Some(ps_sample());
-    d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]];
+    d.vertex_shader = Some((vs_textured()).into());
+    d.pixel_shader = Some((ps_sample()).into());
+    d.declaration = vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]].into();
     d.textures = vec![binding];
     d
 }
@@ -556,8 +556,8 @@ fn cube_render_targets_match_the_d3d9_driver() {
         let mut seen = Vec::new();
         for (k, dir) in directions.iter().enumerate() {
             let mut s = sample_draw(binding.clone(), out.clone(), &[]);
-            s.pixel_shader = Some(ps_sample_cube());
-            s.ps_constants.f[0] = dir.map(f32::to_bits);
+            s.pixel_shader = Some((ps_sample_cube()).into());
+            std::sync::Arc::make_mut(&mut s.ps_constants).f[0] = dir.map(f32::to_bits);
             draws.truncate(6);
             draws.push(s);
             let clear = clear_of(&[out.clone()], 0);

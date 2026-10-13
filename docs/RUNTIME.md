@@ -802,3 +802,22 @@ The supplied gameplay profiles identify the actual mixer worker as guest
 alone is not an audio caller trace; that attribution remains unresolved.
 See [L81 results](tasks/L81-audio-render-thread.md) for evidence, repeat
 measurements and the requested head-run follow-up.
+
+### L90 shared draw payloads
+
+Draw commands hold `Arc` shader tokens, declarations and constant blocks.
+Guest objects allocate shader/declaration storage once. Constant setters
+compare raw register bits before `Arc::make_mut`, so redundant setters
+retain the same block and changed setters preserve earlier queued or
+recorded commands. Shader lookup first uses allocation identity; the
+backend retains allocations to prevent pointer reuse and deduplicates
+equal programs only when registering a new allocation. Uniform-block
+reuse checks shared identity before comparing contents. Binding layouts
+and uploaded register counts are unchanged in this first batch.
+
+Runtime light suite: 150 passed, including shader/declaration release and
+float/int/bool snapshot lifetime coverage. Frame serialization: 5 passed.
+The indexed-draw benchmark allocates 10 times instead of 15 (including
+test COM arguments). Paired debug medians on L92/L93 were 49.35 and 45.59
+us/draw; overlapping timing ranges limit that comparison. See
+[L90 results](tasks/L90-draw-costs.md) for GPU gates and later batches.

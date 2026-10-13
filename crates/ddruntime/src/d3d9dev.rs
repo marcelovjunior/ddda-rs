@@ -53,9 +53,9 @@ pub struct SurfaceDesc {
 pub enum Kind {
     Device(Box<DeviceData>),
     /// IDirect3DVertexShader9 / IDirect3DPixelShader9: the bytecode
-    Shader { device: u32, tokens: Vec<u32> },
+    Shader { device: u32, tokens: std::sync::Arc<[u32]> },
     /// IDirect3DVertexDeclaration9: the elements (8 bytes each, END excluded)
-    Declaration { device: u32, elements: Vec<[u8; 8]> },
+    Declaration { device: u32, elements: std::sync::Arc<[[u8; 8]]> },
     /// `gamma`: the ramp SetGammaRamp gave this chain (None: identity)
     SwapChain { device: u32, pp: PresentParameters, back_buffers: Vec<u32>, presents: u64, gamma: Option<Box<d3d9cmd::GammaRamp>> },
     /// `owner`: the texture whose reference count this level surface

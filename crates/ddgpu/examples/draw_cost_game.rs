@@ -73,7 +73,8 @@ fn main() {
     for (k, v) in [(7, 1), (14, 1), (23, 4), (22, 3), (8, 3), (27, 0), (168, 0xF), (190, 0xF), (191, 0xF), (192, 0xF), (174, 0), (162, !0), (58, 0xFF), (59, 0xFF)] {
         states.iter_mut().find(|s| s.0 == k).unwrap().1 = v;
     }
-    let (vs, ps) = (vertex_shader(150), pixel_shader(100));
+    let (vs, ps): (std::sync::Arc<[u32]>, std::sync::Arc<[u32]>) =
+        (vertex_shader(150).into(), pixel_shader(100).into());
     let draw = |k: u32| {
         let mut vs_c = Constants { f: vec![[0; 4]; 256], ..Default::default() };
         vs_c.f[(k % 200) as usize] = [1f32.to_bits(); 4];
@@ -86,10 +87,10 @@ fn main() {
             indices: Indices::Buffer(0x301, 101),
             vertex_shader: Some(vs.clone()),
             pixel_shader: Some(ps.clone()),
-            declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]],
+            declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]].into(),
             fvf: 0,
-            vs_constants: vs_c,
-            ps_constants: ps_c,
+            vs_constants: vs_c.into(),
+            ps_constants: ps_c.into(),
             textures: (0..6).map(|s| TextureBinding { sampler: s, resource: 0x200 + set + s, kind: TexKind::Flat, format: 21, width: 64, height: 64, depth: 1, levels: 7, usage: 0, states: sampler }).collect(),
             render_states: states.clone(),
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],

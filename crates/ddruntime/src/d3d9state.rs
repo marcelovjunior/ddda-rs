@@ -16,6 +16,7 @@ use crate::services::{arg, ret};
 use ddnative_base::mem::Mem;
 use ddnative_base::x86::Cpu;
 use crate::fasthash::FxMap as HashMap;
+use std::sync::Arc;
 
 const RS_ZENABLE: u32 = 7;
 const TSS_TEXCOORDINDEX: u32 = 11;
@@ -37,8 +38,8 @@ pub struct DeviceState {
     pub viewport: [u32; 6],
     pub scissor: [i32; 4],
     pub transforms: HashMap<u32, [u32; 16]>,
-    pub vs: Constants,
-    pub ps: Constants,
+    pub vs: Arc<Constants>,
+    pub ps: Arc<Constants>,
     pub vertex_shader: u32,
     pub pixel_shader: u32,
     pub declaration: u32,
@@ -122,8 +123,8 @@ impl DeviceState {
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],
             scissor: [0, 0, w as i32, h as i32],
             transforms: HashMap::default(),
-            vs: Constants { f: vec![[0; 4]; VS_FLOATS as usize], ..Default::default() },
-            ps: Constants { f: vec![[0; 4]; PS_FLOATS as usize], ..Default::default() },
+            vs: Arc::new(Constants { f: vec![[0; 4]; VS_FLOATS as usize], ..Default::default() }),
+            ps: Arc::new(Constants { f: vec![[0; 4]; PS_FLOATS as usize], ..Default::default() }),
             vertex_shader: 0,
             pixel_shader: 0,
             declaration: 0,
@@ -380,7 +381,7 @@ fn create_shader(m: &mut dyn Mem, cpu: &mut Cpu, iface: &'static str, stage_bits
     let (dev, p, out) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2));
     let tokens = read_tokens(m, p);
     cpu.eax = if tokens[0] >> 16 == stage_bits && d3d9shader::parse(&tokens).is_ok() {
-        let o = new_object(m, iface, Kind::Shader { device: dev, tokens });
+        let o = new_object(m, iface, Kind::Shader { device: dev, tokens: tokens.into() });
         m.set_u32(out, o);
         D3D_OK
     } else {
@@ -449,6 +450,18 @@ fn set_constants(m: &mut dyn Mem, cpu: &mut Cpu, vertex: bool, kind: char) {
         let words: Vec<u32> = (0..count * if kind == 'b' { 1 } else { 4 }).map(|k| m.u32(p + 4 * k)).collect();
         state(dev, |s| {
             let c = if vertex { &mut s.vs } else { &mut s.ps };
+            // A queued or recorded draw owns the old block. Only detach it
+            // when an update changes bits; repeated setters keep sharing.
+            let changed = (0..count as usize).any(|k| {
+                let r = start as usize + k;
+                match kind {
+                    'f' => c.f[r] != words[4 * k..4 * k + 4],
+                    'i' => c.i[r].map(|v| v as u32) != words[4 * k..4 * k + 4],
+                    _ => c.b[r] != words[k],
+                }
+            });
+            if !changed { return; }
+            let c = Arc::make_mut(c);
             for k in 0..count as usize {
                 let r = start as usize + k;
                 match kind {
@@ -537,7 +550,7 @@ pub fn create_vertex_declaration(m: &mut dyn Mem, cpu: &mut Cpu) {
         }
         elements.push(e);
     }
-    let o = new_object(m, "IDirect3DVertexDeclaration9", Kind::Declaration { device: dev, elements });
+    let o = new_object(m, "IDirect3DVertexDeclaration9", Kind::Declaration { device: dev, elements: elements.into() });
     m.set_u32(out, o);
     cpu.eax = D3D_OK;
     ret(m, cpu, 12);
