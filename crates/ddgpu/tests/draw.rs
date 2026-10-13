@@ -161,36 +161,42 @@ fn blue_clear() -> ClearCall {
 #[test]
 fn compact_constant_layouts_and_ring_rollover_match_the_driver() {
     let (Some(mut reference), Some(mut gpu)) = (d3d9ref::Oracle::new(), ddgpu::WgpuBackend::headless()) else { return; };
-    let target = Target { width: 64, height: 64, ..back_buffer() };
+    // More than 48 MiB of distinct blocks (L105's larger ring), with one
+    // visible pixel per draw. Assert a restart so future ring growth cannot
+    // silently turn this into a test that never crosses the boundary.
+    let (width, height) = (192, 128);
+    let target = Target { width, height, ..back_buffer() };
     let mut clear = blue_clear();
     clear.targets[0] = Some(target.clone());
-    clear.viewport = [0, 0, 64, 64, 0, 0];
+    clear.viewport = [0, 0, width, height, 0, 0];
     let mut shaders = [ps_constant(), ps_constant()];
     shaders[1][3] |= 223;
     let shaders = shaders.map(std::sync::Arc::<[u32]>::from);
     let mut template = draw(ps_constant(), Constants::default(), vec![]);
     template.targets[0] = Some(target.clone());
-    template.viewport = [0, 0, 64, 64, 0, 1f32.to_bits()];
+    template.viewport = [0, 0, width, height, 0, 1f32.to_bits()];
     template.render_states.extend([(174, 1), (15, 1), (24, 127), (25, 5)]);
     // Alpha test GREATER than 127: incorrect compact tail offsets discard
     // pixels. SetRenderState ordering remains unique and sorted.
     template.render_states.retain(|&(s, v)| s != 15 || v == 1);
     template.render_states.sort();
-    let mut draws = Vec::with_capacity(4096);
-    for pixel in 0..4096 {
+    let pixels = (width * height) as usize;
+    let mut draws = Vec::with_capacity(pixels);
+    for pixel in 0..pixels {
         let reg = if pixel % 2 == 0 { 0 } else { 223 };
         let mut d = template.clone();
         d.pixel_shader = Some(shaders[pixel % 2].clone());
         let mut c = Constants { f: vec![[0; 4]; reg + 1], ..Default::default() };
         c.f[reg] = [(pixel % 7) as f32 / 6.0, (pixel % 11) as f32 / 10.0, (pixel % 3) as f32 / 2.0, 1.0].map(f32::to_bits);
         d.ps_constants = c.into();
-        let (x, y) = ((pixel % 64) as i32, (pixel / 64) as i32);
+        let (x, y) = ((pixel % width as usize) as i32, (pixel / width as usize) as i32);
         d.scissor = [x, y, x + 1, y + 1];
         draws.push(d);
     }
     let expected = reference.render(&[], Some(&clear), &draws, &target).expect("D3D9 render");
     gpu.clear(&clear);
     for d in &draws { gpu.draw(d); }
+    assert!(gpu.uniform_ring_restarts() > 0, "the test must actually exhaust the uniform ring");
     gpu.present(&target);
     assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
     assert_eq!(gpu.last_frame.unwrap().rgba, expected.rgba);
@@ -1085,7 +1091,13 @@ fn deferred_frame_matches_synchronous_image() {
             backend.fill(&d3d9cmd::FillCall { dst: bb.clone(), rect: [0, 0, 1, 1], colour: 0xFFFFFFFF });
             backend.present(&bb);
             reads.push(backend.read_back(&copy).expect("copied image"));
-            assert_eq!(backend.query_result(0x500), Some(16));
+            // L102 starts the deferred query read on the first request. Drain
+            // that request before asserting the exact synchronous count.
+            let count = backend.query_result(0x500).or_else(|| {
+                backend.fence();
+                backend.query_result(0x500)
+            });
+            assert_eq!(count, Some(16));
             backend.release(0x300);
             backend.release(0x301);
         }

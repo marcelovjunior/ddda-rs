@@ -625,6 +625,11 @@ impl WgpuBackend {
         (self.draws_recorded.get(), self.passes_begun.get())
     }
 
+    /// Completed uniform-ring restarts, for rollover validation and profiling.
+    pub fn uniform_ring_restarts(&self) -> u64 {
+        self.uniforms.borrow().generation
+    }
+
     /// Room in a ring for `bytes` (`len` reserved), flushing and starting
     /// the ring again when it is full: the offset.
     fn ring_alloc(&self, ring: &RefCell<Ring>, bytes: &[u8], len: u64, align: u64) -> u64 {

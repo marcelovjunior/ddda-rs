@@ -1678,6 +1678,13 @@ fn every_translation_is_valid_wgsl() {
                     d3d9wgsl::Options { ps_input_locations: Some(locations), alpha_test: true, ..Default::default() },
                 ]
             };
+            // L90 changes the uniform array extent and following field offsets.
+            // Check both layouts for every existing interface/input variant.
+            let variants = variants.into_iter().flat_map(|options| {
+                let mut compact = options.clone();
+                compact.compact_constants = true;
+                [options, compact]
+            });
             for options in variants {
                 let label = format!("{options:?}");
                 let t = match d3d9wgsl::translate_with(&shader, options) {

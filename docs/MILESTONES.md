@@ -2029,3 +2029,21 @@ opening (codex-31), route perf (codex-29).
 - Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
   comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
 - Next: finish the serialized GPU gate and hand the minimal fix to head.
+
+
+### L90 final draw-cost validation (2026-10-13)
+
+Rebased compact constants and dirty groups onto FPS base eeaaa7a6, keeping
+L97 shared render state and L98 batched dirty-resource reads. The synthetic
+snapshot now allocates only the COM fixture's two argument buffers per draw;
+VS150/PS32 float payload shrinks 7,680 to 2,912 bytes. Three matched debug
+GPU pairs have median submission cost 239.18 to 50.98 us/draw and waited
+frame cost 243.92 to 56.50 ms; these are microbenchmarks, not gameplay FPS.
+All 35 active GPU equivalence tests pass (38 invocations including all four
+target-format shards); three existing exploratory tests remain ignored.
+The 24,576-pixel compact-layout regression proves an actual 48 MiB ring
+rollover and exact driver RGBA equality. All 18,036 full/compact WGSL
+variants validate. The fullscreen-gamma Reset issue recurs in runtime
+validation; draw-path and L98 dirty-flush regressions pass. See
+`docs/tasks/L90-draw-costs.md` for complete counts and limits.
+Next: head measures the integrated gameplay render-thread profile.

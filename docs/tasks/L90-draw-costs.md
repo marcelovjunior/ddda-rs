@@ -1,7 +1,8 @@
 # L90: per-draw D3D9 costs
 
 Owner: codex-7. Branch: `task/L90-draw-costs`. Base:
-`task/L92-stage-autoplay` at `8c01fe5b` (rebased per head).
+`task/fps-line` at `c349d834` (L89/L83/L94/L97/L102 integrated;
+previously rebased on L92/L93 at `8c01fe5b` per head).
 User-assigned brief, 2026-10-13.
 
 ## Scope
@@ -110,3 +111,50 @@ Serialize GPU suites through HEAVY_BIG=1/heavy.py. Measure `draw_path` and
   stream offsets/frequencies, target/index changes, nonindexed draws and
   the UP stream reset. All ddgpu tests and examples compile. GPU gate and
   paired backend timings remain pending the head's next run-done release.
+
+
+## Final integration validation
+
+- Rebased onto head's requested FPS base **eeaaa7a6**. Core commits are
+  compact **83efa036**, groups **eb3ed5c6**; dependencies are L89 fixture
+  compatibility **2644b7d3** and L96 headless PRIMARY **3bc8ed49**.
+  The initial Arc/identity commit **ef1370cd** was handed to head separately.
+  Original pre-rebase compact/group commits: **8999b372**, **a91da3d1**.
+  Newer FPS-branch changes after eeaaa7a6 are not included in these numbers.
+- Integrated L97 removes the final production snapshot allocation:
+  **2 allocations/draw**, both in the test COM helper. Set
+  `DDRUNTIME_SYNC_BACKEND=1` to isolate snapshot cost from L89 queue work.
+  L98's batched `flush_reads` remains intact in the extracted snapshot
+  module; both dirty-flush regressions pass with dirty-flush auditing.
+- **7,850** distinct installed shaders match Microsoft's disassembly;
+  **18,036** full/compact layout and input-interface variants from Title
+  and root validate in Naga, zero failures. Existing checks are retained.
+- Vulkan driver gate: **35 active named tests pass**, executed as 38
+  invocations because all 200 target formats are split into four shards;
+  three existing exploratory tests remain ignored. The 150 random-state
+  cases, 180 depth cases, frame/readback, MSAA, presentation and cache
+  comparisons pass. Every case has a 60-second process-tree timeout;
+  head authorized 300 seconds for cache, which finished in 18.27 seconds.
+- The compact-layout test now renders **24,576** independently visible
+  pixels and asserts an actual ring restart after L105 enlarged the ring
+  to 48 MiB; exact driver RGBA comparison passes in 2.07 seconds. L102's
+  nonblocking query contract required one fixture adjustment: request the
+  result, fence pending work, then retain the exact count-of-16 assertion.
+  This fixture passes; no worker or queue production code was changed.
+- Three alternating matched debug `draw_cost_game` pairs (saved Arc-only
+  and compact-only binaries on the same pre-integration base, 1,000 draws
+  x 10 frames): submitted medians **239.18 -> 50.98 us/draw**; GPU-waited
+  frame medians **243.92 -> 56.50 ms**. Per-draw ranges were 224.68-302.39
+  and 47.84-52.02 us. Across 11,000 draws including warmup, render passes
+  fell from 23 to 15. Shared-machine microbenchmarks are not gameplay FPS.
+- Earlier integrated full light runtime validation passed 154 tests with
+  one existing ignored test. On the latest base, final validation is
+  recorded below; the independent fullscreen-gamma Reset issue recurred.
+- Private logs/binaries are under C:/ddda-targets/L90-*. No game was run,
+  no lifted shard was built, and no game/research data is committed.
+- Final latest-base light runtime suite: **155 passed, 1 failed,
+  1 existing ignored**, with serial tests, synchronous synthetic backend and
+  `DDRUNTIME_VERIFY_DIRTY_FLUSH=1`. The only failure is fullscreen-gamma
+  Reset (D3DERR_INVALIDCALL), previously reproduced on untouched code by
+  L98. All four draw-path tests and both 42-resource/alias dirty-flush
+  regressions pass. Earlier 5 queue, 5 frame and 4 backend CPU tests pass.
