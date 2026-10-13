@@ -475,6 +475,7 @@ pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
             with_device(device, |d| d.swap_chains.push(chain));
             bind_implicit(m, device, chain, pp);
             m.set_u32(out, device);
+            crate::load_log::event("d3d_device_created", format_args!("device={device:#x}"));
             D3D_OK
         }
     };
