@@ -1922,3 +1922,16 @@ opening (codex-31), route perf (codex-29).
   - the two loader threads run shards 15 and 19, still at opt-level 0.
 - Build: a full `play-fast` build takes ~6 min cold; a runtime-only relink
   takes ~20 s; the optimised `play` build takes ~25 min.
+
+
+### L96 headless encoder-hang investigation (2026-10-13)
+
+- Concurrent cache tests reproduced a driver deadlock: the WGL instance
+  thread spins during shutdown while Vulkan device/pipeline creation waits.
+  No encoder/readback loop was observed; L88/L95 batching remains intact.
+- Headless initialization now selects primary backends by default, keeping
+  `WGPU_BACKEND` overrides. Focused regression checks clear/copy submit
+  limits, resource tracking and upload ordering.
+- Light runtime suite passes; GPU acceptance gate is queued. No game/FPS
+  comparison by this agent. Evidence: `docs/tasks/L96-encoder-hang.md`.
+- Next: finish the serialized GPU gate and hand the minimal fix to head.

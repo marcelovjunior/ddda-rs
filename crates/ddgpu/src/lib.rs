@@ -468,7 +468,14 @@ impl WgpuBackend {
 
     /// A backend on the default adapter without a window.
     pub fn headless() -> Option<WgpuBackend> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        // Do not initialize the unused OpenGL backend alongside Vulkan/DX12.
+        // On the NVIDIA Windows driver, parallel headless instance creation
+        // can deadlock Vulkan device/pipeline creation against WGL's instance
+        // thread exiting inside the driver (L96, tests/cache.rs). Native
+        // backends remain available; WGPU_BACKEND can explicitly opt into GL.
+        descriptor.backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY);
+        let instance = wgpu::Instance::new(descriptor);
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
         let needed = Self::required_features();
         if !adapter.features().contains(needed) {
