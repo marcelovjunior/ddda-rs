@@ -205,4 +205,5 @@ Verification logs and raw analysis outputs are archived privately under
 `E:/ddda-re/notes/L154`. The source-only tested candidate patch is preserved in
 this worktree's ignored `target/l154-review/ndraw_candidate.patch` so the head
 can review/apply it after resolving ownership. The C:/ddda-targets/L154 build
-cache is removed at handoff per head #12750; no owned process remains.
+cache cleanup requested by head #12750 was rejected by automatic approval
+review as "blocked by policy"; the cache remains. No owned process remains.
