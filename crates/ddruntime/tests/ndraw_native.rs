@@ -327,6 +327,48 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
             }
         });
     }
+
+    // an instanced draw (type 3): stream 1 instance data (stride 16,
+    // offset 8), 5 instances, instance step 2. The D3D9 path: the stream
+    // apply, then the calls 0x00DAB480's type 3 makes around the draw
+    // (crates/mtdraw executor set_frequencies/reset_frequencies)
+    let vb2 = out(&mut s, dev, 26, &[1600, 8, 0, 1, OUT, 0]);
+    let vbo2 = NDRAW + 0x100 * 18;
+    put(&mut s, vbo2 + 0x14, &[1600, 0, 0, vb2]);
+    s.mem.set_u32(streams + 4, vbo2);
+    s.mem.set_u8(streams + 0x11, 16);
+    s.mem.set_u32(streams + 0x18, 8);
+    s.mem.set_u8(streams + 0x25, 1);
+    s.mem.set_u16(record + 2, 3);
+    put(&mut s, record + 0x20, &[5, 2]);
+    caches.begin_frame(&info);
+    let instanced = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 3).expect("taken").call;
+    let mut ctx = Context { m: &s.mem, words: vec![0; 0xE28 / 4] };
+    // the streams, and the binding again (its VS c0 was changed above)
+    let mut calls = mtstate::streams(&mut ctx, CTX, streams);
+    calls.extend(mtstate::shader(&mut ctx, CTX, shader, false, 0).unwrap());
+    let extent = ctx.words[0xE20 / 4];
+    drop(ctx);
+    make(&mut s, dev, &calls);
+    assert_eq!(com(&mut s, dev, 102, &[0, 0x4000_0005]), 0); // SetStreamSourceFreq
+    assert_eq!(com(&mut s, dev, 102, &[1, 0x8000_0001]), 0);
+    assert_eq!(com(&mut s, dev, 100, &[1, vb2, 2 * 16 + 8, 16]), 0); // SetStreamSource
+    let (primitive, primitives, start, base, vertices) = draw_params(&s.mem, record, 1, extent).unwrap();
+    assert_eq!(com(&mut s, dev, 82, &[primitive, base as u32, 0, vertices, start, primitives]), 0);
+    let d3d9 = ddruntime::d3d9draw::recorded(|r| r.draws.last().cloned()).flatten().expect("the D3D9 path drew");
+    let d3d9cmd::Vertices::Streams(st) = &d3d9.vertices else { panic!("streams") };
+    assert_eq!(st.iter().map(|s| s.4).collect::<Vec<_>>(), [0x4000_0005, 0x8000_0001]);
+    assert_eq!(differences(&instanced, r, &d3d9), vec![]);
+    let (mut a, mut b) = (d3d9.clone(), instanced.clone());
+    a.render_states = Default::default();
+    b.render_states = Default::default();
+    a.vs_constants = b.vs_constants.clone();
+    a.ps_constants = b.ps_constants.clone();
+    assert_eq!(a, b);
+    for k in [0, 1] {
+        assert_eq!(com(&mut s, dev, 102, &[k, 1]), 0);
+    }
+    assert_eq!(com(&mut s, dev, 100, &[1, vb2, 8, 16]), 0);
     assert_eq!(com(&mut s, dev, 42, &[]), 0); // EndScene
 }
 

@@ -954,6 +954,44 @@ fn stream_part(g: &G, binding: u32) -> Result<StreamPart, Refusal> {
     Ok(StreamPart { streams: streams[..count].into(), indices: if ib == 0 { 0 } else { g.u32(ib.wrapping_add(0x20)) }, extent })
 }
 
+// Translated from 0x00DAB480's types 2 and 3 (DDDA.exe 2017-12-13 Steam):
+// their stream loops before the draw, whose SetStreamSourceFreq and
+// SetStreamSource calls return to 0x00DAB891/0x00DAB8C5 and
+// 0x00DAB9F7/0x00DABA29 (crates/mtdraw executor set_frequencies): an
+// instanced draw's streams on the device. Each stream with an object gets a
+// frequency: instance data (binding +0x24 + k set) 0x80000001, and its
+// source again at offset step * stride + its own offset (step: record +0x20
+// for type 2, +0x24 for type 3); geometry 0x40000000 | the instances (record
+// +0x1C for type 2, +0x20 for type 3). Streams without a backend handle are
+// not on the device, as stream_part. (The executor sets every frequency
+// back to 1 and the sources back to their own offsets after the draw: what
+// the stream apply leaves, so a taken draw needs no device change.)
+fn instanced_streams(g: &G, record: u32, binding: u32, kind: u32) -> Arc<[(u32, u32, u32, u32, u32)]> {
+    let (count, step) = if kind == 3 { (0x20, 0x24) } else { (0x1C, 0x20) };
+    let instances = g.u32(record.wrapping_add(count));
+    let mut streams = [(0, 0, 0, 0, 0); 4];
+    let mut n = 0;
+    for k in 0..4u32 {
+        let vb = g.u32(binding.wrapping_add(4 * k));
+        if vb == 0 {
+            continue;
+        }
+        let handle = g.u32(vb.wrapping_add(0x20));
+        if handle == 0 {
+            continue;
+        }
+        let stride = g.u8(binding.wrapping_add(0x10 + k));
+        let offset = g.u32(binding.wrapping_add(0x14 + 4 * k));
+        streams[n] = if g.u8(binding.wrapping_add(0x24 + k)) != 0 {
+            (k, handle, g.u32(record.wrapping_add(step)).wrapping_mul(stride).wrapping_add(offset), stride, 0x8000_0001)
+        } else {
+            (k, handle, offset, stride, instances | 0x4000_0000)
+        };
+        n += 1;
+    }
+    streams[..n].into()
+}
+
 /// A target binding of this frame (0x00DA6FE0 with nothing applied).
 pub struct TargetPart {
     targets: [Option<Target>; 4],
@@ -1285,12 +1323,14 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         }
     };
     c.mirror = Some(mirror);
-    // the draw
-    if kind == 1 && s.indices == 0 {
+    // the draw (types 2 and 3: types 0 and 1 drawn instanced)
+    let indexed = kind & 1 == 1;
+    if indexed && s.indices == 0 {
         return Err(Refusal::NoIndices);
     }
-    let (primitive, primitives, start, base_vertex, vertex_count) = draw_params_of(&g, record, kind, s.extent)?;
-    let indices = if kind == 1 {
+    let (primitive, primitives, start, base_vertex, vertex_count) = draw_params_of(&g, record, kind & 1, s.extent)?;
+    let vertices = if kind >= 2 { instanced_streams(&g, record, streams, kind) } else { s.streams.clone() };
+    let indices = if indexed {
         let ib = s.indices;
         let format = *c.index_formats.entry(ib).or_insert_with(|| objects(|o| match o.live.get(&ib).map(|x| &x.kind) {
             Some(Kind::Buffer { data, .. }) => Some(data.format),
@@ -1302,7 +1342,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     };
     let call = DrawCall {
         primitive, primitives, start, base_vertex, min_index: 0, vertex_count,
-        vertices: Vertices::Streams(s.streams.clone()),
+        vertices: Vertices::Streams(vertices),
         indices,
         vertex_shader: Some(b.meta.vs.clone()), pixel_shader: Some(b.meta.ps.clone()),
         declaration: b.meta.declaration.clone(),
@@ -1538,9 +1578,10 @@ pub fn native_draw(
     caches: &mut Caches,
 ) -> Result<NativeDraw, Refusal> {
     let Vertices::Streams(streams) = &d.vertices else { return Err(Refusal::Device) };
-    // non-instanced: every stream steps once per vertex
+    // non-instanced: every stream steps once per vertex (the native worker
+    // draws one instance)
     if streams.iter().any(|s| s.4 != 1) {
-        return Err(Refusal::Device);
+        return Err(Refusal::Instanced);
     }
     let (Some(vertex_shader), Some(pixel_shader)) = (d.vertex_shader.clone(), d.pixel_shader.clone()) else {
         return Err(Refusal::Missing);
@@ -1830,10 +1871,6 @@ impl Native {
         // native jobs do not count samples for queries (a DrawCall does)
         if matches!(self.mode, Mode::Native | Mode::Compare) && g.native && !g.spans.is_empty() {
             *t.refused.entry(Refusal::Query).or_default() += 1;
-            return Taken::Default;
-        }
-        if kind >= 2 {
-            *t.refused.entry(Refusal::Instanced).or_default() += 1;
             return Taken::Default;
         }
         let started = Instant::now();
@@ -2305,6 +2342,31 @@ mod tests {
         again.ctx.push((0x100, 7));
         again.prune(&g, &pruned);
         assert!(again.is_empty() && again.ctx.is_empty());
+    }
+
+    /// Instanced draws: each stream with an object and a handle gets the
+    /// frequency the executor sets; instance data starts at its instance
+    /// offset (step * stride + its own offset).
+    #[test]
+    fn instanced_streams_carry_the_executors_frequencies_and_offsets() {
+        let mut m = TestMem::default();
+        let (record, binding) = (0x1000, 0x2000);
+        // stream 0 geometry, stride 32; stream 2 instance data, stride 16,
+        // offset 8; stream 3 an object without a handle (not on the device)
+        for (k, vb, handle, stride, offset, data) in [(0u32, 0x3000, 7, 32u8, 0, 0u8), (2, 0x3100, 9, 16, 8, 1), (3, 0x3200, 0, 4, 0, 1)] {
+            m.set_u32(binding + 4 * k, vb);
+            m.set_u32(vb + 0x20, handle);
+            m.set_u8(binding + 0x10 + k, stride);
+            m.set_u32(binding + 0x14 + 4 * k, offset);
+            m.set_u8(binding + 0x24 + k, data);
+        }
+        // type 2: instances +0x1C, step +0x20; type 3: +0x20, +0x24
+        m.set_u32(record + 0x1C, 5);
+        m.set_u32(record + 0x20, 3);
+        m.set_u32(record + 0x24, 11);
+        let g = G::new(&m);
+        assert_eq!(&*instanced_streams(&g, record, binding, 2), &[(0, 7, 0, 32, 0x4000_0005), (2, 9, 3 * 16 + 8, 16, 0x8000_0001)]);
+        assert_eq!(&*instanced_streams(&g, record, binding, 3), &[(0, 7, 0, 32, 0x4000_0003), (2, 9, 11 * 16 + 8, 16, 0x8000_0001)]);
     }
 
     /// Pruning (in place) keeps each word once, where it was first
