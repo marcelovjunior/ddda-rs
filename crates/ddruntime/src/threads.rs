@@ -48,7 +48,11 @@ use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+#[path = "sync_profile.rs"]
+pub(crate) mod sync_profile;
+
 pub const WAIT_OBJECT_0: u32 = 0;
+pub const WAIT_ABANDONED_0: u32 = 0x80;
 pub const WAIT_TIMEOUT: u32 = 0x102;
 pub const WAIT_FAILED: u32 = 0xFFFF_FFFF;
 pub const INFINITE: u32 = 0xFFFF_FFFF;
@@ -128,6 +132,8 @@ pub struct GuestLock {
     /// SetEvent, ResetEvent and WaitForSingleObject (L86); kept by the
     /// handle's creation and CloseHandle (under the guest lock).
     events: std::sync::RwLock<crate::fasthash::FxMap<u32, (u32, Arc<EventCell>)>>,
+    event_cache_id: u64,
+    event_epoch: std::sync::atomic::AtomicU64,
 }
 
 impl Default for GuestLock {
@@ -153,6 +159,8 @@ impl Default for GuestLock {
             held_hint: std::sync::atomic::AtomicBool::new(true),
             parallel: std::sync::atomic::AtomicBool::new(parallel),
             events: Default::default(),
+            event_cache_id: NEXT_EVENT_CACHE_ID.fetch_add(1, SeqCst),
+            event_epoch: 0.into(),
         }
     }
 }
@@ -161,6 +169,7 @@ impl Default for GuestLock {
 /// service call skips the runtime lookup (the serial mode's cost stays as
 /// it was).
 static ANY_PARALLEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static NEXT_EVENT_CACHE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Whether this runtime runs guest threads in parallel.
 pub fn parallel() -> bool {
@@ -214,6 +223,7 @@ impl GuestLock {
         s.waiting += 1;
         signal_preempt(&s);
         let mut spun = false;
+        if s.held { sync_profile::service_contention(); }
         while s.held || s.suspended.get(&me).copied().unwrap_or(0) > 0 {
             // L87: spin briefly (only for a held lock, not a suspension)
             // before sleeping on the condvar; the state is rechecked under
@@ -764,6 +774,7 @@ pub(crate) fn block_on(keys: &[u64], deadline: Option<Instant>) {
 /// exist (the waiter counts it before checking; see the critical sections
 /// and EventCell).
 pub(crate) fn wait_until(keys: &[u64], deadline: Option<Instant>, cond: impl Fn() -> bool) {
+    sync_profile::blocking();
     let keys: Box<[u64]> = keys.into();
     let rt = runtime::current();
     let mut s = rt.lock.lock();
@@ -990,11 +1001,12 @@ pub struct EventCell {
     /// threads in a wait that includes this event (counted before they
     /// check it): SetEvent signals the event's key only then
     waiters: std::sync::atomic::AtomicU32,
+    address_waiters: std::sync::atomic::AtomicU32,
 }
 
 impl EventCell {
     pub fn new(manual: bool, set: bool) -> Arc<EventCell> {
-        Arc::new(EventCell { manual, set: set.into(), waiters: 0.into() })
+        Arc::new(EventCell { manual, set: set.into(), waiters: 0.into(), address_waiters: 0.into() })
     }
 
     pub fn is_set(&self) -> bool {
@@ -1014,6 +1026,10 @@ impl EventCell {
     /// Set or reset; the threads waiting for it recheck (`object`: its id).
     fn store(&self, object: u32, value: bool) {
         self.set.store(value, SeqCst);
+        #[cfg(windows)]
+        if value && self.address_waiters.load(SeqCst) > 0 {
+            address_wait::wake(&self.set);
+        }
         if value && self.waiters.load(SeqCst) > 0 {
             signal_key(key::object(object));
         }
@@ -1024,7 +1040,7 @@ impl EventCell {
 pub enum Object {
     Event(Arc<EventCell>),
     Semaphore { count: u32, max: u32 },
-    Mutex { owner: u32, recursion: u32 },
+    Mutex { owner: u32, recursion: u32, abandoned: bool },
     Thread { tid: u32, exit: Option<u32> },
 }
 
@@ -1085,13 +1101,53 @@ pub(crate) fn close(h: u32) -> bool {
     let closed = kernel(|k| k.handles.remove(&h).is_some());
     if closed {
         runtime::current().lock.events.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+        runtime::current().lock.event_epoch.fetch_add(1, SeqCst);
     }
     closed
 }
 
 /// The event behind handle `h`, read without the guest lock.
 fn event_of(h: u32) -> Option<(u32, Arc<EventCell>)> {
-    runtime::current().lock.events.read().unwrap_or_else(|e| e.into_inner()).get(&h).cloned()
+    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let cached = *CACHE.get_or_init(|| std::env::var("DDRUNTIME_SYNC_CACHE").is_ok_and(|v| v == "1"));
+    event_lookup(&runtime::current().lock, h, cached)
+}
+
+type CachedEvent = (u32, u32, Arc<EventCell>);
+struct EventCache {
+    runtime: u64,
+    epoch: u64,
+    slots: [Option<CachedEvent>; 64],
+}
+thread_local! {
+    static EVENT_CACHE: std::cell::RefCell<EventCache> = const { std::cell::RefCell::new(EventCache {
+        runtime: 0, epoch: 0, slots: [const { None }; 64],
+    }) };
+}
+/// Handles are monotonic and objects live for the runtime's lifetime. A close
+/// invalidates every thread's bounded cache; a distinct runtime id prevents
+/// allocator-address reuse from resurrecting handles in a later session.
+/// Concurrent CloseHandle versus wait remains Win32's undefined operation.
+fn event_lookup(lock: &GuestLock, h: u32, cached: bool) -> Option<(u32, Arc<EventCell>)> {
+    if !cached {
+        return lock.events.read().unwrap_or_else(|e| e.into_inner()).get(&h).cloned();
+    }
+    EVENT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let epoch = lock.event_epoch.load(SeqCst);
+        if cache.runtime != lock.event_cache_id || cache.epoch != epoch {
+            cache.slots.fill(None);
+            cache.runtime = lock.event_cache_id;
+            cache.epoch = epoch;
+        }
+        let slot = &mut cache.slots[((h >> 2) & 63) as usize];
+        if let Some((handle, object, cell)) = slot {
+            if *handle == h { return Some((*object, cell.clone())); }
+        }
+        let result = lock.events.read().unwrap_or_else(|e| e.into_inner()).get(&h).cloned();
+        if let Some((object, cell)) = &result { *slot = Some((h, *object, cell.clone())); }
+        result
+    })
 }
 
 fn set_error(e: u32) {
@@ -1196,7 +1252,7 @@ pub fn release_semaphore(m: &mut dyn Mem, cpu: &mut Cpu) {
 pub fn create_mutex(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (own, name) = (arg(m, cpu, 1) != 0, arg(m, cpu, 2));
     let me = current_tid();
-    cpu.eax = create_named(m, name, || if own { Object::Mutex { owner: me, recursion: 1 } } else { Object::Mutex { owner: 0, recursion: 0 } });
+    cpu.eax = create_named(m, name, || Object::Mutex { owner: if own { me } else { 0 }, recursion: u32::from(own), abandoned: false });
     ret(m, cpu, 12);
 }
 
@@ -1207,7 +1263,7 @@ pub fn release_mutex(m: &mut dyn Mem, cpu: &mut Cpu) {
     let r = kernel(|k| {
         let o = k.object_of(h).ok_or(ERROR_INVALID_HANDLE)?;
         match k.objects.get_mut(&o) {
-            Some(Object::Mutex { owner, recursion }) if *owner == me => {
+            Some(Object::Mutex { owner, recursion, .. }) if *owner == me => {
                 *recursion -= 1;
                 if *recursion == 0 {
                     *owner = 0;
@@ -1247,13 +1303,33 @@ fn consume(o: &mut Object, me: u32) -> bool {
     match o {
         Object::Event(e) => return e.take(),
         Object::Semaphore { count, .. } => *count -= 1,
-        Object::Mutex { owner, recursion } => {
+        Object::Mutex { owner, recursion, abandoned } => {
             *owner = me;
             *recursion += 1;
+            *abandoned = false;
         }
         _ => {}
     }
     true
+}
+
+fn abandoned(o: &Object) -> bool {
+    matches!(o, Object::Mutex { abandoned: true, .. })
+}
+
+/// A terminating owner releases all its recursive mutex entries. The next
+/// successful waiter receives ownership plus WAIT_ABANDONED exactly once.
+/// Microsoft Learn: WaitForSingleObject / WaitForMultipleObjects.
+fn abandon_mutexes(k: &mut Kernel, tid: u32) {
+    for o in k.objects.values_mut() {
+        if let Object::Mutex { owner, recursion, abandoned } = o {
+            if *owner == tid {
+                *owner = 0;
+                *recursion = 0;
+                *abandoned = true;
+            }
+        }
+    }
 }
 
 /// Wait for `handles` (all of them, or any), up to `ms` milliseconds.
@@ -1263,6 +1339,22 @@ fn consume(o: &mut Object, me: u32) -> bool {
 /// one is set (`wait_until`).
 pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
     let me = current_tid();
+    // The common single-object success/poll requires no temporary vectors or
+    // host clock. Other objects remain serialized by the existing guest lock.
+    if handles.len() == 1 {
+        let ready = kernel(|k| {
+            let object = k.object_of(handles[0])?;
+            let value = k.objects.get_mut(&object)?;
+            let result = if abandoned(value) { WAIT_ABANDONED_0 } else { WAIT_OBJECT_0 };
+            Some((signalled(value, me) && consume(value, me), result))
+        });
+        match ready {
+            None => { set_error(ERROR_INVALID_HANDLE); return WAIT_FAILED; }
+            Some((true, result)) => return result,
+            Some((false, _)) if ms == 0 => { sync_profile::contention(); return WAIT_TIMEOUT; }
+            _ => {}
+        }
+    }
     let deadline = (ms != INFINITE).then(|| Instant::now() + Duration::from_millis(ms as u64));
     let events: Vec<(u32, Arc<EventCell>)> = kernel(|k| {
         handles.iter().filter_map(|&h| k.object_of(h)).filter_map(|o| match k.objects.get(&o) {
@@ -1288,6 +1380,7 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
             let mut seen_set: Vec<u32> = Vec::new();
             if all {
                 if states.iter().all(|&s| s) {
+                    let result = if objs.iter().any(|o| abandoned(&k.objects[o])) { WAIT_ABANDONED_0 } else { WAIT_OBJECT_0 };
                     // the events first: one may be taken meanwhile by a
                     // wait without the guest lock; then nothing is taken
                     let mut taken = Vec::new();
@@ -1306,16 +1399,17 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
                             consume(k.objects.get_mut(o).unwrap(), me);
                         }
                     }
-                    return Ok(WAIT_OBJECT_0);
+                    return Ok(result);
                 }
                 // not all signalled: the events that are set do not wake
                 // this thread again; the others, and the locked objects, do
                 seen_set = objs.iter().zip(&states).filter(|&(o, &s)| s && matches!(k.objects[o], Object::Event(_))).map(|(&o, _)| o).collect();
             } else {
                 for (i, o) in objs.iter().enumerate() {
+                    let result = if abandoned(&k.objects[o]) { WAIT_ABANDONED_0 } else { WAIT_OBJECT_0 };
                     // an event taken meanwhile counts as not set
                     if states[i] && consume(k.objects.get_mut(o).unwrap(), me) {
-                        return Ok(WAIT_OBJECT_0 + i as u32);
+                        return Ok(result + i as u32);
                     }
                 }
             }
@@ -1328,6 +1422,7 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
             }
             Ok(r) => break r,
             Err((taken, seen_set)) => {
+                sync_profile::contention();
                 // a wait for all that lost an event: the ones it took are set
                 // again, and their waiters recheck
                 for (o, e) in &taken {
@@ -1354,6 +1449,7 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
     if e.take() {
         return WAIT_OBJECT_0;
     }
+    sync_profile::contention();
     if ms == 0 {
         return WAIT_TIMEOUT;
     }
@@ -1375,6 +1471,10 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
             }
         }
     }
+    #[cfg(windows)]
+    if address_wait::enabled() && parallel() && !holds_lock() {
+        return address_wait::event(e, deadline);
+    }
     e.waiters.fetch_add(1, SeqCst);
     let r = loop {
         if e.take() {
@@ -1387,6 +1487,49 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
     };
     e.waiters.fetch_sub(1, SeqCst);
     r
+}
+
+/// Windows address waits compare the value before parking and may wake
+/// spuriously. Always recheck/take, using the original absolute deadline.
+/// https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-waitonaddress
+#[cfg(windows)]
+mod address_wait {
+    use super::*;
+    #[link(name = "synchronization")]
+    unsafe extern "system" {
+        fn WaitOnAddress(address: *const std::ffi::c_void, compare: *const std::ffi::c_void, size: usize, ms: u32) -> i32;
+        fn WakeByAddressAll(address: *const std::ffi::c_void);
+    }
+    pub(super) fn enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var("DDRUNTIME_SYNC_FUTEX").is_ok_and(|v| v == "1"))
+    }
+    pub(super) fn wake(value: &std::sync::atomic::AtomicBool) {
+        // SAFETY: EventCell lives in an Arc for the entire wait/signal.
+        unsafe { WakeByAddressAll(value.as_ptr().cast()) }
+    }
+    pub(super) fn event(e: &EventCell, deadline: Option<Instant>) -> u32 {
+        e.address_waiters.fetch_add(1, SeqCst);
+        let result = loop {
+            if e.take() { break WAIT_OBJECT_0; }
+            let ms = match deadline {
+                None => INFINITE,
+                Some(d) => {
+                    let now = Instant::now();
+                    if now >= d { break WAIT_TIMEOUT; }
+                    // Round up so sub-ms remainder does not turn into polling.
+                    (d - now).as_nanos().div_ceil(1_000_000).min((INFINITE - 1) as u128) as u32
+                }
+            };
+            sync_profile::blocking();
+            let unset = false;
+            // SAFETY: both bool values are one byte; e is alive and stable.
+            // SeqCst waiter registration + state check pairs with store/wake.
+            unsafe { WaitOnAddress(e.set.as_ptr().cast(), (&unset as *const bool).cast(), 1, ms); }
+        };
+        e.address_waiters.fetch_sub(1, SeqCst);
+        result
+    }
 }
 
 /// WaitForSingleObject(handle, ms).
@@ -1407,8 +1550,14 @@ pub fn wait_for_single_object(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// WaitForMultipleObjects(count, handles*, wait all, ms).
 pub fn wait_for_multiple_objects(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (n, p, all, ms) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2) != 0, arg(m, cpu, 3));
-    let handles: Vec<u32> = (0..n.min(64)).map(|k| m.u32(p + 4 * k)).collect();
-    cpu.eax = wait(&handles, all, ms);
+    if n == 0 || n > 64 {
+        set_error(87); // ERROR_INVALID_PARAMETER (MAXIMUM_WAIT_OBJECTS = 64)
+        cpu.eax = WAIT_FAILED;
+    } else {
+        let mut handles = [0; 64];
+        for k in 0..n { handles[k as usize] = m.u32(p + 4 * k); }
+        cpu.eax = wait(&handles[..n as usize], all, ms);
+    }
     ret(m, cpu, 16);
 }
 
@@ -1475,6 +1624,7 @@ pub fn enter_critical_section(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// Take a section another thread owns.
 fn contend(cs: u32, owner: &std::sync::atomic::AtomicU32, me: u32) {
+    sync_profile::contention();
     // spin while other guest threads run (parallel mode, no guest lock held)
     if parallel() && !holds_lock() {
         let start = Instant::now();
@@ -1718,6 +1868,7 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
         }
     };
     rt.kernel.with(|k| {
+        abandon_mutexes(k, tid);
         if let Some(&o) = k.threads.get(&tid) {
             if let Some(Object::Thread { exit, .. }) = k.objects.get_mut(&o) {
                 *exit = Some(code);
@@ -1840,6 +1991,173 @@ mod tests {
     use crate::memory::{GuestMemory, READ, WRITE};
     use d3d9cmd::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn event_cache_invalidates_closed_handles_and_runtime_identity() {
+        let (rt, mut m) = sync_runtime();
+        let h = create_named(&m, 0, || Object::Event(EventCell::new(false, true)));
+        let (object, event) = event_lookup(&rt.lock, h, true).unwrap();
+        assert!(event.take());
+        assert!(!event_lookup(&rt.lock, h, true).unwrap().1.take());
+        event.store(object, true);
+        assert!(event_lookup(&rt.lock, h, false).unwrap().1.take());
+        assert!(close(h));
+        assert!(event_lookup(&rt.lock, h, true).is_none());
+        let (next, _) = sync_runtime();
+        let replacement = create_named(&m, 0, || Object::Event(EventCell::new(true, true)));
+        assert_eq!(h, replacement);
+        let fresh = event_lookup(&next.lock, h, true).unwrap().1;
+        assert!(!Arc::ptr_eq(&event, &fresh));
+        assert!(fresh.take() && fresh.take());
+        m.set_u32(DATA, 0); // guest memory remains usable across cache changes
+    }
+
+    #[test]
+    fn event_cache_aliases_and_collisions_preserve_object_identity() {
+        let (rt, m) = sync_runtime();
+        let h = create_named(&m, 0, || Object::Event(EventCell::new(false, true)));
+        let (object, event) = event_lookup(&rt.lock, h, true).unwrap();
+        let alias = kernel(|k| k.handle(object));
+        rt.lock.events.write().unwrap().insert(alias, (object, event.clone()));
+        assert!(event_lookup(&rt.lock, alias, true).unwrap().1.take());
+        assert!(!event_lookup(&rt.lock, h, true).unwrap().1.take());
+        for _ in 0..128 {
+            let other = create_named(&m, 0, || Object::Event(EventCell::new(true, true)));
+            assert!(event_lookup(&rt.lock, other, true).unwrap().1.manual);
+        }
+        assert!(Arc::ptr_eq(&event, &event_lookup(&rt.lock, h, true).unwrap().1));
+        close(alias);
+        assert!(event_lookup(&rt.lock, alias, true).is_none());
+        assert!(event_lookup(&rt.lock, h, true).is_some());
+    }
+
+    #[test]
+    fn single_wait_polls_and_abandoned_mutex_results() {
+        let (_, m) = sync_runtime();
+        let sem = create_named(&m, 0, || Object::Semaphore { count: 1, max: 2 });
+        assert_eq!(wait(&[sem], false, 0), WAIT_OBJECT_0);
+        assert_eq!(wait(&[sem], false, 0), WAIT_TIMEOUT);
+        assert_eq!(wait(&[0xdead], false, 0), WAIT_FAILED);
+        let mutex = create_named(&m, 0, || Object::Mutex { owner: 0x4321, recursion: 3, abandoned: false });
+        assert_eq!(wait(&[mutex], false, 0), WAIT_TIMEOUT);
+        kernel(|k| abandon_mutexes(k, 0x4321));
+        assert_eq!(wait(&[mutex], false, 0), WAIT_ABANDONED_0);
+        assert_eq!(wait(&[mutex], false, 0), WAIT_OBJECT_0, "recursive entry is no longer abandoned");
+        kernel(|k| abandon_mutexes(k, current_tid()));
+        assert_eq!(wait(&[sem, mutex], false, 0), WAIT_ABANDONED_0 + 1);
+        kernel(|k| abandon_mutexes(k, current_tid()));
+        assert_eq!(wait(&[sem, mutex], true, 0), WAIT_TIMEOUT, "wait-all cannot consume the abandoned mutex early");
+        let event = create_named(&m, 0, || Object::Event(EventCell::new(true, true)));
+        assert_eq!(wait(&[event, mutex], true, 0), WAIT_ABANDONED_0);
+        assert_eq!(wait(&[mutex], false, 0), WAIT_OBJECT_0);
+    }
+
+    #[test]
+    fn multiple_wait_rejects_invalid_counts_without_reading_handles() {
+        let (_, mut m) = sync_runtime();
+        let mut cpu = Cpu::default();
+        for n in [0, 65, u32::MAX] {
+            cpu.esp = DATA + 0x800;
+            for (i, v) in [0x1234, n, 0xdead0000, 1, 0].into_iter().enumerate() {
+                m.set_u32(cpu.esp + 4 * i as u32, v);
+            }
+            wait_for_multiple_objects(&mut m, &mut cpu);
+            assert_eq!(cpu.eax, WAIT_FAILED);
+            assert_eq!(with_state(|s| s.last_error), 87);
+            assert_eq!(cpu.esp, DATA + 0x814);
+        }
+    }
+
+    #[test]
+    #[ignore = "synthetic before/after microbenchmark; run explicitly"]
+    fn sync_event_lookup_benchmark() {
+        let (rt, m) = sync_runtime();
+        let h = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+        for round in 0..6 {
+            for cached in if round % 2 == 0 { [false, true] } else { [true, false] } {
+                let start = Instant::now();
+                for _ in 0..1_000_000 {
+                    let (o, e) = event_lookup(&rt.lock, std::hint::black_box(h), cached).unwrap();
+                    e.store(o, true);
+                    assert!(e.take());
+                    std::hint::black_box(e);
+                }
+                eprintln!("L153 lookup+set+take cached={cached} round={round} ns={:.3}", start.elapsed().as_nanos() as f64 / 1_000_000.0);
+            }
+        }
+        for round in 0..4 {
+            for cached in if round % 2 == 0 { [false, true] } else { [true, false] } {
+                let handles: Vec<_> = (0..8).map(|_| create_named(&m, 0, || Object::Event(EventCell::new(false, false)))).collect();
+                let barrier = Arc::new(std::sync::Barrier::new(9));
+                let workers: Vec<_> = handles.into_iter().map(|h| {
+                    let (rt, barrier) = (rt.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        // Warm the cache before the common start.
+                        event_lookup(&rt.lock, h, cached).unwrap();
+                        barrier.wait();
+                        for _ in 0..100_000 {
+                            let (o, e) = event_lookup(&rt.lock, h, cached).unwrap();
+                            e.store(o, true);
+                            assert!(e.take());
+                            std::hint::black_box(e);
+                        }
+                    })
+                }).collect();
+                let start = Instant::now();
+                barrier.wait();
+                for w in workers { w.join().unwrap(); }
+                eprintln!("L153 8-thread separate-events cached={cached} round={round} wall_ns_per_op={:.3}", start.elapsed().as_nanos() as f64 / 800_000.0);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn address_event_timeout_manual_and_auto_reset() {
+        let e = EventCell::new(false, false);
+        assert_eq!(address_wait::event(&e, Some(Instant::now())), WAIT_TIMEOUT);
+        e.store(1, true);
+        assert_eq!(address_wait::event(&e, Some(Instant::now())), WAIT_OBJECT_0);
+        assert!(!e.take());
+        for manual in [false, true] {
+            let e = EventCell::new(manual, false);
+            let barrier = Arc::new(std::sync::Barrier::new(5));
+            let workers: Vec<_> = (0..4).map(|_| {
+                let (e, barrier) = (e.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    address_wait::event(&e, Some(Instant::now() + Duration::from_millis(250)))
+                })
+            }).collect();
+            barrier.wait();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while e.address_waiters.load(SeqCst) < 4 && Instant::now() < deadline { std::thread::yield_now(); }
+            e.store(1, true);
+            let results: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+            assert_eq!(results.iter().filter(|&&r| r == WAIT_OBJECT_0).count(), if manual { 4 } else { 1 });
+            assert_eq!(e.is_set(), manual);
+            assert_eq!(e.address_waiters.load(SeqCst), 0);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn address_event_ping_pong_loses_no_wakes() {
+        let a = EventCell::new(false, false);
+        let b = EventCell::new(false, false);
+        let (aa, bb) = (a.clone(), b.clone());
+        let worker = std::thread::spawn(move || {
+            for _ in 0..5000 {
+                assert_eq!(address_wait::event(&aa, Some(Instant::now() + Duration::from_secs(5))), WAIT_OBJECT_0);
+                bb.store(2, true);
+            }
+        });
+        for _ in 0..5000 {
+            a.store(1, true);
+            assert_eq!(address_wait::event(&b, Some(Instant::now() + Duration::from_secs(5))), WAIT_OBJECT_0);
+        }
+        worker.join().unwrap();
+    }
 
     /// A backend whose Present takes `PRESENT` (a display waiting for its
     /// refresh); everything else does nothing.
