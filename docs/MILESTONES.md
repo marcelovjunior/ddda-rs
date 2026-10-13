@@ -23,6 +23,9 @@
   pass. Synthetic tests add no real-data coverage.
 - Real coverage remains **0/50**: no head captures yet, and generic capture
   needs local/lifted call seams beyond the shared ext-only recorder.
+- Unwired generic capture wrapper passes seven standalone tests and emits
+  bounded, explicitly synthetic smoke records accepted by the converter.
+  Shared lib/dispatch integration remains with the head/owning agent.
 - Next: finish shared capture hook and request a head-only gameplay capture.
   Details and one-command reproduction: `tasks/L165-codegen-corpus.md`.
 

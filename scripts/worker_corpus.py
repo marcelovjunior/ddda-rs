@@ -273,6 +273,7 @@ def main():
     args=ap.parse_args()
     if args.command=='rank':
         result=rank(args.profiles,args.count,args.metric);private(args.out).write_text(json.dumps(result,indent=2),encoding='utf-8')
+        args.out.with_suffix('.entries.txt').write_text('\n'.join(r['entry'] for r in result['functions'])+'\n',encoding='utf-8')
         print('rank  entry        self nearest inclusive score')
         for i,r in enumerate(result['functions'],1):print(f"{i:4}  {r['entry']} {r['self']:5} {r['nearest']:7} {r['inclusive']:9} {r['score']:5}")
         print('Sample scores overlap; text-only observations are truncated lower bounds.')

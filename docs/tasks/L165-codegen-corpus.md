@@ -108,3 +108,44 @@ returns 0. Capture logs are never timings; this command times offline replay.
 Next: agree the complete call-boundary hook with the shared owner, perform
 the head-only capture, then reject incomplete histories and replay/time all
 eligible real calls. Never replace missing real inputs with synthetic ones.
+
+## Generic capture wrapper checkpoint
+
+`crates/ddruntime/src/codegen_corpus.rs` is deliberately **not wired into
+lib/dispatch yet** (shared owner coordination #13802). It reuses the public
+crate-local recorder API from `711b9576`, limits captures to two calls per
+entry by default (configurable 1..16), and serializes recording across
+threads without delaying other callers. Nested or exhausted calls execute
+their original body directly. It rejects conflicts with existing overrides.
+No environment setting means no wrappers or marker-monitor thread.
+
+The head's integration points, after merging `711b9576`, are:
+
+```
+// lib.rs
+mod codegen_corpus;
+// Inside the existing game-feature ensure_with closure in dispatch.rs:
+if std::env::var_os("DDRUNTIME_CORPUS_DIR").is_some() {
+    crate::codegen_corpus::install(ports, &ddnative::generated::lifted::bodies());
+}
+```
+
+The `rank` command also writes `rank50.entries.txt` (or the alternate
+manifest's matching name). For a head-only capture, configure a fresh
+private directory via `DDRUNTIME_CORPUS_DIR`, the entry-list file via
+`DDRUNTIME_CORPUS_LIST`, and optionally `DDRUNTIME_CORPUS_CALLS=2`. After
+the save is loaded and the desired gameplay scene is ready, the head
+creates an empty `START` file in that directory. Captures include guest
+thread IDs; a live capture is never used for FPS timing. Existing START
+files are rejected to prevent accidental startup capture.
+
+This wrapper does **not** solve the direct/local callee-seam prerequisite.
+Until that hook exists, ext-only eligible kernels can be recorded and other
+rows will fail replay explicitly. There is still no real-call corpus here.
+
+`python scripts/check_codegen_capture.py` compiles only this module and the
+pinned shared recorder source. Seven tests pass, including the two wrapper
+tests; two produced synthetic records pass the strict snapshot converter.
+The smoke test proves disarmed calls, exactly-once execution, two-call
+budget, and synthetic-origin labeling. It is ignored in general runtime
+tests because it owns global configuration and writes private artifacts.
