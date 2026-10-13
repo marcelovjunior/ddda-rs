@@ -223,6 +223,37 @@ fn native_worker_effective_states_match_backend_and_host_driver() {
     assert_eq!(backend.native_job_stats().accepted, 16);
 }
 
+/// L140: run with DDGPU_NATIVE_PIPELINE_CACHE=1 to exercise the opt-in;
+/// also valid with it unset, comparing the ordinary native path's pixels.
+#[test]
+fn persisted_native_pipelines_preserve_pixels() {
+    let enabled = std::env::var("DDGPU_NATIVE_PIPELINE_CACHE").as_deref() == Ok("1");
+    let dir = std::env::temp_dir().join(format!("ddgpu-l140-native-{}", std::process::id()));
+    let mut expected = Vec::new();
+    for round in 0..2 {
+        let Some(mut backend) = ddgpu::WgpuBackend::headless() else { return; };
+        if !backend.enable_pipeline_cache(&dir) { return; }
+        upload(&mut backend);
+        let target = target(1, 21);
+        for case in 0..4 {
+            let d = draw(case & 1 != 0, case & 2 != 0, false, [0.8, case as f32 / 4.0, 0.25, 0.5]);
+            backend.clear(&clear(&target, None));
+            assert!(backend.native(job(d, &target, None)).is_ok());
+            backend.present(&target);
+            let pixels = backend.last_frame.as_ref().unwrap().rgba.clone();
+            if round == 0 { expected.push(pixels); }
+            else { assert_eq!(pixels, expected[case], "warm native pixels case {case}"); }
+            assert!(backend.errors.is_empty(), "{:?}", backend.errors);
+        }
+        ddgpu::save_pipeline_caches();
+        if enabled {
+            let files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap()).collect();
+            assert!(files.iter().any(|e| e.metadata().unwrap().len() > 0), "native pipeline cache was not saved");
+        }
+    }
+    if dir.exists() { std::fs::remove_dir_all(dir).unwrap(); }
+}
+
 #[test]
 fn native_job_rejection_is_atomic_and_recovers() {
     let Some(mut backend) = ddgpu::WgpuBackend::headless() else {

@@ -10,3 +10,6 @@ publish.workspace = true
 d3d9cmd = { path = "../d3d9cmd" }
 miniz_oxide.workspace = true
 png = "0.18.1"
+
+[dev-dependencies]
+d3d9shader = { path = "../d3d9shader" }
