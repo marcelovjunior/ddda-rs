@@ -47,7 +47,28 @@ these numbers with earlier L110/L123 floor measurements.
 
 ## Results
 
-Implementation checkpoint only: CPU compilation and GPU comparison pending.
+Combo17 native run fails worker acceptance: **63,496** asynchronous rejection
+messages; first 16 reasons are `native indexed strip restart unsupported`.
+Jobs include six passes / 253 draws. Producer "draws taken" and zero producer
+rejections count enqueue success, not worker execution. The gameplay rate
+cannot establish native correctness or performance with these missing draws.
+
+`GraphicsBackend::native_or_draw(job, original_calls)` now carries both
+representations through one DeferredBackend FIFO command. The immediate
+worker tries native and, on atomic rejection, executes the original calls
+exactly once. No producer round trip; unsupported strips retain the guard.
+The API accepts draw-only jobs (clear/copy commands stay in FIFO separately).
+**12 d3d9cmd CPU tests pass**, four new: rejection ordering, nonblocking
+acceptance without duplicate draws, unsupported backend fallback and the
+draw-only contract. Producer integration is coordinated with claude-2.
+
+Combo17 Compare mode records **zero** begin/submit/oracle/shadow operations.
+Root cause: `g.native` initialized only for Native, then `!g.native` selects
+the ordinary DrawCall branch before Compare. Reported to claude-2/codex-11;
+the head must rerun after their producer fix. Verify also reports sampler
+MAXANISOTROPY 16/4 mismatches; decoder correction belongs to claude-2.
+
+Prototype CPU check passes; GPU comparison pending.
 The oracle requires every RGBA byte to equal the wgpu reference and at
 least one rasterized pixel. Timing includes tracking/encoding, finish and
 submit; GPU waits and readbacks are outside the timed interval. The native
