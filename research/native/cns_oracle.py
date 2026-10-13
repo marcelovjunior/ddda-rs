@@ -151,5 +151,7 @@ class Oracle:
 
     def record(self, name, entry, setup, out, n):
         cases = [self.run_case(seed, setup, entry) for seed in range(n)]
-        json.dump(dict(function=name, cases=cases), open(out, 'w'))
+        # constant tables of the CRT atan2/asinf that the ports read up front (exe read-only data, kept out of the cases)
+        rodata = {'0x0144C640': h.code(0x0144C640, 0x1820).hex()}
+        json.dump(dict(function=name, rodata=rodata, cases=cases), open(out, 'w'))
         print(f'{n} cases, {sum(len(c["events"]) for c in cases)} calls -> {out}', flush=True)

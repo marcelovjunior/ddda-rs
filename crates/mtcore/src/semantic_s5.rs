@@ -667,10 +667,6 @@ pub fn aim_twist_provider(m: &mut dyn Mem, c: &mut Cpu) {
 const EULER_TRIG_SITES: [u32; 2] = [0x0086_59af, 0x0086_59f5];
 /// ... and of the second rotation built from the decomposed matrix.
 const TWIST_TRIG_SITES: [u32; 2] = [0x0086_6da0, 0x0086_6de5];
-/// The guest helper that decomposes a rotation matrix into three angles
-/// (usercall: ECX = the matrix, one stack argument = an output buffer for
-/// the three floats, returns a pointer to them, `ret 4`).
-const DECOMPOSE_ROTATION: u32 = 0x00cf_c9e0;
 
 /// The parent bone's matrix (joint byte `+0x91`; 0xFF: the model's virtual
 /// +0x58(-1) accessor) as a guest address. `back` is the call site's return
@@ -708,10 +704,12 @@ fn euler_twist_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, model:
         bases.parent = parent_matrix_address(m, c, pg, joint, model, frame, regs, 0x0086_5b62, false);
         let inputs = kernels::load_m7_in_parent_space(m, pg, &bases, &matrix);
         let relative = kernels::kernel_m7_in_parent_space(&inputs, &mut |_, x| x);
-        // the helper reads the matrix at F + 0x130 and writes three angles to the buffer at F + 0xf0
-        write_matrix(m, pg, frame + 0x130, &relative);
-        let result = guest_call(m, c, pg, frame, DECOMPOSE_ROTATION, 0x0086_6d4a, Registers { eax: frame + 0xf0, ecx: frame + 0x130, esi: out, edi: joint }, &[frame + 0xf0]);
-        bases.r = [read_f32(m, pg, result), read_f32(m, pg, result + 4), read_f32(m, pg, result + 8)];
+        // 0x00CFC9E0, the rotation matrix to Euler angles (s6's bit-exact atan2/asinf), folded in
+        let mut elements = [0.0f32; 11];
+        for k in [0usize, 1, 2, 4, 5, 6, 10] {
+            elements[k] = relative[k];
+        }
+        bases.r = crate::semantic_s6_pose::euler_from_matrix(&crate::semantic_s6_crt::Tables { memory: &*m, pages: pg }, &elements);
         let inputs = kernels::load_m7_scale_rotation(m, pg, &bases, &matrix);
         matrix = kernels::kernel_m7_scale_rotation(&inputs, &mut |cosine, x| crt_sincos(m, c, pg, frame, x, cosine, TWIST_TRIG_SITES[cosine as usize]));
     }

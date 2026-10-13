@@ -70,7 +70,13 @@ class Oracle:
             uc.mem_write(page, h.code(page, 0x1000))
         uc.mem_write(BLEND, h.code(BLEND, REAL_LENGTH[BLEND]) if BLEND in REAL else bytes([0xC3]))  # stub unless run as real code
         uc.mem_map(0x00CFC000, 0x1000)
-        uc.mem_write(DECOMPOSE, bytes([0xC3]))
+        uc.mem_write(DECOMPOSE, h.code(DECOMPOSE, 0x113))   # rotation matrix -> Euler angles, with the CRT's atan2/asinf
+        uc.mem_map(0x012F1000, 0x1000)
+        uc.mem_write(0x012F0D4C, h.code(0x012F0D4C, 0x3BD))
+        uc.mem_write(0x012F1109, h.code(0x012F1109, 0x516))
+        for page in (0x0144C000, 0x0144D000, 0x01606000):
+            uc.mem_map(page, 0x1000)
+            uc.mem_write(page, h.code(page, 0x1000))
         uc.mem_map(0x30000000, 0x1000)
         uc.mem_write(VSTUB, b'\xc3')
         for address, size in ((THIS, 0x1000), (JOINT, 0x1000), (MODEL, 0x2000), (JOINTS, 0x10000), (PTRS, 0x10000),
@@ -123,9 +129,9 @@ class Oracle:
             uc.emu_stop()
             return
         spec = PROVIDERS.get(address)
-        if (address in PROVIDERS and address not in REAL) or (address == BLEND and BLEND not in REAL) or address in (VSTUB, DECOMPOSE):
+        if (address in PROVIDERS and address not in REAL) or (address == BLEND and BLEND not in REAL) or address in (VSTUB,):
             return self.stub(uc, address, spec)
-        assert ENTRY <= address < END or 0x421ED0 <= address < 0x421EFF or 0x7E4B60 <= address < 0x7E4CA4 or SINCOS[0] <= address < SINCOS[1] or any(a <= address < a + REAL_LENGTH[a] for a in REAL), hex(address)
+        assert ENTRY <= address < END or 0x421ED0 <= address < 0x421EFF or 0x7E4B60 <= address < 0x7E4CA4 or 0xCFC9E0 <= address < 0xCFCAF3 or 0x12F0D4C <= address < 0x12F161F or SINCOS[0] <= address < SINCOS[1] or any(a <= address < a + REAL_LENGTH[a] for a in REAL), hex(address)
 
     def stub(self, uc, address, spec):
         esp = uc.reg_read(x.UC_X86_REG_ESP)
@@ -280,7 +286,8 @@ def main():
     modes = {}
     for c in cases:
         modes[c['mode']] = modes.get(c['mode'], 0) + 1
-    json.dump(dict(function='0x00860AC0', cases=cases), open(out, 'w'))
+    rodata = {'0x0144C640': h.code(0x0144C640, 0x1820).hex()}   # CRT atan2/asinf tables, read up front by the port
+    json.dump(dict(function='0x00860AC0', rodata=rodata, cases=cases), open(out, 'w'))
     print(f'{n} cases -> {out}; modes {sorted(modes.items())}; calls {[(hex(k), v) for k, v in sorted(calls.items())]}')
 
 

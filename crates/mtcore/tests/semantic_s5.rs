@@ -51,8 +51,21 @@ fn cases(path: &str, body: x86::LiftFn, input_registers: fn(u32) -> &'static [us
     };
     let data: Value = serde_json::from_str(&text).unwrap();
     let cases = data["cases"].as_array().unwrap();
+    // read-only exe data the ports read (kept once per file)
+    let mut rodata = BTreeMap::new();
+    if let Some(tables) = data["rodata"].as_object() {
+        for (base, hex) in tables {
+            let base = u32::from_str_radix(base.trim_start_matches("0x"), 16).unwrap();
+            let hex = hex.as_str().unwrap();
+            for i in 0..hex.len() / 2 {
+                rodata.insert(base + i as u32, u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap());
+            }
+        }
+    }
     for (i, case) in cases.iter().enumerate() {
-        let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
+        let mut bytes = rodata.clone();
+        bytes.extend(pairs(&case["initial"]));
+        let mut m = Memory { bytes, writes: BTreeMap::new() };
         let before = regs(&case["before"]);
         let after = regs(&case["after"]);
         let mut c = Cpu::default();

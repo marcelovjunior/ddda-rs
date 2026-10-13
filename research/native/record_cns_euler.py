@@ -28,18 +28,6 @@ def vcall_stub(self, esp):
     return 1, dest, []
 
 
-def decompose_stub(self, esp):
-    rng = self.rng
-    ecx = self.uc.reg_read(o.x.UC_X86_REG_ECX)
-    buf = struct.unpack('<I', self.uc.mem_read(esp + 4, 4))[0]
-    self.remember(ecx, 64)
-    reads = [(ecx, list(self.uc.mem_read(ecx, 64)))]
-    angles = [rng.choice((0.0, rng.uniform(-3.2, 3.2), rng.uniform(-3.2, 3.2), rng.uniform(-100, 100))) for _ in range(3)]
-    dest = buf if rng.random() < 0.7 else PTRS + 0x100 + 0x10 * rng.randrange(8)
-    self.stub_write(dest, b''.join(o.f32(a) for a in angles))
-    return 1, dest, reads
-
-
 def setup(self, rng):
     w = self.uc.mem_write
     r = rng.random
@@ -65,7 +53,9 @@ def setup(self, rng):
 def main():
     out, n = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 3000
     arenas = [(THIS, 0x1000), (JOINT, 0x1000), (MODEL, 0x1000), (JOINTS, 0x10000), (PTRS, 0x10000), (ANGLES, 0x100), (OUT, 0x100)]
-    oracle = o.Oracle([(ENTRY, 0x1a87), (0x012F0906, 0x2A7)], arenas, stubs={VSTUB: vcall_stub, DECOMPOSE: decompose_stub})
+    # 0x00CFC9E0 (rotation matrix to Euler angles) runs as real code with the CRT's atan2 (0x012F1109) and asinf (0x012F0D4C)
+    code = [(ENTRY, 0x1a87), (0x012F0906, 0x2A7), (0x00CFC9E0, 0x113), (0x012F0D4C, 0x3BD), (0x012F1109, 0x516)]
+    oracle = o.Oracle(code, arenas, stubs={VSTUB: vcall_stub}, data_pages=o.DATA_PAGES + (0x0144C000, 0x0144D000, 0x01606000))
     oracle.record('0x00865990', ENTRY, setup, out, n)
 
 
