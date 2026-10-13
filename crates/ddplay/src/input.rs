@@ -51,6 +51,11 @@ impl Input {
                 self.send(Event::Key { hwnd: 0, vk, scan, down, extended, system });
                 self.held.retain(|&(v, _, _)| v != vk);
                 if down {
+                    // DDPLAY_RATE_LOG runs: the player marks phases with O
+                    // (e.g. "gameplay starts") for the head's measurements
+                    if vk == 0x4f && !event.repeat && std::env::var_os("DDPLAY_RATE_LOG").is_some() {
+                        eprintln!("ddplay marker: O");
+                    }
                     self.held.push((vk, scan, extended));
                     if let Some(text) = &event.text {
                         for unit in text.encode_utf16() {
