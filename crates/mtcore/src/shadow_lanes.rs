@@ -469,8 +469,21 @@ impl Capture<'_> {
         if address == 0 {
             return Err(CaptureError::NullPointer);
         }
-        let next = self.identities.len();
-        let identity = *self.identities.entry((kind, address)).or_insert(next);
+        // Targets compare by content (claude-9): 0x00DA6FE0 returns at once for
+        // the context's current pointer, and for any other pointer compares
+        // each colour view (+0x84..), the depth surface (+0x94), the clipped
+        // viewport (+0x64..) and scissor (+0x74..) with the context's cached
+        // values, calling the device only on a change, then caches the
+        // pointer (+8). Two bindings with equal bytes (all fields it reads lie
+        // in the 0x5C captured) therefore apply identically wherever they sit,
+        // so lane-local copies of a serial binding are equivalent. Other
+        // kinds keep pointer identity until their consumers are shown alike.
+        let identity = if kind == BindingKind::Targets {
+            usize::MAX
+        } else {
+            let next = self.identities.len();
+            *self.identities.entry((kind, address)).or_insert(next)
+        };
         let bytes = match kind {
             BindingKind::Targets => self.block(address, 0x5c)?,
             BindingKind::Fixed => self.block(address, 0x14)?,
