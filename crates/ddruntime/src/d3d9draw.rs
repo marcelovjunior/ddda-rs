@@ -371,6 +371,7 @@ fn in_scene(dev: u32) -> bool {
 /// (L21: the game sets indices and then draws triangle strips with it; a
 /// draw carrying them reached wgpu as an indexed strip and failed).
 pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
+    DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (dev, ty, start, count) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) => {
@@ -386,6 +387,7 @@ pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// DrawIndexedPrimitive(this, type, base vertex (signed), min index, vertex
 /// count, start index, primitive count).
 pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
+    DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let a: Vec<u32> = (0..7).map(|k| arg(m, cpu, k)).collect();
     let (dev, ty) = (a[0], a[1]);
     cpu.eax = match vertex_count(ty, a[6]) {
@@ -416,6 +418,7 @@ fn reset_after_up(dev: u32, indices: bool) {
 
 /// DrawPrimitiveUP(this, type, primitive count, vertex data*, stride).
 pub fn draw_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
+    DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (dev, ty, count, data, stride) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) && data != 0 => {
@@ -433,6 +436,7 @@ pub fn draw_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// DrawIndexedPrimitiveUP(this, type, min index, vertex count, primitive
 /// count, index data*, index format, vertex data*, stride).
 pub fn draw_indexed_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
+    DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let a: Vec<u32> = (0..9).map(|k| arg(m, cpu, k)).collect();
     let (dev, ty, min, nverts, count, idata, ifmt, vdata, stride) = (a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
     cpu.eax = match vertex_count(ty, count) {
@@ -473,10 +477,22 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// Present the swap chain's first back buffer.
 pub fn present_back_buffer(m: &dyn Mem, back_buffer: u32) {
+    PRESENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     flush(m, back_buffer);
     if let Some(t) = target(back_buffer) {
         // read under the guest lock for the host's sink (d3d9dev::presented)
         crate::d3d9dev::set_presented(crate::d3d9dev::presentation());
         backend_unlocked(|b| b.present(&t));
     }
+}
+
+/// Draw calls and Presents so far (L92): a host can tell the game's stage
+/// from draws per frame (title, menus and loading screens draw a few
+/// hundred things per frame, the world over a thousand).
+static DRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static PRESENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// (draw calls, Presents) so far.
+pub fn counts() -> (u64, u64) {
+    (DRAWS.load(std::sync::atomic::Ordering::Relaxed), PRESENTS.load(std::sync::atomic::Ordering::Relaxed))
 }

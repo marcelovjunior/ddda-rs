@@ -29,6 +29,7 @@ impl Input {
             .spawn(move || pads(events, rumble))
             .expect("the pad thread");
         autokeys(host.events.clone());
+        autoplay(host.events.clone());
         Input { events: host.events, held: Vec::new(), alt: false, cursor: (0, 0), buttons: [false; 8] }
     }
 
@@ -210,6 +211,49 @@ fn autokeys(events: EventSender) {
             for down in [true, false] {
                 let _ = events.send(Event::Key { hwnd: 0, vk, scan, down, extended, system: false });
                 std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+        }
+    });
+}
+
+/// DDPLAY_AUTOPLAY=1 (L92): play unattended into gameplay. Every 3 s it
+/// logs a stage probe (draws per frame and frames per second, from the
+/// runtime's counters). After 40 s it presses Enter every 3 s (skipping the
+/// movie, PRESS ANY BUTTON, and the menus' first entry: Continue/Load Game)
+/// until the frames draw like the world (1,000 or more draws per frame for
+/// two probes in a row). Then it logs "ddplay stage: gameplay" and stops
+/// pressing; the probes go on.
+fn autoplay(events: EventSender) {
+    if std::env::var_os("DDPLAY_AUTOPLAY").is_none() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("autoplay".into()).spawn(move || {
+        let start = std::time::Instant::now();
+        let (mut d0, mut p0) = ddruntime::d3d9draw::counts();
+        let mut high = 0;
+        let mut playing = false;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let (d, p) = ddruntime::d3d9draw::counts();
+            let (draws, frames) = (d - d0, p - p0);
+            (d0, p0) = (d, p);
+            let per = if frames > 0 { draws / frames } else { 0 };
+            let t = start.elapsed().as_secs_f64();
+            eprintln!("ddplay stage-probe t={t:.0}s draws/frame={per} fps={:.1}", frames as f64 / 3.0);
+            if playing {
+                continue;
+            }
+            high = if per >= 1000 { high + 1 } else { 0 };
+            if high >= 2 {
+                eprintln!("ddplay stage: gameplay t={t:.0}s");
+                playing = true;
+                continue;
+            }
+            if t > 40.0 {
+                for down in [true, false] {
+                    let _ = events.send(Event::Key { hwnd: 0, vk: 0x0d, scan: 0x1c, down, extended: false, system: false });
+                    std::thread::sleep(std::time::Duration::from_millis(80));
+                }
             }
         }
     });
