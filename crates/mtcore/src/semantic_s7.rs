@@ -44,18 +44,18 @@ use ddnative_base::x86::{call_ext, Cpu};
 /// compiler may otherwise swap.
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
-struct F(f32);
+pub(crate) struct F(pub(crate) f32);
 
 impl F {
-    const fn from_bits(bits: u32) -> F {
+    pub(crate) const fn from_bits(bits: u32) -> F {
         F(f32::from_bits(bits))
     }
     #[inline(always)]
-    fn to_bits(self) -> u32 {
+    pub(crate) fn to_bits(self) -> u32 {
         self.0.to_bits()
     }
     #[inline(always)]
-    fn sqrt(self) -> F {
+    pub(crate) fn sqrt(self) -> F {
         F(self.0.sqrt())
     }
 }

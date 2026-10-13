@@ -45,4 +45,5 @@ pub mod shadow_lanes;
 pub mod semantic_c2;
 pub mod semantic_s7;
 pub mod semantic_s7_trig;
+pub mod semantic_s7_math;
 pub mod tree;
