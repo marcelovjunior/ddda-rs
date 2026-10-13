@@ -91,6 +91,7 @@ fn stack_args(target: u32) -> u32 {
         0x007c_6f90 => 0,
         0x00fb_3790 => 0,
         0x0117_87c0 => 6,
+        0x0117_3dc0 | 0x0117_40a0 | 0x0117_3800 | 0x0117_3ae0 | 0x0117_31b0 | 0x0117_3520 | 0x0117_4380 | 0x0117_5340 | 0x0117_5620 | 0x0117_4d80 | 0x0117_5060 | 0x0117_4730 | 0x0117_4aa0 | 0x0117_5900 => 6,
         0x00de_d390 | 0x0076_7960 => 1,
         0x0116_6a60 | 0x0116_69b0 => 2,
         0x0116_68a0 | 0x0116_5ef0 | 0x0116_67b0 | 0x0116_5e00 | 0x0116_4500 | 0x0116_5560 => 3,
@@ -253,16 +254,37 @@ fn semantic_collision_query_matches_original() {
 fn semantic_layer_walks_match_original() {
     ddnative_host::install();
     for (name, body) in [
-        ("walk_single_forward", mtcore::semantic_s2::walk_single_forward as LiftFn),
-        ("walk_single_backward", mtcore::semantic_s2::walk_single_backward),
-        ("walk_low_forward", mtcore::semantic_s2::walk_low_forward),
-        ("walk_low_backward", mtcore::semantic_s2::walk_low_backward),
-        ("walk_high_forward", mtcore::semantic_s2::walk_high_forward),
-        ("walk_high_backward", mtcore::semantic_s2::walk_high_backward),
+        ("walk_single_forward", mtcore::semantic_s2::walk_single_forward_guest_nodes as LiftFn),
+        ("walk_single_backward", mtcore::semantic_s2::walk_single_backward_guest_nodes),
+        ("walk_low_forward", mtcore::semantic_s2::walk_low_forward_guest_nodes),
+        ("walk_low_backward", mtcore::semantic_s2::walk_low_backward_guest_nodes),
+        ("walk_high_forward", mtcore::semantic_s2::walk_high_forward_guest_nodes),
+        ("walk_high_backward", mtcore::semantic_s2::walk_high_backward_guest_nodes),
     ] {
         let n = abi_cases_with_calls(&format!("E:/ddda-re/notes/native-L184/{name}.json"), body);
         eprintln!("{n} ABI-level {name} cases passed");
     }
+}
+
+// verifies 0x011787c0 (ABI level)
+#[test]
+fn semantic_node_dispatch_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/node.json", mtcore::semantic_s2::node_dispatch);
+    eprintln!("{n} ABI-level node_dispatch cases passed");
+}
+
+// The whole cast chain native (dispatcher, the three walks, the node
+// dispatch) against the original's own code for all of them: only the leaf
+// cast routines, 0x00FB3790, the shape's bounds method, 0x01164500 and
+// 0x01165560 are recorded stubs.
+#[test]
+fn semantic_cast_chain_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/deep_b.json", mtcore::semantic_s2::cast_shape_b);
+    eprintln!("{n} ABI-level deep cast_shape_b cases passed");
+    let n = abi_cases_with_calls("E:/ddda-re/notes/native-L184/deep_a.json", mtcore::semantic_s2::cast_shape_a);
+    eprintln!("{n} ABI-level deep cast_shape_a cases passed");
 }
 
 // Backed pages exercise the same fast accessor path as the parallel runtime.
