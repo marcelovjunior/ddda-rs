@@ -1097,3 +1097,17 @@ recorder lifetime is one job, so L123 cross-job resident/bundle speedups are
 not yet active here. Four focused GPU tests and 14 CPU tests pass. Shadow
 comparison begin/end hooks are compiled; L127 end-to-end gate and head's
 DDDRAW_NATIVE=1 image/FPS run remain pending. Details: tasks/L126-native-worker.md.
+
+## L136 readable ports through external dispatch (2026-10-13)
+
+Registry construction overlays the finalized `x86::overrides()` list after
+`lifted::all()`, including ports/mods without generated bodies. Each override
+is a `Binding::Lifted`; it replaces an existing body or entry step as well.
+Thus `call_ext` reaches the same override used by lifted direct calls, while
+unknown targets retain the existing emulator/unbound fallback. Interior SEH
+instruction entries and subsequent session service registration are retained.
+Two light regressions cover port-only initial/cached external calls, unknown
+targets, and ordinary/step-enabled binding replacement. The 12-log audit found
+15 first-seen entries per run, including the six already-ported L130 readers;
+activation in a game run remains for head to verify. See
+`tasks/L136-ports-dispatch.md` for counts and their phase/frequency limits.

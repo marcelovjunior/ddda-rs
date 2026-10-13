@@ -186,8 +186,8 @@ impl Registry {
         Self::default()
     }
 
-    /// Every lifted function of the generated program (none without the
-    /// `game` feature: then every original address is unbound).
+    /// Every lifted function of the generated program, with the finalized
+    /// readable ports/mods overlaid, including addresses without a lift.
     pub fn with_lifted_program() -> Self {
         #[allow(unused_mut)]
         let mut r = Self::new();
@@ -212,7 +212,17 @@ impl Registry {
         for (addr, f) in ddnative::generated::lifted::all() {
             r.insert(addr, Binding::Lifted(f)).expect("the lifted list has one entry per address");
         }
+        r.bind_overrides(x86::overrides());
         r
+    }
+
+    fn bind_overrides(&mut self, overrides: &[(u32, LiftFn)]) {
+        for &(addr, port) in overrides {
+            self.replace(addr, Binding::Lifted(port));
+            // A whole-function port also supersedes the lifted entry's
+            // restartable step. Interior instruction entries remain for SEH.
+            self.entries.get_mut(&addr).unwrap().step = None;
+        }
     }
 
     /// Add a binding; an address can have only one.
@@ -661,6 +671,29 @@ mod tests {
 
     fn same(a: Option<Step>, b: Option<Step>) -> bool {
         a.map(|f| f as usize) == b.map(|f| f as usize)
+    }
+
+    #[test]
+    fn overrides_replace_lifted_and_step_entries() {
+        fn old_body(_: &mut dyn Mem, _: &mut Cpu) { panic!("old lift reached"); }
+        fn old_step(_: &mut dyn Mem, _: &mut Cpu, _: u32) -> Flow { panic!("old step reached"); }
+        fn lookup(ip: u32) -> Option<Step> {
+            (ip == TEXT || ip == TEXT + 1).then_some(old_step)
+        }
+        let mut r = Registry::new();
+        r.set_instruction_lookup(lookup);
+        r.insert(TEXT, Binding::Lifted(old_body)).unwrap();
+        r.insert(TEXT + 32, Binding::Lifted(old_body)).unwrap();
+        r.bind_overrides(&[(TEXT, ret), (TEXT + 32, ret)]);
+        assert_eq!(r.len(), 2);
+        assert!(r.instruction(TEXT).is_none());
+        assert!(r.instruction(TEXT + 1).is_some(), "SEH interior retained");
+        let mut m = GuestMemory::new();
+        let mut cpu = Cpu::default();
+        for addr in [TEXT, TEXT + 32] {
+            r.call(&mut m, &mut cpu, addr).unwrap();
+        }
+        assert_eq!(cpu.esp, 8);
     }
 
     #[test]
