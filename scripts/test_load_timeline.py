@@ -34,6 +34,11 @@ class TimelineTests(unittest.TestCase):
         self.assertIn("| 3.000 | 2.000 | 2 | 2000.0 |", result)
         self.assertIn("Unmeasured UI milestones", result)
 
+    def test_zlib_entry_buckets_are_totals(self):
+        events = parse("load-log t=0 event=process_start\nload-log t=1 event=zlib_entry_totals short_output_calls=12 short_output_ns=500000000\nload-log t=2 event=first_present")
+        self.assertEqual(len(list(phases(events))), 2)
+        self.assertIn("short_output=0.500000 s", render(events))
+
     def test_legacy_clocks_remain_explicit(self):
         result = render_legacy("ddplay stage-probe t=99s draws/frame=4765 fps=11.0")
         self.assertIn("NOT process start", result)
