@@ -434,10 +434,15 @@ pub(crate) struct Worker {
     /// view cache is cleared at every release)
     targets: FxMap<(u32, bool), (n::View, wgpu::TextureFormat)>,
     sampled: FxMap<(wgpu::Texture, bool), n::View>,
+    /// a copy of each texture drawn into and sampled by the same draw
+    snapshots: FxMap<wgpu::Texture, wgpu::Texture>,
     samplers: FxMap<[u32; 14], n::Sampler>,
     texture_sets: FxMap<(n::Pipeline, usize), (Arc<[TextureBinding]>, [n::TextureSet; 2])>,
 }
 struct PreparedDraw {
+    /// textures the draw samples while rendering into them: copied into
+    /// their snapshots just before it (the D3D9 path's L59 snapshot)
+    copies: Vec<(wgpu::Texture, wgpu::Texture)>,
     pipeline: n::Pipeline,
     shaders: [n::Shader; 2],
     sets: [n::TextureSet; 2],
@@ -532,6 +537,7 @@ impl Worker {
             views: Default::default(),
             targets: Default::default(),
             sampled: Default::default(),
+            snapshots: Default::default(),
             samplers: Default::default(),
             texture_sets: Default::default(),
         }
@@ -603,6 +609,25 @@ impl Worker {
         }
         Ok((handle, format))
     }
+    /// The snapshot texture of `src` (made once, reused: each feedback draw
+    /// copies into it in order, after earlier draws sampled it).
+    fn snapshot(&mut self, device: &wgpu::Device, src: &wgpu::Texture) -> wgpu::Texture {
+        self.snapshots
+            .entry(src.clone())
+            .or_insert_with(|| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("native feedback snapshot"),
+                    size: src.size(),
+                    mip_level_count: src.mip_level_count(),
+                    sample_count: 1,
+                    dimension: src.dimension(),
+                    format: src.format(),
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[src.format().add_srgb_suffix(), src.format().remove_srgb_suffix()],
+                })
+            })
+            .clone()
+    }
     /// Whether the worker holds `buffer` or a view of `texture`.
     pub(crate) fn holds(&self, buffer: Option<&wgpu::Buffer>, texture: Option<&wgpu::Texture>) -> bool {
         buffer.is_some_and(|b| self.buffers.contains_key(b))
@@ -612,6 +637,7 @@ impl Worker {
     /// that may still name them; keep shaders, states and pipelines.
     pub(crate) fn reset_resources(&mut self) {
         self.device.reset_resources();
+        self.snapshots.clear();
         self.recording = None;
         self.constants.clear();
         self.applied.clear();
@@ -817,15 +843,7 @@ impl Worker {
                 .iter()
                 .find(|t| t.sampler == base + slot)
                 .ok_or("native sampler not covered")?;
-            if pass
-                .colours
-                .iter()
-                .chain([&pass.depth])
-                .flatten()
-                .any(|target| target.texture.is_some_and(|x| x.resource == t.resource))
-            {
-                return Err("native sampled attachment feedback unsupported".into());
-            }
+            let attached = attached(pass, t.resource);
             if !f32::from_bits(t.states[8]).is_finite()
                 || (stage == n::Stage::Vertex && f32::from_bits(t.states[8]) != 0.0)
             {
@@ -843,16 +861,24 @@ impl Worker {
                 .texture_for(t)
                 .ok_or("native sampled texture unavailable")?;
             let srgb = t.states[11] != 0;
-            let key = (tx.texture.clone(), srgb);
+            let gpu_format = tx.gpu_format;
+            // a texture the draw renders into is sampled from its snapshot
+            let source = if attached {
+                let src = tx.texture.clone();
+                self.snapshot(&backend.device, &src)
+            } else {
+                tx.texture.clone()
+            };
+            let key = (source.clone(), srgb);
             let view = if let Some(&view) = self.sampled.get(&key) {
                 view
             } else {
                 let format = if srgb {
-                    tx.gpu_format.add_srgb_suffix()
+                    gpu_format.add_srgb_suffix()
                 } else {
-                    tx.gpu_format
+                    gpu_format
                 };
-                let view = tx.texture.create_view(&wgpu::TextureViewDescriptor {
+                let view = source.create_view(&wgpu::TextureViewDescriptor {
                     format: Some(format),
                     dimension: Some(match expected {
                         TexKind::Flat => wgpu::TextureViewDimension::D2,
@@ -998,15 +1024,23 @@ impl Worker {
                 })?;
                 // Texture allocations only change after release, which drops
                 // this worker. Retained Arc identities cannot be recycled.
-                for texture in d.textures.iter() {
-                    if pass
-                        .colours
-                        .iter()
-                        .chain([&pass.depth])
-                        .flatten()
-                        .any(|t| t.texture.is_some_and(|x| x.resource == texture.resource))
-                    {
-                        return Err("native sampled attachment feedback unsupported".into());
+                // textures sampled while rendered into: copied before the draw
+                let mut copies = vec![];
+                for t in d.textures.iter() {
+                    let sampled = pi.samplers.iter().any(|&(s, _)| s == t.sampler)
+                        || vi.samplers.iter().any(|&(s, _)| 257 + s == t.sampler);
+                    if sampled && attached(pass, t.resource) {
+                        let src = backend
+                            .texture_for(t)
+                            .ok_or("native sampled texture unavailable")?
+                            .texture
+                            .clone();
+                        // depth-stencil textures cannot be copied whole
+                        if src.format().is_depth_stencil_format() {
+                            return Err("native sampled depth attachment feedback unsupported".into());
+                        }
+                        let snapshot = self.snapshot(&backend.device, &src);
+                        copies.push((src, snapshot));
                     }
                 }
                 let set_key = (pipeline, d.textures.as_ptr() as usize);
@@ -1047,6 +1081,7 @@ impl Worker {
                     })
                     .transpose()?;
                 prepared.draws.push(PreparedDraw {
+                    copies,
                     pipeline,
                     shaders: [ps, vs],
                     sets,
@@ -1110,6 +1145,19 @@ impl Worker {
         for (pass, prepared) in job.passes.iter().zip(&prepared) {
             recorder.begin_pass(prepared.desc)?;
             for (d, p) in pass.draws.iter().zip(&prepared.draws) {
+                if !p.copies.is_empty() {
+                    // as the D3D9 path: what the pass drew so far, copied,
+                    // then the pass goes on loading its attachments
+                    for (src, dst) in &p.copies {
+                        recorder.copy_texture(src, dst);
+                    }
+                    recorder.begin_pass(n::PassDesc {
+                        clear_colour: None,
+                        clear_depth: None,
+                        clear_stencil: None,
+                        ..prepared.desc
+                    })?;
+                }
                 recorder.set_pipeline(p.pipeline);
                 for set in p.sets {
                     recorder.set_texture_set(set);
@@ -1215,6 +1263,14 @@ fn depth_bias(d: &NativeDraw, pass: &NativePass) -> bool {
     pass.depth.is_some()
         && state_value(&d.state, 7) != 0
         && (state_value(&d.state, 195) != 0 || state_value(&d.state, 175) != 0)
+}
+/// Whether the pass renders into texture `resource`.
+fn attached(pass: &NativePass, resource: u32) -> bool {
+    pass.colours
+        .iter()
+        .chain([&pass.depth])
+        .flatten()
+        .any(|t| t.texture.is_some_and(|x| x.resource == resource))
 }
 fn state_value(state: &NativeFixedState, key: u32) -> u32 {
     state

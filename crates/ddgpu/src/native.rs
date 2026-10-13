@@ -1552,6 +1552,23 @@ impl<'a> Recorder<'a> {
         }
         self.blend = colour;
     }
+    /// End the pass and copy every mip level of `src` into `dst` (the same
+    /// size and format), recorded in order on this recorder's encoder.
+    pub fn copy_texture(&mut self, src: &wgpu::Texture, dst: &wgpu::Texture) {
+        self.end_pass();
+        let device = self.device;
+        let encoder = self
+            .encoder
+            .get_or_insert_with(|| device.gpu.create_command_encoder(&Default::default()));
+        for level in 0..src.mip_level_count() {
+            let size = src.size().mip_level_size(level, src.dimension());
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo { texture: src, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: dst, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                size,
+            );
+        }
+    }
     pub fn begin_pass(&mut self, desc: PassDesc) -> Result<(), &'static str> {
         self.end_pass();
         let device = self.device;

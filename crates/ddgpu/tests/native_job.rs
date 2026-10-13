@@ -740,3 +740,56 @@ fn native_depth_bias_matches_the_d3d9_path() {
     assert_ne!(images[0], images[1], "the bias changes what passes the depth test");
     assert!(backend.errors.is_empty(), "{:?}", backend.errors);
 }
+
+/// L141: a draw sampling the texture it renders into samples what the pass
+/// drew before it (the D3D9 path copies it first; L59), natively too.
+#[test]
+fn native_feedback_draws_sample_what_the_pass_drew_before_them() {
+    let Some(mut backend) = ddgpu::WgpuBackend::headless() else {
+        return;
+    };
+    let rt = |surface: u32| Target {
+        surface,
+        format: 21,
+        width: 8,
+        height: 8,
+        texture: Some(TargetTexture { resource: 70, kind: TexKind::Flat, width: 8, height: 8, depth: 1, levels: 1, usage: USAGE_RENDERTARGET }),
+        level: 0,
+        samples: 0,
+        quality: 0,
+    };
+    let t = rt(71);
+    upload(&mut backend);
+    // first: a flat colour; second: samples the target at c0 = (0.25, 0.25)
+    let first = draw(false, false, false, [0.0, 0.5, 1.0, 1.0]);
+    let mut second = draw(false, false, false, [0.25, 0.25, 0.0, 0.0]);
+    // dcl_2d s0; mov r1, c0; texld r0, r1, s0; mov oC0, r0
+    second.pixel_shader = vec![
+        0xffff0300, 0x0200001f, 0x90000000, 0xa00f0800, 0x02000001, 0x800f0001, 0xa0e40000, 0x03000042,
+        0x800f0000, 0x80e40001, 0xa0e40800, 0x02000001, 0x800f0800, 0x80e40000, 0xffff,
+    ]
+    .into();
+    let mut states = [0; 14];
+    states[1..4].fill(3);
+    states[5] = 1;
+    states[6] = 1;
+    second.textures = vec![TextureBinding {
+        sampler: 0, resource: 70, kind: TexKind::Flat, format: 21, width: 8, height: 8, depth: 1, levels: 1,
+        usage: USAGE_RENDERTARGET, states,
+    }]
+    .into();
+    backend.clear(&clear(&t, None));
+    backend.draw(&legacy(&first, &t, None));
+    backend.draw(&legacy(&second, &t, None));
+    let expected = backend.read_back(&t).unwrap();
+    backend.clear(&clear(&t, None));
+    let job = NativeJob {
+        passes: vec![NativePass { colours: [Some(t.clone()), None, None, None], draws: vec![first, second], ..Default::default() }],
+    };
+    assert!(backend.native(job).is_ok(), "{:?}", backend.native_job_stats().rejection_reasons);
+    assert_eq!(backend.read_back(&t).unwrap(), expected);
+    // the second draw sampled the first's colour, not the clear's
+    let p = &expected[..4];
+    assert!(p[0] == 255 && p[1] > 100 && p[2] == 0 && p[3] == 255, "BGRA of (0, 0.5, 1, 1): {p:?}");
+    assert!(backend.errors.is_empty(), "{:?}", backend.errors);
+}
