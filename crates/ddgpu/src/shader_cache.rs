@@ -121,6 +121,8 @@ mod tests {
         assert!(load(&dir, source).is_none());
         std::fs::write(path(&dir, source), b"truncated").unwrap();
         assert!(load(&dir, source).is_none());
+        source_at(source.into(), Some(&dir)).unwrap();
+        assert!(load(&dir, source).is_some(), "corrupt entry is replaced");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

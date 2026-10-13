@@ -64,3 +64,20 @@ launch still parses WGSL and pays cache serialization/write overhead.
 Private logs/cache: `C:/ddda-targets/L83/`. The all-shader CPU roundtrip is
 in progress. Full GPU batches refused
 to start when the head's pause became active; no GPU batch ran while paused.
+
+After the pause lifted, the first **1,000-shader batch** completed: 764 vertex,
+236 pixel, all 1,000 cache hits, exact serialized IR equality for each. Means:
+translation **0.345757 ms**, parse **3.828870 ms**, validation **0.249730 ms**,
+cache read/decode **0.451911 ms**, WGSL module **3.964825 ms**, Naga module
+**0.250913 ms**. Including translation and cache I/O: **4.310582 -> 1.048581 ms
+(75.67% reduction)**. Batch 1000 was interrupted by another shared pause and
+killed by its 60-second watchdog; it contributes no measurements. Full
+29,198-shader timing remains **unfinished**. The CPU seed process (40768)
+is suspended by the head's pause; no L83 GPU process remains running.
+
+Checkpoint: `3a956d94` on `task/L83-naga-direct`. The intended production
+hook adds `mod shader_cache;` to ddgpu's lib.rs, obtains
+`let source = shader_cache::source(t.wgsl)?;` **before** pushing the device's
+error scope, and passes that source to draw-module creation. A separate
+headless test adapter selection override is requested to permit Vulkan
+driver-equivalence tests. Both await the head's stale-claim decision.
