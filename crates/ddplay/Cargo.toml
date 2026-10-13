@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 ddruntime = { path = "../ddruntime" }
+ddnative-base = { path = "../ddnative-base" }
 ddgpu = { path = "../ddgpu" }
 ddaudio = { path = "../ddaudio" }
 cpal = "0.17.3"
@@ -18,3 +19,5 @@ windows-sys = { version = "0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse
 [features]
 # the diagnostic emulator fallback (ddruntime/src/emu.rs, L51); needs CMake on PATH
 emu = ["ddruntime/emu"]
+# L114: inlinable memory accessors and flag helpers in the shards
+inline-access = ["ddnative-base/inline-access"]
