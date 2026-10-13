@@ -519,7 +519,13 @@ impl Finisher {
                     c.notify_all();
                 }
             }));
-            if result.is_err() {
+            if let Err(error) = result {
+                // The runtime's guest-fault hook suppresses ordinary panic
+                // output. Preserve the worker's cause before notifying waiters.
+                let message = error.downcast_ref::<String>().map(String::as_str)
+                    .or_else(|| error.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic payload");
+                eprintln!("ddgpu finisher failed: {message}");
                 let (m, c) = &*d;
                 m.lock().unwrap().1 = true;
                 c.notify_all();
@@ -710,6 +716,18 @@ impl WgpuBackend {
     /// starts on, as in headless mode; a host that shows frames through a
     /// [`PresentSink`] turns it off.
     pub fn new(device: wgpu::Device, queue: wgpu::Queue, adapter: wgpu::AdapterInfo) -> WgpuBackend {
+        // Opt-in so hosts that installed their own callbacks keep them. Error
+        // scopes still work; uncaptured errors retain wgpu's default fatal policy.
+        if std::env::var("DDGPU_DIAGNOSTICS").as_deref() == Ok("1") {
+            eprintln!("ddgpu diagnostics adapter={adapter:?}");
+            device.set_device_lost_callback(|reason, message| {
+                eprintln!("ddgpu device lost: reason={reason:?} message={message}");
+            });
+            device.on_uncaptured_error(Arc::new(|error: wgpu::Error| {
+                eprintln!("ddgpu uncaptured error: {error}");
+                panic!("wgpu error: {error}\n");
+            }));
+        }
         let uniforms = Ring::new(&device, UNIFORM_RING, wgpu::BufferUsages::UNIFORM, "constants");
         let inline = Ring::new(&device, INLINE_RING, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX, "inline data");
         // L113: with DDGPU_NATIVE_SIM the pixel stage's bindings are also
@@ -3205,5 +3223,36 @@ impl GraphicsBackend for WgpuBackend {
             });
         }
         self.encode_profile.present();
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    /// Diagnostic callbacks must still reject validation errors when the runtime
+    /// suppresses the global panic hook; the stderr receipt must retain the cause.
+    #[test]
+    #[ignore = "GPU diagnostic: run isolated with a 60 second timeout"]
+    fn diagnostics_keep_uncaptured_errors_fatal_with_silent_panic_hook() {
+        let old = std::env::var_os("DDGPU_DIAGNOSTICS");
+        std::env::set_var("DDGPU_DIAGNOSTICS", "1");
+        let gpu = super::WgpuBackend::headless().expect("Vulkan adapter");
+        match old {
+            Some(value) => std::env::set_var("DDGPU_DIAGNOSTICS", value),
+            None => std::env::remove_var("DDGPU_DIAGNOSTICS"),
+        }
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("diagnostic invalid buffer"),
+                size: 16,
+                usage: wgpu::BufferUsages::empty(),
+                mapped_at_creation: false,
+            })
+        }));
+        std::panic::set_hook(hook);
+        assert!(error.is_err(), "diagnostics must not suppress validation failure");
+        gpu.device.destroy();
+        let _ = gpu.device.poll(wgpu::PollType::Poll);
     }
 }
