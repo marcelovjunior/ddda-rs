@@ -174,7 +174,7 @@ fn draw(ps: Vec<u32>, ps_constants: Constants, textures: Vec<TextureBinding>, ta
     DrawCall {
         primitive: 4, primitives, start: 0, base_vertex: 0, min_index: 0, vertex_count, vertices, indices,
         vertex_shader: Some((vs()).into()), pixel_shader: Some((ps).into()), declaration: declaration().into(), fvf: 0,
-        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(), ps_constants: ps_constants.into(), textures, render_states,
+        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(), ps_constants: ps_constants.into(), textures, render_states: render_states.into(),
         viewport: [0, 0, W, H, 0f32.to_bits(), 1f32.to_bits()], scissor: [0, 0, W as i32, H as i32], targets, depth,
     }
 }
