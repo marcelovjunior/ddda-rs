@@ -14,8 +14,11 @@
   nine in FE9580. Three tests pass, including **401,408 native oracle
   cases** preserving AH, flags and MXCSR. Whole-function original replay
   also passes before/after fusion (three fixtures, **6,155 call boundaries**).
-  Whole geometry port is WIP.
-  Next: head integration regeneration/gate and counter run; UI timings
+  Whole geometry port now passes **12 cases / 18,499 boundaries**, including
+  NaNs/subnormals, with original SSE executed on hardware for exact MXCSR.
+  Finite-position indexing removes redundant scans; opt-in via
+  `DDRUNTIME_GEOMETRY_PORT=1`, off pending head A/B.
+  Next: head integration regeneration/gate and geometry A/B; UI timings
   need head marks. No measured geometry or first-Present speedup yet.
 
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)

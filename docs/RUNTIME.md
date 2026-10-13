@@ -22,6 +22,15 @@ archive streaming functions still handle checksums, buffers and callbacks.
 explicit mods at that address retain precedence. Isolated leaf timings
 improved 2.30–8.06x; the port is enabled by default.
 
+`DDRUNTIME_GEOMETRY_PORT=1` opts into the complete readable `0x00fe9580`
+boot geometry builder (off by default pending head A/B). Finite-position
+indexing avoids redundant coincident-vertex scans without changing face
+accumulation order; exceptional coordinates retain the literal scan.
+Twelve original-instruction fixtures pass, including **18,499 exact call
+boundaries**, NaN payloads and MXCSR (original SSE runs on hardware in the
+recorder). Unit values, axis vectors and strings remain in guest memory.
+Visible boot timings and the depth-four game comparison remain pending.
+
 `DDRUNTIME_LOAD_LOG=1` adds process-relative startup/movie/file/archive/GPU
 timing and frame counters. `scripts/load_timeline.py` produces a timeline;
 UI milestones require explicit head-observed timestamps. Service totals

@@ -1,6 +1,7 @@
 """Prepare a private isolated FE9580 original-vector replay (no ddlift shards).
 
-Emits the whole function twice at opt-level 1, with/without L109c fusion.
+Emits the whole function twice at opt-level 1, with/without L109c fusion,
+and compares the readable port at opt-level 3.
 Generated source and vectors remain private. Run cargo with the task's
 target dir, INCREMENTAL=0 and JOBS=4. This is not an end-to-end game timing.
 """
@@ -36,6 +37,16 @@ edition = "2024"
 ddnative-base = {{path = "{ROOT.as_posix()}/crates/ddnative-base"}}
 ''')
     (OUT / 'src').mkdir(exist_ok=True)
+    (OUT / 'port').mkdir(exist_ok=True)
+    (OUT / 'port/Cargo.toml').write_text(f'''[package]
+name = "geometry-port"
+version = "0.0.0"
+edition = "2024"
+[lib]
+path = "{ROOT.as_posix()}/crates/ddruntime/src/procedural_geometry.rs"
+[dependencies]
+ddnative-base = {{path = "{ROOT.as_posix()}/crates/ddnative-base"}}
+''')
     (OUT / 'Cargo.toml').write_text(f'''[package]
 name = "l109c-geometry-bench"
 version = "0.0.0"
@@ -47,6 +58,7 @@ ddnative-host = {{path = "{ROOT.as_posix()}/crates/ddnative-host"}}
 serde_json = "1"
 geometry-before = {{path = "before"}}
 geometry-after = {{path = "after"}}
+geometry-port = {{path = "port"}}
 [profile.release]
 lto = false
 [profile.release.package.geometry-before]
@@ -81,15 +93,15 @@ fn check(m:&dyn Mem,c:&Cpu,v:&Value,stack:u32) {
  assert_eq!([c.eax,c.ecx,c.edx,c.ebx,c.esp,c.ebp,c.esi,c.edi],[e.eax,e.ecx,e.edx,e.ebx,e.esp,e.ebp,e.esi,e.edi]);
  assert_eq!(c.xmm,e.xmm);
  let (f,valid)=c.fl.snapshot(); assert_eq!(f&valid&0x8c5,number(&v["flags"])&valid&0x8c5);
+ assert_eq!(x86::stmxcsr(),number(&v["mxcsr"]));
  for (i,b) in bytes(&v["stack"]).iter().enumerate(){assert_eq!(m.u8(stack+i as u32),*b,"stack {i:x}");}
- // Unicorn does not reproduce SSE sticky MXCSR exceptions. This recorder
- // proves results/call state; the native float oracle covers exceptions.
+ // The recorder executes original SSE arithmetic/comparison on hardware.
 }
 fn main(){
  ddnative_host::install();
  let vectors:Value=serde_json::from_slice(&std::fs::read("E:/ddda-re/notes/native-L109c/vectors/geometry.json").unwrap()).unwrap();
  for (case,v) in vectors.as_array().unwrap().iter().enumerate(){
-  for (name,function) in [("before",geometry_before::f_00fe9580 as x86::LiftFn),("after",geometry_after::f_00fe9580)] {
+  for (name,function) in [("before",geometry_before::f_00fe9580 as x86::LiftFn),("after",geometry_after::f_00fe9580),("port",geometry_port::build_geometry)] {
    let mut m=Memory(Box::default());
    for w in v["memory_before"].as_array().unwrap(){write(&mut m,number(&w[0]),&bytes(&w[1]));}
    let stack=number(&v["stack_base"]);write(&mut m,stack,&bytes(&v["before"]["stack"]));
