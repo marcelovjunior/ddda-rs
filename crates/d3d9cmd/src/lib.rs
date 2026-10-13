@@ -213,6 +213,11 @@ pub trait GraphicsBackend: Send + std::any::Any {
     /// backends have nothing queued; read_back/query_result retain their own
     /// GPU synchronization.
     fn fence(&mut self) {}
+    /// A mark after every command recorded so far (L102); `passed` tells
+    /// whether the commands up to it have executed. Immediate backends
+    /// execute as they record: every mark has passed.
+    fn mark(&mut self) -> u64 { 0 }
+    fn passed(&self, _mark: u64) -> bool { true }
     fn upload(&mut self, upload: Upload);
     fn draw(&mut self, draw: &DrawCall);
     fn clear(&mut self, clear: &ClearCall);
