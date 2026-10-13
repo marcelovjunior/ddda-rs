@@ -2,6 +2,10 @@
 
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
+- Actual cap172 reaches sample300 but rejects capture at0. First-cause
+  stage/reason/seed/allocation diagnostics added;10replay tests pass.
+  Next: head rerun and source-backed capture correction; no equality yet.
+
 - Final default light with one test thread:281 passed/0 failed/7 ignored.
   Concurrent-run inherited timing failures both pass; no checks skipped.
   L172 focused10replay+11executor pass. Awaiting head actual capture.

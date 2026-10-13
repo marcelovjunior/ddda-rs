@@ -100,16 +100,36 @@ struct Journal<'a> {
     live: &'a mut dyn Mem,
     input: RefCell<Snapshot>,
     writes: RefCell<BTreeMap<u32, u8>>,
-    failure: Cell<Option<u32>>,
+    failure: Cell<Option<CaptureFailure>>,
+    stage: Cell<&'static str>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CaptureFailure {
+    stage: &'static str,
+    reason: &'static str,
+    address: u32,
 }
 impl Journal<'_> {
+    fn fail(&self, address: u32, reason: &'static str) {
+        if self.failure.get().is_none() {
+            self.failure.set(Some(CaptureFailure {
+                stage: self.stage.get(),
+                reason,
+                address,
+            }));
+        }
+    }
     fn page(&self, address: u32) {
         if self.failure.get().is_some() || self.input.borrow().has_page(address) {
             return;
         }
         let base = address & !4095;
-        if self.input.borrow().page_count() == MAX_PAGES || self.live.probe(base, 4096, false).is_err() {
-            self.failure.set(Some(address));
+        if self.input.borrow().page_count() == MAX_PAGES {
+            self.fail(address, "page limit");
+            return;
+        }
+        if self.live.probe(base, 4096, false).is_err() {
+            self.fail(address, "unreadable page");
             return;
         }
         let permissions = 1 | if self.live.probe(base, 4096, true).is_ok() {
@@ -120,14 +140,18 @@ impl Journal<'_> {
         self.input.borrow_mut().capture_page(self.live, base, permissions);
     }
     fn seed(&self, start: u32, length: u32) {
+        if self.failure.get().is_some() {
+            return;
+        }
         let Some(end) = start.checked_add(length) else {
-            self.failure.set(Some(start));
+            self.fail(start, "range overflow");
             return;
         };
         let mut page = start & !4095;
         while page < end {
             self.page(page);
             if self.failure.get().is_some() {
+                eprintln!("parallel-shadow seed refusal stage={} start={start:#x} length={length:#x}", self.stage.get());
                 return;
             }
             page += 4096;
@@ -147,7 +171,7 @@ impl Journal<'_> {
             let at = address.wrapping_add(offset as u32);
             if write {
                 if writes.len() == lanes::MAX_TRACKED_BYTES && !writes.contains_key(&at) {
-                    self.failure.set(Some(at));
+                    self.fail(at, "tracked write limit");
                     return;
                 }
                 writes.insert(at, value);
@@ -157,43 +181,52 @@ impl Journal<'_> {
                 .unwrap_or_else(|| self.input.borrow().u8(at))
                 != value
             {
-                self.failure.set(Some(at));
+                self.fail(at, "read differs from frozen input plus journal writes");
             }
         }
     }
     fn seed_primitives(&self) {
         // sPrimitive ctor E60DE0; manager ctors 11927F0/11925E0/11929A0.
         let primitive = self.u32(0x018d1848);
+        self.stage.set("primitive singleton");
         self.seed(primitive, 0x1d0);
         let pools = self.u32(primitive + 0xd0);
         if pools > 8 {
-            self.failure.set(Some(primitive + 0xd0));
+            self.fail(primitive + 0xd0, "primitive pool count exceeds eight");
             return;
         }
         for lane in 0..pools {
+            self.stage.set("primitive pool/list/buffer headers");
             let pool = self.u32(primitive + 0x30 + lane * 4);
             self.seed(pool, 0x280);
             self.seed(self.u32(pool + 4), 0x84);
             self.seed(self.u32(pool + 8), 0x18);
         }
         let bytes = self.u32(primitive + 0xd8);
+        self.stage.set("primitive byte manager");
         self.seed(bytes, 0x14);
+        self.stage.set("primitive byte arena");
         self.seed(self.u32(bytes + 4), self.u32(bytes + 0xc));
         let tags = self.u32(primitive + 0xdc);
+        self.stage.set("primitive tag manager");
         self.seed(tags, 0x14);
         let count = self.u32(tags + 0x10);
         if let (Some(descriptors), Some(entries)) = (count.checked_mul(0x28), count.checked_mul(8)) {
+            self.stage.set("primitive descriptor arena");
             self.seed(self.u32(tags + 4), descriptors);
+            self.stage.set("primitive tag entry arena");
             self.seed(self.u32(tags + 8), entries);
         } else {
-            self.failure.set(Some(tags));
+            self.fail(tags, "primitive tag size overflow");
         }
         let textures = self.u32(primitive + 0xd4);
+        self.stage.set("primitive texture manager");
         self.seed(textures, 0x10);
         if let Some(bytes) = self.u32(textures + 8).checked_mul(0x14) {
+            self.stage.set("primitive texture arena");
             self.seed(self.u32(textures + 4), bytes);
         } else {
-            self.failure.set(Some(textures));
+            self.fail(textures, "primitive texture size overflow");
         }
     }
 }
@@ -240,8 +273,10 @@ impl Mem for Journal<'_> {
         self.observed(a, &v.to_le_bytes(), true);
     }
     fn alloc(&mut self, size: u32) -> u32 {
-        self.failure.set(Some(0));
-        self.live.alloc(size)
+        let address = self.live.alloc(size);
+        self.fail(address, "host allocation during serial traversal");
+        eprintln!("parallel-shadow capture allocation address={address:#x} size={size:#x}");
+        address
     }
 }
 
@@ -540,26 +575,32 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         input: RefCell::new(Snapshot::default()),
         writes: RefCell::new(BTreeMap::new()),
         failure: Cell::new(None),
+        stage: Cell::new("inline recording lanes"),
     };
     // Source: DB63E0's eight inline contexts and DBE560's scheduler fields.
     journal.seed(incoming.ecx + 0xd40, 8 * LANE_BYTES);
+    journal.stage.set("scheduler");
     let scheduler = journal.u32(SCHEDULER_GLOBAL);
     journal.seed(scheduler, 0x1c150);
     // FED200 partitions the secondary root-entry arena at context+54.
     // Both entry arenas have the source capacity at context+4c.
     let preseed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        journal.stage.set("root recording context");
         journal.seed(context, LANE_BYTES);
         let capacity = journal
             .u32(context + 0x4c)
             .checked_mul(8)
             .expect("entry arena size");
+        journal.stage.set("primary entry arena");
         journal.seed(journal.u32(context + 0x44), capacity);
+        journal.stage.set("secondary entry arena");
         journal.seed(journal.u32(context + 0x54), capacity);
         journal.seed_primitives();
     }));
     if preseed.is_err() {
-        journal.failure.set(Some(context));
+        journal.fail(context, "preseed panic");
     }
+    journal.stage.set("guest stack");
     let stack = if incoming.fs_base != 0 {
         journal.u32(incoming.fs_base + 8)..journal.u32(incoming.fs_base + 4)
     } else {
@@ -568,18 +609,20 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     if stack.start < incoming.esp && incoming.esp < stack.end && stack.end - stack.start <= 8 << 20 {
         journal.seed(stack.start, stack.end - stack.start);
     } else {
-        journal.failure.set(Some(incoming.esp));
+        journal.fail(incoming.esp, "invalid stack bounds");
     }
+    journal.stage.set("serial traversal");
     original(&mut journal, cpu);
     let outgoing = cpu.clone();
     let result_mxcsr = x86::stmxcsr();
     ddnative_base::x87::park();
     x86::ldmxcsr(x86::MXCSR_DEFAULT);
+    journal.stage.set("serial stream capture");
     let observed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         capture_context(&journal, context, Limits::default())
     }));
-    let result = if let Some(address) = journal.failure.get() {
-        Err(format!("incomplete/incoherent capture at {address:#x}"))
+    let result = if let Some(failure) = journal.failure.get() {
+        Err(format!("incomplete/incoherent capture: {failure:#x?}"))
     } else if let Ok(Ok(observed)) = observed {
         let input = Arc::new(journal.input.into_inner());
         let writes = journal.writes.into_inner();
@@ -1167,6 +1210,7 @@ mod tests {
             input: RefCell::new(Snapshot::default()),
             writes: RefCell::new(BTreeMap::new()),
             failure: Cell::new(None),
+            stage: Cell::new("test"),
         };
         assert_eq!(journal.u32(0x1000), 7);
         journal.set_u32(0x1000, 9);
@@ -1175,7 +1219,9 @@ mod tests {
         assert_eq!(concurrent.u32(0x1000), 9);
         concurrent.set_u32(0x1000, 11);
         assert_eq!(journal.u32(0x1000), 11);
-        assert_eq!(journal.failure.get(), Some(0x1000));
+        assert_eq!(journal.failure.get().unwrap().address, 0x1000);
+        journal.fail(0, "later error");
+        assert_eq!(journal.failure.get().unwrap().address, 0x1000);
     }
 
     #[test]
