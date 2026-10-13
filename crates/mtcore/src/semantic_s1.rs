@@ -1466,3 +1466,278 @@ pub fn restore_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
     (c.ebx, c.ebp, c.esi, c.edi) = saved;
     c.esp = entry.wrapping_add(4);
 }
+
+/// `sqrtss`.
+#[inline(always)]
+fn fsqrt(x: f32) -> f32 {
+    x.sqrt()
+}
+
+// Translated from 0x00e53d10 (DDDA.exe 2017-12-13 Steam).
+/// 0x00E53D10, `skeleton->build_joint_matrices(owner, joints, count)`
+/// (thiscall, `ret 0xC`): the per-frame matrix pass of a joint chain.
+/// `joints` is an array of `count` joint blocks of 0x260 bytes starting at
+/// `joints + 0xA0` (the block has the joint's local 4x4 matrices at +0x58,
+/// +0x108 ...). Starting from the root matrix (the owner's table entry
+/// `owner[0x364] + 0x10 + 0xA0 * index`, `index` the byte `[joints[0x220]
+/// + 0x91]`; the owner's virtual method 0x58 `(-1)` when it is 0xFF), each
+/// joint's 4x4 matrix is multiplied with the previous joint's data kept in
+/// `this + 0x178 + 0x260 * k` and its inverse-bind data, in the two
+/// variants selected by the byte `this[0xCFA]`: the plain one, and the one
+/// that renormalises the basis vectors and rescales the translation.
+/// Float expressions keep the original's evaluation order.
+#[allow(non_snake_case, unused_assignments, unused_mut, unused_variables)]
+pub fn build_joint_matrices(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let owner = pg.u32(m, entry.wrapping_add(4));
+    let joints = pg.u32(m, entry.wrapping_add(8));
+    let mut count = pg.u32(m, entry.wrapping_add(12));
+    let saved = (c.esi, c.edi);
+    // the original's frame after its prologue and two pushes
+    let frame = (entry.wrapping_sub(4) & !15).wrapping_sub(0x198 + 8);
+    // a float in guest memory at `base + 4 * index`
+    macro_rules! L {
+        ($base:expr, $index:expr) => {
+            float(pg, m, ($base).wrapping_add((($index) as i32 * 4) as u32))
+        };
+    }
+    macro_rules! S {
+        ($base:expr, $index:expr, $value:expr) => {{
+            let value: f32 = $value;
+            pg.set_u32(m, ($base).wrapping_add((($index) as i32 * 4) as u32), value.to_bits());
+        }};
+    }
+    let index = pg.u8(m, pg.u32(m, joints.wrapping_add(0x220)).wrapping_add(0x91)) as u32;
+    let mut pfVar12 = if index == 0xff {
+        let method = pg.u32(m, pg.u32(m, owner).wrapping_add(0x58));
+        call_from(m, c, pg, frame, owner, &[u32::MAX], 0x00e5_3d58, |m, c| crate::semantic::call_guest(m, c, method))
+    } else {
+        pg.u32(m, owner.wrapping_add(0x364)).wrapping_add(0x10).wrapping_add(index * 0xa0)
+    };
+    let mut pfVar13: u32;
+    let renormalize = pg.u8(m, this.wrapping_add(0xcfa)) != 0;
+    let mut fVar1: f32;
+    let mut fVar10: f32;
+    let mut fVar14: f32;
+    let mut fVar15: f32;
+    let mut fVar16: f32;
+    let mut fVar17: f32;
+    let mut fVar18: f32;
+    let mut fVar19: f32;
+    let mut fVar2: f32;
+    let mut fVar20: f32;
+    let mut fVar21: f32;
+    let mut fVar22: f32;
+    let mut fVar23: f32;
+    let mut fVar24: f32;
+    let mut fVar25: f32;
+    let mut fVar26: f32;
+    let mut fVar3: f32;
+    let mut fVar4: f32;
+    let mut fVar5: f32;
+    let mut fVar6: f32;
+    let mut fVar7: f32;
+    let mut fVar8: f32;
+    let mut fVar9: f32;
+    let mut local_118: f32;
+    let mut local_11c: f32;
+    let mut local_120: f32;
+    let mut local_124: f32;
+    let mut local_128: f32;
+    let mut local_12c: f32;
+    let mut local_130: f32;
+    let mut local_134: f32;
+    let mut local_138: f32;
+    local_138 = L!(pfVar12, 6);
+    fVar21 = L!(pfVar12, 5);
+    fVar20 = L!(pfVar12, 4);
+    fVar14 = L!(pfVar12, 3);
+    fVar18 = L!(pfVar12, 2);
+    fVar16 = L!(pfVar12, 1);
+    fVar26 = L!(pfVar12, 0);
+    local_134 = L!(pfVar12, 7);
+    local_130 = L!(pfVar12, 8);
+    local_12c = L!(pfVar12, 9);
+    local_128 = L!(pfVar12, 10);
+    local_124 = L!(pfVar12, 11);
+    local_120 = L!(pfVar12, 12);
+    local_11c = L!(pfVar12, 13);
+    local_118 = L!(pfVar12, 14);
+    if !renormalize {
+        if (count as i32) > 0 {
+            pfVar12 = this.wrapping_add(376);
+            pfVar13 = joints.wrapping_add(168);
+            loop {
+                fVar14 = L!(pfVar13, -22);
+                fVar24 = L!(pfVar13, 42);
+                fVar1 = L!(pfVar13, 44);
+                fVar2 = L!(pfVar13, 43);
+                fVar3 = L!(pfVar13, 45);
+                fVar15 = L!(pfVar13, -18);
+                fVar17 = L!(pfVar13, 47);
+                fVar19 = L!(pfVar13, 48);
+                fVar22 = L!(pfVar13, 46);
+                fVar23 = L!(pfVar13, 49);
+                fVar25 = L!(pfVar13, 51);
+                fVar4 = L!(pfVar13, 50);
+                fVar5 = L!(pfVar13, 52);
+                fVar6 = L!(pfVar13, 53);
+                fVar7 = L!(pfVar13, 55);
+                fVar8 = L!(pfVar13, 54);
+                fVar9 = L!(pfVar13, 56);
+                fVar10 = L!(pfVar13, 57);
+                S!(pfVar13, -6, fVar15 * fVar2 + fVar24 * fVar14 + fVar1 * L!(pfVar13, -14) + fVar3 * L!(pfVar13, -10));
+                S!(pfVar13, -5, fVar24 * L!(pfVar13, -21) + fVar2 * L!(pfVar13, -17) + fVar1 * L!(pfVar13, -13) + fVar3 * L!(pfVar13, -9));
+                S!(pfVar13, -4, fVar24 * L!(pfVar13, -20) + fVar2 * L!(pfVar13, -16) + fVar1 * L!(pfVar13, -12) + fVar3 * L!(pfVar13, -8));
+                S!(pfVar13, -3, fVar24 * L!(pfVar13, -19) + fVar2 * L!(pfVar13, -15) + fVar1 * L!(pfVar13, -11) + fVar3 * L!(pfVar13, -7));
+                S!(pfVar13, -2, fVar22 * fVar14 + fVar15 * fVar17 + fVar19 * L!(pfVar13, -14) + fVar23 * L!(pfVar13, -10));
+                S!(pfVar13, -1, fVar22 * L!(pfVar13, -21) + fVar17 * L!(pfVar13, -17) + fVar19 * L!(pfVar13, -13) + fVar23 * L!(pfVar13, -9));
+                S!(pfVar13, 0, fVar22 * L!(pfVar13, -20) + fVar17 * L!(pfVar13, -16) + fVar19 * L!(pfVar13, -12) + fVar23 * L!(pfVar13, -8));
+                S!(pfVar13, 1, fVar22 * L!(pfVar13, -19) + fVar17 * L!(pfVar13, -15) + fVar19 * L!(pfVar13, -11) + fVar23 * L!(pfVar13, -7));
+                S!(pfVar13, 2, fVar15 * fVar25 + fVar4 * fVar14 + fVar5 * L!(pfVar13, -14) + fVar6 * L!(pfVar13, -10));
+                S!(pfVar13, 3, fVar4 * L!(pfVar13, -21) + fVar25 * L!(pfVar13, -17) + fVar5 * L!(pfVar13, -13) + fVar6 * L!(pfVar13, -9));
+                S!(pfVar13, 4, fVar25 * L!(pfVar13, -16) + fVar4 * L!(pfVar13, -20) + fVar5 * L!(pfVar13, -12) + fVar6 * L!(pfVar13, -8));
+                S!(pfVar13, 5, fVar4 * L!(pfVar13, -19) + fVar25 * L!(pfVar13, -15) + fVar5 * L!(pfVar13, -11) + fVar6 * L!(pfVar13, -7));
+                S!(pfVar13, 6, fVar15 * fVar7 + fVar14 * fVar8 + fVar9 * L!(pfVar13, -14) + fVar10 * L!(pfVar13, -10));
+                S!(pfVar13, 7, fVar8 * L!(pfVar13, -21) + fVar7 * L!(pfVar13, -17) + fVar9 * L!(pfVar13, -13) + fVar10 * L!(pfVar13, -9));
+                S!(pfVar13, 9, fVar8 * L!(pfVar13, -19) + fVar7 * L!(pfVar13, -15) + fVar9 * L!(pfVar13, -11) + fVar10 * L!(pfVar13, -7));
+                S!(pfVar13, 8, fVar8 * L!(pfVar13, -20) + fVar7 * L!(pfVar13, -16) + fVar9 * L!(pfVar13, -12) + fVar10 * L!(pfVar13, -8));
+                fVar17 = -(local_11c * fVar16 + local_120 * fVar26 + local_118 * fVar18);
+                fVar19 = -(local_11c * fVar21 + local_120 * fVar20 + local_118 * local_138);
+                fVar22 = -(local_11c * local_12c + local_120 * local_130 + local_118 * local_128);
+                fVar14 = L!(pfVar13, -6);
+                fVar24 = L!(pfVar13, -1);
+                fVar1 = L!(pfVar13, 3);
+                fVar2 = L!(pfVar13, 7);
+                fVar3 = L!(pfVar13, 8);
+                fVar15 = L!(pfVar13, 9);
+                S!(pfVar13, 10, fVar14 * fVar26 + fVar16 * L!(pfVar13, -5) + fVar18 * L!(pfVar13, -4) + fVar17 * L!(pfVar13, -3));
+                S!(pfVar13, 11, fVar14 * fVar20 + fVar21 * L!(pfVar13, -5) + local_138 * L!(pfVar13, -4) + fVar19 * L!(pfVar13, -3));
+                S!(pfVar13, 12, fVar14 * local_130 + local_12c * L!(pfVar13, -5) + local_128 * L!(pfVar13, -4) + fVar22 * L!(pfVar13, -3));
+                S!(pfVar13, 13, (fVar14 + L!(pfVar13, -5) + L!(pfVar13, -4)) * 0.0 + L!(pfVar13, -3));
+                S!(pfVar13, 14, fVar16 * fVar24 + L!(pfVar13, -2) * fVar26 + fVar18 * L!(pfVar13, 0) + fVar17 * L!(pfVar13, 1));
+                S!(pfVar13, 15, fVar21 * fVar24 + fVar20 * L!(pfVar13, -2) + local_138 * L!(pfVar13, 0) + fVar19 * L!(pfVar13, 1));
+                S!(pfVar13, 16, local_12c * fVar24 + local_130 * L!(pfVar13, -2) + local_128 * L!(pfVar13, 0) + fVar22 * L!(pfVar13, 1));
+                S!(pfVar13, 17, (fVar24 + L!(pfVar13, -2) + L!(pfVar13, 0)) * 0.0 + L!(pfVar13, 1));
+                S!(pfVar13, 18, L!(pfVar13, 2) * fVar26 + fVar16 * fVar1 + fVar18 * L!(pfVar13, 4) + fVar17 * L!(pfVar13, 5));
+                S!(pfVar13, 19, fVar21 * fVar1 + fVar20 * L!(pfVar13, 2) + local_138 * L!(pfVar13, 4) + fVar19 * L!(pfVar13, 5));
+                S!(pfVar13, 20, local_12c * fVar1 + local_130 * L!(pfVar13, 2) + local_128 * L!(pfVar13, 4) + fVar22 * L!(pfVar13, 5));
+                S!(pfVar13, 21, (fVar1 + L!(pfVar13, 2) + L!(pfVar13, 4)) * 0.0 + L!(pfVar13, 5));
+                S!(pfVar13, 22, L!(pfVar13, 6) * fVar26 + fVar16 * fVar2 + fVar3 * fVar18 + fVar15 * fVar17);
+                S!(pfVar13, 23, fVar21 * fVar2 + fVar20 * L!(pfVar13, 6) + fVar3 * local_138 + fVar15 * fVar19);
+                S!(pfVar13, 24, local_12c * fVar2 + local_130 * L!(pfVar13, 6) + fVar3 * local_128 + fVar15 * fVar22);
+                S!(pfVar13, 25, 1.0);
+                fVar26 = L!(pfVar12, -6);
+                fVar16 = L!(pfVar12, -5);
+                fVar18 = L!(pfVar12, -4);
+                fVar20 = L!(pfVar12, -2);
+                local_138 = L!(pfVar12, 0);
+                fVar21 = L!(pfVar12, -1);
+                local_130 = L!(pfVar12, 2);
+                local_12c = L!(pfVar12, 3);
+                local_128 = L!(pfVar12, 4);
+                local_120 = L!(pfVar12, 6);
+                local_11c = L!(pfVar12, 7);
+                local_118 = L!(pfVar12, 8);
+                pfVar13 = pfVar13.wrapping_add(152 * 4);
+                pfVar12 = pfVar12.wrapping_add(152 * 4);
+                count = count.wrapping_sub(1);
+                if count == 0 { break; }
+            }
+        }
+    } else if (count as i32) > 0 {
+        pfVar12 = this.wrapping_add(376);
+        pfVar13 = joints.wrapping_add(168);
+        loop {
+            fVar22 = fsqrt(fVar16 * fVar16 + fVar26 * fVar26 + fVar18 * fVar18 + fVar14 * fVar14);
+            fVar23 = fsqrt(fVar21 * fVar21 + fVar20 * fVar20 + local_138 * local_138 + local_134 * local_134);
+            fVar24 = 1.0 / fVar22;
+            fVar16 = fVar16 * fVar24;
+            fVar26 = fVar24 * fVar26;
+            fVar14 = 1.0 / fVar23;
+            local_138 = local_138 * fVar14;
+            fVar20 = fVar20 * fVar14;
+            fVar25 = fsqrt(local_12c * local_12c + local_130 * local_130 + local_128 * local_128 + local_124 * local_124);
+            fVar21 = fVar21 * fVar14;
+            fVar14 = 1.0 / fVar25;
+            local_130 = local_130 * fVar14;
+            local_12c = local_12c * fVar14;
+            local_128 = local_128 * fVar14;
+            fVar14 = L!(pfVar13, 42);
+            fVar18 = fVar18 * fVar24;
+            fVar24 = L!(pfVar13, 43);
+            fVar1 = L!(pfVar13, -22);
+            fVar2 = L!(pfVar13, -15);
+            fVar3 = L!(pfVar13, -11);
+            fVar15 = L!(pfVar13, -7);
+            fVar17 = L!(pfVar13, -19);
+            fVar19 = L!(pfVar13, 55);
+            S!(pfVar13, -4, fVar14 * L!(pfVar13, -20) + L!(pfVar13, -16) * fVar24 + L!(pfVar13, -12) * L!(pfVar13, 44) + L!(pfVar13, -8) * L!(pfVar13, 45));
+            S!(pfVar13, -3, fVar14 * fVar17 + fVar2 * L!(pfVar13, 43) + fVar3 * L!(pfVar13, 44) + fVar15 * L!(pfVar13, 45));
+            S!(pfVar13, -6, L!(pfVar13, -18) * fVar24 + fVar14 * fVar1 + L!(pfVar13, -14) * L!(pfVar13, 44) + L!(pfVar13, -10) * L!(pfVar13, 45));
+            S!(pfVar13, -5, fVar14 * L!(pfVar13, -21) + L!(pfVar13, -17) * fVar24 + L!(pfVar13, -13) * L!(pfVar13, 44) + L!(pfVar13, -9) * L!(pfVar13, 45));
+            S!(pfVar13, -1, L!(pfVar13, -21) * L!(pfVar13, 46) + L!(pfVar13, -17) * L!(pfVar13, 47) + L!(pfVar13, -13) * L!(pfVar13, 48) + L!(pfVar13, -9) * L!(pfVar13, 49));
+            S!(pfVar13, 0, L!(pfVar13, -20) * L!(pfVar13, 46) + L!(pfVar13, -16) * L!(pfVar13, 47) + L!(pfVar13, -12) * L!(pfVar13, 48) + L!(pfVar13, -8) * L!(pfVar13, 49));
+            S!(pfVar13, 1, fVar17 * L!(pfVar13, 46) + fVar2 * L!(pfVar13, 47) + fVar3 * L!(pfVar13, 48) + fVar15 * L!(pfVar13, 49));
+            S!(pfVar13, -2, fVar1 * L!(pfVar13, 46) + L!(pfVar13, -18) * L!(pfVar13, 47) + L!(pfVar13, -14) * L!(pfVar13, 48) + L!(pfVar13, -10) * L!(pfVar13, 49));
+            S!(pfVar13, 2, fVar1 * L!(pfVar13, 50) + L!(pfVar13, -18) * L!(pfVar13, 51) + L!(pfVar13, -14) * L!(pfVar13, 52) + L!(pfVar13, -10) * L!(pfVar13, 53));
+            S!(pfVar13, 3, L!(pfVar13, -21) * L!(pfVar13, 50) + L!(pfVar13, -17) * L!(pfVar13, 51) + L!(pfVar13, -13) * L!(pfVar13, 52) + L!(pfVar13, -9) * L!(pfVar13, 53));
+            S!(pfVar13, 4, L!(pfVar13, -20) * L!(pfVar13, 50) + L!(pfVar13, -16) * L!(pfVar13, 51) + L!(pfVar13, -12) * L!(pfVar13, 52) + L!(pfVar13, -8) * L!(pfVar13, 53));
+            S!(pfVar13, 5, fVar17 * L!(pfVar13, 50) + fVar2 * L!(pfVar13, 51) + fVar3 * L!(pfVar13, 52) + fVar15 * L!(pfVar13, 53));
+            S!(pfVar13, 6, fVar1 * L!(pfVar13, 54) + L!(pfVar13, 55) * L!(pfVar13, -18) + L!(pfVar13, 56) * L!(pfVar13, -14) + L!(pfVar13, 57) * L!(pfVar13, -10));
+            S!(pfVar13, 7, L!(pfVar13, 54) * L!(pfVar13, -21) + fVar19 * L!(pfVar13, -17) + L!(pfVar13, 56) * L!(pfVar13, -13) + L!(pfVar13, 57) * L!(pfVar13, -9));
+            S!(pfVar13, 8, L!(pfVar13, 54) * L!(pfVar13, -20) + fVar19 * L!(pfVar13, -16) + L!(pfVar13, 56) * L!(pfVar13, -12) + L!(pfVar13, 57) * L!(pfVar13, -8));
+            S!(pfVar13, 9, fVar17 * L!(pfVar13, 54) + fVar2 * fVar19 + fVar3 * L!(pfVar13, 56) + fVar15 * L!(pfVar13, 57));
+            fVar15 = -(local_11c * fVar16 + local_120 * fVar26 + local_118 * fVar18);
+            fVar17 = -(local_11c * fVar21 + local_120 * fVar20 + local_118 * local_138);
+            fVar14 = L!(pfVar13, -6);
+            fVar19 = -(local_11c * local_12c + local_120 * local_130 + local_118 * local_128);
+            fVar24 = L!(pfVar13, -1);
+            fVar1 = L!(pfVar13, 3);
+            fVar2 = L!(pfVar13, 7);
+            fVar3 = L!(pfVar13, 9);
+            S!(pfVar13, 10, L!(pfVar13, -5) * fVar16 + fVar14 * fVar26 + L!(pfVar13, -4) * fVar18 + L!(pfVar13, -3) * fVar15);
+            S!(pfVar13, 11, L!(pfVar13, -5) * fVar21 + fVar14 * fVar20 + L!(pfVar13, -4) * local_138 + L!(pfVar13, -3) * fVar17);
+            S!(pfVar13, 12, L!(pfVar13, -5) * local_12c + fVar14 * local_130 + L!(pfVar13, -4) * local_128 + L!(pfVar13, -3) * fVar19);
+            S!(pfVar13, 13, (fVar14 + L!(pfVar13, -5) + L!(pfVar13, -4)) * 0.0 + L!(pfVar13, -3));
+            S!(pfVar13, 15, fVar24 * fVar21 + L!(pfVar13, -2) * fVar20 + L!(pfVar13, 0) * local_138 + L!(pfVar13, 1) * fVar17);
+            S!(pfVar13, 16, fVar24 * local_12c + L!(pfVar13, -2) * local_130 + L!(pfVar13, 0) * local_128 + L!(pfVar13, 1) * fVar19);
+            S!(pfVar13, 17, (fVar24 + L!(pfVar13, -2) + L!(pfVar13, 0)) * 0.0 + L!(pfVar13, 1));
+            S!(pfVar13, 14, fVar24 * fVar16 + L!(pfVar13, -2) * fVar26 + L!(pfVar13, 0) * fVar18 + L!(pfVar13, 1) * fVar15);
+            S!(pfVar13, 18, fVar1 * fVar16 + L!(pfVar13, 2) * fVar26 + L!(pfVar13, 4) * fVar18 + L!(pfVar13, 5) * fVar15);
+            S!(pfVar13, 19, fVar1 * fVar21 + L!(pfVar13, 2) * fVar20 + L!(pfVar13, 4) * local_138 + L!(pfVar13, 5) * fVar17);
+            S!(pfVar13, 20, fVar1 * local_12c + L!(pfVar13, 2) * local_130 + L!(pfVar13, 4) * local_128 + L!(pfVar13, 5) * fVar19);
+            S!(pfVar13, 21, (fVar1 + L!(pfVar13, 2) + L!(pfVar13, 4)) * 0.0 + L!(pfVar13, 5));
+            S!(pfVar13, 23, fVar2 * fVar21 + L!(pfVar13, 6) * fVar20 + L!(pfVar13, 8) * local_138 + fVar3 * fVar17);
+            S!(pfVar13, 24, fVar2 * local_12c + L!(pfVar13, 6) * local_130 + L!(pfVar13, 8) * local_128 + fVar3 * fVar19);
+            S!(pfVar13, 25, (fVar2 + L!(pfVar13, 6) + L!(pfVar13, 8)) * 0.0 + fVar3);
+            S!(pfVar13, 22, (fVar2 * fVar16 + L!(pfVar13, 6) * fVar26 + L!(pfVar13, 8) * fVar18 + fVar3 * fVar15) / fVar22);
+            S!(pfVar13, 23, L!(pfVar13, 23) / fVar23);
+            S!(pfVar13, 24, L!(pfVar13, 24) / fVar25);
+            S!(pfVar13, 25, 1.0);
+            local_138 = L!(pfVar12, 0);
+            fVar26 = L!(pfVar12, -6);
+            fVar16 = L!(pfVar12, -5);
+            fVar18 = L!(pfVar12, -4);
+            fVar14 = L!(pfVar12, -3);
+            fVar20 = L!(pfVar12, -2);
+            fVar21 = L!(pfVar12, -1);
+            local_134 = L!(pfVar12, 1);
+            local_130 = L!(pfVar12, 2);
+            local_12c = L!(pfVar12, 3);
+            local_128 = L!(pfVar12, 4);
+            local_124 = L!(pfVar12, 5);
+            local_120 = L!(pfVar12, 6);
+            local_11c = L!(pfVar12, 7);
+            local_118 = L!(pfVar12, 8);
+            pfVar13 = pfVar13.wrapping_add(152 * 4);
+            pfVar12 = pfVar12.wrapping_add(152 * 4);
+            count = count.wrapping_sub(1);
+            if count == 0 { break; }
+        }
+    }
+    (c.esi, c.edi) = saved;
+    c.esp = entry.wrapping_add(16);
+}

@@ -42,6 +42,7 @@ fn call_inputs(target: u32) -> &'static [usize] {
         0x0042_3b80 => &[6],                                   // ESI = state
         0x0081_f280 | 0x0080_b450 | 0x0042_19a0 | 0x0042_15e0 | 0x00ca_de50 => &[0], // EAX
         0x00b8_09d0 => &[1, 2],
+        0x3000_0058 => &[1],
         0x00da_7d70 => &[1],
         0x00ea_1ee0 | 0x00ea_1f40 | 0x00ea_1fd0 | 0x3100_0100 | 0x00f1_fd30 => &[1],
         0x00ff_0800 | 0x00ff_0d20 | 0x00ff_0ad0 | 0x0043_3b00 | 0x005b_19c0 => &[1],
@@ -62,6 +63,7 @@ fn stack_args(target: u32) -> u32 {
         0x0042_3b80 | 0x0081_f280 | 0x0080_b450 | 0x0088_6210 | 0x00b8_09d0 => 0,
         0x3000_0000 | 0x3000_0010 | 0x3000_0020 => 1, // tuning virtual, Enter/LeaveCriticalSection
         0x0042_19a0 => 4,
+        0x3000_0058 => 1, // owner's root-matrix method
         0x00da_7d70 => 1, // frame allocator
         0x00ea_1ee0 | 0x00ea_1f40 | 0x00ea_1fd0 | 0x3100_0100 => 1, // attached node calls
         0x00f1_fd30 => 6,
@@ -319,4 +321,13 @@ fn semantic_restore_recording_state_matches_original() {
     ddnative_host::install();
     let n = abi_cases_full("E:/ddda-re/notes/native-L130/restore.json", mtcore::semantic_s1::restore_recording_state, true, &[0x012e_fea0]);
     eprintln!("{n} restore cases verified"); assert!(n >= 60 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
+}
+
+// verifies 0x00e53d10 (ABI level; void)
+#[test]
+fn semantic_joint_matrices_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_full("E:/ddda-re/notes/native-L184/joint_matrices.json", mtcore::semantic_s1::build_joint_matrices, false, &[]);
+    assert!(n >= 1000 || std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_none(), "{n} cases");
+    eprintln!("{n} ABI-level joint-matrix cases passed");
 }
