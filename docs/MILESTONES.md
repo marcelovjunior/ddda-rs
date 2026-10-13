@@ -1,5 +1,21 @@
 # Milestones
 
+### L90 shared draw payloads (2026-10-13)
+
+- Shader tokens/declarations are shared immutable allocations; constants
+  detach on changed setters and remain immutable for queued/recorded draws.
+  Backend caches use retained shader identities, avoiding per-draw bytecode
+  hashing while still sharing identical independently created programs.
+- On L92/L93 base: runtime light suite **150 passed**; frame serialization
+  **5 passed**, identity regression **1 passed**. Runtime allocations
+  **15 -> 10/draw**; three paired debug samples give median **49.35 ->
+  45.59 us/draw**, with overlapping ranges under shared-machine load.
+- Completed GPU driver comparisons passed; long-lived cache, depth precision
+  and target formats hit the 60-second limit and remain unverified.
+  Debug GPU benchmark: **442.91 -> 256.04 us/draw**, same 11,000 draws / 23
+  passes. No gameplay/FPS claim. Next: head's Arc-only integration run,
+  then separate compact-constant/snapshot batches.
+
 ### L82 input polling convoy (2026-10-13)
 
 - Head's measured GetAsyncKeyState hotspot (1,284,189 calls / 14,719 ms wait

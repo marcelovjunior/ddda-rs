@@ -173,8 +173,8 @@ fn draw(ps: Vec<u32>, ps_constants: Constants, textures: Vec<TextureBinding>, ta
         render_states: Vec<(u32, u32)>, vertices: Vertices, indices: Indices, primitives: u32, vertex_count: u32) -> DrawCall {
     DrawCall {
         primitive: 4, primitives, start: 0, base_vertex: 0, min_index: 0, vertex_count, vertices, indices,
-        vertex_shader: Some(vs()), pixel_shader: Some(ps), declaration: declaration(), fvf: 0,
-        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }, ps_constants, textures, render_states,
+        vertex_shader: Some((vs()).into()), pixel_shader: Some((ps).into()), declaration: declaration().into(), fvf: 0,
+        vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(), ps_constants: ps_constants.into(), textures, render_states,
         viewport: [0, 0, W, H, 0f32.to_bits(), 1f32.to_bits()], scissor: [0, 0, W as i32, H as i32], targets, depth,
     }
 }
@@ -341,7 +341,7 @@ fn bisection_names_the_first_differing_draw() {
             self.draws += 1;
             if self.draws == 4 {
                 let mut d = d.clone();
-                d.ps_constants.f[1][0] = 1.75f32.to_bits();
+                std::sync::Arc::make_mut(&mut d.ps_constants).f[1][0] = 1.75f32.to_bits();
                 self.inner.draw(&d);
             } else {
                 self.inner.draw(d);

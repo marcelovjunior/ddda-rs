@@ -117,12 +117,12 @@ fn main() {
             primitive: 4, primitives: 1, start: 0, base_vertex: 0, min_index: 0, vertex_count: 3,
             vertices: Vertices::Streams(vec![(0, 0x300, 0, 24, 1)]),
             indices: Indices::None,
-            vertex_shader: Some(vs()),
-            pixel_shader: Some(ps.to_vec()),
-            declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]],
+            vertex_shader: Some((vs()).into()),
+            pixel_shader: Some((ps.to_vec()).into()),
+            declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]].into(),
             fvf: 0,
-            vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() },
-            ps_constants: Constants { f: vec![[0; 4]; 224], ..Default::default() },
+            vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
+            ps_constants: Constants { f: vec![[0; 4]; 224], ..Default::default() }.into(),
             textures,
             render_states: states,
             viewport: [0, 0, w, h, 0f32.to_bits(), 1f32.to_bits()],
@@ -135,7 +135,7 @@ fn main() {
     // the vertex shader's module and the textures, outside the timing
     if let Some(d) = stream.first() {
         let mut first = d.clone();
-        first.pixel_shader = Some(vec![0xFFFF_0300, 0x0200_0001, 0x800F_0800, 0x90E4_0000, 0x0000_FFFF]);
+        first.pixel_shader = Some((vec![0xFFFF_0300, 0x0200_0001, 0x800F_0800, 0x90E4_0000, 0x0000_FFFF]).into());
         first.textures.clear();
         gpu.draw(&first);
     }

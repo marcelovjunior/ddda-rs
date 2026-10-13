@@ -683,8 +683,8 @@ impl Dec<'_> {
             k => return Err(bad(format!("indices kind {k}"))),
         };
         let tokens = |b: &[u8]| b.chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect::<Vec<u32>>();
-        let vertex_shader = self.opt_blob()?.map(tokens);
-        let pixel_shader = self.opt_blob()?.map(tokens);
+        let vertex_shader = self.opt_blob()?.map(|b| tokens(b).into());
+        let pixel_shader = self.opt_blob()?.map(|b| tokens(b).into());
         let declaration = self.blob()?.chunks_exact(8).map(|e| e.try_into().unwrap()).collect();
         let fvf = self.u32()?;
         let vs_constants = constants_from(self.blob()?)?;
@@ -711,7 +711,7 @@ impl Dec<'_> {
         let depth = self.opt_target()?;
         Ok(DrawCall {
             primitive, primitives, start, base_vertex, min_index, vertex_count, vertices, indices, vertex_shader, pixel_shader, declaration, fvf,
-            vs_constants, ps_constants, textures, render_states, viewport, scissor, targets, depth,
+            vs_constants: vs_constants.into(), ps_constants: ps_constants.into(), textures, render_states, viewport, scissor, targets, depth,
         })
     }
 }
@@ -871,8 +871,8 @@ mod tests {
             primitive: 4, primitives: 2, start: 3, base_vertex: -5, min_index: 1, vertex_count: 9,
             vertices: Vertices::Streams(vec![(0, 0x500, 16, 24, 1), (1, 0x501, 0, 8, 0x8000_0002)]),
             indices: Indices::Buffer(0x600, 101),
-            vertex_shader: Some(vec![0xFFFE_0300, 0x0000_FFFF]), pixel_shader: None,
-            declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]], fvf: 0, vs_constants: vs, ps_constants: Constants::default(),
+            vertex_shader: Some((vec![0xFFFE_0300, 0x0000_FFFF]).into()), pixel_shader: None,
+            declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0]].into(), fvf: 0, vs_constants: vs.into(), ps_constants: Constants::default().into(),
             textures: vec![TextureBinding { sampler: 257, resource: 0x300, kind: TexKind::Cube, format: 113, width: 16, height: 16, depth: 1, levels: 5, usage: 1, states: [7; 14] }],
             render_states: vec![(7, 1), (27, 0)], viewport: [0, 0, 8, 4, 0, 0x3F80_0000], scissor: [0, 0, 8, -4],
             targets: [Some(target(0x101, Some(tex))), None, Some(target(0x102, None)), None], depth: Some(target(0x180, None)),

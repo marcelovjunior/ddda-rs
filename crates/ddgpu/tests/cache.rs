@@ -156,12 +156,12 @@ fn frame_of(rng: &mut Rng, count: usize) -> (Vec<Upload>, Vec<ClearCall>, Vec<Dr
         draws.push(DrawCall {
             primitive, primitives, start, base_vertex: 0, min_index: 0, vertex_count: 12,
             vertices, indices,
-            vertex_shader: Some(vs()),
-            pixel_shader: Some(if mrt { ps_two() } else if textured { ps_texture() } else { ps_constant() }),
-            declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]],
+            vertex_shader: Some((vs()).into()),
+            pixel_shader: Some((if mrt { ps_two() } else if textured { ps_texture() } else { ps_constant() }).into()),
+            declaration: vec![[0, 0, 0, 0, 3, 0, 0, 0], [0, 0, 16, 0, 1, 0, 5, 0]].into(),
             fvf: 0,
-            vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() },
-            ps_constants: c,
+            vs_constants: Constants { f: vec![[0; 4]; 256], ..Default::default() }.into(),
+            ps_constants: c.into(),
             textures: if textured {
                 vec![TextureBinding { sampler: 0, resource: 0x200 + tex, kind: TexKind::Flat, format: formats[tex as usize], width: 4, height: 4, depth: 1, levels: 1, usage: 0, states: st }]
             } else {

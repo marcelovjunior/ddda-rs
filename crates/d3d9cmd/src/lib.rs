@@ -112,13 +112,14 @@ pub struct DrawCall {
     pub vertex_count: u32,
     pub vertices: Vertices,
     pub indices: Indices,
-    pub vertex_shader: Option<Vec<u32>>,
-    pub pixel_shader: Option<Vec<u32>>,
+    pub vertex_shader: Option<std::sync::Arc<[u32]>>,
+    pub pixel_shader: Option<std::sync::Arc<[u32]>>,
     /// D3DVERTEXELEMENT9 bytes (END excluded); empty when FVF drives it
-    pub declaration: Vec<[u8; 8]>,
+    pub declaration: std::sync::Arc<[[u8; 8]]>,
     pub fvf: u32,
-    pub vs_constants: Constants,
-    pub ps_constants: Constants,
+    /// Immutable snapshot; setters detach a shared block only when bits change.
+    pub vs_constants: std::sync::Arc<Constants>,
+    pub ps_constants: std::sync::Arc<Constants>,
     pub textures: Vec<TextureBinding>,
     /// every render state, sorted by state
     pub render_states: Vec<(u32, u32)>,
