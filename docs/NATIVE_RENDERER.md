@@ -29,6 +29,8 @@ constant blocks from them again. That re-derivation is the cost:
 | combo9 (+L101 cheaper D3D9 calls) | 13.7 / 13.7-14.7 | render thread 88%: snapshot 26%, draw calls 20%, flush_reads 16% |
 | combo11 (+L121 copies in the open encoder; autoplay presses Enter early) | 14.1 / 15.3 | gameplay reached at 59 s |
 | combo12 (+L118 step 3) | 14.7 / 15.3-16.7 | render thread 89% (snapshot 24%, draw calls 31%) |
+| combo14 (+float-compare fusion, regenerated shards) | 14.4 / 14.0-15.3 | first Present at 3.7 s (was 5.8 s) |
+| combo15, DDDRAW_NATIVE=drawcall (L119: scene draws from the nDraw objects, no D3D9 services/snapshot) | 14.2 / 15.3-16.0 | the render thread waits 90% on the main thread: the game's own code is the bound now |
 
 (average / end of the run; L114, inlining the memory and flag helpers into
 the shards, gave no gain for 2.5x the compile time and was dropped.)
