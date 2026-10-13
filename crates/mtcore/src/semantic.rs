@@ -65,3 +65,102 @@ fn expand(m: &mut dyn Mem, pg: Pages, bank: u32, values: u32, packed: u32, mut o
     }
     out
 }
+
+/// 0x00E10FC0, `this->intern_keys(owner, values, keys, extra, crc_out) ->
+/// interned` (thiscall, `ret 0x14`): build a key sequence in a 1 KiB stack
+/// buffer (at the caller's ESP - 0x400, as the original: the interning
+/// callee reads it there), optionally store its CRC, and intern it.
+///
+/// The sequence: the four `keys` words tagged with their slot in the low
+/// bits (zero words skipped), `extra`, then the expansions of the six
+/// `owner` words in the order 0, 3, 4, 2, 1, 5 (zero words skipped). The
+/// CRC is the table CRC of the words' bytes, high byte first, at
+/// 0x014075C0. The interning (0x00E0E5E0, FNV basis 0x811C9DC5) stays a
+/// guest call, so its own port and every caller see the same table.
+pub fn intern_dependency_keys(m: &mut dyn Mem, c: &mut Cpu) {
+    intern_dependency_keys_with(m, c, native_expand)
+}
+
+/// One expansion of `packed` into `out` for [`intern_dependency_keys`]:
+/// the native recursion (production) or a guest call to 0x00E0EC50.
+pub type Expander = fn(&mut dyn Mem, &mut Cpu, Pages, u32, u32, u32, u32) -> u32;
+
+fn native_expand(m: &mut dyn Mem, _: &mut Cpu, pg: Pages, this: u32, values: u32, packed: u32, out: u32) -> u32 {
+    let bank = pg.u32(m, this.wrapping_add(0x28));
+    expand(m, pg, bank, values, packed, out)
+}
+
+/// The original's own call to 0x00E0EC50 (for tests against vectors that
+/// record those calls as callees): `push out; push values; push packed;
+/// mov ecx, this; call` with ESP at the original's frame.
+pub fn guest_expand(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, values: u32, packed: u32, out: u32) -> u32 {
+    for v in [out, values, packed, RETURN_FROM_EXPAND.with(|r| r.get())] {
+        c.esp = c.esp.wrapping_sub(4);
+        pg.set_u32(m, c.esp, v);
+    }
+    c.ecx = this;
+    ddnative_base::x86::call_ext(m, c, 0x00e0_ec50);
+    c.eax
+}
+
+thread_local! {
+    /// The return address of the expansion call being made (each of the
+    /// six call sites has its own), for [`guest_expand`].
+    static RETURN_FROM_EXPAND: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// [`intern_dependency_keys`] with its expansion step chosen by the caller.
+pub fn intern_dependency_keys_with(m: &mut dyn Mem, c: &mut Cpu, expander: Expander) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let arg = |m: &dyn Mem, k: u32| pg.u32(m, entry.wrapping_add(4 + 4 * k));
+    let owner = arg(m, 0);
+    let values = arg(m, 1);
+    let keys = arg(m, 2);
+    let extra = arg(m, 3);
+    let crc_out = arg(m, 4);
+    let this = c.ecx;
+    let buffer = entry.wrapping_sub(0x400);
+    let mut out = buffer;
+    for slot in 0..4u32 {
+        let k = pg.u32(m, keys.wrapping_add(4 * slot));
+        if k != 0 {
+            pg.set_u32(m, out, (k & 0xffff_f000) | slot);
+            out = out.wrapping_add(4);
+        }
+    }
+    pg.set_u32(m, out, extra);
+    out = out.wrapping_add(4);
+    // The original's frame during the expansions: ESP = entry - 0x414.
+    c.esp = entry.wrapping_sub(0x414);
+    for (field, resume) in [(0u32, 0x00e1_1058u32), (3, 0x00e1_1069), (4, 0x00e1_107a), (2, 0x00e1_108b), (1, 0x00e1_109c), (5, 0x00e1_10ad)] {
+        let packed = pg.u32(m, owner.wrapping_add(4 * field));
+        if packed != 0 {
+            RETURN_FROM_EXPAND.with(|r| r.set(resume));
+            out = expander(m, c, pg, this, values, packed, out);
+        }
+    }
+    let count = out.wrapping_sub(buffer) >> 2;
+    if crc_out != 0 {
+        let mut crc = u32::MAX;
+        for i in 0..(count & 0x3fff_ffff) {
+            let word = pg.u32(m, buffer.wrapping_add(4 * i));
+            for shift in [24u32, 16, 8, 0] {
+                let index = ((word >> shift) ^ crc) & 0xff;
+                crc = (crc >> 8) ^ pg.u32(m, 0x0140_75c0u32.wrapping_add(index * 4));
+            }
+        }
+        pg.set_u32(m, crc_out, crc);
+    }
+    // The original's frame at the call: ESP = entry - 0x414 (0x404 locals,
+    // four pushes), then three arguments and the return address.
+    c.esp = entry.wrapping_sub(0x414);
+    for v in [0x811c_9dc5u32, count.wrapping_mul(4), buffer, 0x00e1_118f] {
+        c.esp = c.esp.wrapping_sub(4);
+        pg.set_u32(m, c.esp, v);
+    }
+    c.ecx = this;
+    ddnative_base::x86::call_ext(m, c, 0x00e0_e5e0);
+    // EAX = the interned sequence; `ret 0x14` from the entry frame
+    c.esp = entry.wrapping_add(4 + 0x14);
+}
