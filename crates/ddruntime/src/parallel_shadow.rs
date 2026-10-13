@@ -28,6 +28,18 @@ pub(crate) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn private_copy(&self, source: u32, length: u32) -> Result<(Self, Range<u32>), Reject> {
+        source.checked_add(length).ok_or(Reject::InvalidPrivateRange)?;
+        let (mut output, range) = self.private_arena(length)?;
+        for offset in (0..length).step_by(PAGE as usize) {
+            let page = Arc::make_mut(output.pages.get_mut(&(range.start + offset)).unwrap());
+            let count = (length - offset).min(PAGE) as usize;
+            for (index, byte) in page.bytes[..count].iter_mut().enumerate() {
+                *byte = self.byte(source + offset + index as u32, false)?;
+            }
+        }
+        Ok((output, range))
+    }
     /// Storage owned solely by the offline transaction, not the live guest
     /// allocator. Select an unused range in THIS snapshot's address space.
     /// Consumers must prove all published references leave this storage before
@@ -600,6 +612,31 @@ mod tests {
         assert!(matches!(
             input.private_arena(u32::MAX),
             Err(Reject::InvalidPrivateRange)
+        ));
+    }
+
+    #[test]
+    fn private_copy_preserves_unaligned_source_and_isolates_parent_aliases() {
+        let mut live = GuestMemory::new();
+        live.map(0x1000, PAGE * 2, READ | WRITE).unwrap();
+        for offset in 0..64 {
+            live.set_u8(0x1ff0 + offset, offset as u8);
+        }
+        let mut input = Snapshot::default();
+        for page in [0x1000, 0x2000] {
+            input.capture_page(&live, page, READ | WRITE);
+        }
+        let (copy, range) = input.private_copy(0x1ff0, 64).unwrap();
+        let mut memory = LaneMemory::new(Arc::new(copy), 1000);
+        for offset in 0..64 {
+            assert_eq!(memory.u8(range.start + offset), offset as u8);
+        }
+        memory.set_u32(range.start + 16, 0xabcdef01);
+        assert_eq!(memory.u32(0x2000), 0x13121110);
+        assert_eq!(live.u32(0x2000), 0x13121110);
+        assert!(matches!(
+            input.private_copy(0x2ff0, 64),
+            Err(Reject::MissingPage(0x3000))
         ));
     }
 

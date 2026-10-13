@@ -155,6 +155,23 @@ binary/environment receipt and hash the corpus; no real corpus exists yet.
 
 ## Results
 
+Second real v3 capture shadow-48204-300.ddshadow is complete (no rejection):
+1,633 pages/13,226 write bytes, SHA256
+c3414a55e0ea0a692d07c3f2aa2576cac3195d46be2e1ea89904bf32e74d7f80.
+Original serial/live comparison passes for6 entries. Parallel stops at
+CreateEventA (captured token0x7ff00490); no equality is claimed.
+
+The captured root is exactly manager+d40+LANE_BYTES: initializing nested
+children in place would overwrite the parent lane. Replay now copies the
+complete manager header/inline contexts privately and retargets DB63E0 this
+only; its original parent argument and object/list pointers are preserved.
+PublishedView forbids references into both temporary manager and sort arena.
+33 focused shadow tests pass, including unaligned private-copy isolation and
+manager retargeting. Unsupported-import diagnostics now include guest return
+address, so the event creation can be traced before implementing any service.
+Next: head rebuild offline example only, replay the complete existing capture.
+
+
 Nonempty-work gate now requires appended commands, not merely a nonempty
 pre-existing stream. The real capture goes from2 to6 roots (four appended).
 Fifteen focused replay tests pass, including refusal when an unchanged

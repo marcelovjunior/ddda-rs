@@ -36,6 +36,7 @@ mod capture_file;
 thread_local! {
     static IN_SHADOW: Cell<bool> = const { Cell::new(false) };
     static REPLAY: RefCell<Option<Rc<Replay>>> = const { RefCell::new(None) };
+    static UNRESOLVED: Cell<u32> = const { Cell::new(0) };
 }
 
 pub(crate) fn enabled() -> bool {
@@ -298,11 +299,11 @@ impl Mem for PrivateMemory {
 /// FED3B0 copies roots and nested arrays to the parent before returning.
 struct PublishedView<'a> {
     memory: &'a dyn Mem,
-    private: Option<Range<u32>>,
+    private: Vec<Range<u32>>,
 }
 impl Mem for PublishedView<'_> {
     fn probe(&self, a: u32, n: u32, w: bool) -> Result<(), u32> {
-        if let Some(range) = &self.private {
+        for range in &self.private {
             for offset in 0..n {
                 let at = a.wrapping_add(offset);
                 if range.contains(&at) {
@@ -313,7 +314,7 @@ impl Mem for PublishedView<'_> {
         self.memory.probe(a, n, w)
     }
     fn u8(&self, a: u32) -> u8 {
-        if self.private.as_ref().is_some_and(|range| range.contains(&a)) {
+        if self.private.iter().any(|range| range.contains(&a)) {
             std::panic::panic_any(Reject::PrivateOutputEscape(a));
         }
         self.memory.u8(a)
@@ -353,9 +354,24 @@ fn resolve(target: u32) -> LiftFn {
                     return service;
                 }
             }
-            std::panic::panic_any(Reject::UnsupportedTarget(target))
+            UNRESOLVED.with(|slot| slot.set(target));
+            unsupported_call
         }
     }
+}
+
+fn unsupported_call(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let target = UNRESOLVED.with(Cell::get);
+    let caller = if m.probe(cpu.esp, 4, false).is_ok() {
+        m.u32(cpu.esp)
+    } else {
+        0
+    };
+    eprintln!(
+        "parallel-shadow unsupported target={target:#x} return={caller:#x} ecx={:#x} esp={:#x}",
+        cpu.ecx, cpu.esp
+    );
+    std::panic::panic_any(Reject::UnsupportedTarget(target));
 }
 
 /// Exact uncontended guest-memory contract of threads::{enter,leave}_critical_section.
@@ -455,6 +471,7 @@ fn private_schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
     let scheduler = cpu.ecx;
     let count = memory.u32(scheduler + 0x8c) as usize;
     let mode = memory.u32(cpu.esp + 4);
+    eprintln!("parallel-shadow private schedule mode={mode} jobs={count}");
     if mode == 0 || mode > 3 || count > 8192 {
         std::panic::panic_any(Reject::UnsupportedScheduler(mode));
     }
@@ -607,7 +624,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
         stage: Cell::new("inline recording lanes"),
     };
     // Source: DB63E0's eight inline contexts and DBE560's scheduler fields.
-    journal.seed(incoming.ecx + 0xd40, 8 * LANE_BYTES);
+    journal.seed(incoming.ecx, 0xd40 + 8 * LANE_BYTES);
     journal.stage.set("scheduler");
     let scheduler = journal.u32(SCHEDULER_GLOBAL);
     journal.seed(scheduler, 0x1c150);
@@ -772,7 +789,7 @@ type ReplayResult = (
     mtcore::shadow_lanes::StreamSnapshot,
     BTreeMap<u32, u8>,
     u32,
-    Option<Range<u32>>,
+    Vec<Range<u32>>,
 );
 
 fn compare_replays(
@@ -827,6 +844,22 @@ fn compare_replays(
             .name(format!("shadow-replay-{parallel}"))
             .stack_size(64 << 20)
             .spawn(move || {
+                let mut private_ranges = Vec::new();
+                let input = if parallel {
+                    // DB63E0 reads the manager's category flags/masks and uses
+                    // its eight inline contexts. A nested caller can itself be
+                    // one of those contexts; FED200 must not overwrite it.
+                    // Retarget only this method's manager, preserving the root
+                    // context argument and every original object/list pointer.
+                    let (copy, range) = input
+                        .private_copy(cpu.ecx, 0xd40 + 8 * LANE_BYTES)
+                        .map_err(|error| format!("private recording manager: {error:?}"))?;
+                    cpu.ecx = range.start;
+                    private_ranges.push(range);
+                    Arc::new(copy)
+                } else {
+                    input
+                };
                 let (input, arena) = if parallel && input.u32(context + 0x54) == 0 {
                     let size = input
                         .u32(context + 0x4c)
@@ -839,6 +872,9 @@ fn compare_replays(
                 } else {
                     (input, None)
                 };
+                if let Some(range) = &arena {
+                    private_ranges.push(range.clone());
+                }
                 let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(input, ACCESS_LIMIT))));
                 with_replay(
                     Replay {
@@ -869,12 +905,12 @@ fn compare_replays(
                         }
                         let published = PublishedView {
                             memory: m,
-                            private: arena.clone(),
+                            private: private_ranges.clone(),
                         };
                         let stream = capture_context(&published, context, Limits::default())
                             .map_err(|e| format!("stream: {e:?}"))?;
                         let writes = memory.0.borrow().writes().clone();
-                        Ok::<_, String>((cpu.clone(), stream, writes, final_mxcsr, arena.clone()))
+                        Ok::<_, String>((cpu.clone(), stream, writes, final_mxcsr, private_ranges.clone()))
                     },
                 )
             })
@@ -903,7 +939,7 @@ fn compare_replays(
         // Only newly allocated private sort storage is discarded. FED3B0's
         // consumed roots/children must already be outside it (PublishedView),
         // and the complete stream comparison above must have passed.
-        if scratch.contains(address) || results[1].4.as_ref().is_some_and(|range| range.contains(address)) {
+        if scratch.contains(address) || results[1].4.iter().any(|range| range.contains(address)) {
             continue;
         }
         let a = results[0]
@@ -980,7 +1016,7 @@ mod tests {
             capture_context(
                 &PublishedView {
                     memory: &memory,
-                    private: Some(range.clone()),
+                    private: vec![range.clone()],
                 },
                 0x1000,
                 Limits::default(),
@@ -996,7 +1032,7 @@ mod tests {
         let stream = capture_context(
             &PublishedView {
                 memory: &memory,
-                private: Some(range),
+                private: vec![range],
             },
             0x1000,
             Limits::default(),
@@ -1181,6 +1217,11 @@ mod tests {
 
     fn synthetic_traverse(m: &mut dyn Mem, cpu: &mut Cpu) {
         let parallel = current().lane_count > 1;
+        assert_eq!(m.u32(cpu.ecx + 0x20), 0x12345678);
+        if parallel {
+            assert_ne!(cpu.ecx, 0x200000);
+            m.set_u8(cpu.ecx + 0xd40 + LANE_BYTES, 99);
+        }
         cpu.ecx = 0x40000;
         m.set_u32(0x4008c, 4);
         push(m, cpu, 1);
@@ -1211,11 +1252,13 @@ mod tests {
             (0x40000, 0x1d000),
             (0x80000, 0x2000),
             (0x18d0000, 0x2000),
+            (0x200000, 0x1a0000),
         ];
         for (base, len) in ranges {
             live.map(base, len, READ | WRITE).unwrap();
         }
         live.set_u32(0x1010, mutation);
+        live.set_u32(0x200020, 0x12345678);
         live.set_u32(0x1044, 0x2000);
         live.set_u32(0x104c, 16);
         live.set_u32(SCHEDULER_GLOBAL, 0x40000);
@@ -1254,6 +1297,7 @@ mod tests {
         }
         let incoming = Cpu {
             esp: 0x81000,
+            ecx: 0x200000,
             ..Cpu::default()
         };
         let outgoing = Cpu {
