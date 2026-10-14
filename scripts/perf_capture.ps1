@@ -18,6 +18,7 @@ param(
     [Nullable[uint32]]$TraceStage = $null,
     [ValidateRange(0, 60)][double]$TraceDelay = 5,
     [ValidateRange(0.001, 30)][double]$TraceSeconds = 10,
+    [ValidateSet('off', 'on')][string]$MaterialSpecialization = 'off',
     [switch]$Trace,
     [switch]$NoShadows
 )
@@ -56,6 +57,7 @@ $oldMeshBuilder = $env:DDVIEW_MESH_BUILDER
 $oldTraceStage = $env:DDVIEW_TRACE_STAGE
 $oldTraceDelay = $env:DDVIEW_TRACE_DELAY
 $oldTraceSeconds = $env:DDVIEW_TRACE_SECONDS
+$oldMaterialSpecialization = $env:DDVIEW_MATERIAL_SPECIALIZATION
 $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 $captureProcess = $null
 $gpuSamples = [Collections.Generic.List[object]]::new()
@@ -70,6 +72,7 @@ try {
     $env:DDVIEW_TRACE_STAGE = if ($null -ne $TraceStage) { [string]$TraceStage } else { $null }
     $env:DDVIEW_TRACE_DELAY = if ($null -ne $TraceStage) { $TraceDelay.ToString([Globalization.CultureInfo]::InvariantCulture) } else { $null }
     $env:DDVIEW_TRACE_SECONDS = if ($null -ne $TraceStage) { $TraceSeconds.ToString([Globalization.CultureInfo]::InvariantCulture) } else { $null }
+    $env:DDVIEW_MATERIAL_SPECIALIZATION = if ($MaterialSpecialization -eq 'on') { '1' } else { $null }
     [ordered]@{
         executable = $viewerPath; sha256 = (Get-FileHash -LiteralPath $viewerPath -Algorithm SHA256).Hash
         arguments = $ViewerArgs; seconds = $Seconds; trace = [bool]$Trace; no_shadows = [bool]$NoShadows
@@ -85,6 +88,8 @@ try {
         skin_diagnostics_env = $env:DDVIEW_SKIN_DIAGNOSTICS
         mesh_builder = $MeshBuilder
         trace_stage = $TraceStage; trace_delay_seconds = $TraceDelay; trace_window_seconds = $TraceSeconds
+        mesh_builder = $MeshBuilder
+        material_specialization = $MaterialSpecialization
         started_utc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$outputPath.run.json"
     $captureProcess = Start-Process -FilePath $viewerPath -ArgumentList ($quotedArguments -join ' ') `
@@ -153,6 +158,7 @@ try {
     $env:DDVIEW_TRACE_STAGE = $oldTraceStage
     $env:DDVIEW_TRACE_DELAY = $oldTraceDelay
     $env:DDVIEW_TRACE_SECONDS = $oldTraceSeconds
+    $env:DDVIEW_MATERIAL_SPECIALIZATION = $oldMaterialSpecialization
     if ($captureProcess -and -not $captureProcess.HasExited) {
         Write-Warning "Viewer PID $($captureProcess.Id) still running: retain live/ddview lease until actual exit."
     }
