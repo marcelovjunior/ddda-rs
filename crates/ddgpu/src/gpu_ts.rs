@@ -48,7 +48,7 @@ static AGG: Mutex<Option<Agg>> = Mutex::new(None);
 pub(crate) fn init(device: &wgpu::Device, queue: &wgpu::Queue) {
     if !enabled() { return; }
     if !device.features().contains(features()) {
-        eprintln!("gpu-ts: TIMESTAMP_QUERY unsupported on this device; disabled");
+        eprintln!("gpu-ts: unsupported on this device (missing {:?}; device has {:?}); disabled", features() - device.features(), device.features() & features());
         return;
     }
     let qs = device.create_query_set(&wgpu::QuerySetDescriptor { label: Some("gpu-ts"), ty: wgpu::QueryType::Timestamp, count: CAP });
