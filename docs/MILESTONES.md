@@ -952,6 +952,14 @@
   `DDRUNTIME_GEOMETRY_PORT=1`, off pending head A/B.
   Next: head integration regeneration/gate and geometry A/B; UI timings
   need head marks. No measured geometry or first-Present speedup yet.
+### L109 dynamic-Huffman oracle extension (2026-10-13)
+
+- **632 original fast-inflate cases pass**, up from 559: 73 entry/return
+  snapshots from 24 complete 8 KiB dynamic-Huffman streams. Original
+  outer inflate and table builder run unmocked; full plaintext matches.
+- The existing readable port needed no changes. All memory windows,
+  GPR/XMM registers and arithmetic flags still match byte-for-byte.
+- Next: head's matched game run; decoder benchmarks are not loading times.
 
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 

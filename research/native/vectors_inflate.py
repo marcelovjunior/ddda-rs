@@ -136,8 +136,78 @@ def generate():
     return cases
 
 
+def dynamic_cases():
+    """Capture real fast-loop calls while the original outer inflate builds
+    dynamic tables and expands complete synthetic raw-DEFLATE streams.
+
+    Initial state is raw TYPEDO (12), no history, 15 window bits, as read by
+    0x00cf02e0. The output can hold the whole stream, so no window allocator
+    is needed. Outer inflate and table-building instructions run unmocked.
+    The final outer output must equal the synthetic plaintext as well.
+    """
+    results = []
+    for seed in range(24):
+        rnd = random.Random(10000+seed)
+        # Unequal symbol frequencies force a dynamic tree, unlike tiny or
+        # uniformly random streams which often select fixed/stored blocks.
+        payload = bytes(rnd.choices(range(48), weights=range(48,0,-1), k=8192))
+        compressor = zlib.compressobj(6, zlib.DEFLATED, -15)
+        data = compressor.compress(payload)+compressor.flush()
+        assert (data[0] >> 1) & 3 == 2, 'expected dynamic Huffman block'
+        uc = original_uc(core.UC_ARCH_X86, core.UC_MODE_32)
+        uc.ctl_set_tcg_buffer_size(core.h.TCG_BUFFER)
+        for va, b in core.h.image()[1]:
+            start = va & ~0xfff
+            uc.mem_map(start, (va+len(b)-start+0xfff)&~0xfff)
+            uc.mem_write(va,b)
+        uc.mem_map(core.h.SCRATCH, core.h.SCRATCH_SIZE)
+        uc.mem_map(core.h.STACK, core.h.STACK_SIZE)
+        uc.mem_map(core.h.RET & ~0xfff, 0x1000)
+        base = core.h.SCRATCH
+        stream, state, source, output = base+0x100, base+0x1000, base+0x3000, base+0x8000
+        uc.mem_write(base, rnd.randbytes(0x10000))
+        uc.mem_write(stream, bytes(56))
+        uc.mem_write(state, bytes(0x1c00))
+        def put(at, value): uc.mem_write(at,struct.pack('<I',value))
+        for offset,value in {0:source,4:len(data),12:output,16:len(payload)+1024,28:state}.items():put(stream+offset,value)
+        for offset,value in {0:12,0x1c:15}.items():put(state+offset,value)
+        uc.mem_write(source,data)
+        uc.mem_write(core.ESP-0x1000,rnd.randbytes(0x1100))
+        uc.mem_write(core.ESP,struct.pack('<III',core.h.RET,stream,4))
+        for reg in core.UC_GPR:uc.reg_write(reg,rnd.getrandbits(32))
+        uc.reg_write(core.xc.UC_X86_REG_ESP,core.ESP)
+        uc.reg_write(core.xc.UC_X86_REG_MXCSR,0x1f80)
+        uc.reg_write(core.xc.UC_X86_REG_FPCW,0x37f)
+        pending = []
+        def machine(windows):
+            return ({n:uc.reg_read(r) for n,r in zip(core.GPR,core.UC_GPR)},
+                    [[(uc.reg_read(r)>>(32*i))&0xffffffff for i in range(4)] for r in core.UC_XMM],
+                    [[a,bytes(uc.mem_read(a,n)).hex()] for a,n in windows])
+        # Use a return-address guard; there are no callees inside fast.
+        def record_hook(uc, address, size, user):
+            if pending and address == pending[0][0]:
+                _,windows,c=pending.pop()
+                regs,xmm,memory=machine(windows)
+                c.update(regs_out=regs,xmm_out=xmm,mem_out=memory,flags=uc.reg_read(core.xc.UC_X86_REG_EFLAGS))
+                results.append(c)
+            if address == 0x00cf2cb0:
+                esp=uc.reg_read(core.xc.UC_X86_REG_ESP)
+                back=struct.unpack('<I',uc.mem_read(esp,4))[0]
+                windows=[(base,0x10000),(esp-0x200,0x240)]
+                regs,xmm,memory=machine(windows)
+                pending.append((back,windows,{'addr':address,'regs_in':regs,'xmm_in':xmm,'mem_in':memory,'calls':[]}))
+        before=len(results)
+        uc.hook_add(core.UC_HOOK_CODE,record_hook)
+        uc.emu_start(0x00cf02e0,core.h.RET,count=2_000_000)
+        assert uc.reg_read(core.xc.UC_X86_REG_EIP)==core.h.RET and not pending
+        assert uc.reg_read(core.xc.UC_X86_REG_EAX)==1, 'outer inflate did not reach stream end'
+        assert bytes(uc.mem_read(output,len(payload)))==payload
+        assert len(results)>before
+    return results
+
+
 def main():
-    cases = generate()
+    cases = generate() + dynamic_cases()
     path = Path(os.environ.get('L109_VECTORS', 'E:/ddda-re/notes/native-L109/vectors/inflate_fast.bin'))
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('wb') as f:
