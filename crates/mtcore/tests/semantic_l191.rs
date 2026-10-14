@@ -141,7 +141,12 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
             for (a, b) in pairs(&back["memory"]) {
                 m.set_u8(a, b);
             }
+            // the callee leaves ECX and EDX as the recorder did (its scribble, or
+            // its own values): a port that does not set them before the next call
+            // or tail call must not pass on the stale ones
             c.eax = regs(back)[EAX];
+            c.ecx = regs(back)[ECX];
+            c.edx = regs(back)[EDX];
             c.esp = regs(back)[ESP];
             log2.borrow_mut().push(target);
             *position.borrow_mut() += 1;

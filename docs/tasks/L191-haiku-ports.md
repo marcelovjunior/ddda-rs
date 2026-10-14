@@ -60,6 +60,17 @@ a path the caller never takes); the scribble rule covers the rest.
   stays at 1.17x with the direct return-address write).
 - Not verified in-game: the fix is the only flag difference between port and lifted
   on the first call, and the recordings cannot see flags.
+- Second cause (found after 7a5ae8e3): the pass path tail-calls slot 0x174 after
+  `mov ecx, esi` (0x00885E1D). The port did not set ECX, so the tail-called method
+  received the ECX the previous vtable method had left (the recorder's scribble in
+  the recording). The crash frames fit this: 0x00886400 (vf10) calls its vtable slot
+  0x20, which is vf08; vf08 tail-calls 0x00C51D90 with ECX = 0xFFFF, and 0x00C51D90
+  reads `[ecx+0x2627]` = 0x12626. Fixed by setting `c.ecx = this` before the tail call.
+  The harness missed it because its replay never changed the port's ECX/EDX after a
+  call; it now sets them from the recorded return state, and the test fails without
+  the fix (port ECX 404594402 at the tail, recorded 0x20000000). The other five L191
+  tests pass with the stronger replay. Not verified in-game: the game runner must
+  confirm that the crash is gone with 0x885DC0 registered.
 
 ### Gaps that remain
 - EFLAGS at non-tail calls in vf09, char, probe and owner are not reproduced (no
@@ -79,7 +90,9 @@ a path the caller never takes); the scribble rule covers the rest.
    from the callee's lifted code (`l191_callee_inputs.py`) rather than from memory.
 3. Callee-saved registers (EBX, EBP, ESI, EDI) survive a call in the recording, so they
    must match at every call. ECX and EDX after a stub return hold a recorder scribble
-   that is undefined for the port: record it (`scribbled`) and skip it.
+   that is undefined for the port: record it (`scribbled`) and skip it. The replay must
+   set ECX and EDX from the recorded return state, or a port that leaves its own stale
+   value passes the check by accident (vf08's tail call).
 4. Flags: a tail call hands the flags on to the callee. Reproduce the last compare
    before any tail call and before the first call of a path whose callee might read
    flags. `c.fl.alu_sub(a, b, width)` leaves the same flags as the lifted compare.
@@ -104,5 +117,6 @@ a path the caller never takes); the scribble rule covers the rest.
 - The real self-time sink is 0x00DD42C0 itself: a linear scan of all listeners of
   `this+0x4CD48` (stride 0x6E0) for each event and each parent level, reading about six fields
   per listener through the page table. Cheaper options: read the first 0xD0 bytes of each
-  listener once (one slice instead of six page lookups); keep an owner/channel index
-  maintained by the add/remove paths (needs those paths ported too).
+  listener once (one slice instead of six page lookups; done in 88e3c98c, a 1.01x to 1.08x
+  gain in the bench, below the gate); keep an owner/channel index maintained by the
+  add/remove paths (needs those paths ported too).
