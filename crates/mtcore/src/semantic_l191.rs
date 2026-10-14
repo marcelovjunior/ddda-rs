@@ -50,6 +50,8 @@ pub fn obj_model_vf11(m: &mut dyn Mem, c: &mut Cpu) {
     if pending {
         // The state handler runs with the argument as its only stack word.
         let frame = entry.wrapping_sub(4);
+        c.eax = arg;
+        c.esi = this.wrapping_add(MODEL_STATE);
         call_from(m, c, pg, frame, this, &[arg], 0x0088_68d6, |m, c| call_guest(m, c, 0x007a_6640));
         c.esi = pg.u32(m, entry.wrapping_sub(4));
         c.esp = entry.wrapping_add(8);
@@ -78,11 +80,16 @@ pub fn obj_model_vf08(m: &mut dyn Mem, c: &mut Cpu) {
     // push ESI
     pg.set_u32(m, entry.wrapping_sub(4), c.esi);
     pg.set_u16(m, this.wrapping_add(0x209c), 0);
+    // the lifted body zeroes EAX and sets ESI = this
+    c.eax = 0;
+    c.esi = this;
 
     // A virtual method of the model, called thiscall with no arguments.
     let method = |m: &mut dyn Mem, c: &mut Cpu, slot: u32, back: u32| {
         let vtable = pg.u32(m, this);
         let target = pg.u32(m, vtable.wrapping_add(slot));
+        c.eax = vtable;
+        c.edx = target;
         call_from(m, c, pg, entry.wrapping_sub(4), this, &[], back, |m, c| call_guest(m, c, target));
     };
 
@@ -97,6 +104,8 @@ pub fn obj_model_vf08(m: &mut dyn Mem, c: &mut Cpu) {
         // Tail call through slot 0x174 with the return address still in place.
         let vtable = pg.u32(m, this);
         let target = pg.u32(m, vtable.wrapping_add(0x174));
+        c.eax = vtable;
+        c.edx = target;
         c.esi = pg.u32(m, entry.wrapping_sub(4));
         c.esp = entry;
         call_guest(m, c, target);
@@ -127,6 +136,9 @@ pub fn character_vf09(m: &mut dyn Mem, c: &mut Cpu) {
     let entry = c.esp;
     let this = c.ecx;
     let (saved_ebp, saved_ebx, saved_esi, saved_edi) = (c.ebp, c.ebx, c.esi, c.edi);
+    // the lifted body sets EBP to the frame base and ESI to the owner
+    c.ebp = entry.wrapping_sub(4);
+    c.esi = this;
     // Prologue: EBP, then the frame aligned to 8 with ECX (this), EBX, ESI and EDI pushed.
     let aligned = entry.wrapping_sub(4) & !7;
     pg.set_u32(m, entry.wrapping_sub(4), saved_ebp);
@@ -201,6 +213,9 @@ pub fn character_vf09(m: &mut dyn Mem, c: &mut Cpu) {
 fn vmethod(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, object: u32, slot: u32, back: u32) {
     let vtable = pg.u32(m, object);
     let target = pg.u32(m, vtable.wrapping_add(slot));
+    // the lifted body loads the vtable into EAX and the method into EDX
+    c.eax = vtable;
+    c.edx = target;
     call_from(m, c, pg, frame, object, &[], back, |m, c| call_guest(m, c, target));
 }
 
@@ -284,12 +299,17 @@ fn draw_prep_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, frame: u32
     }
     // The bounds test: the squared distance from the global reference point
     // (its object at +0x34) against the threshold at 0x0150929C.
-    if pg.u32(m, this.wrapping_add(0x1f80)) != 0 {
+    // the lifted body loads the pass word into EBX unconditionally
+    c.ebx = pg.u32(m, this.wrapping_add(0x1f80));
+    if c.ebx != 0 {
         let mut call_helper = true;
         if pg.u8(m, this.wrapping_add(0x206d)) & 1 != 0 && pg.u8(m, this.wrapping_add(0x206e)) & 0x10 == 0 {
             call_helper = false;
             let global = pg.u32(m, 0x018d_0b6c);
             let reference = pg.u32(m, global.wrapping_add(0x34));
+            // the lifted body leaves the global in EAX and the reference in ESI
+            c.eax = global;
+            c.esi = reference;
             if reference != 0 {
                 let p = call_from(m, c, pg, frame, this, &[frame.wrapping_add(0x10)], 0x0088_6694, |m, c| call_guest(m, c, 0x004c_6b50));
                 let coord = |a: u32| f32::from_bits(pg.u32(m, a));
@@ -308,18 +328,23 @@ fn draw_prep_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, frame: u32
     }
     if pg.u8(m, this.wrapping_add(0x2398)) & 4 != 0 {
         let block = this.wrapping_add(0x10e0);
+        // ESI = the sub-object (the lifted body sets it before both calls)
+        c.esi = block;
         call_from(m, c, pg, frame, this, &[block], 0x0088_67fb, |m, c| call_guest(m, c, 0x0076_b300));
         call_from(m, c, pg, frame, this, &[block], 0x0088_6801, |m, c| call_guest(m, c, 0x0076_b660));
     }
     if pg.u32(m, this.wrapping_add(0x23b4)) != 0 && pg.u8(m, this.wrapping_add(0x23b8)) & 2 == 0 {
         let count = pg.u32(m, this.wrapping_add(0x23a4));
+        c.ebx = count;
+        c.esi = 0;
         if (count as i32) > 0 {
-            // each non-null element of the table at +0x23B0 is released
+            // each non-null element of the table at +0x23B0 is released; ESI counts them
             let mut i = 0u32;
             loop {
                 let table = pg.u32(m, this.wrapping_add(0x23b0));
                 let element = pg.u32(m, table.wrapping_add(i.wrapping_mul(4)));
                 if element != 0 {
+                    c.esi = i;
                     call_from(m, c, pg, frame, this, &[element], 0x0088_6833, |m, c| call_guest(m, c, 0x005b_0570));
                 }
                 i = i.wrapping_add(1);
@@ -327,6 +352,7 @@ fn draw_prep_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, frame: u32
                     break;
                 }
             }
+            c.esi = i;
         }
     }
     let flags = pg.u32(m, this.wrapping_add(0x20c4)) & 0xffff_fff3;
@@ -367,6 +393,9 @@ pub fn obj_model_vf09(m: &mut dyn Mem, c: &mut Cpu) {
     pg.set_u32(m, aligned.wrapping_sub(0x1c), saved.2);
     pg.set_u32(m, aligned.wrapping_sub(0x20), saved.3);
 
+    // the prologue: EBP is the frame base, EDI the owner
+    c.ebp = entry.wrapping_sub(4);
+    c.edi = this;
     draw_prep_body(m, c, pg, this, frame);
 
     // Epilogue: the saved registers come back from the frame.
@@ -407,6 +436,8 @@ fn probe_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, frame: u32, s
             }
             pg.set_u32(m, slot, value);
             // the record is the argument; the vtable method 0x44 of the object decides
+            // EBX holds the table base of the slot here (the lifted `ebx = [T + 0xB8]`)
+            c.ebx = pg.u32(m, table.wrapping_add(0xb8));
             let flagged = pg.u8(m, state.wrapping_add(0xb4)) != 0;
             let (object, back) = if flagged {
                 (pg.u32(m, frame + 0x28), 0x0116_5c41)
@@ -416,6 +447,8 @@ fn probe_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, frame: u32, s
             if vcall(m, c, pg, frame, object, 0x44, &[record], back) as u8 == 0 {
                 return 0;
             }
+            // the lifted body restores EBX = this after the method call
+            c.ebx = this;
         }
     }
 
@@ -465,6 +498,8 @@ fn probe_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, frame: u32, s
         let table_word = pg.u32(m, frame + 0x14);
         call_from(m, c, pg, frame, table_word, &args, 0x0116_5cf4, |m, c| call_guest(m, c, 0x010a_88a0))
     };
+    // EDI holds the callback's result from here on (the lifted `edi = eax`)
+    c.edi = result;
     if pg.u8(m, frame + 0x13) == 0 {
         pg.set_u32(m, state.wrapping_add(0xa8), 0);
     }
@@ -510,6 +545,11 @@ pub fn probe_search_step(m: &mut dyn Mem, c: &mut Cpu) {
     let l20 = if source_flag { pg.u32(m, source.wrapping_add(0x38)) } else { 0 };
     pg.set_u32(m, frame + 0x20, l20);
 
+    // the lifted prologue: EBP = the owner, EBX = this, EDI = the index, ESI = the state
+    c.ebp = owner;
+    c.ebx = this;
+    c.edi = index;
+    c.esi = state;
     let result = probe_body(m, c, pg, entry, frame, state, owner, this, index, table, entry_record, l20);
 
     // Epilogue: the saved registers come back from the frame; ret 0x10.

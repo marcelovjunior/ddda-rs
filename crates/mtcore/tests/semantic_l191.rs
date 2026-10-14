@@ -41,6 +41,7 @@ fn regs(v: &Value) -> [u32; 8] {
 /// Register order of the recorded files.
 const EAX: usize = 0;
 const ECX: usize = 1;
+const EDX: usize = 2;
 const EBX: usize = 3;
 const ESP: usize = 4;
 const EBP: usize = 5;
@@ -105,7 +106,12 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
                 .unwrap_or_else(|| panic!("case {i}: no convention for {target:x}"));
             let at_call = regs(call);
             let now = [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi];
-            for &r in reads.iter().chain(&[ESP]) {
+            // every register the callee could read (all of them: an implicit input the port
+            // does not set would make the guest code diverge), and ESP
+            // EBX, EBP, ESI, EDI (callee-saved) carry state across calls and must match at
+            // every call; EAX and ECX/EDX after a call are caller-saved garbage, checked only
+            // where a callee declares them (`reads`).
+            for r in [EBX, EBP, ESI, EDI, ESP].into_iter().chain(reads.iter().copied()) {
                 assert_eq!(now[r], at_call[r], "case {i}: call {k} ({target:x}) register {r}");
             }
             let recorded = pairs(&call["memory"]);
@@ -114,6 +120,12 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
             for (&a, &b) in &recorded {
                 if a >= esp && a < esp + 4 * words {
                     assert_eq!(m.u8(a), b, "case {i}: call {target:x} memory {a:x}");
+                }
+            }
+            // memory the callee reads beyond its arguments (a recorded check)
+            if let Some(checks) = call.get("checks") {
+                for (a, b) in pairs(checks) {
+                    assert_eq!(m.u8(a), b, "case {i}: call {target:x} reads {a:x}");
                 }
             }
             for (a, b) in pairs(&back["memory"]) {
@@ -132,6 +144,7 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
             *made.entry(*t).or_default() += 1;
         }
         let eax = if returns { [c.eax, after[EAX]] } else { [0, 0] };
+
         let got = [eax[0], c.ebx, c.esp, c.ebp, c.esi, c.edi];
         let want = [eax[1], after[EBX], after[ESP], after[EBP], after[ESI], after[EDI]];
         assert_eq!(got, want, "case {i}: eax/ebx/esp/ebp/esi/edi");
