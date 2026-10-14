@@ -1020,24 +1020,25 @@ impl CowBanks {
 /// binding writing a register decides, as at the flush; its bank lacking
 /// it, the device keeps its own); what is left for the device.
 fn fill_from_uploads(banks: &mut CowBanks, mut missing: [[u64; 4]; 2], uploads: &Uploads) -> Result<[[u64; 4]; 2], Refusal> {
-    let mut device = [[0u64; 4]; 2];
-    for u in uploads.bindings.iter().rev() {
-        for stage in 0..2 {
-            for word in 0..4 {
-                let mut take = missing[stage][word] & u.written[stage].0[word];
-                missing[stage][word] &= !take;
-                while take != 0 {
-                    let n = word * 64 + take.trailing_zeros() as usize;
-                    take &= take - 1;
-                    match u.constants[stage].f.get(n) {
-                        Some(&v) => banks.set_float(stage, n, v)?,
-                        None => device[stage][word] |= 1 << (n % 64),
-                    }
+    if uploads.is_empty() {
+        return Ok(missing);
+    }
+    for stage in 0..2 {
+        for word in 0..4 {
+            let mut m = missing[stage][word];
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                let Some(u) = uploads.last_writer(stage, n) else { continue };
+                // the newest writer's bank lacking it: the device keeps its own
+                if let Some(&v) = u.constants[stage].f.get(n) {
+                    banks.set_float(stage, n, v)?;
+                    missing[stage][word] &= !(1 << (n % 64));
                 }
             }
         }
     }
-    Ok(std::array::from_fn(|stage| std::array::from_fn(|word| missing[stage][word] | device[stage][word])))
+    Ok(missing)
 }
 
 /// Fill the `missing` float registers with `value(stage, register)`; a
@@ -2062,13 +2063,43 @@ pub fn commit(m: &mut dyn Mem, info: &FrameInfo, c: &mut Caches, mut sh: Shadow,
 #[derive(Default)]
 pub struct Uploads {
     bindings: Vec<Arc<BindingPart>>,
+    /// per stage and float register, 1 + the index of the newest binding
+    /// writing it (0: none; L180: a fill looks a register up instead of
+    /// walking the list, which grows over a whole frame when every draw is
+    /// taken); 512 entries once a binding is added
+    last_float: Vec<u32>,
 }
 
 impl Uploads {
     fn add(&mut self, b: &Arc<BindingPart>) {
         if !self.bindings.last().is_some_and(|l| Arc::ptr_eq(l, b)) {
             self.bindings.push(b.clone());
+            if self.last_float.is_empty() {
+                self.last_float.resize(512, 0);
+            }
+            let index = self.bindings.len() as u32;
+            for (stage, (floats, _, _)) in b.written.iter().enumerate() {
+                for word in 0..4 {
+                    let mut m = floats[word];
+                    while m != 0 {
+                        let n = word * 64 + m.trailing_zeros() as usize;
+                        m &= m - 1;
+                        self.last_float[stage * 256 + n] = index;
+                    }
+                }
+            }
         }
+    }
+    /// The newest binding writing float register `n` of `stage`.
+    fn last_writer(&self, stage: usize, n: usize) -> Option<&Arc<BindingPart>> {
+        match self.last_float.get(stage * 256 + n) {
+            Some(&index) if index != 0 => self.bindings.get(index as usize - 1),
+            _ => None,
+        }
+    }
+    fn clear(&mut self) {
+        self.bindings.clear();
+        self.last_float.fill(0);
     }
     fn is_empty(&self) -> bool {
         self.bindings.is_empty()
@@ -2160,7 +2191,7 @@ pub fn flush_uploads(device: u32, uploads: &mut Uploads) {
             s.constant_snapshots[1].dirty = true;
         }
     });
-    uploads.bindings.clear();
+    uploads.clear();
 }
 
 /// Flush what `d` reads (the D3D9 path's flush_reads; the benchmark).
