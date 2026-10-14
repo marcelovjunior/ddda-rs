@@ -63,3 +63,10 @@ DDRUNTIME_SHADOW_PRIMITIVE=1 alone runs fine (58.7 / 58.2, no change); the panic
 3. `fast_u32`/`fast_set_u32` 2.8 ms main, 0.7 ms in the shadow job: generic lifted memory helpers; any port that removes lifted bodies
    shrinks them (largest lifted users in the main profile: 0x011318f0, 0x0109d480, 0x01077500, 0x00f75520, 0x00fe64f0).
 4. `semantic::dispatch_event` (0x00ddbdc0) 0.46: port/inline the event dispatch.
+
+## Round 3
+- DDRUNTIME_JOB_INLINE=N (job_order.rs; top-level batches of 2..N jobs run on the caller, skipping the SetEvent/WaitForMultipleObjects round trip of
+  every enabled worker): N=3 56.3/60.2, N=8 44.8 (harmful) vs 60.4/59.5 control. Off by default; the wake path is not a cheap win
+  (DDRUNTIME_JOB_STATS=1 prints batch time by queue size). The remaining DBE560 self time is the join wait itself.
+- L191 (c6c8df77) merged: 885DC0 (obj_model_vf08) still crashes the game at start (WinMain read 0x00012626); 886880, 84C720, 886530, 1165B40
+  run clean (59.8/59.8). fast2 ships them with 885DC0 in DDRUNTIME_SEMANTIC_SKIP.
