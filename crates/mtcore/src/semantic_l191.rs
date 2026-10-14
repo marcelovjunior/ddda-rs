@@ -44,9 +44,25 @@ pub fn obj_model_vf11(m: &mut dyn Mem, c: &mut Cpu) {
     let state = this.wrapping_add(MODEL_STATE);
     pg.set_u32(m, this.wrapping_add(MODEL_FADE), level);
 
-    let pending = pg.u32(m, state.wrapping_add(0x24)) != 0
-        && pg.u32(m, state.wrapping_add(0x28)) != 0
-        && pg.u8(m, state.wrapping_add(0x5a)) != 0;
+    // The lifted body's three compares with zero (`cmp [state+0x24]`, `cmp [state+0x28]`,
+    // `cmp byte [state+0x5A]`), in order, each stopping at the first zero. The flags
+    // they leave are the flags of the callee (EFLAGS are not reset by the call or the
+    // tail call), so the last one run is reproduced here.
+    let first = pg.u32(m, state.wrapping_add(0x24));
+    c.fl.alu_sub(first, 0, 32);
+    let pending = if first == 0 {
+        false
+    } else {
+        let second = pg.u32(m, state.wrapping_add(0x28));
+        c.fl.alu_sub(second, 0, 32);
+        if second == 0 {
+            false
+        } else {
+            let flag = pg.u8(m, state.wrapping_add(0x5a));
+            c.fl.alu_sub(flag as u32, 0, 8);
+            flag != 0
+        }
+    };
     if pending {
         // The state handler runs with the argument as its only stack word.
         let frame = entry.wrapping_sub(4);
@@ -85,19 +101,30 @@ pub fn obj_model_vf08(m: &mut dyn Mem, c: &mut Cpu) {
     c.esi = this;
 
     // A virtual method of the model, called thiscall with no arguments.
+    // (the same stack as `call_from` with no arguments: the return address at entry - 8)
     let method = |m: &mut dyn Mem, c: &mut Cpu, slot: u32, back: u32| {
         let vtable = pg.u32(m, this);
         let target = pg.u32(m, vtable.wrapping_add(slot));
         c.eax = vtable;
         c.edx = target;
-        call_from(m, c, pg, entry.wrapping_sub(4), this, &[], back, |m, c| call_guest(m, c, target));
+        c.ecx = this;
+        pg.set_u32(m, entry.wrapping_sub(8), back);
+        c.esp = entry.wrapping_sub(8);
+        call_guest(m, c, target);
+        c.esp = entry.wrapping_sub(4);
     };
 
-    if pg.u32(m, this.wrapping_add(MODEL_PREPARED)) == 0 {
+    // `cmp [esi+0x1F9C], 0`: the flags the first method (slot 0x80) sees
+    let prepared = pg.u32(m, this.wrapping_add(MODEL_PREPARED));
+    c.fl.alu_sub(prepared, 0, 32);
+    if prepared == 0 {
         pg.set_u32(m, this.wrapping_add(MODEL_PREPARED), 1);
         method(m, c, 0x80, 0x0088_5de8);
     }
-    if pg.u32(m, this.wrapping_add(MODEL_PASSES)) == 1 {
+    // `cmp [esi+0x1F98], 1`: the flags of the next method (slot 0x168), and of the exit
+    let passes = pg.u32(m, this.wrapping_add(MODEL_PASSES));
+    c.fl.alu_sub(passes, 1, 32);
+    if passes == 1 {
         method(m, c, 0x168, 0x0088_5dfd);
         method(m, c, 0x16c, 0x0088_5e09);
         method(m, c, 0x170, 0x0088_5e15);
@@ -488,6 +515,8 @@ fn probe_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, frame: u32, s
     }
     let l1c = pg.u32(m, frame + 0x1c);
     let args = [index, eax, this, 0x0116_58c0, state, l1c];
+    // the callee reads EAX (the lifted body's select)
+    c.eax = eax;
     let result = if pg.u8(m, entry.wrapping_add(0x10)) == 0 {
         // 0x010A8BB0 on the table (ECX = the table word at +0x14)
         let table_word = pg.u32(m, frame + 0x14);
@@ -630,6 +659,7 @@ fn owner_visit_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, frame: 
                 ecx = record;
                 c.ebx = record;
                 c.esi = esi;
+                c.edx = k;
                 let p = call_from(m, c, pg, frame, record, &[], 0x0116_b791, |m, c| call_guest(m, c, 0x0057_b8c0));
                 eax = p;
                 // four lanes: (A < B) or (C < D) against the constant mask
@@ -696,6 +726,7 @@ fn owner_visit_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, frame: 
                     let arg1 = pg.u32(m, entry.wrapping_add(4));
                     c.esi = i;
                     c.ebx = arg1;
+                    c.edx = item;
                     let r6 = call_from(m, c, pg, frame, this, &[arg1, eax, 0], 0x0116_b83d, |m, c| call_guest(m, c, 0x0116_9a50));
                     eax = r6;
                     let set = (r6 & 0xff) != 0;
