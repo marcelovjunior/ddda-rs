@@ -441,6 +441,11 @@ fn participant_events(m: &dyn Mem, scheduler: u32) -> (Vec<u32>, Vec<u32>) {
 /// Run the traversal's parallel branch in a window. False: not exclusive
 /// (nothing was changed; the caller runs it serially).
 pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
+    if std::env::var("DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE").as_deref() == Ok("skip") {
+        // experiment (fps ceiling): no shadow traversal at all (ret 8)
+        cpu.esp = cpu.esp.wrapping_add(12);
+        return true;
+    }
     if stats_mode() {
         run_stats(m, cpu, original);
         return true;
