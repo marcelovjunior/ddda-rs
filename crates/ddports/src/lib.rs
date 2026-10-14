@@ -38,7 +38,17 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
         ports.push((0x0107ff30, mtcore::shadow_primitive::dispatch_end));
         ports.push((0x0111e180, mtcore::shadow_primitive::sprimitive_sort));
     }
-    if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
+    if std::env::var("DDRUNTIME_SHADOW_TOP").as_deref() == Ok("1") {
+        // L172 P2a/P2d: the shadow job's top levels and the lane init/merge
+        // (semantic ports; setup_pass replaces the instruction-level port)
+        ports.push((0x00efd240, mtcore::shadow_top::setup_pass));
+        ports.push((0x00efdc70, mtcore::shadow_top::draw_cascades));
+        ports.push((0x00efef80, mtcore::shadow_top::draw_cascades));
+        ports.push((0x00ee2c90, mtcore::shadow_top::draw_shadow));
+        ports.push((0x00db7620, mtcore::shadow_top::run_unit_job));
+        ports.push((0x00fed200, mtcore::semantic_p2a::init_recording_lanes));
+        ports.push((0x00fed3b0, mtcore::semantic_p2a::merge_recording_lanes));
+    } else if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
         ports.push((0x00efd240, mtcore::shadow_pass::setup));
     }
     ports
