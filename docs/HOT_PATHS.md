@@ -267,3 +267,62 @@ than ~10 guest calls per invocation will not speed up from a port, only from che
 and the s4 family) picked the second operand when both operands of an SSE arithmetic instruction
 were NaN and the second was signalling; the hardware returns the first operand. Test:
 `crates/mtcore/tests/rt_nan.rs` (hardware vs helper over NaN pairs).
+
+## 10. Per-call and per-instruction overhead (L190)
+
+Micro-benchmarks, release, best of repeated rounds, ns. "O3 caller" = the helper called from
+optimised code (`crates/mtcore/tests/helper_bench.rs`); "O0 caller" = the same call from code
+compiled at opt-level 0 like the play-profile shards (a standalone `rustc -C opt-level=0` harness
+against the optimised `ddnative-base`; its empty loop body costs 7.2 ns of each number).
+
+| Piece | O3 caller before | after (`lean-access`) | O0 caller before -> after |
+|---|---:|---:|---:|
+| `m.fast_u32` (hit) | 2.02 | 1.77 | 12.8 -> 12.8 |
+| `m.fast_set_u32` (hit) | 2.01 | 1.77 | 9.0 -> 9.0 |
+| `emit::push + pop` | 3.53 | 3.52 | 14.4 -> 13.5 |
+| `m.fast_u8` | 1.52 | 1.5-1.8 (code untouched; layout noise) | 12.6 |
+| `fl.alu_sub` / `alu_and` | 1.77 | 1.77 | 12.7 |
+| `fl.cond("le")` / `("ne")` | 7.0 / 2.0 | not changed (a packed-key version gave 5.3 / 2.5: no gain overall) | 15.1 / 14.3 |
+| `x86::call_local` (nop) | 0.25 | | |
+| `x86::call_ext` (trivial handler) | 2.9 | | 9.5 incl. loop |
+| `x87 real_memory` fld+fstp | 9.9 | | |
+
+How the numbers read:
+
+- **The helper bodies are at their floor.** A guest memory access is one out-of-line call, one
+  atomic load of the page entry, a permission test and the load: 1.8-2 ns. `lean-access`
+  (default feature of `ddnative-base`; `--no-default-features` restores L77) gives the aligned
+  dword load and store their own path (no page-end test, one alignment test) and makes `push`/`pop`
+  one optimised out-of-line copy with the store inlined: -12% on `fast_u32`/`fast_set_u32` from an
+  optimised caller and -0.9 ns on push+pop from an opt-level-0 caller. From an opt-level-0 caller
+  the access is not faster, because the caller's own spills and argument set-up (5-6 ns)
+  dominate. Expect about 1-2% of CPU, not more.
+- **Calls are cheap**: a not-overridden `call_local` is a bit test (0.25 ns); `call_ext` into the
+  dispatch cache is 3 ns; the runtime's cache (L74/L101/L171/L185) is already direct-mapped
+  with a lean path; a port reached from a port through `call_guest` is a bit test plus one probe of
+  the open-addressing table. No cheap change is left in dispatch.
+- **The large factor is the opt-level.** The skin-remap function (`B8B800`, loops and memory
+  helpers) runs in 30.6 us at opt-level 0, 12.1 us at opt-level 1, 11.5 us at opt-level 3
+  (2.5x). `-Zmir-opt-level=3 -Zinline-mir` at opt-level 0 gains 4%; nothing else short of
+  opt-level 1 helps. The play profiles build the 32 address shards at opt-level 0 (`play-fast`:
+  15 of them at 1, chosen for loading and the title) and only 83 functions in `lift_hot_00` at 1.
+- **Static helper sites in the generated code**: `fast_u32` 866k, `fast_set_u32` 674k, `emit::push`
+  573k, `emit::pop` 135k, `alu_sub` 101k, `alu_and` 69k, `call_ext` 137k, `call_lifted` 55k,
+  `call_local` 23k, `cond` 336.
+
+**Where the busy lifted time sits** (five saved gameplay captures, busy guest-thread samples
+attributed to the nearest lifted function without a port, `scripts/hot_list.py`): lift_hot_00
+13%, shards 28 11.6%, 02 10.4%, 27 9.6%, 31 4.8%, 01 4.7%, 30 4.6%, 00 4.4%, 06 3.4%, then
+`play-fast`'s opt-level-0 shards 14 2.9%, 08 2.9%, 03 2.7%, 11 2.5%, 29 2.4%, 24 2.4%, 09 2.3%,
+16 2.3% (19.4% together; the other opt-level-0 shards 3.4%).
+
+**What to build.** `play-hot` (new profile, `scripts/build_play.sh --profile play-hot TAG`,
+target `C:/ddda-targets/playhot`) is `play-fast` with those eight shards at opt-level 1 too:
+the 19% of lifted samples they hold should run about 2.5x faster (an estimated 8-11% of lifted
+CPU; unmeasured in game). `scripts/hot_list.py` picks the functions for a finer cut from a
+fresh `autorun3.sh` capture (it skips functions that have a port). Not done: moving the hot list
+inside the generated code. `lift.py gen` with the *committed* hot list rewrites 756 of the 1575
+generated files and takes 11.5 minutes, so the tracked shards no longer match the generator and
+its data; a deliberate regeneration plus gate by the lifter owner is needed before the hot
+package can grow (its capacity is 2000 functions; 83 now).
+

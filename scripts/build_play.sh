@@ -5,7 +5,7 @@
 #   scripts/build_play.sh [options] TAG [-- extra cargo args]
 #
 #   TAG                 run name: the exe and PDB go to <target>/runs/TAG
-#   --profile P         play-fast (default), play or play-o0
+#   --profile P         play-fast (default), play, play-o0 or play-hot (play-fast + 8 more O1 shards, L190)
 #   --target-dir D      default: $CARGO_TARGET_DIR, else the profile's shared
 #                       warm directory (play-fast: C:/ddda-targets/playfast,
 #                       play: C:/ddda-targets/play, play-o0: C:/ddda-targets/playo0)
@@ -50,6 +50,7 @@ if [ -z "$td" ]; then
     play-fast) td=C:/ddda-targets/playfast ;;
     play) td=C:/ddda-targets/play ;;
     play-o0) td=C:/ddda-targets/playo0 ;;
+    play-hot) td=C:/ddda-targets/playhot ;;
     *) echo "build_play: give --target-dir for profile $profile" >&2; exit 2 ;;
   esac
 fi
