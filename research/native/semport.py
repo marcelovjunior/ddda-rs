@@ -430,6 +430,15 @@ class Fn:
         elif mn == 'cvtsi2ss':
             di = self.xmm_index(i, ops[0])
             e(f'xmm[{di}][0] = ({self.get(i, ops[1], 32)} as i32) as f32;')
+        elif mn == 'imul' and len(ops) == 3:
+            e(self.put(i, ops[0], f'(({self.get(i, ops[1], 32)} as i32).wrapping_mul({ops[2].imm} as i32)) as u32'))
+        elif mn in ('sete', 'setne') and ops[0].size == 1:
+            cond = 'zf' if mn == 'sete' else '!zf'
+            e(self.put(i, ops[0], f'({cond}) as u32'))
+        elif mn == 'fld' and ops[0].type == X86_OP_MEM and ops[0].size == 4:
+            e(f'x87 = {self.get(i, ops[0], 32)};')
+        elif mn == 'fstp' and ops[0].type == X86_OP_MEM and ops[0].size == 4:
+            e(self.put(i, ops[0], 'rt::x87_copy(x87)'))
         elif mn == 'nop':
             pass
         else:
@@ -461,9 +470,12 @@ class Fn:
         if self.frame is not None:
             w(f'    let mut fr = [0f32; {self.frame // 4}];')
         w('    let (mut cf, mut zf, mut sf, mut of_, mut pf) = (false, false, false, false, false);')
+        w('    let mut x87 = 0u32;')
         w('    //LDDECL')
         w(f'    let mut pc: u32 = 0x{self.entry:08x};')
         w('    loop {')
+        w('        #[cfg(feature = "cover")]')
+        w('        rt::hit(pc);')
         w('        match pc {')
         lset = set(leaders)
         for k, i in enumerate(self.insns):
