@@ -59,8 +59,8 @@ fn wjitter(state: &mut u64, max_us: u64) {
 /// The per-thread FPU environment the harness gives every thread: distinct
 /// x87 control word and MXCSR.
 #[cfg(target_arch = "x86_64")]
-fn wset_fp(k: usize) {
-    let mxcsr: u32 = 0x1f80 | ((k as u32 % 4) << 13) | if k % 2 == 1 { 0x8000 } else { 0 };
+fn wset_fp(k: usize, vary_mxcsr: bool) {
+    let mxcsr: u32 = if vary_mxcsr { 0x1f80 | ((k as u32 % 4) << 13) | if k % 2 == 1 { 0x8000 } else { 0 } } else { 0x1f80 };
     let cw: u16 = 0x027f | (((k as u16 + 1) % 4) << 10);
     unsafe {
         std::arch::asm!("ldmxcsr [{m}]", "fldcw [{c}]", m = in(reg) &mxcsr, c = in(reg) &cw, options(nostack));
@@ -75,9 +75,14 @@ fn wfp() -> (u32, u16) {
     (mxcsr & 0xffc0, cw)
 }
 #[cfg(target_arch = "x86_64")]
-fn wexpected_fp(k: usize) -> (u32, u16) {
-    (0x1f80 & 0xffc0 | ((k as u32 % 4) << 13) | if k % 2 == 1 { 0x8000 } else { 0 }, 0x027f | (((k as u16 + 1) % 4) << 10))
+fn wexpected_fp(k: usize, vary_mxcsr: bool) -> (u32, u16) {
+    let mxcsr = if vary_mxcsr { 0x1f80 & 0xffc0 | ((k as u32 % 4) << 13) | if k % 2 == 1 { 0x8000 } else { 0 } } else { 0x1f80 & 0xffc0 };
+    (mxcsr, 0x027f | (((k as u16 + 1) % 4) << 10))
 }
+
+/// What the window owner does inside the window (after the redirect):
+/// post and run units with the helper interface under test.
+type Traversal = dyn Fn(&mut GuestCaller, &Arc<WindowStats>, &mut u64) + Send + Sync;
 
 /// What the harness counted.
 #[derive(Default)]
@@ -153,7 +158,7 @@ impl MockHelpers {
 /// plays the shadow job and opens a window once the others are parked; a
 /// stray thread sets the workers' start events at random, including inside
 /// windows.
-fn run_window_scenario(workers: usize, rounds: u32, with_helpers: bool, seed: u64) -> Arc<WindowStats> {
+fn run_window_scenario(workers: usize, rounds: u32, traversal: Option<Arc<Traversal>>, vary_mxcsr: bool, seed: u64) -> Arc<WindowStats> {
     let _serial = WINDOW_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     waits::ENABLED.store(true, Ordering::Relaxed);
     let (rt, mut m) = sync_runtime();
@@ -163,12 +168,11 @@ fn run_window_scenario(workers: usize, rounds: u32, with_helpers: bool, seed: u6
     let starts: Arc<Vec<u32>> = Arc::new((0..workers).map(|_| mk(&m)).collect());
     let dones: Arc<Vec<u32>> = Arc::new((0..workers).map(|_| mk(&m)).collect());
     let stats = Arc::new(WindowStats::default());
-    let helpers = Arc::new(MockHelpers::default());
-    let (stats2, starts2, dones2, helpers2) = (stats.clone(), starts.clone(), dones.clone(), helpers.clone());
+    let (stats2, starts2, dones2) = (stats.clone(), starts.clone(), dones.clone());
     // thread 0: the driver; 1..=workers: workers; workers + 1: the stray waker
     run_guest_threads(&rt, &r, &m, workers + 2, Arc::new(move |k, g: &mut GuestCaller| {
         let mut rng = seed ^ (k as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        let (stats, starts, dones, helpers) = (&stats2, &starts2, &dones2, &helpers2);
+        let (stats, starts, dones) = (&stats2, &starts2, &dones2);
         if k == 0 {
             // the main thread: start everyone, join, repeat
             for _ in 0..rounds {
@@ -209,7 +213,7 @@ fn run_window_scenario(workers: usize, rounds: u32, with_helpers: bool, seed: u6
         } else {
             let me = k - 1;
             #[cfg(target_arch = "x86_64")]
-            wset_fp(k);
+            wset_fp(k, vary_mxcsr);
             loop {
                 let wait = g.call(S_WAIT1, &[starts[me], 10_000]);
                 // ---- everything below runs after the wait returned ----
@@ -229,7 +233,7 @@ fn run_window_scenario(workers: usize, rounds: u32, with_helpers: bool, seed: u6
                     stats.saw_private.fetch_add(1, SeqCst);
                 }
                 #[cfg(target_arch = "x86_64")]
-                if wfp() != wexpected_fp(k) {
+                if wfp() != wexpected_fp(k, vary_mxcsr) {
                     stats.fp_changed.fetch_add(1, SeqCst);
                 }
                 stats.jobs.fetch_add(1, SeqCst);
@@ -260,18 +264,8 @@ fn run_window_scenario(workers: usize, rounds: u32, with_helpers: bool, seed: u6
                             stats.in_window.store(true, SeqCst);
                             g.m.set_u32(WG_GLOBAL, WG_PRIVATE);
                             // the traversal: some units, maybe run by the parked workers
-                            if with_helpers {
-                                for _ in 0..(1 + wnext(&mut rng) % 6) {
-                                    let (stats3, mem) = (stats.clone(), g.m.share());
-                                    helpers.post(Box::new(move || {
-                                        // a unit sees the redirect, on whatever thread runs it
-                                        if mem.u32(WG_GLOBAL) != WG_PRIVATE {
-                                            stats3.helper_off_window.fetch_add(1, SeqCst);
-                                        }
-                                        stats3.helper_units.fetch_add(1, SeqCst);
-                                    }));
-                                }
-                                helpers.drain(true);
+                            if let Some(traversal) = &traversal {
+                                traversal(g, stats, &mut rng);
                             }
                             wjitter(&mut rng, 1500);
                             assert_eq!(g.m.u32(WG_GLOBAL), WG_PRIVATE);
@@ -285,7 +279,7 @@ fn run_window_scenario(workers: usize, rounds: u32, with_helpers: bool, seed: u6
                         stats.refused.fetch_add(1, SeqCst);
                     }
                     #[cfg(target_arch = "x86_64")]
-                    if wfp() != wexpected_fp(k) {
+                    if wfp() != wexpected_fp(k, vary_mxcsr) {
                         stats.fp_changed.fetch_add(1, SeqCst);
                     }
                 }
@@ -310,7 +304,7 @@ fn check_window_stats(stats: &WindowStats, rounds: u32) {
 
 #[test]
 fn window_hides_the_redirect_and_holds_every_woken_worker() {
-    let stats = run_window_scenario(5, 400, false, 0x1234_5678);
+    let stats = run_window_scenario(5, 400, None, true, 0x1234_5678);
     eprintln!("windows {} refused {} jobs {}", stats.windows.load(SeqCst), stats.refused.load(SeqCst), stats.jobs.load(SeqCst));
     check_window_stats(&stats, 400);
 }
@@ -318,14 +312,29 @@ fn window_hides_the_redirect_and_holds_every_woken_worker() {
 #[test]
 fn window_with_many_threads_and_other_seeds() {
     for (workers, seed) in [(2, 7u64), (8, 0xdead_beef), (12, 99)] {
-        let stats = run_window_scenario(workers, 150, false, seed);
+        let stats = run_window_scenario(workers, 150, None, true, seed);
         check_window_stats(&stats, 150);
     }
 }
 
 #[test]
 fn mock_helpers_run_units_inside_the_window_only() {
-    let stats = run_window_scenario(5, 200, true, 0xfeed_f00d);
+    let helpers = Arc::new(MockHelpers::default());
+    let traversal: Arc<Traversal> = Arc::new(move |g: &mut GuestCaller, stats: &Arc<WindowStats>, rng: &mut u64| {
+        // the traversal's units, maybe run by the parked workers
+        for _ in 0..(1 + wnext(rng) % 6) {
+            let (stats3, mem) = (stats.clone(), g.m.share());
+            helpers.post(Box::new(move || {
+                // a unit sees the redirect, on whatever thread runs it
+                if mem.u32(WG_GLOBAL) != WG_PRIVATE {
+                    stats3.helper_off_window.fetch_add(1, SeqCst);
+                }
+                stats3.helper_units.fetch_add(1, SeqCst);
+            }));
+        }
+        helpers.drain(true);
+    });
+    let stats = run_window_scenario(5, 200, Some(traversal), true, 0xfeed_f00d);
     eprintln!("helper units {} windows {}", stats.helper_units.load(SeqCst), stats.windows.load(SeqCst));
     check_window_stats(&stats, 200);
     assert!(stats.helper_units.load(SeqCst) > 0);
