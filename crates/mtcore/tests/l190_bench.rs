@@ -9,6 +9,8 @@ use serde_json::Value;
 
 #[path = "l190_bench/lifted.rs"]
 mod lifted;
+#[path = "l190_bench/lifted_stack.rs"]
+mod lifted_stack;
 
 #[derive(Default)]
 struct Paged {
@@ -49,6 +51,10 @@ fn bench(path: &str, name: &str, bodies: &[(&str, LiftFn)]) {
     let data: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let cases = data["cases"].as_array().unwrap();
     let mut m = Paged::default();
+    // the stack window: guest 0x0F000000..0x0F010000 on one contiguous host block
+    let layout = std::alloc::Layout::from_size_align(0x10000, 4096).unwrap();
+    let block = unsafe { std::alloc::alloc_zeroed(layout) };
+    assert!(unsafe { m.table.install_external(0x0F000, block, 16, 3) });
     let mut totals = vec![0f64; bodies.len()];
     let mut count = 0u64;
     for round in 0..3 {
@@ -89,6 +95,7 @@ fn bench(path: &str, name: &str, bodies: &[(&str, LiftFn)]) {
                         m.set_u8(a, b);
                     }
                     let mut c = Cpu::default();
+                    (c.stack_lo, c.stack_len, c.stack_host) = (0x0F00_0000, 0x10000, block as usize);
                     [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = [before[0], before[1], before[2], before[3], before[4], before[5], before[6], before[7]];
                     let t = std::time::Instant::now();
                     body(std::hint::black_box(&mut m), std::hint::black_box(&mut c));
@@ -108,7 +115,7 @@ fn bench(path: &str, name: &str, bodies: &[(&str, LiftFn)]) {
     for (k, (label, _)) in bodies.iter().enumerate() {
         eprintln!("{name}: {label} ns/call = {:.1}", totals[k] / count as f64);
     }
-    eprintln!("{name}: speedup = {:.2}x", totals[0] / totals[1]);
+    for k in 1..bodies.len() { eprintln!("{name}: {} speedup vs {} = {:.2}x", bodies[k].0, bodies[0].0, totals[0] / totals[k]); }
 }
 
 const DIR: &str = "E:/ddda-re/notes/native-L190/";
@@ -141,4 +148,18 @@ fn bench_prepare_part_blocks() {
 #[ignore]
 fn bench_player_draw_part() {
     bench(&format!("{DIR}player_part.json"), "0x00B89FE0", &[("lifted", lifted::f_00b89fe0), ("port", mtcore::semantic_l190::player_draw_part)]);
+}
+
+#[test]
+#[ignore]
+fn bench_stack_window() {
+    for (name, file, lifted_fn, stacked, port) in [
+        ("0x00B89790", "player_parts.json", lifted::f_00b89790 as LiftFn, lifted_stack::f_00b89790 as LiftFn, mtcore::semantic_l190::player_draw_parts as LiftFn),
+        ("0x00B89FE0", "player_part.json", lifted::f_00b89fe0, lifted_stack::f_00b89fe0, mtcore::semantic_l190::player_draw_part),
+        ("0x00B8A770", "skin_prepare.json", lifted::f_00b8a770, lifted_stack::f_00b8a770, mtcore::semantic_l190::prepare_part_blocks),
+        ("0x00FA5860", "swing.json", lifted::f_00fa5860, lifted_stack::f_00fa5860, mtcore::semantic_l190::swing_model_draw_unit),
+    ] {
+        eprintln!("-- {name}: lifted, lifted with the stack window, port");
+        bench(&format!("{DIR}{file}"), name, &[("lifted", lifted_fn), ("stack window", stacked), ("port", port)]);
+    }
 }

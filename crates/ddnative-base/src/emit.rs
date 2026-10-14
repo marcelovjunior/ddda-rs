@@ -94,3 +94,43 @@ pub fn andnps(d: [u32; 4], s: [u32; 4]) -> [u32; 4] {
 pub fn store64(x: [u32; 4], m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) {
     m.fast_set_u64_words(pt, a, [x[0], x[1]]);
 }
+
+/// A dword load from the guest stack (L190): inside the CPU's stack window one plain host load,
+/// else the page-table access. For addresses formed from ESP or EBP.
+#[inline(always)]
+pub fn stack_u32(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &Cpu, addr: u32) -> u32 {
+    let off = addr.wrapping_sub(cpu.stack_lo);
+    if off < cpu.stack_len.wrapping_sub(3) && addr & 3 == 0 {
+        // SAFETY: the window is a live contiguous host block of stack_len bytes, the dword aligned
+        // inside it; ordinary (non-atomic) access is exact on the owning thread's own stack
+        return u32::from_le(unsafe { std::ptr::read_volatile((cpu.stack_host + off as usize) as *const u32) });
+    }
+    m.fast_u32(pt, addr)
+}
+
+/// A dword store to the guest stack, as [`stack_u32`].
+#[inline(always)]
+pub fn stack_set_u32(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &Cpu, addr: u32, v: u32) {
+    let off = addr.wrapping_sub(cpu.stack_lo);
+    if off < cpu.stack_len.wrapping_sub(3) && addr & 3 == 0 {
+        // SAFETY: as stack_u32
+        return unsafe { std::ptr::write_volatile((cpu.stack_host + off as usize) as *mut u32, v.to_le()) };
+    }
+    m.fast_set_u32(pt, addr, v)
+}
+
+/// `push v` with the stack window.
+#[inline(always)]
+pub fn push_s(v: u32, m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) {
+    cpu.esp = cpu.esp.wrapping_sub(4);
+    let esp = cpu.esp;
+    stack_set_u32(m, pt, cpu, esp, v);
+}
+
+/// `pop` with the stack window.
+#[inline(always)]
+pub fn pop_s(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) -> u32 {
+    let v = stack_u32(m, pt, cpu, cpu.esp);
+    cpu.esp = cpu.esp.wrapping_add(4);
+    v
+}

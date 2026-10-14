@@ -84,6 +84,12 @@ pub struct Cpu {
     pub mxcsr: Mxcsr,
     /// Full x87 state, including 80-bit stack values and control/status words.
     pub st: crate::x87::X87,
+    /// The guest stack window (L190): guest addresses `stack_lo .. stack_lo + stack_len` are
+    /// backed by one contiguous, readable and writable host block at `stack_host` (zero length:
+    /// no window). Stack accesses inside it skip the page table.
+    pub stack_lo: u32,
+    pub stack_len: u32,
+    pub stack_host: usize,
 }
 
 impl From<Entry> for Cpu {
@@ -93,7 +99,7 @@ impl From<Entry> for Cpu {
         Cpu { eax: r.eax, ecx: r.ecx, edx: r.edx, ebx: r.ebx, esp: r.esp, ebp: r.ebp, esi: r.esi, edi: r.edi,
               xmm, fl: Flags::default(), df: false, fs_base: 0, seg: Segments::default(), sys_flags: 0,
               mxcsr: Mxcsr::default(),
-              st: Default::default() }
+              st: Default::default(), stack_lo: 0, stack_len: 0, stack_host: 0 }
     }
 }
 

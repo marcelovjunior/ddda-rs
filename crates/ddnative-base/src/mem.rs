@@ -113,6 +113,9 @@ pub struct PageTable {
     // still mean unbacked even when a lazy page has permission bits set.
     entries: Box<[AtomicUsize; PAGES]>,
     retired: std::sync::Mutex<Vec<usize>>,
+    /// First page and count of host blocks the owner installed ([`PageTable::install_external`]):
+    /// not freed page by page at drop.
+    external: std::sync::Mutex<Vec<(usize, usize)>>,
     backing: Option<std::sync::Mutex<backing::Regions>>,
 }
 
@@ -145,6 +148,7 @@ impl PageTable {
             // SAFETY: zero is a valid AtomicUsize.
             entries: unsafe { zeroed_box() },
             retired: Default::default(),
+            external: Default::default(),
             backing: (mode != BackingMode::Pages).then(|| std::sync::Mutex::new(backing::Regions::new(mode))),
         }
     }
@@ -155,6 +159,11 @@ impl Drop for PageTable {
         // Region owners retain every published/retired allocation until here.
         if self.backing.is_some() { return; }
         let retired = std::mem::take(self.retired.get_mut().unwrap_or_else(|e| e.into_inner()));
+        for &(first, count) in self.external.get_mut().unwrap_or_else(|e| e.into_inner()).iter() {
+            for p in first..first + count {
+                self.entries[p].store(0, Ordering::Relaxed);
+            }
+        }
         let live = self.entries.iter().map(|p| p.load(Ordering::Relaxed) & POINTER_MASK).filter(|&p| p != 0);
         for p in live.chain(retired) {
             // SAFETY: every non-null page came from alloc_zero_page and is
@@ -232,6 +241,27 @@ impl PageTable {
                 Err(changed) => entry = changed,
             }
         }
+    }
+
+    /// Back `count` pages from `first` with one contiguous host block the caller owns (it must
+    /// outlive the table), so that a run of guest addresses is a run of host addresses (the
+    /// stack window of [`crate::x86::Cpu`]). The pages must not be backed yet.
+    ///
+    /// # Safety
+    /// `host` is PAGE-aligned, `count * PAGE` zeroed bytes, valid until the table is dropped.
+    pub unsafe fn install_external(&self, first: usize, host: *mut u8, count: usize, perm: u8) -> bool {
+        for k in 0..count {
+            let cur = self.entries[first + k].load(Ordering::Acquire);
+            let entry = tagged_page(host as usize + k * PAGE as usize, perm);
+            if cur & POINTER_MASK != 0 || self.entries[first + k].compare_exchange(cur, entry, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                for j in 0..k {
+                    self.entries[first + j].store(0, Ordering::Release);
+                }
+                return false;
+            }
+        }
+        self.external.lock().unwrap_or_else(|e| e.into_inner()).push((first, count));
+        true
     }
 
     /// Take page `p`'s bytes away (it reads as unbacked again); the old
@@ -387,19 +417,22 @@ impl dyn Mem + '_ {
         // SAFETY: 4 aligned bytes inside a backed page of a live table
         unsafe { atomic_u32_at(page.add((addr % PAGE) as usize)) }
     }
-    #[inline(never)]
+    #[cfg_attr(feature = "inline-access", inline)]
+    #[cfg_attr(not(feature = "inline-access"), inline(never))]
     pub fn fast_u8(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u8 {
         let Some(p) = allowed(pt, addr, 1, READ) else { return self.slow_u8(addr); };
         // SAFETY: allowed returns 1 byte inside a backed page.
         unsafe { load_at(p, 1) as u8 }
     }
-    #[inline(never)]
+    #[cfg_attr(feature = "inline-access", inline)]
+    #[cfg_attr(not(feature = "inline-access"), inline(never))]
     pub fn fast_u16(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u16 {
         let Some(p) = allowed(pt, addr, 2, READ) else { return self.slow_u16(addr); };
         // SAFETY: allowed returns 2 bytes inside a backed page.
         unsafe { load_at(p, 2) as u16 }
     }
-    #[inline(never)]
+    #[cfg_attr(feature = "inline-access", inline)]
+    #[cfg_attr(not(feature = "inline-access"), inline(never))]
     pub fn fast_u32(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
         self.fast_u32_inner(pt, addr)
     }
@@ -464,19 +497,22 @@ impl dyn Mem + '_ {
             self.fast_set_u32_inner(pt, addr.wrapping_add(4 * k as u32), v);
         }
     }
-    #[inline(never)]
+    #[cfg_attr(feature = "inline-access", inline)]
+    #[cfg_attr(not(feature = "inline-access"), inline(never))]
     pub fn fast_set_u8(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u8) {
         let Some(p) = allowed(pt, addr, 1, WRITE) else { return self.slow_set_u8(addr, v); };
         // SAFETY: allowed returns 1 byte inside a backed page.
         unsafe { store_at(p, 1, v as u32) }
     }
-    #[inline(never)]
+    #[cfg_attr(feature = "inline-access", inline)]
+    #[cfg_attr(not(feature = "inline-access"), inline(never))]
     pub fn fast_set_u16(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u16) {
         let Some(p) = allowed(pt, addr, 2, WRITE) else { return self.slow_set_u16(addr, v); };
         // SAFETY: allowed returns 2 bytes inside a backed page.
         unsafe { store_at(p, 2, v as u32) }
     }
-    #[inline(never)]
+    #[cfg_attr(feature = "inline-access", inline)]
+    #[cfg_attr(not(feature = "inline-access"), inline(never))]
     pub fn fast_set_u32(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u32) {
         self.fast_set_u32_inner(pt, addr, v);
     }
