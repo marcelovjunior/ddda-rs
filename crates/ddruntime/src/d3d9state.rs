@@ -429,6 +429,22 @@ pub(crate) fn device_set_sampler_state(dev: u32, smp: u32, t: u32, v: u32) {
     });
 }
 
+/// `device_set_sampler_state` for several states in one device lookup
+/// (L180, claude-2: the native sink's sampler section per taken draw).
+pub(crate) fn device_set_sampler_states(dev: u32, states: &[(u32, u32, u32)]) {
+    if states.is_empty() {
+        return;
+    }
+    state(dev, |s| {
+        for &(smp, t, v) in states {
+            if s.sampler.insert((smp, t), v) != Some(v) {
+                s.draw_dirty |= groups::TEXTURES;
+                SAMPLER_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    });
+}
+
 /// Bumped by every change of a sampler state or a texture binding
 /// (between Resets, which rebuild the state outside a frame): the native
 /// path's mirror of them is current while it is unchanged (L119).

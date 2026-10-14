@@ -2037,9 +2037,7 @@ pub fn commit(m: &mut dyn Mem, info: &FrameInfo, c: &mut Caches, mut sh: Shadow,
         m.set_u32(a, v);
     }
     if !sh.is_empty() {
-        for &(t, ty, v) in &sh.sampler_states {
-            crate::d3d9state::device_set_sampler_state(info.device, t, ty, v);
-        }
+        crate::d3d9state::device_set_sampler_states(info.device, &sh.sampler_states);
         for &(t, h) in &sh.textures {
             crate::d3d9state::device_set_texture(info.device, t, h);
         }
