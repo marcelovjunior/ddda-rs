@@ -118,14 +118,20 @@ pub(crate) fn note_draw(size: (u32, u32), d: &d3d9cmd::DrawCall) {
         with(|w| w.sizes.entry(size).or_default().taken += 1);
         return;
     }
+    // loose key: what the draw IS (shaders, declaration, primitive type and size, textures
+    // by resource, index format); strict key: also stream buffers/offsets, states, targets, viewport
     let mut s = crate::fasthash::FxHasher::default();
-    (d.primitive, d.primitives, d.start, d.base_vertex, d.min_index, d.vertex_count, d.fvf, d.viewport, d.scissor).hash(&mut s);
-    format!("{:?}{:?}{:?}{:?}{:?}{:?}", d.vertices, d.indices, d.textures, d.render_states, d.targets, d.depth).hash(&mut s);
+    (d.primitive, d.primitives, d.vertex_count, d.fvf).hash(&mut s);
     (shader_key(&d.vertex_shader), shader_key(&d.pixel_shader)).hash(&mut s);
     d.declaration[..].hash(&mut s);
+    for t in d.textures.iter() {
+        (t.sampler, t.resource).hash(&mut s);
+    }
     let shape = s.finish();
     let mut c = crate::fasthash::FxHasher::default();
-    format!("{:?}{:?}", d.vs_constants, d.ps_constants).hash(&mut c);
+    shape.hash(&mut c);
+    (d.start, d.base_vertex, d.min_index, d.viewport, d.scissor).hash(&mut c);
+    format!("{:?}{:?}{:?}{:?}{:?}{:?}", d.vertices, d.indices, d.textures, d.render_states, d.targets, d.depth).hash(&mut c);
     let consts = c.finish();
     with(|w| {
         w.sizes.entry(size).or_default().taken += 1;
@@ -169,7 +175,7 @@ fn report_worker() {
         let frames = w.frames.max(1) as f64;
         let mut rows: Vec<_> = w.sizes.iter().filter(|(_, s)| s.total > 0).collect();
         rows.sort_by_key(|(_, s)| std::cmp::Reverse(s.total));
-        let mut line = format!("measure worker ({} frames; per frame: draws seen / taken / sink-decode ms; vs previous frame: same state at same index % / same state+constants % / same multiset %)", w.frames);
+        let mut line = format!("measure worker ({} frames; per frame: draws seen / taken / sink-decode ms; vs previous frame: loose key at same index % / strict key at same index % / loose multiset %)", w.frames);
         for (size, s) in rows.iter().take(6) {
             let c = s.compared.max(1) as f64;
             line += &format!(
