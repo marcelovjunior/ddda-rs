@@ -157,6 +157,15 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             let target_recorded = if paired { n(&trace[k]["target"]) } else { n(&trace[k]["target"]) };
             assert_eq!(target, target_recorded, "case {i}: call target");
             assert_eq!(c.ecx, regs(call)[1], "case {i}: call ECX");
+            if std::env::var_os("STRICT_REGS").is_some() {
+                let r = regs(call);
+                // [eax, ecx, edx, ebx, esp, ebp, esi, edi]
+                for (name, got, want) in [("eax", c.eax, r[0]), ("edx", c.edx, r[2]), ("ebx", c.ebx, r[3]), ("ebp", c.ebp, r[5]), ("esi", c.esi, r[6]), ("edi", c.edi, r[7])] {
+                    if got != want {
+                        eprintln!("case {i}: call {target:x}: {name} got {got:x} want {want:x}");
+                    }
+                }
+            }
             assert_eq!(c.esp, regs(call)[4], "case {i}: call ESP");
             for &r in callee_reads::saved_reads(target) {
                 assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi][r], regs(call)[r], "call {target:x} register {r} (callee reads it)");
