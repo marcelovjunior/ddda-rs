@@ -70,3 +70,14 @@ DDRUNTIME_SHADOW_PRIMITIVE=1 alone runs fine (58.7 / 58.2, no change); the panic
   (DDRUNTIME_JOB_STATS=1 prints batch time by queue size). The remaining DBE560 self time is the join wait itself.
 - L191 (c6c8df77) merged: 885DC0 (obj_model_vf08) still crashes the game at start (WinMain read 0x00012626); 886880, 84C720, 886530, 1165B40
   run clean (59.8/59.8). fast2 ships them with 885DC0 in DDRUNTIME_SEMANTIC_SKIP.
+
+## Round 4: render worker (profile_prof5, 0x1034 busy 77%)
+Self items: draw_call 21.7% (one 600-line function with the cache lookups inlined: no line-level profile available here),
+memcpy (VCRUNTIME 0x1c010/0x1bc50/0x1e570) ~9% (callers: draw_call 46%, Native::draw 22%, `[Constants;2]::default()` 20% = the per-draw
+`mem::take(&mut c.banks)` scratch), Mirror::textures 4.8%, hashbrown u32 lookups ~5% (kept_part target/stream, Caches::meta, contains_key
+in the dirty check), mi_malloc 3.3%, `Instant::now/elapsed` ~4% (two QPC reads per taken draw).
+Done: the clock reads are gated by DDRUNTIME_NDRAW_STATS (commit "L180: no clock reads per taken draw"); fps 58.5 / 58.9 / 60.0 vs 59.8 / 59.8
+(noise: the worker is not the bound in the measured phases). Shipped in fast2.
+Left for whoever has a line-level profiler (perf/VTune/`--profile` with `debug = line-tables-only` + dbghelp SymGetLineFromAddr):
+split draw_call into non-inlined phases to attribute its 21.7%; replace the scratch `[Constants;2]` take/default with a reused pair;
+per-draw Arc clones (render_states, textures, targets array clone, vertices) -> one Arc<DrawParts> per kept binding.
