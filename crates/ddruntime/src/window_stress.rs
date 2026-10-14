@@ -20,14 +20,13 @@
 //     wait/gate/window;
 //   * critical-section ownership across helpers that adopt the owner's
 //     identity (and is refused to those that do not).
-// The helper interface of P1 (parked workers running units) is mocked in
-// `MockHelpers` and replaced by the real one when it lands.
+// The helper interface of P1 (`waits::Window::help`) is exercised in
+// window_stress_help.rs.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::Mutex as StdMutex;
 
-/// Windows are process-global: one stress test at a time.
-static WINDOW_TESTS: StdMutex<()> = StdMutex::new(());
+/// (windows are process-global: one stress test at a time, WINDOW_TESTS of waits_help_tests.rs)
 
 const WG_GLOBAL: u32 = DATA + 0x100;
 const WG_ORIGINAL: u32 = 0x1111_1111;
@@ -61,7 +60,8 @@ fn wjitter(state: &mut u64, max_us: u64) {
 #[cfg(target_arch = "x86_64")]
 fn wset_fp(k: usize, vary_mxcsr: bool) {
     let mxcsr: u32 = if vary_mxcsr { 0x1f80 | ((k as u32 % 4) << 13) | if k % 2 == 1 { 0x8000 } else { 0 } } else { 0x1f80 };
-    let cw: u16 = 0x027f | (((k as u16 + 1) % 4) << 10);
+    // (guest threads run with the host's default control word outside guest x87 code)
+    let cw: u16 = if vary_mxcsr { 0x027f | (((k as u16 + 1) % 4) << 10) } else { 0x037f };
     unsafe {
         std::arch::asm!("ldmxcsr [{m}]", "fldcw [{c}]", m = in(reg) &mxcsr, c = in(reg) &cw, options(nostack));
     }
@@ -77,18 +77,24 @@ fn wfp() -> (u32, u16) {
 #[cfg(target_arch = "x86_64")]
 fn wexpected_fp(k: usize, vary_mxcsr: bool) -> (u32, u16) {
     let mxcsr = if vary_mxcsr { 0x1f80 & 0xffc0 | ((k as u32 % 4) << 13) | if k % 2 == 1 { 0x8000 } else { 0 } } else { 0x1f80 & 0xffc0 };
-    (mxcsr, 0x027f | (((k as u16 + 1) % 4) << 10))
+    (mxcsr, if vary_mxcsr { 0x027f | (((k as u16 + 1) % 4) << 10) } else { 0x037f })
 }
 
 /// What the window owner does inside the window (after the redirect):
 /// post and run units with the helper interface under test.
-type Traversal = dyn Fn(&mut GuestCaller, &Arc<WindowStats>, &mut u64) + Send + Sync;
+type Traversal = dyn Fn(&mut GuestCaller, &Arc<WindowStats>, &OpenWindow, &mut u64) + Send + Sync;
 
 /// What the harness counted.
 #[derive(Default)]
 struct WindowStats {
     in_window: AtomicBool,
     window_owner: AtomicUsize,
+    window_tid: AtomicU32,
+    helper_foreign: AtomicU32,
+    violated: AtomicU32,
+    refused_open: AtomicU32,
+    refused_exclusive: AtomicU32,
+    refused_violated: AtomicU32,
     stop: AtomicBool,
     opener: AtomicUsize,
     windows: AtomicU32,
@@ -102,54 +108,11 @@ struct WindowStats {
     helper_off_window: AtomicU32,
 }
 
-/// RAII for an open window, as the production path should hold it: closing
-/// on every exit including a panic inside the window.
-struct OpenWindow;
+/// The open window (waits::Window closes on drop, panics included).
+struct OpenWindow(waits::Window<'static>);
 impl OpenWindow {
     fn open(guarded: &[u32]) -> Option<OpenWindow> {
-        waits::open(guarded).then(|| OpenWindow)
-    }
-}
-impl Drop for OpenWindow {
-    fn drop(&mut self) {
-        waits::close();
-    }
-}
-
-/// Mock of P1's parked-worker helpers: the window owner posts units; a
-/// parked worker (any thread that calls `help` while parked) takes and runs
-/// them on its own stack. Replaced by the real interface when it exists.
-#[derive(Default)]
-struct MockHelpers {
-    queue: StdMutex<Vec<Box<dyn FnOnce() + Send>>>,
-    pending: AtomicU32,
-}
-impl MockHelpers {
-    fn post(&self, unit: Box<dyn FnOnce() + Send>) {
-        self.pending.fetch_add(1, SeqCst);
-        self.queue.lock().unwrap().push(unit);
-    }
-    /// Run one pending unit if there is one; true if it ran one.
-    fn help(&self) -> bool {
-        let unit = self.queue.lock().unwrap().pop();
-        match unit {
-            Some(u) => {
-                u();
-                self.pending.fetch_sub(1, SeqCst);
-                true
-            }
-            None => false,
-        }
-    }
-    fn drain(&self, owner_runs_too: bool) {
-        let end = Instant::now() + Duration::from_secs(10);
-        while self.pending.load(SeqCst) > 0 {
-            if owner_runs_too {
-                self.help();
-            }
-            assert!(Instant::now() < end, "helper units were not drained");
-            std::hint::spin_loop();
-        }
+        waits::open(guarded).map(OpenWindow)
     }
 }
 
@@ -205,15 +168,22 @@ fn run_window_scenario(workers: usize, rounds: u32, traversal: Option<Arc<Traver
             }
         } else if k == workers + 1 {
             // stray wake-ups on random start events, any time
+            // (outside a window rarely: a wake before the redirect makes the owner give the window up)
             while !stats.stop.load(SeqCst) {
                 wjitter(&mut rng, 150);
-                let w = wnext(&mut rng) as usize % workers;
-                g.call(S_SET, &[starts[w]]);
+                if stats.in_window.load(SeqCst) || wnext(&mut rng) % 40 == 0 {
+                    let w = wnext(&mut rng) as usize % workers;
+                    g.call(S_SET, &[starts[w]]);
+                }
             }
         } else {
             let me = k - 1;
             #[cfg(target_arch = "x86_64")]
             wset_fp(k, vary_mxcsr);
+            // the thread's guest x87 state: one distinct value on its stack, which the
+            // wait services (and the tasks run on this thread) must leave alone
+            let x87_bits = (1.0f32 + k as f32).to_bits();
+            g.c.st.push(x87_bits);
             loop {
                 let wait = g.call(S_WAIT1, &[starts[me], 10_000]);
                 // ---- everything below runs after the wait returned ----
@@ -232,51 +202,61 @@ fn run_window_scenario(workers: usize, rounds: u32, traversal: Option<Arc<Traver
                 if g.m.u32(WG_GLOBAL) != WG_ORIGINAL {
                     stats.saw_private.fetch_add(1, SeqCst);
                 }
+                if g.c.st.depth() != 1 || g.c.st.top_f32() != Some(x87_bits) {
+                    stats.fp_changed.fetch_add(1, SeqCst);
+                    eprintln!("worker {me}: guest x87 stack changed: depth {} top {:?}", g.c.st.depth(), g.c.st.top_f32());
+                }
                 #[cfg(target_arch = "x86_64")]
                 if wfp() != wexpected_fp(k, vary_mxcsr) {
                     stats.fp_changed.fetch_add(1, SeqCst);
+                    static SHOWN: AtomicU32 = AtomicU32::new(0);
+                    if SHOWN.fetch_add(1, SeqCst) < 4 {
+                        eprintln!("worker {me}: FPU (mxcsr, cw) now {:x?} expected {:x?}", wfp(), wexpected_fp(k, vary_mxcsr));
+                    }
                 }
                 stats.jobs.fetch_add(1, SeqCst);
                 if stats.opener.load(SeqCst) == me + 1 {
                     // the shadow job: open, check exclusivity, redirect, run, restore, close
-                    let guarded: Vec<u32> = (0..workers).filter(|&w| w != me).flat_map(|w| [starts[w], dones[w]]).collect();
+                    let guarded: Vec<u32> = (0..workers).flat_map(|w| [starts[w], dones[w]]).collect();
+                    // wait (as the shadow job would find it) for the others to be parked, then open
+                    // and check once, as shadow_publish::run does: a wake in between refuses the window
+                    let settle = Instant::now() + Duration::from_millis(30);
+                    while waits::verdict(&waits::others(), starts, dones).is_none() && Instant::now() < settle {
+                        std::hint::spin_loop();
+                    }
                     if let Some(window) = OpenWindow::open(&guarded) {
-                        let deadline = Instant::now() + Duration::from_millis(30);
-                        let exclusive = loop {
-                            let others = waits::others();
-                            let parked = (0..workers)
-                                .filter(|&w| w != me)
-                                .filter(|&w| others.iter().any(|(_, h)| h.contains(&starts[w])))
-                                .count();
-                            // the main thread joins: blocked on a done event
-                            let main_joined = others.iter().any(|(_, h)| !h.is_empty() && h.iter().all(|x| dones.contains(x)));
-                            if parked == workers - 1 && main_joined {
-                                break true;
-                            }
-                            if Instant::now() > deadline {
-                                break false;
-                            }
-                            std::hint::spin_loop();
-                        };
-                        if exclusive {
+                        let exclusive = window.0.check(starts, dones).is_some();
+                        // a participant that woke since the window opened: no redirect (the
+                        // production policy); it is held either way
+                        if exclusive && !window.0.violated() {
                             stats.windows.fetch_add(1, SeqCst);
                             stats.window_owner.store(me + 1, SeqCst);
+                            stats.window_tid.store(current_tid(), SeqCst);
                             stats.in_window.store(true, SeqCst);
                             g.m.set_u32(WG_GLOBAL, WG_PRIVATE);
-                            // the traversal: some units, maybe run by the parked workers
+                            // the traversal: units, maybe run by the parked workers
                             if let Some(traversal) = &traversal {
-                                traversal(g, stats, &mut rng);
+                                traversal(g, stats, &window, &mut rng);
                             }
                             wjitter(&mut rng, 1500);
                             assert_eq!(g.m.u32(WG_GLOBAL), WG_PRIVATE);
                             g.m.set_u32(WG_GLOBAL, WG_ORIGINAL);
                             stats.in_window.store(false, SeqCst);
+                            if window.0.violated() {
+                                stats.violated.fetch_add(1, SeqCst);
+                            }
                         } else {
                             stats.refused.fetch_add(1, SeqCst);
+                            if exclusive {
+                                stats.refused_violated.fetch_add(1, SeqCst);
+                            } else {
+                                stats.refused_exclusive.fetch_add(1, SeqCst);
+                            }
                         }
                         drop(window);
                     } else {
                         stats.refused.fetch_add(1, SeqCst);
+                        stats.refused_open.fetch_add(1, SeqCst);
                     }
                     #[cfg(target_arch = "x86_64")]
                     if wfp() != wexpected_fp(k, vary_mxcsr) {
@@ -298,8 +278,8 @@ fn check_window_stats(stats: &WindowStats, rounds: u32) {
     assert_eq!(stats.saw_private.load(SeqCst), 0, "an outer thread observed the redirected global");
     assert_eq!(stats.fp_changed.load(SeqCst), 0, "a thread's x87/MXCSR changed");
     assert_eq!(stats.helper_off_window.load(SeqCst), 0, "a helper unit did not see the window's redirect");
-    assert!(stats.windows.load(SeqCst) * 4 >= rounds, "too few windows opened ({} of {rounds} rounds, {} refused): the stress did not exercise the window",
-            stats.windows.load(SeqCst), stats.refused.load(SeqCst));
+    assert!(stats.windows.load(SeqCst) * 4 >= rounds, "too few windows opened ({} of {rounds} rounds, {} refused: open {} exclusive {} violated {}): the stress did not exercise the window",
+            stats.windows.load(SeqCst), stats.refused.load(SeqCst), stats.refused_open.load(SeqCst), stats.refused_exclusive.load(SeqCst), stats.refused_violated.load(SeqCst));
 }
 
 #[test]
@@ -315,29 +295,6 @@ fn window_with_many_threads_and_other_seeds() {
         let stats = run_window_scenario(workers, 150, None, true, seed);
         check_window_stats(&stats, 150);
     }
-}
-
-#[test]
-fn mock_helpers_run_units_inside_the_window_only() {
-    let helpers = Arc::new(MockHelpers::default());
-    let traversal: Arc<Traversal> = Arc::new(move |g: &mut GuestCaller, stats: &Arc<WindowStats>, rng: &mut u64| {
-        // the traversal's units, maybe run by the parked workers
-        for _ in 0..(1 + wnext(rng) % 6) {
-            let (stats3, mem) = (stats.clone(), g.m.share());
-            helpers.post(Box::new(move || {
-                // a unit sees the redirect, on whatever thread runs it
-                if mem.u32(WG_GLOBAL) != WG_PRIVATE {
-                    stats3.helper_off_window.fetch_add(1, SeqCst);
-                }
-                stats3.helper_units.fetch_add(1, SeqCst);
-            }));
-        }
-        helpers.drain(true);
-    });
-    let stats = run_window_scenario(5, 200, Some(traversal), true, 0xfeed_f00d);
-    eprintln!("helper units {} windows {}", stats.helper_units.load(SeqCst), stats.windows.load(SeqCst));
-    check_window_stats(&stats, 200);
-    assert!(stats.helper_units.load(SeqCst) > 0);
 }
 
 /// An abort inside the window (a panic in the traversal, a refused proof

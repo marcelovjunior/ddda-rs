@@ -51,6 +51,10 @@ static WINDOWS: AtomicU64 = AtomicU64::new(0);
 static NOT_EXCLUSIVE: AtomicU64 = AtomicU64::new(0);
 static PROOFS: AtomicU64 = AtomicU64::new(0);
 static UNITS: AtomicU64 = AtomicU64::new(0);
+/// windows aborted before the redirect because a participant woke
+static WOKE: AtomicU64 = AtomicU64::new(0);
+/// participants that woke (and were held) during a completed window
+static WOKE_INSIDE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) enum Decision {
     Serial,
@@ -84,9 +88,9 @@ pub(super) fn proof_result(result: &Result<usize, String>) {
 
 fn report() {
     eprintln!(
-        "parallel-shadow publish: traversals {} windows {} not exclusive {} proofs {} units {} fallback {}",
+        "parallel-shadow publish: traversals {} windows {} not exclusive {} proofs {} units {} woke {} woke inside {} fallback {}",
         CALLS.load(Relaxed), WINDOWS.load(Relaxed), NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed),
-        UNITS.load(Relaxed), FALLBACK.load(Relaxed)
+        UNITS.load(Relaxed), WOKE.load(Relaxed), WOKE_INSIDE.load(Relaxed), FALLBACK.load(Relaxed)
     );
 }
 
@@ -105,6 +109,9 @@ pub(super) struct Storage {
     pub(super) manager: u32,
     /// (address, capacity)
     pub(super) secondary: (u32, u32),
+    /// the scheduler and manager copies already hold the current bytes
+    /// (the replay test builds them in its snapshot)
+    pub(super) prefilled: bool,
 }
 static STORAGE: Mutex<Option<Storage>> = Mutex::new(None);
 
@@ -118,47 +125,30 @@ fn copy(m: &mut dyn Mem, from: u32, to: u32, size: u32) {
     crate::fastmem::write_bulk(m, to, &bytes);
 }
 
-/// The other job participants all blocked in their waits (see the module
-/// notes), as `[handles guarded]` when exclusive.
-fn exclusive(m: &dyn Mem, scheduler: u32) -> Option<Vec<u32>> {
+/// The job participants' start and done events from the scheduler's slots.
+fn participant_events(m: &dyn Mem, scheduler: u32) -> (Vec<u32>, Vec<u32>) {
     let participants = m.u32(scheduler + 0x98).min(64);
-    let mut starts = Vec::new();
-    let mut dones = Vec::new();
+    let (mut starts, mut dones) = (Vec::new(), Vec::new());
     for k in 1..participants {
         let slot = scheduler + 0x1bdec + 0x20 * (k - 1);
         dones.push(m.u32(slot));
         starts.push(m.u32(slot - 4));
     }
-    let others = crate::threads::waits::others();
-    let unblocked = starts.iter().filter(|&&s| !others.iter().any(|(_, h)| h.contains(&s))).count();
-    let main_blocked = others.iter().any(|(_, h)| !h.is_empty() && h.iter().all(|x| dones.contains(x)));
-    // the main thread itself (every worker parked), or one worker (this one)
-    // with the main thread in the join
-    let ok = (unblocked == 0 && !main_blocked) || (unblocked == 1 && main_blocked);
-    ok.then(|| starts.into_iter().chain(dones).collect())
+    (starts, dones)
 }
 
 /// Run the traversal's parallel branch in a window. False: not exclusive
 /// (nothing was changed; the caller runs it serially).
 pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     let scheduler = m.u32(SCHEDULER_GLOBAL);
-    // open first (a waking participant is then held), then check
-    let guarded = {
-        let participants = m.u32(scheduler + 0x98).min(64);
-        let mut h = Vec::new();
-        for k in 1..participants {
-            let slot = scheduler + 0x1bdec + 0x20 * (k - 1);
-            h.push(m.u32(slot));
-            h.push(m.u32(slot - 4));
-        }
-        h
-    };
-    if !crate::threads::waits::open(&guarded) {
+    let (starts, dones) = participant_events(m, scheduler);
+    // open first (a waking participant is then held and flagged), then check
+    let guarded: Vec<u32> = starts.iter().chain(&dones).copied().collect();
+    let Some(window) = crate::threads::waits::open(&guarded) else {
         NOT_EXCLUSIVE.fetch_add(1, Relaxed);
         return false;
-    }
-    if exclusive(m, scheduler).is_none() {
-        crate::threads::waits::close();
+    };
+    if window.check(&starts, &dones).is_none() {
         NOT_EXCLUSIVE.fetch_add(1, Relaxed);
         return false;
     }
@@ -171,14 +161,25 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
             scheduler: allocate(0x1c150),
             manager: allocate(0xd40 + 8 * LANE_BYTES),
             secondary: (0, 0),
+            prefilled: false,
         });
         if st.secondary.1 < capacity {
             st.secondary = (allocate(capacity.max(1)), capacity);
         }
-        Storage { scheduler: st.scheduler, manager: st.manager, secondary: st.secondary }
+        Storage { scheduler: st.scheduler, manager: st.manager, secondary: st.secondary, prefilled: false }
     };
+    // the last check before any redirect: a participant that woke while the
+    // window was being set up (it is held, but the premise is gone) aborts
+    if window.violated() || window.check(&starts, &dones).is_none() {
+        NOT_EXCLUSIVE.fetch_add(1, Relaxed);
+        WOKE.fetch_add(1, Relaxed);
+        return false;
+    }
     let result = run_window(m, cpu, original, &storage);
-    crate::threads::waits::close();
+    if window.violated() {
+        WOKE_INSIDE.fetch_add(1, Relaxed);
+    }
+    drop(window);
     if let Err(reason) = result {
         // the published state is the original parallel branch's, but not
         // proven equal: stop publishing
@@ -197,9 +198,11 @@ pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, stora
     let context = m.u32(cpu.esp + 4);
     let (private_scheduler, private_manager, secondary) = (storage.scheduler, storage.manager, storage.secondary.0);
     // the private copies and the top-level globals (as the proof replay)
-    copy(m, scheduler, private_scheduler, 0x1c150);
     let manager = cpu.ecx;
-    copy(m, manager, private_manager, 0xd40 + 8 * LANE_BYTES);
+    if !storage.prefilled {
+        copy(m, scheduler, private_scheduler, 0x1c150);
+        copy(m, manager, private_manager, 0xd40 + 8 * LANE_BYTES);
+    }
     let nesting = [m.u8(NESTING), m.u8(NESTING_OTHER)];
     let use_secondary = m.u32(context + 0x54) == 0;
     if use_secondary {
@@ -217,8 +220,20 @@ pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, stora
     let initial_roots = m.u32(context + 0x48);
     let initial_lanes: Vec<u32> = (0..2).map(|lane| m.u32(lane_base + lane * LANE_BYTES + 0x74)).collect();
     WINDOW_SCHEDULER.with(|w| w.set(private_scheduler));
-    original(m, cpu);
+    // a panic in the traversal must not leave the redirect behind (the
+    // window itself is released by the caller's drop while unwinding)
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| original(m, cpu)));
     WINDOW_SCHEDULER.with(|w| w.set(0));
+    if let Err(payload) = ran {
+        m.set_u32(SCHEDULER_GLOBAL, scheduler);
+        m.set_u8(NESTING, nesting[0]);
+        m.set_u8(NESTING_OTHER, nesting[1]);
+        if use_secondary {
+            m.set_u32(context + 0x54, 0);
+        }
+        cpu.ecx = manager;
+        std::panic::resume_unwind(payload);
+    }
     let balanced = [m.u8(NESTING), m.u8(NESTING_OTHER)] == [0, 0] && m.u32(SCHEDULER_GLOBAL) == private_scheduler;
     m.set_u32(SCHEDULER_GLOBAL, scheduler);
     m.set_u8(NESTING, nesting[0]);
@@ -314,4 +329,48 @@ pub(super) fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) {
         m.set_u32(scheduler + offset, 0);
     }
     cpu.esp = cpu.esp.wrapping_add(8);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::{GuestMemory, READ, WRITE};
+
+    /// L172 P3: a panic inside the traversal restores the globals, and the
+    /// window the caller holds is released while unwinding (the gated threads
+    /// of the outer batch must never stay held).
+    #[test]
+    fn a_panic_in_the_traversal_restores_the_redirect_and_releases_the_window() {
+        let mut m = GuestMemory::new();
+        for (base, size) in [(0x018d_0000u32, 0x1000u32), (0x0200_0000, 0x1c150), (0x0300_0000, 0xd40 + 8 * LANE_BYTES), (0x0600_0000, 0x1c150),
+                             (0x0700_0000, 0xd40 + 8 * LANE_BYTES), (0x0400_0000, 0x1000), (0x0500_0000, 0x1000)] {
+            m.map(base, (size + 0xfff) & !0xfff, READ | WRITE).unwrap();
+        }
+        let (scheduler, manager, context, stack) = (0x0200_0000u32, 0x0300_0000u32, 0x0400_0000u32, 0x0500_0800u32);
+        m.set_u32(SCHEDULER_GLOBAL, scheduler);
+        m.set_u8(NESTING, 3);
+        m.set_u8(NESTING_OTHER, 5);
+        m.set_u32(context + 0x54, 0);
+        m.set_u32(stack + 4, context);
+        let storage = Storage { scheduler: 0x0600_0000, manager: 0x0700_0000, secondary: (0x0500_0000, 0x100), prefilled: false };
+        let mut cpu = Cpu { esp: stack, ecx: manager, ..Cpu::default() };
+        fn failing(_: &mut dyn Mem, _: &mut Cpu) {
+            panic!("traversal fails");
+        }
+        crate::threads::waits::ENABLED.store(true, Relaxed);
+        let window = crate::threads::waits::open(&[0x7777]).expect("window");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = window;
+            let _ = run_window(&mut m, &mut cpu, failing, &storage);
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(m.u32(SCHEDULER_GLOBAL), scheduler, "the scheduler global was left redirected");
+        assert_eq!((m.u8(NESTING), m.u8(NESTING_OTHER)), (3, 5), "the nesting bytes were left reset");
+        assert_eq!(m.u32(context + 0x54), 0);
+        assert_eq!(cpu.ecx, manager);
+        assert_eq!(window_scheduler(), 0);
+        // released: a new window can be opened
+        assert!(crate::threads::waits::open(&[0x7777]).is_some(), "the window was not released by the unwind");
+        crate::threads::waits::ENABLED.store(false, Relaxed);
+    }
 }
