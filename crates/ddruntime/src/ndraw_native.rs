@@ -2521,6 +2521,9 @@ impl CommandSink for Native {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let g = &mut *g;
         g.info = FrameInfo::read(m, render);
+        if crate::measure::enabled() {
+            crate::measure::frame_boundary();
+        }
         g.handled = false;
         g.spans.clear();
         if self.mode != Mode::Off {
@@ -2635,6 +2638,9 @@ impl Native {
         let f = &mut g.frame;
         let size = target_size(m, record);
         *f.draws_by_size.entry(size).or_default() += 1;
+        if crate::measure::enabled() {
+            crate::measure::note_total(size);
+        }
         if self.mode == Mode::Census {
             f.targets.insert(m.u32(record.wrapping_add(4)));
             f.states.insert(m.u32(record.wrapping_add(8)));
@@ -2652,7 +2658,7 @@ impl Native {
         }
         // two clock reads a draw (~3% of the worker) only for the diagnostic report
         static TIMING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let started = (*TIMING.get_or_init(|| std::env::var_os("DDRUNTIME_NDRAW_STATS").is_some())).then(Instant::now);
+        let started = (*TIMING.get_or_init(|| std::env::var_os("DDRUNTIME_NDRAW_STATS").is_some() || crate::measure::enabled())).then(Instant::now);
         let lock = crate::d3d9dev::device_lock();
         let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind).and_then(|mut d| {
             if !d.filled {
@@ -2728,10 +2734,18 @@ impl Native {
                         crate::d3d9draw::backend_unlocked(|b| g.comparison.draw(b, native, &d));
                         t.taken += 1;
                         drop(lock);
-                        if let Some(started) = started { t.decode += started.elapsed(); }
+                        if let Some(started) = started {
+            t.decode += started.elapsed();
+            if crate::measure::enabled() {
+                crate::measure::note_time(size, started.elapsed());
+            }
+        }
                         return Taken::Handled;
                     }
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
+                    if crate::measure::enabled() {
+                        crate::measure::note_draw(size, &d);
+                    }
                     g.pending.push(native, d);
                     t.taken += 1;
                     Taken::Handled
@@ -2739,7 +2753,12 @@ impl Native {
             },
         };
         drop(lock);
-        if let Some(started) = started { t.decode += started.elapsed(); }
+        if let Some(started) = started {
+            t.decode += started.elapsed();
+            if crate::measure::enabled() {
+                crate::measure::note_time(size, started.elapsed());
+            }
+        }
         taken
     }
 }

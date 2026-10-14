@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 mod cache;
+mod gpu_busy;
 mod upload_data;
 mod compute_quads;
 mod backend_data;
@@ -970,6 +971,7 @@ impl WgpuBackend {
         self.encode_profile.end(7, start);
         let start = self.encode_profile.start();
         self.queue.submit([buffer]);
+        crate::gpu_busy::submitted(&self.queue, false);
         self.encode_profile.end(8, start);
         self.submissions.set(self.submissions.get() + 1);
     }
