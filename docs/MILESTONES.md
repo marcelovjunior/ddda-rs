@@ -3243,3 +3243,67 @@ opening (codex-31), route perf (codex-29).
   and the old profiler discards symbol displacement. Next: finish paused
   checks; head integrates and measures gameplay plus raw-PC attribution.
   Details: `docs/tasks/L143-backend-thread.md`.
+## Milestone 2026-10-12 (tonight): FPS and build iteration, L61-L80
+
+- Integration reviewed through `task/opt-int` **afb8f8fc**; gameplay has
+  been reached through Load Game. Earlier measured phases remain: logos
+  **~58 FPS**, title movie **~24 FPS**, menu **~12 FPS**, loading **0.2-1 FPS**.
+  These are phase observations, not a matched gameplay before/after test.
+- **L61-L63:** page-wise memcpy/memset (serial title movie about **1 -> 4
+  FPS**), live x87 state and bulk file/movie/audio/surface transfers.
+  **L62b:** TEB live-id and page-table operands remove the hot TLS/trait
+  paths (before: **14% / 30%** of sampled decoder work respectively).
+- **L64/L65:** route step services through the guest lock, release it for
+  host graphics/file/audio work, skip it for explicit lock-free services.
+  In contention tests, another service's mean delay under a 4 ms Present
+  falls **4,122 -> 12 us**; under a 30 ms audio effect **5,629 -> 5.6 us**.
+- **L67:** string services match **22,000** original lifted cases, including
+  **133** matching faults. Dev strlen(200) **4,908 -> 916 ns**. **L69:** keyed
+  waits reduce the 16-idle-worker lock test **437.6 -> 10.7 us/iteration**.
+  **L70:** combined binding/step lookup reduces dispatch **111 -> 10.4 ns**
+  in release (model benchmark). No separate L68 result found in the history.
+- **L71:** first driver pipeline compilation **99-171 ms**, later-run
+  **1.3-1.7 ms**, shader module **6-10 ms** (translation about **0.5 ms**).
+  Persistent Vulkan cache and counters implemented; loading compilation
+  stalls remain distinct from steady gameplay draw cost.
+- **L72:** shared passes reduce the 1,000-draw benchmark **19.2 -> 7.4 us/draw**,
+  GPU-waited frame **22 -> 10.3 ms**; 40 random 16-draw frames compare equal.
+  **L78:** device snapshot/hash work **15.2 -> 5.1 us** per indexed draw with
+  no-op backend. **L80:** suppress unchanged pass commands; **33 ddgpu tests
+  pass**, driver equivalence included. These are not additive FPS gains.
+- **Gameplay bound:** the 40 s `profile_gameplay_render2.txt` sample has
+  render thread **85% of a core**, main thread **23%**. Render inclusive
+  samples: service dispatch **85.4%**, backend draw **34.9%**, constants
+  **22.2%**, snapshot **17.8%**, pass encoding **9.5%**, guest-lock acquisition
+  **8.8%** (overlapping). CPU rendering/services and lock waits dominate;
+  the profile does not measure gameplay FPS or prove a GPU execution bound.
+  Earlier render profile: **76%** of a core. Keep symbol-attribution limits
+  in RUNTIME; the generic byte-copy symbol alone does not identify audio.
+- **L66/L73-L75:** function-level hot/cold layout, lean emission, large
+  function splitting and stable `ddnative-host` policy reduce rebuild work.
+  L66 fixed shard **254.89 -> 21.49 s** (opt1/default front end -> opt0/eight
+  threads); full split play+emu **636.08 s**, some dependencies cached,
+  versus head's approximate **25 min**. **83 hot functions**, provisional
+  loading/movie list. Gate passes **178,130 cases / 59,734 lifted entries**.
+  L73 shard05 splitting **110 -> 84 s**; L75 module-size experiment
+  **216 -> 72 s** at opt1, not yet integrated into this snapshot.
+- `play-fast` used whole hot shards (later adding loader shards 15/19);
+  `play-o0` supplies the all-address-shard opt0 comparison. Current `play`
+  uses L66 hot packages. **L77:** one opt3 copy of the base helpers instead
+  of opt0 copies in every shard: CRT stricmp **38.3 -> 17.2-17.6 us**;
+  two-shard build **41 -> 31-37 s**. See NATIVE_PIPELINE for exact profiles.
+- **Toolchain:** Cranelift rejected per head's L84 brief; LLVM retained.
+  No rejection/timing receipt in the reviewed sources; reason requested
+  on board #10098. `RUSTC_BOOTSTRAP=1` enables `-Zthreads=8` on stable.
+- **L75/L76 pending integration:** build helper **57b73344** keeps per-run
+  exe/PDB copies with stable bootstrap/thread flags; gate **225574c7**
+  parallelizes unchanged comparisons: lift **158 -> 33 s**, mtmath
+  **102 -> 12 s**, mtcore **86 -> 10 s**, mtframe **80 -> 18 s**.
+- **Inventory checked, no build:** **59,450 / 59,469 verified (99.968%)**,
+  **19 residuals**, **99.788% of counted code bytes**. L79 is a separate
+  shader-correctness lane, not an FPS result in this integration snapshot.
+- **Evidence gap:** numerical steady-gameplay FPS is absent from the
+  supplied sampling profiles/commits; requested from head (#10094/#10129).
+- **Next action:** head records matched gameplay rates and visuals for the
+  integrated renderer changes; finish constant-upload and guest-lock work.
+  L84 ran only read-only evidence checks and `inventory.py summary`.
