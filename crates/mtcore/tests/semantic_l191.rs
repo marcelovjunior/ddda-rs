@@ -41,6 +41,7 @@ fn regs(v: &Value) -> [u32; 8] {
 /// Register order of the recorded files.
 const EAX: usize = 0;
 const ECX: usize = 1;
+const EDX: usize = 2;
 const EBX: usize = 3;
 const ESP: usize = 4;
 const EBP: usize = 5;
@@ -105,7 +106,12 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
                 .unwrap_or_else(|| panic!("case {i}: no convention for {target:x}"));
             let at_call = regs(call);
             let now = [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi];
-            for &r in reads.iter().chain(&[ESP]) {
+            // every register the callee could read (all of them: an implicit input the port
+            // does not set would make the guest code diverge), and ESP
+            // EBX, EBP, ESI, EDI (callee-saved) carry state across calls and must match at
+            // every call; EAX and ECX/EDX after a call are caller-saved garbage, checked only
+            // where a callee declares them (`reads`).
+            for r in [EBX, EBP, ESI, EDI, ESP].into_iter().chain(reads.iter().copied()) {
                 assert_eq!(now[r], at_call[r], "case {i}: call {k} ({target:x}) register {r}");
             }
             let recorded = pairs(&call["memory"]);
@@ -114,6 +120,12 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
             for (&a, &b) in &recorded {
                 if a >= esp && a < esp + 4 * words {
                     assert_eq!(m.u8(a), b, "case {i}: call {target:x} memory {a:x}");
+                }
+            }
+            // memory the callee reads beyond its arguments (a recorded check)
+            if let Some(checks) = call.get("checks") {
+                for (a, b) in pairs(checks) {
+                    assert_eq!(m.u8(a), b, "case {i}: call {target:x} reads {a:x}");
                 }
             }
             for (a, b) in pairs(&back["memory"]) {
@@ -132,6 +144,7 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
             *made.entry(*t).or_default() += 1;
         }
         let eax = if returns { [c.eax, after[EAX]] } else { [0, 0] };
+
         let got = [eax[0], c.ebx, c.esp, c.ebp, c.esi, c.edi];
         let want = [eax[1], after[EBX], after[ESP], after[EBP], after[ESI], after[EDI]];
         assert_eq!(got, want, "case {i}: eax/ebx/esp/ebp/esi/edi");
@@ -213,4 +226,42 @@ fn obj_model_vf09_matches_original() {
     let (cases, made) = run_cases(&vectors("objmodel_vf09.json"), mtcore::semantic_l191::obj_model_vf09, false, &callees, &[]);
     assert!(cases >= 1000, "{cases} cases");
     eprintln!("{cases} ABI-level vf09 cases passed; calls {made:x?}");
+}
+
+// verifies 0x01165b40 (ABI level; ret 0x10; the callees as recorded stubs)
+#[test]
+fn probe_search_step_matches_original() {
+    let callees = [
+        Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x00de_5b80, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x00de_52a0, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x00de_5c10, reads: &[ECX], stack_args: 4 },
+        Callee { target: 0x00de_5bd0, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x010a_88a0, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x010a_8bb0, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x3000_0500, reads: &[ECX], stack_args: 3 },
+        Callee { target: 0x3000_0600, reads: &[ECX], stack_args: 3 },
+    ];
+    let (cases, made) = run_cases(&vectors("probe_1165b40.json"), mtcore::semantic_l191::probe_search_step, true, &callees, &[]);
+    assert!(cases >= 1000, "{cases} cases");
+    eprintln!("{cases} ABI-level probe cases passed; calls {made:x?}");
+}
+
+
+// verifies 0x0116b670 (ABI level; ret 4; EAX returned; the callees as recorded stubs)
+#[test]
+fn owner_visit_matches_original() {
+    let callees = [
+        Callee { target: 0x00fb_3790, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0110_7cc0, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0057_b8c0, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0110_7e40, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0110_7e30, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x0116_9a50, reads: &[ECX], stack_args: 3 },
+        Callee { target: 0x0117_87c0, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x3000_0800, reads: &[ECX], stack_args: 9 },
+    ];
+    let (cases, made) = run_cases(&vectors("vis_116b670.json"), mtcore::semantic_l191::owner_visit, true, &callees, &[]);
+    assert!(cases >= 1000, "{cases} cases");
+    eprintln!("{cases} ABI-level owner_visit cases passed; calls {made:x?}");
 }
