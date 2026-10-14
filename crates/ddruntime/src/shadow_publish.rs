@@ -34,6 +34,12 @@ pub(super) fn enabled() -> bool {
         let on = std::env::var("DDRUNTIME_PARALLEL_SHADOW").as_deref() == Ok("publish");
         if on {
             crate::threads::waits::ENABLED.store(true, Relaxed);
+            if std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_TRACE").is_some() {
+                std::thread::spawn(|| loop {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    eprintln!("parallel-shadow waits {}", crate::threads::waits::dump());
+                });
+            }
         }
         on
     })

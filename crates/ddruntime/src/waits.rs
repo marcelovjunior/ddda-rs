@@ -212,6 +212,17 @@ pub(crate) fn verdict(others: &[(u32, Box<[u32]>)], starts: &[u32], dones: &[u32
     ok.then(|| starts.iter().chain(dones).copied().collect())
 }
 
+/// Debug (L172 trace): every registered wait and the window, one line.
+pub(crate) fn dump() -> String {
+    let st = GLOBAL.lock();
+    let mut out = format!("owner={:#x} guarded={:x?} pending={}", st.owner, st.guarded, PENDING.load(SeqCst));
+    for e in &st.entries {
+        let states: Vec<String> = e.handles.iter().map(|&h| format!("{h:#x}:{}", crate::threads::handle_state(h))).collect();
+        out += &format!(" | {:#x}{} [{}]", e.tid, if e.woken { " woken" } else { "" }, states.join(","));
+    }
+    out
+}
+
 static GLOBAL: Registry = Registry::new();
 
 /// Registers the current thread as blocked on `handles` until dropped; the
