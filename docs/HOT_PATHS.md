@@ -1,0 +1,146 @@
+# Hot paths: where a frame's time goes, what is ported, what is next
+
+Written 2026-10-14 (task L190) so nobody re-derives this. Sources: the
+sampling profiles `C:/ddda-targets/L172/runs/profile_{base2,base4,base5,s2e}.txt`
+(`scripts/sample_profile.py --waits`, 30 s, 40 Hz, inside the "heavy"
+gameplay window), L162/L167 stack captures (`docs/tasks/L162-job-wake.md`,
+`L167-critical-callbacks.md`), the L172/L184/L185 commit messages on
+`task/train6` and `task/L172-parallel-shadow`, and Ghidra for roles.
+Numbers are CPU-seconds summed over the 30 s sample, so 30 s = one core
+fully busy. Profiles are noisy (up to 7 fps run to run; judge by two runs).
+
+Related docs (not repeated here): [FRAME.md](FRAME.md) (the original's frame,
+job lines, passes), [NATIVE_PIPELINE.md](NATIVE_PIPELINE.md) (lifter, port
+conventions, vector format), [RUNTIME.md](RUNTIME.md) (threads, dispatch,
+native device), [tasks/L172-parallel-shadow.md](tasks/L172-parallel-shadow.md),
+[tasks/L180-render-worker.md](tasks/L180-render-worker.md),
+[tasks/L25-presentation-performance.md](tasks/L25-presentation-performance.md),
+[tasks/opening-perf.md](tasks/opening-perf.md),
+[tasks/L162-job-wake.md](tasks/L162-job-wake.md) and
+[tasks/L167-critical-callbacks.md](tasks/L167-critical-callbacks.md) (the
+shadow call tree).
+
+## 1. Where the time is (build base5, 2026-10-13 22:36, heavy window ~40 fps)
+
+Threads (CPU s of 30 s):
+
+| Thread | CPU s | What |
+|---|---:|---|
+| guest main thread (`0x004079E0` WinMain -> `0x00DF0D20` loop -> `0x0041DD60` frame) | 18.8 | the frame; waits 34% of samples inside `DBE560` for the job batch |
+| render worker `guest thread 0x1034` (`0x00DAC090`) | 24.6 | replays the draw lists through the native sink (`ndraw_native`): `draw_call` 20% self, `Mirror::textures` 4%, `shadow_samplers` 3.4%, begin_frame/prune 6% (L180 owns this; 74% of it is the sink `command`) |
+| job workers `guest thread 0x1070..0x1084` (loop `sMain::vf20` `0x00DBDC90` -> `0x00DBDEF0`) | 4 x ~10-14 (=71) | run the job batches; each is 45-55% waiting. `0x00DB7620` (the job callback that hosts the shadow and model draws) is 29 of the 66 CPU-s under the loop |
+| guest thread 0x1038 | 6.7 | sound (mixer, x87 leaves `0x01320700`); off the critical path |
+| `d3d9-backend`, `wgpu-encode-0`, `wgpu-finish` | 10.9 / 8.5 / 5.5 | GPU command execution, not guest code |
+
+Self time is dominated by the memory and flag helpers of lifted code
+(`fast_u32` 15%, `fast_set_u32` 6%, `X87::real_memory_dyn` 5%, flag helpers
+~3%): there is no single hot leaf, the lifted bodies themselves are the cost.
+A readable port removes those helpers (typically 2-10x on the ported body).
+
+The critical path is the main thread's wait for the job batch, and in the
+batch the **last job is the uSkyStableShadow callback** (`DB7620` / `EE2C90`,
+vtable `0160DF98`): last in 150/150 sampled frames, mean callback 13.4 ms,
+3.9 ms of it alone (no other job running) per frame (L167). The user
+confirms it: fps drops from ~50 to high 30s when pawns walk into the sun.
+
+## 2. Frame and job structure (one paragraph per level)
+
+- `0x00DF0D20` loop -> `sBbsRpgMain::vf06` `0x0041DD60` (frame; steps in
+  FRAME.md section 2). Steps 36-42 run the unit passes A/B/C
+  (`sUnit::vf06/13/11` `0x00DB6740` / `0x00DB5700` / `0x00DB5690`), step 58
+  `sShadow::vf06` `0x00E277A0`, 60 `sRender::vf06` `0x00DAF000`
+  (-> `0x00DB0DE0`, viewport/camera `0x00DC4770`), 65 `0x004B9660` queues every
+  unit's draw as jobs.
+- Jobs: the scheduler global at `0x018D0B28` (per-thread view in the lifter
+  since 8f7e50e7). `DBE560` runs a batch (`DBD8D0` participates on the
+  caller, workers loop in `DBDC90`); the main thread waits in
+  `wait_until` (92% of its waits are `from DBE560`).
+- Job callbacks seen (L167, solo ms/frame): `DB7620`/`EE2C90` uSkyStableShadow
+  3.9, `4B9FF0`/`C70790` uSoundGenerator 0.47, `4B9FF0`/`BAF4F0` uNpc 0.46,
+  `FED7E0` cDraw 0.25, `4B9FF0`/`B53650` uCmc 0.24, `5D12B0` uPawnIntel 0.2.
+- **Serial shadow chain** (inside one job callback):
+  ```
+  DBD8D0 -> DB7620 -> EE2C90 (uShadow::vf11) -> vtable+60 EFEF80 (uStableShadow::vf24, tail)
+    -> EFDC70 (per cascade: EE5CE0 split math, EFD240 setup [ported shadow_pass::setup], EEA950)
+      -> DB63E0 (sUnit::vf16 shadow traversal [ported shadow_traversal::traverse])
+         -> units via DBE560/DBD8D0 mode 1-3 -> DB7620 per unit:
+            C52D70 -> 886880 (uObjModel::vf11) -> FFE5C0 -> EA3130 (uBaseModel::vf11 [ported])
+                 -> FFC350 / FFC9F0 / EA5320 -> FEEF20 -> FEE320 -> E12A20 (material/cbuffer commit)
+            C25EA0 (update_instancing [ported]) -> FA5860 (uSwingModel::vf11) -> EA3130 -> C24640
+            B6A070 (uPlayerBase::vf11) -> B89790 (vf208) / B8B800 -> effect/model helpers
+         + sPrimitive 107FF00/30 -> E61010 / E68390 (-> 111E180 sort, 10B7440 draw) [ported]
+  ```
+  EFD240 mutates shared resource state; DB7620 units assume exclusive
+  access to the objects they traverse, so view-mode parallel publish crashed
+  (L172, memory ddda-rs-state 23:20). Cascade independence is NOT proven.
+  The scheduler/lane/waits side of this belongs to the L172 owner.
+- Draw path (per model, in the units and the main pass): `EA3130` -> virtual
+  +0x68 -> `FFC350 draw_model_mesh` / `EA5320 draw_mesh` -> `FEEF20`
+  (`commit_current_state_native`) / `FEE320 commit_primitive_state` ->
+  `F11610 draw_with_resources` -> `FED7E0` cDraw -> the D3D9 command stream the
+  render worker replays (`mtdraw::executor::execute` -> `ndraw_native`).
+  Material: `EA23F0 primitive_material`, `FED190 begin_material`, `E0F3C0
+  package_key`, `E12A20 shader_lookup`, `E0E5E0 dependency_hash`
+  (`semantic_draw_*`, ~6 ns-us each). Cull/lights: `FF0780/0AD0/0D20/0E60`
+  (`mtdraw::cull`), `49B1A0 scene_lights`, `EA42E0 cull_bounds`
+  (port exists, 0.78x: not shipped), `FEB1F0 scene_collect_visible`.
+
+## 3. Already ported (registered in `crates/ddports/src/lib.rs`)
+
+Measured speedups are lifted body vs port in the unit benchmarks (commit
+messages are the source; "x" = lifted time / port time). No port is credited
+with a game fps gain individually; the combined effect of the L184 round is
+31.7 -> ~32 (train14-18, within noise), the big jump (to 39.9) came with the
+L180 render-worker sink plus the L172 view-mode scheduler tree (base5).
+
+| Where | Ports (addr) | Speedup |
+|---|---|---|
+| `mtcore::semantic_p2c` | `EA3130` base_model_draw_unit, `EA1FD0` select_shadow_state | 1.8x (1402 -> 790 ns), 1.45x |
+| `semantic_s9` | `F11610` draw_with_resources, `FEB1F0`, `FF2EE0` set_camera_matrices (100x vs lifted), `FF04C0`, `EA5B50`, `FED5D0` | 3.9x (2711 -> 695 ns) ... |
+| `semantic_draw` / `_c` / `_a` / `_b` | `EA5320` draw_mesh (folded variant 3.8-4.2x), `FEE320`, `FFC350`, `FFC9F0`, `EA23F0`, `FED190`, `E0F3C0`, `FF1920`, `FF14D0` | 1.2-4x (median 1.24x over 77 pairs, L178) |
+| `semantic_s1` | `FEDB80/FEDC00` save/restore recording state (8.4x/5.9x), `F23260` draw_attachment 2.5x, tick_gauges, update_instancing | |
+| `semantic_s2/s3` | cast chain `FAC6F0 DEA870 11787C0`, shader_lookup, cull helpers, classify_overlap `EA1EE0`, any_member_test `E61010` | 2-6x |
+| `semantic_s4..s8` | actor/joint/pose/motion filter (`6419 -> 203 ns` 31x), GJK sweep `D7CF70` (3.4x), CRT math | 3-30x |
+| `job_*`, `shadow_*` | `E0E5E0` dependency hash, `FED480` save_state, `DB63E0` traverse, `EFD240` setup, `E61010/E68390` sPrimitive vf11/12, `111E180` pair sort (7.9x) | 1.4-8x |
+| `mtframe` / `mtdraw` / `mtmath` | frame logic, cull, lights, set_render_target, math | see NATIVE_PIPELINE.md |
+
+Dispatch cost matters for small ports: `override_of` is an open-addressing
+table (L180, ~12 ns/call saved); a port calling a ported callee goes through
+`call_guest` -> direct (no re-dispatch). `DDRUNTIME_SEMANTIC_SKIP/ONLY`
+(hex list) bisect ports in game.
+
+## 4. Ranked next candidates (excluding the shadow dispatch/scheduler)
+
+Inclusive CPU-s are from base5 / s2e profiles (all workers, 30 s). Gain =
+inclusive share x (1 - 1/speedup) at an assumed 2-3x on lifted bodies.
+
+| # | Function | Role | Incl. CPU-s | Size | Difficulty | Expected |
+|---|---|---|---:|---:|---|---|
+| 1 | `B89790` (vf208) + `B6A070` uPlayerBase::vf11 + `B8B800` | player consumer draw in the shadow/model units; B6A070 -> vf+0x340 -> B89790 | 3.6 (base5), 9-11 (s2e) | 0x84A / 0x7C / 0x209 | medium (B8B800 uses implicit ESI) | 1-3 CPU-s of ~70 on workers |
+| 2 | `FA5860` uSwingModel::vf11 | integer-only flag/queue shuffle plus base `EA3130` | 2.3 | 0x272 | easy | ~1 CPU-s |
+| 3 | `886880`/`886530`/`885DC0` uObjModel::vf09/vf11/vf08 and `0084C720` uCharacterBase::vf09 | per-model draw prep | 2.3-3.2 each | small | easy-medium | ~1-2 |
+| 4 | `01174730`, `0116B670`, `01165B40` | probe/sky tree search used by the ambient probe (chain with the ported `11787C0`) | 4.0 | ? | medium | 1-2 |
+| 5 | `EE5CE0` (cascade split math), `EEA950`, `EE2C90` | shadow chain top (floating point; per frame, not per unit) | 2.3-6.8 | | medium, overlaps the shadow owner | small: runs once per cascade |
+| 6 | `80A8B0`, `FEEF20` unfolded callers | seen only in s2e | 4.4 | | | |
+| 7 | render worker `ndraw_native::draw_call` etc. | Rust, not lifted: L180 | 24.6 | | medium | the largest single thread; see L180 Next |
+| 8 | main thread `4B97F0` sUnitExt::vf09 / `DB6740` pass A | unit move | 3 | | hard (many virtuals) | |
+
+Not worth porting: the sound thread's `DC77A0/DDB860/DDDFA0/CFE6B0` chain
+(off the critical path, host audio is already native), `01314570/01323460`
+(CRT/loader, 6 CPU-s on the sound/loader thread).
+
+Reading the order: the shadow job is the lever (parallel shadow, L172);
+until that is accepted the best use of ports is cutting the per-unit cost
+inside `DB7620` (rows 1-3), because that serial path is the frame's tail.
+
+## 5. How to port (the pattern)
+
+See NATIVE_PIPELINE.md "Porting conventions" and "Vector file format". In
+short: a semantic port is `fn(m: &mut dyn Mem, c: &mut Cpu)` in
+`crates/mtcore/src/semantic_*.rs` with the original's exact register/stack
+ABI (`semantic_p2c::base_model_draw_unit` is the template; callees go
+through `call_from(..., guest(addr))`), registered in the
+`ddports::ports()` semantic list, with an oracle test in
+`crates/mtcore/tests/semantic_*.rs` that runs recorded vectors
+(`research/native/record_*.py`, Unicorn on the original exe) and mutation
+checks, and a benchmark of port vs lifted body.
