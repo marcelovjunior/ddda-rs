@@ -602,3 +602,35 @@ to 15 ms), so whether 240 fps (4.2 ms) fits the GPU is still open: a 720p run on
 be bounded further by running at 540p or 360p, and a real answer needs `Features::TIMESTAMP_QUERY` (not implemented: no existing timestamp
 plumbing in ddgpu, the passes are written in `vk/pass.rs` and `native.rs`, more than the 30 minutes allowed). 720p worker sink decode: 1537 draws,
 5.34 ms (1080p: 1448 draws, 5.38 ms): the sink cost is per draw, independent of resolution.
+
+### 10.x GPU time per frame (gputime agent, 2026-10-14; exact, GPU timestamp queries)
+
+Instrumentation: `DDGPU_TIMESTAMPS=1` (off by default, one cached bool check when off; crates/ddgpu/src/gpu_ts.rs, commits on task/L172-parallel-shadow). The device requests TIMESTAMP_QUERY + TIMESTAMP_QUERY_INSIDE_ENCODERS (supported on the RTX 4060, Vulkan, driver 610.62). One timestamp is written between the command buffers of every `vk::submit` (start marker, then one after each run of passes); at each present the range is resolved, read back a few frames later, and printed once per second (`gpu-ts:` lines in the run log). Run = consecutive passes batched by the encoder; grouped by the run's largest render target (WxH, c1 = one colour target, d = depth).
+
+Run: fast2 env, 1080p windowed, --no-vsync, benchmark save, gameplay t=38-98 s, exe C:/ddda-targets/r172/runs/shadow2 (tree R172 + gpu_ts), log C:/ddda-targets/L172/runs/run_gputs3.log. fps 47.4 avg over the run including the 30 s profiler sampling window (the earlier identical run without the feature working: 47.5; late probes 54-55 fps): the timestamps do not change fps measurably.
+
+Result (steady, 55-57 frames/s, ~25 one-second windows, stable within +-0.2 ms):
+
+| quantity | ms per frame |
+|---|---|
+| GPU busy (sum of run times between timestamps) | 6.5-6.8 |
+| first-to-last timestamp span (includes GPU idle between submits) | 10.3-12.2 |
+| so GPU idle inside the frame | ~4 |
+
+Top runs by GPU ms per frame (typical window):
+
+| render targets | ms/frame | runs/frame | what |
+|---|---|---|---|
+| 1920x1080 colour+depth | 2.8-2.95 | ~12 | main scene geometry passes |
+| 64x16 colour | 0.85-0.93 | ~1.3 | one expensive small pass (soft-body/cloth sim style; 0.7 ms per run) |
+| 1920x1080 colour | 0.8-0.87 | ~6.4 | full-screen post/lighting passes |
+| "other" (copies/transitions/no pass) | 0.75-0.78 | ~47 | ~16 us per run, mostly timestamp-bracketed barriers and uploads (partly measurement overhead) |
+| 512x1536 colour+depth | 0.37-0.39 | ~2.7 | shadow maps |
+| 256x256 | 0.24-0.36 | 2 | |
+| 128x128 | 0.12-0.2 | 3 | |
+| 960x540 depth, 64x8, 32x32 | 0.07-0.11 each | | |
+
+Caveats: a timestamp between runs is a pipeline bubble (bottom-of-pipe to top), so the ~60 markers per frame inflate busy slightly (the "other" row and small runs are the most affected); real GPU time is probably 5.5-6.5 ms. Frame content: 4.2-4.9k draws/frame.
+
+Verdict for 240 fps (4.2 ms/frame): at the current workload the GPU alone needs ~6.5 ms/frame at 1080p (~150 fps ceiling), so 240 fps does NOT fit if every frame renders the full scene. Idle is ~4 ms (CPU-bound as known), so GPU is not today's limit, but it becomes the limit above ~150 fps. What would fit: with decoupling, the shadow maps (0.4), the 64x16 pass (0.9) and the small intermediate targets (~0.6) can be reused per sim tick and drop to <= 1/4 of their cost per presented frame, leaving ~4.7 ms: borderline. A fit needs additionally ~15% off the 1080p main passes (2.9 + 0.8 ms; e.g. cheaper draw state, fewer redundant draws, depth pre-pass reuse) or 1440p/1080p DLSS-style internal scaling. Roughly: 240 fps at 1080p is a stretch on the 4060 and should not be promised; 120-165 fps is comfortably within the GPU budget. Not measured: GPU time at 720p/540p (would split pixel-bound vs per-draw-bound main passes; one more run with the 720p config).
+
