@@ -765,3 +765,41 @@ The user's live config changed at 04:13 (CameraFov 0 -> 15, JobThread 1 -> 7, Re
 triples the main-view draw count (~4.5k per frame), so the render worker matters even more than the section 11.4 numbers suggest. All sections 11.1-11.4 numbers
 were taken with the live config of that time (draws/frame 4.4-5.2k); from 11.5 on every run copies the pinned `E:/ddda-re/bench/config.ini` (windowed) and
 restores the benchmark save into the sandbox first; compare only against baselines taken on it (fast2 41.5/41.7, main 41.1/41.4).
+
+### 11.6 Render-worker work (decouple2, 2026-10-14 evening)
+
+**W1/W2 result** (pinned config, 3 runs each, lock held per run; `C:/ddda-targets/d1/seq6.out`): constant banks as a boxed pair (W1) plus a periodic sweep of
+the stream/target part tables instead of a 16384-entry clear (W2): N=1 medians 51.9 (old) vs 51.2 (new) fps, N=4 61.6 vs 62.6 (+1.6%). Not slower; kept.
+On the pinned config the plain build runs 50-51 fps (default) and `DDDRAW_NATIVE=1` 32-34 fps: the handle-based native path is not a quick win.
+
+**Per-phase cost of `draw_call`** (`DDRUNTIME_NDRAW_PHASES=1`, microseconds per decided draw, 5 runs of 120 s, stable to about 0.05):
+
+| phase | shadow atlas 512x1536 | all other passes |
+|---|---|---|
+| target + stream parts | 0.40 | 0.43 |
+| constants (the whole `previous != shader` block) | 1.46-1.75 | 1.52-1.78 |
+| fixed state + render-state list | 0.12 | 0.12 |
+| samplers + textures | 0.35 | 0.70 |
+| assemble the DrawCall | 0.21 | 0.14 |
+| total | about 2.5 | about 2.9 |
+
+Inside constants: `binding_part` 1.0-1.2 (63%), device-bank check 0.25-0.3, meta + skipped registers 0.11-0.15, held registers 0.07.
+Inside `binding_part` (shadow): meta/sampler check 0.05, clear previously written registers + bank resize 0.21, upload loop (guest reads) 0.19,
+content lookup/hash 0.18, creating the part 0.32 (BindingPart + two Constants Arcs + two bank Vecs: five allocations). So the constants phase is
+more than half of every draw, and of that about half is allocating and filling a new part for a binding whose per-object registers changed.
+Tried and measured: run-based clear/compare/hash (`float_runs`): no change beyond noise (1.08 -> 1.01 us); copying the exact-length bank instead of moving the
+scratch: clear 0.21 -> 0.07 but part creation 0.32 -> 0.46, net zero (reverted). The allocation itself, not register iteration, is the cost.
+
+**Consequence for NDRAW_DIRECT stage 1:** the gain has to come from not creating a part per draw (a kept register file that is updated in place and
+published as a pooled block), i.e. the doc's section 3.5, not from caching state objects or textures (fixed state 0.12 and textures 0.35 are small for the
+shadow pass). That is a rewrite of `binding_part`/`held_registers`/`fill_uncovered`/`Uploads` together with `ddgpu`'s block packing and was not started;
+the expected prize is about 1 us of 2.5 us for 518 shadow draws (about 0.5 ms of the worker), and 4.5k draws x ~1 us = 4-5 ms if extended to all passes.
+
+**Verify-mode mismatch to chase** (`DDDRAW_NATIVE=verify`, exe d1m = main bb0a58b2 + L193, pinned config, run `run_m_verify.log`): 1,009,566 draws
+compared, 1,009,565 equal, 1 differing field ("float register"), 13,957 merged by the D3D9 path, 0 not drawn; clears/copies 3,633 of 3,633 equal.
+The two report lines printed (one draw each time the report runs): (a) pixel-shader c3, ours `[40028a29 4001a855 3ffe450a 3f4ccccd]` vs the D3D9 path's
+`[400289be 4001a7e1 3ffe43fc 3f4ccccd]`, record 0x647960d0, binding 0x64796090, decoded for this draw, written VS `7fe` PS `1fe`, uncovered none;
+(b) pixel-shader c4, ours `[4002887a 4001a680 3ffe40c8 3f800000]` vs `[40028810 4001a60d 3ffe3fbc 3f800000]`, record 0x6479b0e0, binding 0x6479b0a0, written PS `1fe`.
+Both are the same kind: a vec3 whose three floats differ in the low mantissa bits by a small relative step (about 2e-5), w equal: a value the main thread is still
+writing (a colour/light vector updated every frame) while the worker executes the previous frame's stream, so the two reads (sink first, D3D9 path later) saw different
+generations. It looks like a verify-time race on live memory, not a decode error; it matches the "constant memory is live" risk R1 of NDRAW_DIRECT.md.

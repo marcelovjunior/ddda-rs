@@ -94,3 +94,9 @@ per-draw Arc clones (render_states, textures, targets array clone, vertices) -> 
 - Open levers by size: main-thread sim half 9.5 ms (passes A/C 4.3 ms), memory helpers (hotpath), render worker draw_call (needs a line-level profile),
   GPU time unmeasured (timestamp queries; see docs/DECOUPLED_RENDER.md section 10), DBE560 join ~1.2 ms (inline of small batches did not help).
 - Known-bad: DDRUNTIME_SHADOW_TOP=1 panics (x86.rs:251); JOB_INLINE=8 harmful; parallel shadow view mode crashes.
+
+## L193 render-worker notes (decouple2, 2026-10-14)
+- W1 (constant banks as a boxed pair, no 1.4 KB move/default per draw) and W2 (stream/target part tables swept every 8 frames instead of a 16384-entry clear):
+  pinned config, 3 runs each, N=1 51.9 vs 51.2 fps (noise), N=4 61.6 vs 62.6. Kept.
+- `DDRUNTIME_NDRAW_PHASES=1` prints per-phase us/draw every 600 frames. Shadow atlas draw: parts 0.40, constants 1.5-1.75 (binding_part 1.0-1.2, of which creating a new part 0.3-0.46),
+  fixed state 0.12, samplers+textures 0.35, assemble 0.21 (about 2.5 us); other passes about 2.9 (textures 0.70). See docs/DECOUPLED_RENDER.md section 11.6.

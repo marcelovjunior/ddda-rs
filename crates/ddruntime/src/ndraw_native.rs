@@ -704,6 +704,7 @@ fn hold_upload(bank: &mut Constants, w: &mut ([u64; 4], u16, u16), u: &Upload, v
 }
 
 fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<BindingPart>>, held: Option<&Held>) -> Result<Arc<BindingPart>, Refusal> {
+    let mut bl = phase_start();
     let flags = g.u32(binding);
     let alpha = if flags & 0x18_0000 == 0x18_0000 {
         let comparison = flags >> 3 & 255;
@@ -727,6 +728,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             return Err(Refusal::Missing);
         }
     }
+    phase_lap(&mut bl, c, 9);
     // constants: the binding's registers over zeros (in reused banks)
     // (L180: only the registers the last binding wrote are cleared, not the
     // whole banks)
@@ -750,6 +752,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         }
         bank.f.resize(meta.floats[stage].min(FLOATS[stage]), [0; 4]);
     }
+    phase_lap(&mut bl, c, 10);
     let mut written = [([0u64; 4], 0u16, 0u16); 2];
     let mut uncovered = [[0u64; 4]; 2];
     for stage in 0..2 {
@@ -832,6 +835,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             return Err(refusal);
         }
     }
+    phase_lap(&mut bl, c, 11);
     // the same as the binding's part of an earlier frame: that part; else
     // a part of the same content seen lately (L180: the game's bindings
     // move between frames, their content mostly does not), else a new part,
@@ -841,6 +845,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         _ => {
             let key = content_key(&meta, alpha, &written, &banks);
             let kept = find_kept(&mut c.by_content, &mut c.by_content_old, key, c.frame, |p| same_part(p, &meta, alpha, &written, &banks));
+            phase_lap(&mut bl, c, 12);
             match kept {
                 Some(p) => {
                     c.built[3] += 1;
@@ -862,6 +867,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                         native: Default::default(),
                         uncovered,
                     });
+                    phase_lap(&mut bl, c, 13);
                     c.by_content.insert(key, (c.frame, part.clone()));
                     part
                 }
@@ -1516,7 +1522,7 @@ pub struct Caches {
     banks: Option<Box<[Constants; 2]>>,
     banks_written: [([u64; 4], u16, u16); 2],
     /// DDRUNTIME_NDRAW_PHASES=1: per phase ns of draw_call, class 0 = the 512x1536 shadow atlas, 1 = the rest
-    phase_ns: [[u64; 9]; 2],
+    phase_ns: [[u64; 14]; 2],
     phase_n: [u64; 2],
     phase_class: usize,
     /// binding parts by content (`content_key`), with the frame they were
@@ -1759,7 +1765,7 @@ fn phase_lap(lap: &mut Option<Instant>, c: &mut Caches, k: usize) {
 }
 /// The phase table (per decided draw, microseconds) printed every 600 frames.
 fn phase_report(c: &Caches) {
-    let names = ["parts", "constants", "fixed+states", "samplers+textures", "assemble", "c:meta+skipped", "c:device_banks", "c:binding_part", "c:held_registers"];
+    let names = ["parts", "constants", "fixed+states", "samplers+textures", "assemble", "c:meta+skipped", "c:device_banks", "c:binding_part", "c:held_registers", "bp:meta+samplers", "bp:clear", "bp:uploads", "bp:lookup/hash", "bp:new part"];
     for (class, label) in ["shadow atlas 512x1536", "all other"].iter().enumerate() {
         let n = c.phase_n[class].max(1) as f64;
         let mut line = format!("ndraw phases {label}: {} draws, us/draw:", c.phase_n[class]);
