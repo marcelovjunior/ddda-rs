@@ -3068,12 +3068,12 @@ opening (codex-31), route perf (codex-29).
 - Build: a full `play-fast` build takes ~6 min cold; a runtime-only relink
   takes ~20 s; the optimised `play` build takes ~25 min.
 
-### L89 deferred backend (2026-10-13, final measurements pending)
+### L89 deferred backend (2026-10-13)
 
 - Implemented one owned, bounded FIFO and one backend worker, two outstanding
   Presents, read-result fences, shutdown drain and per-frame presentation TLS.
   `DDRUNTIME_SYNC_BACKEND=1` retains immediate execution.
-- Runtime **134**, queue **5**, capture **5**, GPU **33** pass; **3** existing
+- Runtime **134**, queue **5**, capture **5**, GPU **34** pass; **3** existing
   GPU tests ignored. Queued/synchronous frame pixels and worker sink match.
 - Target-format matrix exceeded the 60-second bound; standalone **0a1776ab**
   shards its unchanged 200 cases. Final four shards and isolated timings wait
@@ -3307,3 +3307,13 @@ opening (codex-31), route perf (codex-29).
 - **Next action:** head records matched gameplay rates and visuals for the
   integrated renderer changes; finish constant-upload and guest-lock work.
   L84 ran only read-only evidence checks and `inventory.py summary`.
+- Standalone **0a1776ab** shards the unchanged target-format matrix: all
+  **200/200** cases match, four processes under 14 seconds each.
+- Serialized `play` medians: 1700 draws **14.35 -> 4.41 us/draw** producer,
+  total **28.72 -> 29.77 ms/frame**; 5200 draws **14.38 -> 9.72 us/draw**,
+  total **79.18 -> 85.98 ms/frame**. Work is offloaded, not eliminated.
+- Core **e7a069f3**, compatible fixtures **ffc2b759**. Head's five-branch combo
+  reports **7.2 vs 4.9 FPS**; the subsequent L102+L103+L99 combo reports **8.9**.
+  Neither isolates L89. Next: head integrates L90 snapshot groups and L98 dirty
+  flushes after addressing the newly exposed query/D3D-lock wait in L102.
+  No game or lifted-shard build by this lane. Details: `tasks/L89-backend-worker.md`.
