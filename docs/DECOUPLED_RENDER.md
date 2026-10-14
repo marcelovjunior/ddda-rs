@@ -718,3 +718,45 @@ What breaks / observations:
   fast between ticks. Gate it like the units (or give it dt/n); then interpolate the view record (`sCamera+0xC0+i*0x190`) eye/orientation between ticks.
 - Recommended next step: (1) gate the remaining sim-half work on paused frames (camera, effects, GUI, 3D sound) to find how much of the ~6 ms is really
   needed per displayed frame; (2) force n=1 during loading/events/menus; (3) then the sink/replay work (C + A2), since that is the cap.
+
+### 11.4 Round 2: forced full frames, gates, re-measure (decouple2, exe `C:/ddda-targets/d1/runs/d1c`)
+
+**Forced full frames** (`force_full` in decouple.rs; `DDRUNTIME_FORCE_FULL=0` turns it off): a frame always simulates while (0) no player
+(`*0x018FA4EC` +0x99C == 0: boot, title, loading), (1) an event runs (`*0x018FA4B8` sEventManager +0x20 != 0), (2) bit 57 of the unit group mask
+(`sUnit+0xD34` bit 25) is cleared (events and menus freeze the world with it), (3) `mDeltaTimeLimite` (+0x78) > 2.5 (the 16.0 states), (5) a movie
+sample was requested in the last second (`movies.rs` `LAST_SAMPLE_MS`, stamped in the WMV reader `next`), and for 240 frames after any of these.
+Result: with SIM_EVERY=4 the benchmark reaches gameplay at t=25-28 s, the same as the full-frame tick-60 run (26 s); before the forced frames it was 53-56 s.
+Counters per run (log line `decouple gates`): e.g. noplayer 1276-1903 frames, movie 253-385, hold 119-179, event/mask57/limite 0 (not entered in the
+autoplay path; those three conditions are untested in game).
+
+**Audio:** the head reported choppy audio on the title movie in the round-1 build (movie frames were skipping the sim). Fixes: movies force full
+frames (above), and **the sound gate was removed** (`sound` is never gated, whatever DDRUNTIME_GATE says; sSoundExt keeps its own per-frame cadence;
+it only cost 0.3-0.45 ms). Audio was not listened to by me; the title-movie check is the head's. The fixed tick itself does not touch the mixer.
+
+**Gate costs** (DDRUNTIME_GATE_MEASURE, inclusive ms per displayed frame on full frames, fixed tick 60, several runs): area (sAreaExt 0x419910) 0.66-0.86,
+softbody (uSimSoftBody::vf11 0xF20640, ~12 calls) 1.2, sound 0.30-0.45 (not gated), gpupart9 (0xEB26C0) 0.04-0.12, net 0.03-0.06, weather 0.02-0.03,
+camera 0.01-0.02, item 0.01, prim 0.003-0.006, zone/msg/cockpit/effect/gui ~0. So the whole list is ~2.3 ms of the ~6 ms "sim half" on a
+skipped frame; the other ~3.5 ms is not in these functions (upkeep, the job-system barriers of the passes with their now-empty bodies, input, the
+`sEffectExt` 0x4258F0 and `sUnitExt` 0x4B97C0 tail-jump entries that I did not wrap, `sShader2Ext`, GUI beyond vf10).
+Gated on non-sim frames: effect, prim, gpupart9, gui, area, zone, item, msg, cockpit, weather, net, softbody. Camera is kept (it needs the interpolation
+design first). DDRUNTIME_GATE=all|names selects; default none.
+
+**Measurement (fps mean t=46..84, 60 Hz tick, no cargo/rustc running, lock held for each run; three runs each, in order):**
+
+| config | runs | median |
+|---|---|---|
+| tick 60, all frames sim (t60) | 48.0 / 42.7 / 48.1 | 48.0 |
+| every 2nd, gated (n2g) | 68.3* / 48.9 / 51.4 | 51.4 |
+| every 4th, forced-full only (n4f) | 56.2 / 50.9 / 59.4 | 56.2 |
+| every 4th, forced-full + gates (n4g) | 52.1 / 56.9 / 58.1 | 56.9 |
+
+(*) that run had 2775 draws/frame instead of ~4.6k (a different, lighter scene state); not representative, the median ignores it. Another agent's game
+(`a1/head`) ran for long periods in this session; the runs waited for no ddplay to exist, but the first batch (q2) was discarded because of an overlap.
+Conclusions: skipping the sim gives +7% (N=2) and +17-19% (N=4) over the fixed tick; **the gates add nothing measurable (n4g vs n4f within noise)**
+although they remove ~2.3 ms of main-thread work, so the main thread is not the bound on those frames: the render worker is.
+
+**What remains per displayed frame (the replay target):** production half 3.8 ms main thread (sRender 1.9 of it, the draw jobs) + the worker's decode of
+the whole stream: ~970-1450 main-view draws (3-5.4 ms), 125-206 shadow draws (0.4-0.7 ms), 250 soft-body draws (0.9 ms, now gated away only in the
+main thread's production: the worker still receives them when a stream carries them), + GPU 6.5 ms. A retained-stream replay must therefore take the
+frame from (production 3.8 + worker 5-7.6) to (patch ~0.3 + sink for the main view ~1.5-2.5): i.e. the unchanged parts above, not the sim, are the
+displayed-frame cost, and they cap the displayed rate at roughly 60-70 fps in this build regardless of N.
