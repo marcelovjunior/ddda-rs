@@ -486,7 +486,14 @@ fn sweep(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, owner: u32, shape:
                             s,
                             &[s.wrapping_add(0x150), s.wrapping_add(16), s.wrapping_add(32), s.wrapping_add(48), s.wrapping_add(64)],
                             0x00d7_df2d,
-                            |m, c| crate::semantic::call_guest(m, c, 0x00d8_e400),
+                            |m, c| {
+                                // the original's registers at this call: ESI = this, EDI = the
+                                // first argument, EBX = the third (the callee reads BL)
+                                c.esi = s;
+                                c.edi = s.wrapping_add(0x150);
+                                c.ebx = s.wrapping_add(16);
+                                crate::semantic::call_guest(m, c, 0x00d8_e400)
+                            },
                         );
                         if ok as u8 == 0 {
                             for i in 0..3 {

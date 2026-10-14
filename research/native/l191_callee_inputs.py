@@ -30,10 +30,19 @@ def block_effect(text, written):
         m = ASSIGN.search(s)
         rhs = s[m.end():] if m else s
         lhs_reg = m.group(1) if m else None
-        # reads in the right-hand side (or the whole statement)
-        for r in REG.findall(rhs):
-            if not written & (1 << IDX[r]):
-                reads |= 1 << IDX[r]
+        # reads in the right-hand side (or the whole statement); a push of a
+        # register saves it for the callee's own epilogue and is not a use, and
+        # a self-XOR or self-SUB zeroes the register without reading it
+        zeroing = re.match(r'cpu\.(\w+) = cpu\.(\w+) (\^|-) cpu\.(\w+)$', s)
+        if zeroing and not (zeroing.group(1) == zeroing.group(2) == zeroing.group(4)):
+            zeroing = None
+        if zeroing:
+            written |= 1 << IDX[zeroing.group(1)]
+            rhs = ''
+        if not s.startswith('emit::push(cpu.') and not zeroing:
+            for r in REG.findall(rhs):
+                if not written & (1 << IDX[r]):
+                    reads |= 1 << IDX[r]
         if lhs_reg:
             written |= 1 << IDX[lhs_reg]
         # pops write registers: `cpu.X = emit::pop(` is an assignment above; calls clobber

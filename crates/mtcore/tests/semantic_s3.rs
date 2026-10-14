@@ -108,6 +108,8 @@ fn abi_cases_checked(path: &str, body: LiftFn, returns: bool, callee: fn(u32) ->
                 m.set_u8(a, b);
             }
             c.eax = regs(back)[0];
+            c.ecx = regs(back)[1];
+            c.edx = regs(back)[2];
             c.esp = regs(back)[4];
             *position.borrow_mut() += 1;
         })));

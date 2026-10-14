@@ -4,6 +4,8 @@
 //! byte the original leaves outside its popped stack scratch. ECX, EDX,
 //! the flags and the scratch below the returned ESP are not compared (MSVC
 //! callers never read them after a call).
+#[path = "../../mtcore/tests/support/callee_reads.rs"]
+mod callee_reads;
 use ddnative_base::{
     mem::Mem,
     x86::{Cpu, LiftFn},
@@ -132,6 +134,9 @@ fn abi_cases_with_call(data: &Value, entry: u32, body: LiftFn) -> usize {
             let at = regs(call);
             assert_eq!(target, n(&call["target"]), "case {i}: call target");
             assert_eq!((c.ecx, c.esp), (at[1], at[4]), "case {i}: call ECX/ESP");
+            for &r in callee_reads::saved_reads(target) {
+                assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi][r], at[r], "case {i}: call {target:x} register {r} (callee reads it)");
+            }
             for (&a, &b) in &pairs(&call["memory"]) {
                 if compared(a, esp) || (at[4]..at[4].wrapping_add(8)).contains(&a) {
                     assert_eq!(m.u8(a), b, "case {i}: memory {a:x} at the call");

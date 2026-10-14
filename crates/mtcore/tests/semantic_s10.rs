@@ -125,6 +125,8 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
                 m.set_u8(a, b);
             }
             c.eax = regs(back)[EAX];
+            c.ecx = regs(back)[1];
+            c.edx = regs(back)[2];
             c.esp = regs(back)[ESP];
             // a callee that returns a float in ST0
             if let Some(bits) = trace[k].get("st0") {
