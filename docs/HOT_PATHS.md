@@ -165,3 +165,46 @@ checks, and a benchmark of port vs lifted body.
 Implicit-register conventions matter for ports of these (the oracle tests check
 the registers each recorded guest call reads): `B89FE0` and `7FFCC0` take ESI =
 context, `B8A770` and `7FFCC0` take EDI = the part, `B8B800` takes ESI = model.
+
+## 7. The main/game thread (L190 follow-up)
+
+The frame waits on the main thread, so its time is what counts. Mean of 16
+`guest main thread` samples (profiles `C:/ddda-targets/L172/runs/profile_*.txt`,
+about 16 CPU-s of 30 s each; inclusive CPU-s, children not subtracted):
+
+| Incl. s | Function | What |
+|---:|---|---|
+| 14.8 | `0041DD60` | the frame |
+| 10.7 | `00DBE560` (9.3 of it in `DBD8D0`) | job batch: the main thread runs jobs itself and waits; most of it is the shadow job (`DB7620` 3.9 on this thread) |
+| 5.0 / 4.1 | `00DAF000` sRender::vf06 / `00DC4770` sCamera::vf09 | per-viewport pass replay; 3.5 of it inside the ported `set_pass` (draw-pass replay, whose callees are ported) |
+| 4.4 | `job_shadow::save_state` (`FED480`, ported) | inclusive of the guest call it wraps |
+| 2.6 | `004B97F0` / `00DB6740` | pass A: every unit's move (`sUnitExt::vf09`, a dispatch loop over virtuals) |
+| 2.0 / 1.7 / 1.5 | `restore_recording_state` / `layer_walk` / `node_dispatch` | ported, inclusive of their callees |
+| 0.3 each | `DB5690`, `4B99D0`, `B89790` | pass C, lines, player draw |
+
+Findings:
+
+- **There is no per-function self time for lifted code in these profiles.**
+  Every `-- self` line is a runtime helper (`fast_u32` 18%, `fast_set_u32` 6%,
+  flag helpers) and `-- nearest lifted function` is "(no lifted frame)" at
+  100%: the profile script that made them (`E:/ddda-rs-wt/L63/scripts/sample_profile.py`,
+  used by `autorun.sh`) looks for `::f_` in frame names, which the Rust v0
+  symbols of the shards do not contain. The repo's own `scripts/sample_profile.py`
+  decodes them (`pretty()`); pointing `autorun2.sh` at it gives the nearest
+  lifted caller of every helper sample, which is the missing self table.
+- **Older profiles with lifted self do exist but pre-date the ports** (`E:/ddda-re/notes/profile_fast1c.txt`,
+  100 s of loading): the main thread's top self was `FE9580` (procedural
+  geometry builder, 3.1 s; already a readable port behind `DDRUNTIME_GEOMETRY_PORT`)
+  and a string comparison helper (13%, the `find_identifier` family, ported).
+  Both are loading-time, not frame time.
+- **The remaining unported main-thread functions are thin dispatch loops**
+  (`4B97F0` over unit lines, `DB6740`, `DC4770` over eight viewport records:
+  a handful of reads and a virtual call per element, all the cost in the
+  callees). A port of them would stay under the 1.1x bar. `DB0DE0` shows up
+  in the inclusive list but is the display-mode enumeration of the renderer's
+  constructor (EnumAdapterModes, sprintf, a std::vector): the symbol that
+  carries that name in the shard is not that function's time; do not port it.
+- So on the main thread the lever is still the shadow job (the shadow agent's
+  scheduler work) and the memory-helper cost of lifted code (codegen, not
+  ports); a port only pays where a lifted body is heavy and runs per unit,
+  which is the worker-side player/model draw work ported in section 3.
