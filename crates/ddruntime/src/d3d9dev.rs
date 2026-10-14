@@ -1115,8 +1115,21 @@ pub struct Presentation {
 /// The game's presentation, once it has a device: what a host window
 /// follows (size, windowed or full screen, refresh rate, vsync).
 pub fn presentation() -> Option<Presentation> {
+    // The scan of every live object (thousands) cost ~0.7 ms a Present on the
+    // main thread; the device found last is checked first and the scan runs
+    // only when it is gone (one device in practice).
+    static LAST_DEVICE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     objects(|o| {
-        let device = o.live.iter().filter_map(|(&k, v)| match &v.kind { Kind::Device(d) => Some((k, d.swap_chains.first().copied()?)), _ => None }).min()?;
+        let cached = LAST_DEVICE.load(std::sync::atomic::Ordering::Relaxed);
+        let from_cache = o.live.get(&cached).and_then(|v| match &v.kind { Kind::Device(d) => Some((cached, d.swap_chains.first().copied()?)), _ => None });
+        let device = match from_cache {
+            Some(d) => d,
+            None => {
+                let d = o.live.iter().filter_map(|(&k, v)| match &v.kind { Kind::Device(d) => Some((k, d.swap_chains.first().copied()?)), _ => None }).min()?;
+                LAST_DEVICE.store(d.0, std::sync::atomic::Ordering::Relaxed);
+                d
+            }
+        };
         match &o.live.get(&device.1)?.kind {
             Kind::SwapChain { pp, .. } => Some(Presentation { width: pp[0], height: pp[1], windowed: pp[8] != 0, refresh: pp[12], interval: pp[13] }),
             _ => None,
