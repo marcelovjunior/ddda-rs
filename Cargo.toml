@@ -831,16 +831,7 @@ debug = "line-tables-only"
 [profile.play.package.ddnative-host]
 debug = "line-tables-only"
 
-# BEGIN generated hot shards
-[profile.dev.package.ddlift-hot-00]
-opt-level = 0
-debug = 1
-[profile.release.package.ddlift-hot-00]
-opt-level = 1
-[profile.play.package.ddlift-hot-00]
-opt-level = 1
-incremental = false
-# END generated hot shards
+
 
 [profile.play-o2]
 inherits = "play"
