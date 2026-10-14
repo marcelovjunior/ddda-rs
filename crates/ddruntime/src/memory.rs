@@ -89,6 +89,28 @@ impl GuestMemory {
         Ok(())
     }
 
+    /// Back `len` bytes at `lo` (page-aligned, unbacked pages of this space, as the lazy stack
+    /// pages are) with one contiguous zeroed host block and return it: the stack window of a
+    /// guest thread (`Cpu::set_stack_window`, feature `stack-window`). The block is never freed
+    /// (guest stacks are not reused). None when a page is already backed.
+    pub fn install_window(&mut self, lo: u32, len: u32) -> Option<*mut u8> {
+        assert!(lo % PAGE == 0 && len % PAGE == 0 && len > 0);
+        let layout = std::alloc::Layout::from_size_align(len as usize, PAGE as usize).ok()?;
+        // SAFETY: a non-zero size layout
+        let block = unsafe { std::alloc::alloc_zeroed(layout) };
+        if block.is_null() {
+            return None;
+        }
+        // SAFETY: the block is PAGE-aligned, zeroed, len bytes, and leaked: it outlives the table
+        if unsafe { self.s().install_external((lo / PAGE) as usize, block, (len / PAGE) as usize, READ | WRITE) } {
+            Some(block)
+        } else {
+            // SAFETY: allocated just above with this layout, not published
+            unsafe { std::alloc::dealloc(block, layout) };
+            None
+        }
+    }
+
     /// Reserve [addr, addr + len) as zero pages that get host memory only
     /// when first written (heaps and stacks: large, mostly untouched).
     pub fn map_lazy(&mut self, addr: u32, len: u32, perm: u8) -> Result<(), Overlap> {

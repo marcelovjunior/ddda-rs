@@ -7,49 +7,49 @@ use ddnative_base::emit;
 // Translated from 0x01345520 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345520.
 pub fn f_01345520(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x74u32, m, pt, cpu); emit::push(0x1995C80u32, m, pt, cpu); emit::push(0x15A030Cu32, m, pt, cpu); cpu.ecx = 0x1995878u32; emit::push(0x134553C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390700u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995878u32, 0x15A109Cu32); emit::push(0x1345550, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x74u32, m, pt, cpu); emit::push_s(0x1995C80u32, m, pt, cpu); emit::push_s(0x15A030Cu32, m, pt, cpu); cpu.ecx = 0x1995878u32; emit::push_s(0x134553C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390700u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995878u32, 0x15A109Cu32); emit::push_s(0x1345550, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345560 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345560.
 pub fn f_01345560(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0xC0u32, m, pt, cpu); emit::push(0x1995C80u32, m, pt, cpu); emit::push(0x15A031Cu32, m, pt, cpu); cpu.ecx = 0x1995A60u32; emit::push(0x134557F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390710u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995A60u32, 0x15A10E4u32); emit::push(0x1345593, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0xC0u32, m, pt, cpu); emit::push_s(0x1995C80u32, m, pt, cpu); emit::push_s(0x15A031Cu32, m, pt, cpu); cpu.ecx = 0x1995A60u32; emit::push_s(0x134557F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390710u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995A60u32, 0x15A10E4u32); emit::push_s(0x1345593, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013455A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013455A0.
 pub fn f_013455a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x74u32, m, pt, cpu); emit::push(0x1995C80u32, m, pt, cpu); emit::push(0x15A032Cu32, m, pt, cpu); cpu.ecx = 0x1995A20u32; emit::push(0x13455BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390720u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995A20u32, 0x15A112Cu32); emit::push(0x13455D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x74u32, m, pt, cpu); emit::push_s(0x1995C80u32, m, pt, cpu); emit::push_s(0x15A032Cu32, m, pt, cpu); cpu.ecx = 0x1995A20u32; emit::push_s(0x13455BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390720u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995A20u32, 0x15A112Cu32); emit::push_s(0x13455D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013455E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013455E0.
 pub fn f_013455e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x74u32, m, pt, cpu); emit::push(0x1995C80u32, m, pt, cpu); emit::push(0x15A0340u32, m, pt, cpu); cpu.ecx = 0x1995D40u32; emit::push(0x13455FC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390730u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995D40u32, 0x15A1174u32); emit::push(0x1345610, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x74u32, m, pt, cpu); emit::push_s(0x1995C80u32, m, pt, cpu); emit::push_s(0x15A0340u32, m, pt, cpu); cpu.ecx = 0x1995D40u32; emit::push_s(0x13455FC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390730u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995D40u32, 0x15A1174u32); emit::push_s(0x1345610, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345620 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345620.
 pub fn f_01345620(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0xC0u32, m, pt, cpu); emit::push(0x1995C80u32, m, pt, cpu); emit::push(0x15A0364u32, m, pt, cpu); cpu.ecx = 0x19958E0u32; emit::push(0x134563F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390740u32, m, pt, cpu); m.fast_set_u32(pt, 0x19958E0u32, 0x15A0A24u32); emit::push(0x1345653, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0xC0u32, m, pt, cpu); emit::push_s(0x1995C80u32, m, pt, cpu); emit::push_s(0x15A0364u32, m, pt, cpu); cpu.ecx = 0x19958E0u32; emit::push_s(0x134563F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390740u32, m, pt, cpu); m.fast_set_u32(pt, 0x19958E0u32, 0x15A0A24u32); emit::push_s(0x1345653, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345660 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345660.
 pub fn f_01345660(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1995C80u32, m, pt, cpu); emit::push(0x15A0370u32, m, pt, cpu); cpu.ecx = 0x1995C00u32; emit::push(0x134567C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390750u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995C00u32, 0x15A0A6Cu32); emit::push(0x1345690, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1995C80u32, m, pt, cpu); emit::push_s(0x15A0370u32, m, pt, cpu); cpu.ecx = 0x1995C00u32; emit::push_s(0x134567C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390750u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995C00u32, 0x15A0A6Cu32); emit::push_s(0x1345690, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013456A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013456A0.
 pub fn f_013456a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1995C80u32, m, pt, cpu); emit::push(0x15A0384u32, m, pt, cpu); cpu.ecx = 0x1995898u32; emit::push(0x13456BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390760u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995898u32, 0x15A0AB4u32); emit::push(0x13456D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1995C80u32, m, pt, cpu); emit::push_s(0x15A0384u32, m, pt, cpu); cpu.ecx = 0x1995898u32; emit::push_s(0x13456BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390760u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995898u32, 0x15A0AB4u32); emit::push_s(0x13456D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013456E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013456E0.
 pub fn f_013456e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x8Cu32, m, pt, cpu); emit::push(0x1995CE0u32, m, pt, cpu); emit::push(0x15A0394u32, m, pt, cpu); cpu.ecx = 0x1995D80u32; emit::push(0x13456FF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390770u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995D80u32, 0x15A0D84u32); emit::push(0x1345713, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x8Cu32, m, pt, cpu); emit::push_s(0x1995CE0u32, m, pt, cpu); emit::push_s(0x15A0394u32, m, pt, cpu); cpu.ecx = 0x1995D80u32; emit::push_s(0x13456FF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390770u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995D80u32, 0x15A0D84u32); emit::push_s(0x1345713, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345720 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345720.
@@ -61,7 +61,7 @@ pub fn f_01345720(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345740 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345740.
 pub fn f_01345740(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x420u32, m, pt, cpu); emit::push(0x1994D60u32, m, pt, cpu); emit::push(0x15A1184u32, m, pt, cpu); cpu.ecx = 0x1995DE8u32; emit::push(0x134575F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390780u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995DE8u32, 0x15A11ACu32); emit::push(0x1345773, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x420u32, m, pt, cpu); emit::push_s(0x1994D60u32, m, pt, cpu); emit::push_s(0x15A1184u32, m, pt, cpu); cpu.ecx = 0x1995DE8u32; emit::push_s(0x134575F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390780u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995DE8u32, 0x15A11ACu32); emit::push_s(0x1345773, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345780 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345780.
@@ -73,7 +73,7 @@ pub fn f_01345780(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013457A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013457A0.
 pub fn f_013457a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x40u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x158BF18u32, m, pt, cpu); cpu.ecx = 0x1995E10u32; emit::push(0x13457BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390790u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995E10u32, 0x15A11C8u32); emit::push(0x13457D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x40u32, m, pt, cpu); emit::push_s(0x1876CB4u32, m, pt, cpu); emit::push_s(0x158BF18u32, m, pt, cpu); cpu.ecx = 0x1995E10u32; emit::push_s(0x13457BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390790u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995E10u32, 0x15A11C8u32); emit::push_s(0x13457D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013457E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013457E0.
@@ -85,7 +85,7 @@ pub fn f_013457e0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345800 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345800.
 pub fn f_01345800(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x4u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x158BF24u32, m, pt, cpu); cpu.ecx = 0x1995E38u32; emit::push(0x134581C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13907A0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995E38u32, 0x15A11E4u32); emit::push(0x1345830, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x4u32, m, pt, cpu); emit::push_s(0x1876CB4u32, m, pt, cpu); emit::push_s(0x158BF24u32, m, pt, cpu); cpu.ecx = 0x1995E38u32; emit::push_s(0x134581C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13907A0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995E38u32, 0x15A11E4u32); emit::push_s(0x1345830, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345840 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345840.
@@ -97,61 +97,61 @@ pub fn f_01345840(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345860 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345860.
 pub fn f_01345860(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x19A1F28u32, m, pt, cpu); emit::push(0x15A11ECu32, m, pt, cpu); cpu.ecx = 0x1995F80u32; emit::push(0x134587C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13907B0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F80u32, 0x15A1308u32); emit::push(0x1345890, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x19A1F28u32, m, pt, cpu); emit::push_s(0x15A11ECu32, m, pt, cpu); cpu.ecx = 0x1995F80u32; emit::push_s(0x134587C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13907B0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F80u32, 0x15A1308u32); emit::push_s(0x1345890, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013458A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013458A0.
 pub fn f_013458a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1995F80u32, m, pt, cpu); emit::push(0x15A11F8u32, m, pt, cpu); cpu.ecx = 0x1995F20u32; emit::push(0x13458BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13907C0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F20u32, 0x15A1350u32); emit::push(0x13458D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1995F80u32, m, pt, cpu); emit::push_s(0x15A11F8u32, m, pt, cpu); cpu.ecx = 0x1995F20u32; emit::push_s(0x13458BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13907C0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F20u32, 0x15A1350u32); emit::push_s(0x13458D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013458E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013458E0.
 pub fn f_013458e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1995F20u32, m, pt, cpu); emit::push(0x15A1208u32, m, pt, cpu); cpu.ecx = 0x1995F00u32; emit::push(0x13458FC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13907D0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F00u32, 0x15A1398u32); emit::push(0x1345910, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1995F20u32, m, pt, cpu); emit::push_s(0x15A1208u32, m, pt, cpu); cpu.ecx = 0x1995F00u32; emit::push_s(0x13458FC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13907D0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F00u32, 0x15A1398u32); emit::push_s(0x1345910, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345920 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345920.
 pub fn f_01345920(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1995F20u32, m, pt, cpu); emit::push(0x15A1228u32, m, pt, cpu); cpu.ecx = 0x1995E78u32; emit::push(0x134593C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13907E0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995E78u32, 0x15A13E0u32); emit::push(0x1345950, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1995F20u32, m, pt, cpu); emit::push_s(0x15A1228u32, m, pt, cpu); cpu.ecx = 0x1995E78u32; emit::push_s(0x134593C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13907E0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995E78u32, 0x15A13E0u32); emit::push_s(0x1345950, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345960 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345960.
 pub fn f_01345960(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x84u32, m, pt, cpu); emit::push(0x1995F20u32, m, pt, cpu); emit::push(0x15A1248u32, m, pt, cpu); cpu.ecx = 0x1995F60u32; emit::push(0x134597F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13907F0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F60u32, 0x15A1428u32); emit::push(0x1345993, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x84u32, m, pt, cpu); emit::push_s(0x1995F20u32, m, pt, cpu); emit::push_s(0x15A1248u32, m, pt, cpu); cpu.ecx = 0x1995F60u32; emit::push_s(0x134597F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13907F0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F60u32, 0x15A1428u32); emit::push_s(0x1345993, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013459A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013459A0.
 pub fn f_013459a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1995F20u32, m, pt, cpu); emit::push(0x15A1270u32, m, pt, cpu); cpu.ecx = 0x1995EA0u32; emit::push(0x13459BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390800u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995EA0u32, 0x15A1470u32); emit::push(0x13459D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1995F20u32, m, pt, cpu); emit::push_s(0x15A1270u32, m, pt, cpu); cpu.ecx = 0x1995EA0u32; emit::push_s(0x13459BC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390800u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995EA0u32, 0x15A1470u32); emit::push_s(0x13459D0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013459E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013459E0.
 pub fn f_013459e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1995F80u32, m, pt, cpu); emit::push(0x15A1288u32, m, pt, cpu); cpu.ecx = 0x1995EC0u32; emit::push(0x13459FC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390810u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995EC0u32, 0x15A14B8u32); emit::push(0x1345A10, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1995F80u32, m, pt, cpu); emit::push_s(0x15A1288u32, m, pt, cpu); cpu.ecx = 0x1995EC0u32; emit::push_s(0x13459FC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390810u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995EC0u32, 0x15A14B8u32); emit::push_s(0x1345A10, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345A20 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345A20.
 pub fn f_01345a20(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1995F80u32, m, pt, cpu); emit::push(0x15A1298u32, m, pt, cpu); cpu.ecx = 0x1995E58u32; emit::push(0x1345A3C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390820u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995E58u32, 0x15A1500u32); emit::push(0x1345A50, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1995F80u32, m, pt, cpu); emit::push_s(0x15A1298u32, m, pt, cpu); cpu.ecx = 0x1995E58u32; emit::push_s(0x1345A3C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390820u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995E58u32, 0x15A1500u32); emit::push_s(0x1345A50, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345A60 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345A60.
 pub fn f_01345a60(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x84u32, m, pt, cpu); emit::push(0x1995F80u32, m, pt, cpu); emit::push(0x15A12A8u32, m, pt, cpu); cpu.ecx = 0x1995EE0u32; emit::push(0x1345A7F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390830u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995EE0u32, 0x15A1548u32); emit::push(0x1345A93, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x84u32, m, pt, cpu); emit::push_s(0x1995F80u32, m, pt, cpu); emit::push_s(0x15A12A8u32, m, pt, cpu); cpu.ecx = 0x1995EE0u32; emit::push_s(0x1345A7F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390830u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995EE0u32, 0x15A1548u32); emit::push_s(0x1345A93, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345AA0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345AA0.
 pub fn f_01345aa0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x80u32, m, pt, cpu); emit::push(0x1995F80u32, m, pt, cpu); emit::push(0x15A12C0u32, m, pt, cpu); cpu.ecx = 0x1995F40u32; emit::push(0x1345ABF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390840u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F40u32, 0x15A1590u32); emit::push(0x1345AD3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x80u32, m, pt, cpu); emit::push_s(0x1995F80u32, m, pt, cpu); emit::push_s(0x15A12C0u32, m, pt, cpu); cpu.ecx = 0x1995F40u32; emit::push_s(0x1345ABF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390840u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995F40u32, 0x15A1590u32); emit::push_s(0x1345AD3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345AE0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345AE0.
@@ -163,7 +163,7 @@ pub fn f_01345ae0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345B00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345B00.
 pub fn f_01345b00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A15A0u32, m, pt, cpu); cpu.ecx = 0x1995FA8u32; emit::push(0x1345B1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390850u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995FA8u32, 0x15A15F0u32); emit::push(0x1345B33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A15A0u32, m, pt, cpu); cpu.ecx = 0x1995FA8u32; emit::push_s(0x1345B1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390850u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995FA8u32, 0x15A15F0u32); emit::push_s(0x1345B33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345B40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345B40.
@@ -175,7 +175,7 @@ pub fn f_01345b40(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345B60 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345B60.
 pub fn f_01345b60(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A15F8u32, m, pt, cpu); cpu.ecx = 0x1995FD0u32; emit::push(0x1345B7F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390860u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995FD0u32, 0x15A1650u32); emit::push(0x1345B93, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A15F8u32, m, pt, cpu); cpu.ecx = 0x1995FD0u32; emit::push_s(0x1345B7F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390860u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995FD0u32, 0x15A1650u32); emit::push_s(0x1345B93, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345BA0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345BA0.
@@ -187,7 +187,7 @@ pub fn f_01345ba0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345BC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345BC0.
 pub fn f_01345bc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A1658u32, m, pt, cpu); cpu.ecx = 0x1995FF8u32; emit::push(0x1345BDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390870u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995FF8u32, 0x15A16B0u32); emit::push(0x1345BF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A1658u32, m, pt, cpu); cpu.ecx = 0x1995FF8u32; emit::push_s(0x1345BDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390870u32, m, pt, cpu); m.fast_set_u32(pt, 0x1995FF8u32, 0x15A16B0u32); emit::push_s(0x1345BF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345C00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345C00.
@@ -199,31 +199,31 @@ pub fn f_01345c00(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345C20 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345C20.
 pub fn f_01345c20(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A16B8u32, m, pt, cpu); cpu.ecx = 0x1996040u32; emit::push(0x1345C3F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390880u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996040u32, 0x15A1788u32); emit::push(0x1345C53, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A16B8u32, m, pt, cpu); cpu.ecx = 0x1996040u32; emit::push_s(0x1345C3F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390880u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996040u32, 0x15A1788u32); emit::push_s(0x1345C53, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345C60 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345C60.
 pub fn f_01345c60(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996040u32, m, pt, cpu); emit::push(0x15A16FCu32, m, pt, cpu); cpu.ecx = 0x1996080u32; emit::push(0x1345C7F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390890u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996080u32, 0x15A17CCu32); emit::push(0x1345C93, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996040u32, m, pt, cpu); emit::push_s(0x15A16FCu32, m, pt, cpu); cpu.ecx = 0x1996080u32; emit::push_s(0x1345C7F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390890u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996080u32, 0x15A17CCu32); emit::push_s(0x1345C93, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345CA0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345CA0.
 pub fn f_01345ca0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996040u32, m, pt, cpu); emit::push(0x15A1710u32, m, pt, cpu); cpu.ecx = 0x1996018u32; emit::push(0x1345CBF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13908A0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996018u32, 0x15A1810u32); emit::push(0x1345CD3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996040u32, m, pt, cpu); emit::push_s(0x15A1710u32, m, pt, cpu); cpu.ecx = 0x1996018u32; emit::push_s(0x1345CBF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13908A0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996018u32, 0x15A1810u32); emit::push_s(0x1345CD3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345CE0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345CE0.
 pub fn f_01345ce0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996040u32, m, pt, cpu); emit::push(0x15A1724u32, m, pt, cpu); cpu.ecx = 0x19960A0u32; emit::push(0x1345CFF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13908B0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19960A0u32, 0x15A1854u32); emit::push(0x1345D13, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996040u32, m, pt, cpu); emit::push_s(0x15A1724u32, m, pt, cpu); cpu.ecx = 0x19960A0u32; emit::push_s(0x1345CFF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13908B0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19960A0u32, 0x15A1854u32); emit::push_s(0x1345D13, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345D20 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345D20.
 pub fn f_01345d20(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996040u32, m, pt, cpu); emit::push(0x15A1738u32, m, pt, cpu); cpu.ecx = 0x1996060u32; emit::push(0x1345D3F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13908C0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996060u32, 0x15A1898u32); emit::push(0x1345D53, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996040u32, m, pt, cpu); emit::push_s(0x15A1738u32, m, pt, cpu); cpu.ecx = 0x1996060u32; emit::push_s(0x1345D3F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13908C0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996060u32, 0x15A1898u32); emit::push_s(0x1345D53, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345D60 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345D60.
@@ -235,55 +235,55 @@ pub fn f_01345d60(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345D80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345D80.
 pub fn f_01345d80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A18A0u32, m, pt, cpu); cpu.ecx = 0x19961A8u32; emit::push(0x1345D9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13908D0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19961A8u32, 0x15A19B8u32); emit::push(0x1345DB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A18A0u32, m, pt, cpu); cpu.ecx = 0x19961A8u32; emit::push_s(0x1345D9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13908D0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19961A8u32, 0x15A19B8u32); emit::push_s(0x1345DB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345DC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345DC0.
 pub fn f_01345dc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x19961A8u32, m, pt, cpu); emit::push(0x15A18DCu32, m, pt, cpu); cpu.ecx = 0x19960E8u32; emit::push(0x1345DDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13908E0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19960E8u32, 0x15A19FCu32); emit::push(0x1345DF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x19961A8u32, m, pt, cpu); emit::push_s(0x15A18DCu32, m, pt, cpu); cpu.ecx = 0x19960E8u32; emit::push_s(0x1345DDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13908E0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19960E8u32, 0x15A19FCu32); emit::push_s(0x1345DF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345E00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345E00.
 pub fn f_01345e00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x19961A8u32, m, pt, cpu); emit::push(0x15A18F0u32, m, pt, cpu); cpu.ecx = 0x1996188u32; emit::push(0x1345E1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13908F0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996188u32, 0x15A1A40u32); emit::push(0x1345E33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x19961A8u32, m, pt, cpu); emit::push_s(0x15A18F0u32, m, pt, cpu); cpu.ecx = 0x1996188u32; emit::push_s(0x1345E1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13908F0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996188u32, 0x15A1A40u32); emit::push_s(0x1345E33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345E40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345E40.
 pub fn f_01345e40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x19961A8u32, m, pt, cpu); emit::push(0x15A1904u32, m, pt, cpu); cpu.ecx = 0x1996128u32; emit::push(0x1345E5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390900u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996128u32, 0x15A1A84u32); emit::push(0x1345E73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x19961A8u32, m, pt, cpu); emit::push_s(0x15A1904u32, m, pt, cpu); cpu.ecx = 0x1996128u32; emit::push_s(0x1345E5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390900u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996128u32, 0x15A1A84u32); emit::push_s(0x1345E73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345E80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345E80.
 pub fn f_01345e80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x19961A8u32, m, pt, cpu); emit::push(0x15A1918u32, m, pt, cpu); cpu.ecx = 0x1996148u32; emit::push(0x1345E9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390910u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996148u32, 0x15A1AC8u32); emit::push(0x1345EB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x19961A8u32, m, pt, cpu); emit::push_s(0x15A1918u32, m, pt, cpu); cpu.ecx = 0x1996148u32; emit::push_s(0x1345E9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390910u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996148u32, 0x15A1AC8u32); emit::push_s(0x1345EB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345EC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345EC0.
 pub fn f_01345ec0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x19961A8u32, m, pt, cpu); emit::push(0x15A192Cu32, m, pt, cpu); cpu.ecx = 0x19961C8u32; emit::push(0x1345EDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390920u32, m, pt, cpu); m.fast_set_u32(pt, 0x19961C8u32, 0x15A1B0Cu32); emit::push(0x1345EF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x19961A8u32, m, pt, cpu); emit::push_s(0x15A192Cu32, m, pt, cpu); cpu.ecx = 0x19961C8u32; emit::push_s(0x1345EDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390920u32, m, pt, cpu); m.fast_set_u32(pt, 0x19961C8u32, 0x15A1B0Cu32); emit::push_s(0x1345EF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345F00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345F00.
 pub fn f_01345f00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x19961A8u32, m, pt, cpu); emit::push(0x15A1940u32, m, pt, cpu); cpu.ecx = 0x1996168u32; emit::push(0x1345F1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390930u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996168u32, 0x15A1B50u32); emit::push(0x1345F33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x19961A8u32, m, pt, cpu); emit::push_s(0x15A1940u32, m, pt, cpu); cpu.ecx = 0x1996168u32; emit::push_s(0x1345F1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390930u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996168u32, 0x15A1B50u32); emit::push_s(0x1345F33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345F40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345F40.
 pub fn f_01345f40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x19961A8u32, m, pt, cpu); emit::push(0x15A1954u32, m, pt, cpu); cpu.ecx = 0x19960C8u32; emit::push(0x1345F5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390940u32, m, pt, cpu); m.fast_set_u32(pt, 0x19960C8u32, 0x15A1B94u32); emit::push(0x1345F73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x19961A8u32, m, pt, cpu); emit::push_s(0x15A1954u32, m, pt, cpu); cpu.ecx = 0x19960C8u32; emit::push_s(0x1345F5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390940u32, m, pt, cpu); m.fast_set_u32(pt, 0x19960C8u32, 0x15A1B94u32); emit::push_s(0x1345F73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345F80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345F80.
 pub fn f_01345f80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x19961A8u32, m, pt, cpu); emit::push(0x15A1968u32, m, pt, cpu); cpu.ecx = 0x1996108u32; emit::push(0x1345F9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390950u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996108u32, 0x15A1BD8u32); emit::push(0x1345FB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x19961A8u32, m, pt, cpu); emit::push_s(0x15A1968u32, m, pt, cpu); cpu.ecx = 0x1996108u32; emit::push_s(0x1345F9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390950u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996108u32, 0x15A1BD8u32); emit::push_s(0x1345FB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01345FC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345FC0.
@@ -295,49 +295,49 @@ pub fn f_01345fc0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01345FE0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01345FE0.
 pub fn f_01345fe0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A1BE0u32, m, pt, cpu); cpu.ecx = 0x1996270u32; emit::push(0x1345FFF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390960u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996270u32, 0x15A1CCCu32); emit::push(0x1346013, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A1BE0u32, m, pt, cpu); cpu.ecx = 0x1996270u32; emit::push_s(0x1345FFF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390960u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996270u32, 0x15A1CCCu32); emit::push_s(0x1346013, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346020 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346020.
 pub fn f_01346020(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996270u32, m, pt, cpu); emit::push(0x15A1BFCu32, m, pt, cpu); cpu.ecx = 0x1996230u32; emit::push(0x134603F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390970u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996230u32, 0x15A1D10u32); emit::push(0x1346053, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996270u32, m, pt, cpu); emit::push_s(0x15A1BFCu32, m, pt, cpu); cpu.ecx = 0x1996230u32; emit::push_s(0x134603F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390970u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996230u32, 0x15A1D10u32); emit::push_s(0x1346053, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346060 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346060.
 pub fn f_01346060(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996270u32, m, pt, cpu); emit::push(0x15A1C10u32, m, pt, cpu); cpu.ecx = 0x19962D0u32; emit::push(0x134607F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390980u32, m, pt, cpu); m.fast_set_u32(pt, 0x19962D0u32, 0x15A1D54u32); emit::push(0x1346093, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996270u32, m, pt, cpu); emit::push_s(0x15A1C10u32, m, pt, cpu); cpu.ecx = 0x19962D0u32; emit::push_s(0x134607F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390980u32, m, pt, cpu); m.fast_set_u32(pt, 0x19962D0u32, 0x15A1D54u32); emit::push_s(0x1346093, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013460A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013460A0.
 pub fn f_013460a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x130u32, m, pt, cpu); emit::push(0x1996270u32, m, pt, cpu); emit::push(0x15A1C24u32, m, pt, cpu); cpu.ecx = 0x1996290u32; emit::push(0x13460BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390990u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996290u32, 0x15A1D98u32); emit::push(0x13460D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x130u32, m, pt, cpu); emit::push_s(0x1996270u32, m, pt, cpu); emit::push_s(0x15A1C24u32, m, pt, cpu); cpu.ecx = 0x1996290u32; emit::push_s(0x13460BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390990u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996290u32, 0x15A1D98u32); emit::push_s(0x13460D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013460E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013460E0.
 pub fn f_013460e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996270u32, m, pt, cpu); emit::push(0x15A1C40u32, m, pt, cpu); cpu.ecx = 0x1996210u32; emit::push(0x13460FF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13909A0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996210u32, 0x15A1DDCu32); emit::push(0x1346113, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996270u32, m, pt, cpu); emit::push_s(0x15A1C40u32, m, pt, cpu); cpu.ecx = 0x1996210u32; emit::push_s(0x13460FF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13909A0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996210u32, 0x15A1DDCu32); emit::push_s(0x1346113, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346120 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346120.
 pub fn f_01346120(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996270u32, m, pt, cpu); emit::push(0x15A1C54u32, m, pt, cpu); cpu.ecx = 0x19961F0u32; emit::push(0x134613F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13909B0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19961F0u32, 0x15A1E20u32); emit::push(0x1346153, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996270u32, m, pt, cpu); emit::push_s(0x15A1C54u32, m, pt, cpu); cpu.ecx = 0x19961F0u32; emit::push_s(0x134613F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13909B0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19961F0u32, 0x15A1E20u32); emit::push_s(0x1346153, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346160 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346160.
 pub fn f_01346160(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996270u32, m, pt, cpu); emit::push(0x15A1C68u32, m, pt, cpu); cpu.ecx = 0x1996250u32; emit::push(0x134617F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13909C0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996250u32, 0x15A1E64u32); emit::push(0x1346193, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996270u32, m, pt, cpu); emit::push_s(0x15A1C68u32, m, pt, cpu); cpu.ecx = 0x1996250u32; emit::push_s(0x134617F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13909C0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996250u32, 0x15A1E64u32); emit::push_s(0x1346193, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013461A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013461A0.
 pub fn f_013461a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1996270u32, m, pt, cpu); emit::push(0x15A1C7Cu32, m, pt, cpu); cpu.ecx = 0x19962B0u32; emit::push(0x13461BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13909D0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19962B0u32, 0x15A1EA8u32); emit::push(0x13461D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1996270u32, m, pt, cpu); emit::push_s(0x15A1C7Cu32, m, pt, cpu); cpu.ecx = 0x19962B0u32; emit::push_s(0x13461BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13909D0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19962B0u32, 0x15A1EA8u32); emit::push_s(0x13461D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013461E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013461E0.
@@ -349,7 +349,7 @@ pub fn f_013461e0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346200 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346200.
 pub fn f_01346200(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x130u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A1EB0u32, m, pt, cpu); cpu.ecx = 0x19962F0u32; emit::push(0x134621F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13909E0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19962F0u32, 0x15A1F50u32); emit::push(0x1346233, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x130u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A1EB0u32, m, pt, cpu); cpu.ecx = 0x19962F0u32; emit::push_s(0x134621F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13909E0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19962F0u32, 0x15A1F50u32); emit::push_s(0x1346233, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346240 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346240.
@@ -361,7 +361,7 @@ pub fn f_01346240(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346260 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346260.
 pub fn f_01346260(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A1F58u32, m, pt, cpu); cpu.ecx = 0x1996320u32; emit::push(0x134627F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x13909F0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996320u32, 0x15A1FBCu32); emit::push(0x1346293, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A1F58u32, m, pt, cpu); cpu.ecx = 0x1996320u32; emit::push_s(0x134627F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x13909F0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996320u32, 0x15A1FBCu32); emit::push_s(0x1346293, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013462A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013462A0.
@@ -373,7 +373,7 @@ pub fn f_013462a0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013462C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013462C0.
 pub fn f_013462c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A1FC4u32, m, pt, cpu); cpu.ecx = 0x1996340u32; emit::push(0x13462DF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A00u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996340u32, 0x15A201Cu32); emit::push(0x13462F3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A1FC4u32, m, pt, cpu); cpu.ecx = 0x1996340u32; emit::push_s(0x13462DF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A00u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996340u32, 0x15A201Cu32); emit::push_s(0x13462F3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346300 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346300.
@@ -385,7 +385,7 @@ pub fn f_01346300(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346320 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346320.
 pub fn f_01346320(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2024u32, m, pt, cpu); cpu.ecx = 0x1996368u32; emit::push(0x134633F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A10u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996368u32, 0x15A207Cu32); emit::push(0x1346353, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2024u32, m, pt, cpu); cpu.ecx = 0x1996368u32; emit::push_s(0x134633F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A10u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996368u32, 0x15A207Cu32); emit::push_s(0x1346353, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346360 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346360.
@@ -397,7 +397,7 @@ pub fn f_01346360(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346380 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346380.
 pub fn f_01346380(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x130u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2084u32, m, pt, cpu); cpu.ecx = 0x1996398u32; emit::push(0x134639F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A20u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996398u32, 0x15A2214u32); emit::push(0x13463B3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x130u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2084u32, m, pt, cpu); cpu.ecx = 0x1996398u32; emit::push_s(0x134639F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A20u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996398u32, 0x15A2214u32); emit::push_s(0x13463B3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013463C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013463C0.
@@ -409,7 +409,7 @@ pub fn f_013463c0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013463E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013463E0.
 pub fn f_013463e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A221Cu32, m, pt, cpu); cpu.ecx = 0x19963C0u32; emit::push(0x13463FF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A30u32, m, pt, cpu); m.fast_set_u32(pt, 0x19963C0u32, 0x15A2288u32); emit::push(0x1346413, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A221Cu32, m, pt, cpu); cpu.ecx = 0x19963C0u32; emit::push_s(0x13463FF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A30u32, m, pt, cpu); m.fast_set_u32(pt, 0x19963C0u32, 0x15A2288u32); emit::push_s(0x1346413, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346420 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346420.
@@ -421,7 +421,7 @@ pub fn f_01346420(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346440 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346440.
 pub fn f_01346440(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2290u32, m, pt, cpu); cpu.ecx = 0x19963E0u32; emit::push(0x134645F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A40u32, m, pt, cpu); m.fast_set_u32(pt, 0x19963E0u32, 0x15A22F4u32); emit::push(0x1346473, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2290u32, m, pt, cpu); cpu.ecx = 0x19963E0u32; emit::push_s(0x134645F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A40u32, m, pt, cpu); m.fast_set_u32(pt, 0x19963E0u32, 0x15A22F4u32); emit::push_s(0x1346473, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346480 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346480.
@@ -433,7 +433,7 @@ pub fn f_01346480(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013464A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013464A0.
 pub fn f_013464a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A22FCu32, m, pt, cpu); cpu.ecx = 0x1996410u32; emit::push(0x13464BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A50u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996410u32, 0x15A236Cu32); emit::push(0x13464D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A22FCu32, m, pt, cpu); cpu.ecx = 0x1996410u32; emit::push_s(0x13464BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A50u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996410u32, 0x15A236Cu32); emit::push_s(0x13464D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013464E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013464E0.
@@ -445,7 +445,7 @@ pub fn f_013464e0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346500 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346500.
 pub fn f_01346500(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2374u32, m, pt, cpu); cpu.ecx = 0x1996430u32; emit::push(0x134651F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A60u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996430u32, 0x15A23ECu32); emit::push(0x1346533, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2374u32, m, pt, cpu); cpu.ecx = 0x1996430u32; emit::push_s(0x134651F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A60u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996430u32, 0x15A23ECu32); emit::push_s(0x1346533, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346540 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346540.
@@ -457,7 +457,7 @@ pub fn f_01346540(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346560 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346560.
 pub fn f_01346560(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A23F4u32, m, pt, cpu); cpu.ecx = 0x1996458u32; emit::push(0x134657F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A70u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996458u32, 0x15A245Cu32); emit::push(0x1346593, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A23F4u32, m, pt, cpu); cpu.ecx = 0x1996458u32; emit::push_s(0x134657F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A70u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996458u32, 0x15A245Cu32); emit::push_s(0x1346593, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013465A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013465A0.
@@ -469,19 +469,19 @@ pub fn f_013465a0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013465C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013465C0.
 pub fn f_013465c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2464u32, m, pt, cpu); cpu.ecx = 0x1996480u32; emit::push(0x13465DF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A80u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996480u32, 0x15A2550u32); emit::push(0x13465F3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2464u32, m, pt, cpu); cpu.ecx = 0x1996480u32; emit::push_s(0x13465DF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A80u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996480u32, 0x15A2550u32); emit::push_s(0x13465F3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346600 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346600.
 pub fn f_01346600(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x130u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2480u32, m, pt, cpu); cpu.ecx = 0x19964C8u32; emit::push(0x134661F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390A90u32, m, pt, cpu); m.fast_set_u32(pt, 0x19964C8u32, 0x15A2594u32); emit::push(0x1346633, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x130u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2480u32, m, pt, cpu); cpu.ecx = 0x19964C8u32; emit::push_s(0x134661F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390A90u32, m, pt, cpu); m.fast_set_u32(pt, 0x19964C8u32, 0x15A2594u32); emit::push_s(0x1346633, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346640 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346640.
 pub fn f_01346640(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x130u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2500u32, m, pt, cpu); cpu.ecx = 0x19964A8u32; emit::push(0x134665F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390AA0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19964A8u32, 0x15A25D8u32); emit::push(0x1346673, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x130u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2500u32, m, pt, cpu); cpu.ecx = 0x19964A8u32; emit::push_s(0x134665F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390AA0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19964A8u32, 0x15A25D8u32); emit::push_s(0x1346673, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346680 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346680.
@@ -493,7 +493,7 @@ pub fn f_01346680(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013466A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013466A0.
 pub fn f_013466a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A25E0u32, m, pt, cpu); cpu.ecx = 0x19964F0u32; emit::push(0x13466BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390AB0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19964F0u32, 0x15A2638u32); emit::push(0x13466D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A25E0u32, m, pt, cpu); cpu.ecx = 0x19964F0u32; emit::push_s(0x13466BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390AB0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19964F0u32, 0x15A2638u32); emit::push_s(0x13466D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013466E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013466E0.
@@ -505,7 +505,7 @@ pub fn f_013466e0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346700 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346700.
 pub fn f_01346700(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2640u32, m, pt, cpu); cpu.ecx = 0x1996518u32; emit::push(0x134671F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390AC0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996518u32, 0x15A26A8u32); emit::push(0x1346733, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2640u32, m, pt, cpu); cpu.ecx = 0x1996518u32; emit::push_s(0x134671F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390AC0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996518u32, 0x15A26A8u32); emit::push_s(0x1346733, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346740 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346740.
@@ -517,7 +517,7 @@ pub fn f_01346740(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346760 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346760.
 pub fn f_01346760(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A26B0u32, m, pt, cpu); cpu.ecx = 0x1996540u32; emit::push(0x134677F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390AD0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996540u32, 0x15A2708u32); emit::push(0x1346793, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A26B0u32, m, pt, cpu); cpu.ecx = 0x1996540u32; emit::push_s(0x134677F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390AD0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996540u32, 0x15A2708u32); emit::push_s(0x1346793, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013467A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013467A0.
@@ -529,7 +529,7 @@ pub fn f_013467a0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013467C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013467C0.
 pub fn f_013467c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2710u32, m, pt, cpu); cpu.ecx = 0x1996568u32; emit::push(0x13467DF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390AE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996568u32, 0x15A27C4u32); emit::push(0x13467F3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2710u32, m, pt, cpu); cpu.ecx = 0x1996568u32; emit::push_s(0x13467DF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390AE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996568u32, 0x15A27C4u32); emit::push_s(0x13467F3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346800 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346800.
@@ -541,7 +541,7 @@ pub fn f_01346800(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346820 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346820.
 pub fn f_01346820(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A27CCu32, m, pt, cpu); cpu.ecx = 0x1996590u32; emit::push(0x134683F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390AF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996590u32, 0x15A2860u32); emit::push(0x1346853, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A27CCu32, m, pt, cpu); cpu.ecx = 0x1996590u32; emit::push_s(0x134683F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390AF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996590u32, 0x15A2860u32); emit::push_s(0x1346853, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346860 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346860.
@@ -553,7 +553,7 @@ pub fn f_01346860(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346880 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346880.
 pub fn f_01346880(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2868u32, m, pt, cpu); cpu.ecx = 0x19965B8u32; emit::push(0x134689F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B00u32, m, pt, cpu); m.fast_set_u32(pt, 0x19965B8u32, 0x15A28B8u32); emit::push(0x13468B3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2868u32, m, pt, cpu); cpu.ecx = 0x19965B8u32; emit::push_s(0x134689F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B00u32, m, pt, cpu); m.fast_set_u32(pt, 0x19965B8u32, 0x15A28B8u32); emit::push_s(0x13468B3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013468C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013468C0.
@@ -565,7 +565,7 @@ pub fn f_013468c0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013468E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013468E0.
 pub fn f_013468e0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A28C0u32, m, pt, cpu); cpu.ecx = 0x19965E0u32; emit::push(0x13468FF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B10u32, m, pt, cpu); m.fast_set_u32(pt, 0x19965E0u32, 0x15A2910u32); emit::push(0x1346913, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A28C0u32, m, pt, cpu); cpu.ecx = 0x19965E0u32; emit::push_s(0x13468FF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B10u32, m, pt, cpu); m.fast_set_u32(pt, 0x19965E0u32, 0x15A2910u32); emit::push_s(0x1346913, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346920 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346920.
@@ -577,7 +577,7 @@ pub fn f_01346920(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346940 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346940.
 pub fn f_01346940(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2918u32, m, pt, cpu); cpu.ecx = 0x1996608u32; emit::push(0x134695F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B20u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996608u32, 0x15A2968u32); emit::push(0x1346973, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2918u32, m, pt, cpu); cpu.ecx = 0x1996608u32; emit::push_s(0x134695F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B20u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996608u32, 0x15A2968u32); emit::push_s(0x1346973, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346980 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346980.
@@ -589,7 +589,7 @@ pub fn f_01346980(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013469A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013469A0.
 pub fn f_013469a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2970u32, m, pt, cpu); cpu.ecx = 0x1996630u32; emit::push(0x13469BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B30u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996630u32, 0x15A29C0u32); emit::push(0x13469D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2970u32, m, pt, cpu); cpu.ecx = 0x1996630u32; emit::push_s(0x13469BF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B30u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996630u32, 0x15A29C0u32); emit::push_s(0x13469D3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013469E0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013469E0.
@@ -601,7 +601,7 @@ pub fn f_013469e0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346A00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346A00.
 pub fn f_01346a00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A29C8u32, m, pt, cpu); cpu.ecx = 0x1996658u32; emit::push(0x1346A1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B40u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996658u32, 0x15A2A18u32); emit::push(0x1346A33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A29C8u32, m, pt, cpu); cpu.ecx = 0x1996658u32; emit::push_s(0x1346A1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B40u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996658u32, 0x15A2A18u32); emit::push_s(0x1346A33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346A40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346A40.
@@ -613,7 +613,7 @@ pub fn f_01346a40(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346A60 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346A60.
 pub fn f_01346a60(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2A20u32, m, pt, cpu); cpu.ecx = 0x1996680u32; emit::push(0x1346A7F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B50u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996680u32, 0x15A2A70u32); emit::push(0x1346A93, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2A20u32, m, pt, cpu); cpu.ecx = 0x1996680u32; emit::push_s(0x1346A7F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B50u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996680u32, 0x15A2A70u32); emit::push_s(0x1346A93, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346AA0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346AA0.
@@ -625,7 +625,7 @@ pub fn f_01346aa0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346AC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346AC0.
 pub fn f_01346ac0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2A78u32, m, pt, cpu); cpu.ecx = 0x19966A0u32; emit::push(0x1346ADF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B60u32, m, pt, cpu); m.fast_set_u32(pt, 0x19966A0u32, 0x15A2AC8u32); emit::push(0x1346AF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2A78u32, m, pt, cpu); cpu.ecx = 0x19966A0u32; emit::push_s(0x1346ADF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B60u32, m, pt, cpu); m.fast_set_u32(pt, 0x19966A0u32, 0x15A2AC8u32); emit::push_s(0x1346AF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346B00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346B00.
@@ -637,7 +637,7 @@ pub fn f_01346b00(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346B20 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346B20.
 pub fn f_01346b20(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2AD0u32, m, pt, cpu); cpu.ecx = 0x19966D0u32; emit::push(0x1346B3F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B70u32, m, pt, cpu); m.fast_set_u32(pt, 0x19966D0u32, 0x15A2B20u32); emit::push(0x1346B53, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2AD0u32, m, pt, cpu); cpu.ecx = 0x19966D0u32; emit::push_s(0x1346B3F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B70u32, m, pt, cpu); m.fast_set_u32(pt, 0x19966D0u32, 0x15A2B20u32); emit::push_s(0x1346B53, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346B60 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346B60.
@@ -649,7 +649,7 @@ pub fn f_01346b60(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346B80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346B80.
 pub fn f_01346b80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x110u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2B28u32, m, pt, cpu); cpu.ecx = 0x19966F8u32; emit::push(0x1346B9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B80u32, m, pt, cpu); m.fast_set_u32(pt, 0x19966F8u32, 0x15A2B78u32); emit::push(0x1346BB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x110u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2B28u32, m, pt, cpu); cpu.ecx = 0x19966F8u32; emit::push_s(0x1346B9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B80u32, m, pt, cpu); m.fast_set_u32(pt, 0x19966F8u32, 0x15A2B78u32); emit::push_s(0x1346BB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346BC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346BC0.
@@ -661,7 +661,7 @@ pub fn f_01346bc0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346BE0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346BE0.
 pub fn f_01346be0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x120u32, m, pt, cpu); emit::push(0x1993650u32, m, pt, cpu); emit::push(0x15A2B80u32, m, pt, cpu); cpu.ecx = 0x1996720u32; emit::push(0x1346BFF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390B90u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996720u32, 0x15A2BFCu32); emit::push(0x1346C13, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x120u32, m, pt, cpu); emit::push_s(0x1993650u32, m, pt, cpu); emit::push_s(0x15A2B80u32, m, pt, cpu); cpu.ecx = 0x1996720u32; emit::push_s(0x1346BFF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390B90u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996720u32, 0x15A2BFCu32); emit::push_s(0x1346C13, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346C20 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346C20.
@@ -673,31 +673,31 @@ pub fn f_01346c20(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346C40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346C40.
 pub fn f_01346c40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x90u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x158C6E0u32, m, pt, cpu); cpu.ecx = 0x19967A8u32; emit::push(0x1346C5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390BA0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19967A8u32, 0x15A2C04u32); emit::push(0x1346C73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x90u32, m, pt, cpu); emit::push_s(0x1876CB4u32, m, pt, cpu); emit::push_s(0x158C6E0u32, m, pt, cpu); cpu.ecx = 0x19967A8u32; emit::push_s(0x1346C5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390BA0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19967A8u32, 0x15A2C04u32); emit::push_s(0x1346C73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346C80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346C80.
 pub fn f_01346c80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0xE00u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x158C6F4u32, m, pt, cpu); cpu.ecx = 0x19967C8u32; emit::push(0x1346C9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390BB0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19967C8u32, 0x15A2C14u32); emit::push(0x1346CB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0xE00u32, m, pt, cpu); emit::push_s(0x1876CB4u32, m, pt, cpu); emit::push_s(0x158C6F4u32, m, pt, cpu); cpu.ecx = 0x19967C8u32; emit::push_s(0x1346C9F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390BB0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19967C8u32, 0x15A2C14u32); emit::push_s(0x1346CB3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346CC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346CC0.
 pub fn f_01346cc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0xA0u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x158C030u32, m, pt, cpu); cpu.ecx = 0x1996760u32; emit::push(0x1346CDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390BC0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996760u32, 0x15A2C30u32); emit::push(0x1346CF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0xA0u32, m, pt, cpu); emit::push_s(0x1876CB4u32, m, pt, cpu); emit::push_s(0x158C030u32, m, pt, cpu); cpu.ecx = 0x1996760u32; emit::push_s(0x1346CDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390BC0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996760u32, 0x15A2C30u32); emit::push_s(0x1346CF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346D00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346D00.
 pub fn f_01346d00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x18u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x158C018u32, m, pt, cpu); cpu.ecx = 0x1996788u32; emit::push(0x1346D1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390BD0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996788u32, 0x15A2C0Cu32); emit::push(0x1346D30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x18u32, m, pt, cpu); emit::push_s(0x1876CB4u32, m, pt, cpu); emit::push_s(0x158C018u32, m, pt, cpu); cpu.ecx = 0x1996788u32; emit::push_s(0x1346D1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390BD0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996788u32, 0x15A2C0Cu32); emit::push_s(0x1346D30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346D40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346D40.
 pub fn f_01346d40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x1260u32, m, pt, cpu); emit::push(0x1876CB4u32, m, pt, cpu); emit::push(0x158C024u32, m, pt, cpu); cpu.ecx = 0x1996740u32; emit::push(0x1346D5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390BE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996740u32, 0x15A2C38u32); emit::push(0x1346D73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x1260u32, m, pt, cpu); emit::push_s(0x1876CB4u32, m, pt, cpu); emit::push_s(0x158C024u32, m, pt, cpu); cpu.ecx = 0x1996740u32; emit::push_s(0x1346D5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390BE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996740u32, 0x15A2C38u32); emit::push_s(0x1346D73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346D80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346D80.
@@ -715,19 +715,19 @@ pub fn f_01346da0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01346DC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346DC0.
 pub fn f_01346dc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0xF0u32, m, pt, cpu); emit::push(0x18D439Cu32, m, pt, cpu); emit::push(0x15A2C40u32, m, pt, cpu); cpu.ecx = 0x19967F8u32; emit::push(0x1346DDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390BF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19967F8u32, 0x15A2CD8u32); emit::push(0x1346DF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0xF0u32, m, pt, cpu); emit::push_s(0x18D439Cu32, m, pt, cpu); emit::push_s(0x15A2C40u32, m, pt, cpu); cpu.ecx = 0x19967F8u32; emit::push_s(0x1346DDF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390BF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19967F8u32, 0x15A2CD8u32); emit::push_s(0x1346DF3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346E00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346E00.
 pub fn f_01346e00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0xB0u32, m, pt, cpu); emit::push(0x18D439Cu32, m, pt, cpu); emit::push(0x15A2CE0u32, m, pt, cpu); cpu.ecx = 0x1996818u32; emit::push(0x1346E1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390C00u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996818u32, 0x15A2D80u32); emit::push(0x1346E33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0xB0u32, m, pt, cpu); emit::push_s(0x18D439Cu32, m, pt, cpu); emit::push_s(0x15A2CE0u32, m, pt, cpu); cpu.ecx = 0x1996818u32; emit::push_s(0x1346E1F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390C00u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996818u32, 0x15A2D80u32); emit::push_s(0x1346E33, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346E40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346E40.
 pub fn f_01346e40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x90u32, m, pt, cpu); emit::push(0x18D439Cu32, m, pt, cpu); emit::push(0x15A2D88u32, m, pt, cpu); cpu.ecx = 0x1996838u32; emit::push(0x1346E5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390C10u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996838u32, 0x15A2E20u32); emit::push(0x1346E73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x90u32, m, pt, cpu); emit::push_s(0x18D439Cu32, m, pt, cpu); emit::push_s(0x15A2D88u32, m, pt, cpu); cpu.ecx = 0x1996838u32; emit::push_s(0x1346E5F, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390C10u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996838u32, 0x15A2E20u32); emit::push_s(0x1346E73, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01346E80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01346E80.
@@ -775,19 +775,19 @@ pub fn f_013485a0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x01348680 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348680.
 pub fn f_01348680(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x1390C20u32, m, pt, cpu); emit::push(0x134868A, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x1390C20u32, m, pt, cpu); emit::push_s(0x134868A, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348690 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348690.
 pub fn f_01348690(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x1390C30u32, m, pt, cpu); emit::push(0x134869A, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x1390C30u32, m, pt, cpu); emit::push_s(0x134869A, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013486A0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013486A0.
 pub fn f_013486a0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x1390C40u32, m, pt, cpu); emit::push(0x13486AA, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x1390C40u32, m, pt, cpu); emit::push_s(0x13486AA, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013486B0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013486B0.
@@ -799,191 +799,191 @@ pub fn f_013486b0(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x013486C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013486C0.
 pub fn f_013486c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x5u32, m, pt, cpu); emit::push(0x73C0u32, m, pt, cpu); emit::push(0x19A1130u32, m, pt, cpu); emit::push(0x1558664u32, m, pt, cpu); cpu.ecx = 0x1996BC0u32; emit::push(0x13486DF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390C50u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996BC0u32, 0x15A496Cu32); emit::push(0x13486F3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x5u32, m, pt, cpu); emit::push_s(0x73C0u32, m, pt, cpu); emit::push_s(0x19A1130u32, m, pt, cpu); emit::push_s(0x1558664u32, m, pt, cpu); cpu.ecx = 0x1996BC0u32; emit::push_s(0x13486DF, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390C50u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996BC0u32, 0x15A496Cu32); emit::push_s(0x13486F3, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348700 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348700.
 pub fn f_01348700(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1995C80u32, m, pt, cpu); emit::push(0x15A3A78u32, m, pt, cpu); cpu.ecx = 0x1996E20u32; emit::push(0x134871C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390C60u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996E20u32, 0x15A49ACu32); emit::push(0x1348730, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1995C80u32, m, pt, cpu); emit::push_s(0x15A3A78u32, m, pt, cpu); cpu.ecx = 0x1996E20u32; emit::push_s(0x134871C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390C60u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996E20u32, 0x15A49ACu32); emit::push_s(0x1348730, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348740 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348740.
 pub fn f_01348740(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3A88u32, m, pt, cpu); cpu.ecx = 0x1996DE0u32; emit::push(0x134875C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390C70u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996DE0u32, 0x15A49F4u32); emit::push(0x1348770, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3A88u32, m, pt, cpu); cpu.ecx = 0x1996DE0u32; emit::push_s(0x134875C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390C70u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996DE0u32, 0x15A49F4u32); emit::push_s(0x1348770, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348780 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348780.
 pub fn f_01348780(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3A98u32, m, pt, cpu); cpu.ecx = 0x1996DA0u32; emit::push(0x134879C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390C80u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996DA0u32, 0x15A4A3Cu32); emit::push(0x13487B0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3A98u32, m, pt, cpu); cpu.ecx = 0x1996DA0u32; emit::push_s(0x134879C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390C80u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996DA0u32, 0x15A4A3Cu32); emit::push_s(0x13487B0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013487C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013487C0.
 pub fn f_013487c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3AACu32, m, pt, cpu); cpu.ecx = 0x19979C0u32; emit::push(0x13487DC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390C90u32, m, pt, cpu); m.fast_set_u32(pt, 0x19979C0u32, 0x15A4A84u32); emit::push(0x13487F0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3AACu32, m, pt, cpu); cpu.ecx = 0x19979C0u32; emit::push_s(0x13487DC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390C90u32, m, pt, cpu); m.fast_set_u32(pt, 0x19979C0u32, 0x15A4A84u32); emit::push_s(0x13487F0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348800 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348800.
 pub fn f_01348800(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1996DE0u32, m, pt, cpu); emit::push(0x15A3AC4u32, m, pt, cpu); cpu.ecx = 0x1997020u32; emit::push(0x134881C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390CA0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997020u32, 0x15A4ACCu32); emit::push(0x1348830, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1996DE0u32, m, pt, cpu); emit::push_s(0x15A3AC4u32, m, pt, cpu); cpu.ecx = 0x1997020u32; emit::push_s(0x134881C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390CA0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997020u32, 0x15A4ACCu32); emit::push_s(0x1348830, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348840 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348840.
 pub fn f_01348840(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3AE4u32, m, pt, cpu); cpu.ecx = 0x1996EE0u32; emit::push(0x134885C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390CB0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996EE0u32, 0x15A4B14u32); emit::push(0x1348870, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3AE4u32, m, pt, cpu); cpu.ecx = 0x1996EE0u32; emit::push_s(0x134885C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390CB0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996EE0u32, 0x15A4B14u32); emit::push_s(0x1348870, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348880 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348880.
 pub fn f_01348880(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3AF8u32, m, pt, cpu); cpu.ecx = 0x19973C0u32; emit::push(0x134889C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390CC0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19973C0u32, 0x15A4B5Cu32); emit::push(0x13488B0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3AF8u32, m, pt, cpu); cpu.ecx = 0x19973C0u32; emit::push_s(0x134889C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390CC0u32, m, pt, cpu); m.fast_set_u32(pt, 0x19973C0u32, 0x15A4B5Cu32); emit::push_s(0x13488B0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013488C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013488C0.
 pub fn f_013488c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3B10u32, m, pt, cpu); cpu.ecx = 0x1997600u32; emit::push(0x13488DC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390CD0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997600u32, 0x15A4BA4u32); emit::push(0x13488F0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3B10u32, m, pt, cpu); cpu.ecx = 0x1997600u32; emit::push_s(0x13488DC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390CD0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997600u32, 0x15A4BA4u32); emit::push_s(0x13488F0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348900 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348900.
 pub fn f_01348900(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3B20u32, m, pt, cpu); cpu.ecx = 0x1996C00u32; emit::push(0x134891C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390CE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996C00u32, 0x15A4BECu32); emit::push(0x1348930, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3B20u32, m, pt, cpu); cpu.ecx = 0x1996C00u32; emit::push_s(0x134891C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390CE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996C00u32, 0x15A4BECu32); emit::push_s(0x1348930, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348940 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348940.
 pub fn f_01348940(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3B34u32, m, pt, cpu); cpu.ecx = 0x1996E40u32; emit::push(0x134895C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390CF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996E40u32, 0x15A4C34u32); emit::push(0x1348970, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3B34u32, m, pt, cpu); cpu.ecx = 0x1996E40u32; emit::push_s(0x134895C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390CF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996E40u32, 0x15A4C34u32); emit::push_s(0x1348970, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348980 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348980.
 pub fn f_01348980(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3B48u32, m, pt, cpu); cpu.ecx = 0x19968D8u32; emit::push(0x134899C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D00u32, m, pt, cpu); m.fast_set_u32(pt, 0x19968D8u32, 0x15A4C7Cu32); emit::push(0x13489B0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3B48u32, m, pt, cpu); cpu.ecx = 0x19968D8u32; emit::push_s(0x134899C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D00u32, m, pt, cpu); m.fast_set_u32(pt, 0x19968D8u32, 0x15A4C7Cu32); emit::push_s(0x13489B0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x013489C0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_013489C0.
 pub fn f_013489c0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3B58u32, m, pt, cpu); cpu.ecx = 0x19976C0u32; emit::push(0x13489DC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D10u32, m, pt, cpu); m.fast_set_u32(pt, 0x19976C0u32, 0x15A4CC4u32); emit::push(0x13489F0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3B58u32, m, pt, cpu); cpu.ecx = 0x19976C0u32; emit::push_s(0x13489DC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D10u32, m, pt, cpu); m.fast_set_u32(pt, 0x19976C0u32, 0x15A4CC4u32); emit::push_s(0x13489F0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348A00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348A00.
 pub fn f_01348a00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3B6Cu32, m, pt, cpu); cpu.ecx = 0x1996A58u32; emit::push(0x1348A1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D20u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996A58u32, 0x15A4D0Cu32); emit::push(0x1348A30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3B6Cu32, m, pt, cpu); cpu.ecx = 0x1996A58u32; emit::push_s(0x1348A1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D20u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996A58u32, 0x15A4D0Cu32); emit::push_s(0x1348A30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348A40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348A40.
 pub fn f_01348a40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3B80u32, m, pt, cpu); cpu.ecx = 0x1996998u32; emit::push(0x1348A5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D30u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996998u32, 0x15A4D54u32); emit::push(0x1348A70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3B80u32, m, pt, cpu); cpu.ecx = 0x1996998u32; emit::push_s(0x1348A5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D30u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996998u32, 0x15A4D54u32); emit::push_s(0x1348A70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348A80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348A80.
 pub fn f_01348a80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3B98u32, m, pt, cpu); cpu.ecx = 0x1996A98u32; emit::push(0x1348A9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D40u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996A98u32, 0x15A4D9Cu32); emit::push(0x1348AB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3B98u32, m, pt, cpu); cpu.ecx = 0x1996A98u32; emit::push_s(0x1348A9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D40u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996A98u32, 0x15A4D9Cu32); emit::push_s(0x1348AB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348AC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348AC0.
 pub fn f_01348ac0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3BA8u32, m, pt, cpu); cpu.ecx = 0x1996F00u32; emit::push(0x1348ADC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D50u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996F00u32, 0x15A4DE4u32); emit::push(0x1348AF0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3BA8u32, m, pt, cpu); cpu.ecx = 0x1996F00u32; emit::push_s(0x1348ADC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D50u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996F00u32, 0x15A4DE4u32); emit::push_s(0x1348AF0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348B00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348B00.
 pub fn f_01348b00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3BBCu32, m, pt, cpu); cpu.ecx = 0x19976E0u32; emit::push(0x1348B1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D60u32, m, pt, cpu); m.fast_set_u32(pt, 0x19976E0u32, 0x15A4E2Cu32); emit::push(0x1348B30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3BBCu32, m, pt, cpu); cpu.ecx = 0x19976E0u32; emit::push_s(0x1348B1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D60u32, m, pt, cpu); m.fast_set_u32(pt, 0x19976E0u32, 0x15A4E2Cu32); emit::push_s(0x1348B30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348B40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348B40.
 pub fn f_01348b40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3BD0u32, m, pt, cpu); cpu.ecx = 0x1997200u32; emit::push(0x1348B5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D70u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997200u32, 0x15A4E74u32); emit::push(0x1348B70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3BD0u32, m, pt, cpu); cpu.ecx = 0x1997200u32; emit::push_s(0x1348B5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D70u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997200u32, 0x15A4E74u32); emit::push_s(0x1348B70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348B80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348B80.
 pub fn f_01348b80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3BE8u32, m, pt, cpu); cpu.ecx = 0x19972C0u32; emit::push(0x1348B9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D80u32, m, pt, cpu); m.fast_set_u32(pt, 0x19972C0u32, 0x15A4EBCu32); emit::push(0x1348BB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3BE8u32, m, pt, cpu); cpu.ecx = 0x19972C0u32; emit::push_s(0x1348B9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D80u32, m, pt, cpu); m.fast_set_u32(pt, 0x19972C0u32, 0x15A4EBCu32); emit::push_s(0x1348BB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348BC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348BC0.
 pub fn f_01348bc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x7Cu32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3BFCu32, m, pt, cpu); cpu.ecx = 0x1996E60u32; emit::push(0x1348BDC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390D90u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996E60u32, 0x15A4F04u32); emit::push(0x1348BF0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x7Cu32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3BFCu32, m, pt, cpu); cpu.ecx = 0x1996E60u32; emit::push_s(0x1348BDC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390D90u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996E60u32, 0x15A4F04u32); emit::push_s(0x1348BF0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348C00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348C00.
 pub fn f_01348c00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3C10u32, m, pt, cpu); cpu.ecx = 0x1996F20u32; emit::push(0x1348C1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390DA0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996F20u32, 0x15A4F4Cu32); emit::push(0x1348C30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3C10u32, m, pt, cpu); cpu.ecx = 0x1996F20u32; emit::push_s(0x1348C1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390DA0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996F20u32, 0x15A4F4Cu32); emit::push_s(0x1348C30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348C40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348C40.
 pub fn f_01348c40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3C24u32, m, pt, cpu); cpu.ecx = 0x1997520u32; emit::push(0x1348C5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390DB0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997520u32, 0x15A4F94u32); emit::push(0x1348C70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3C24u32, m, pt, cpu); cpu.ecx = 0x1997520u32; emit::push_s(0x1348C5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390DB0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997520u32, 0x15A4F94u32); emit::push_s(0x1348C70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348C80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348C80.
 pub fn f_01348c80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3C3Cu32, m, pt, cpu); cpu.ecx = 0x1997100u32; emit::push(0x1348C9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390DC0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997100u32, 0x15A4FDCu32); emit::push(0x1348CB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3C3Cu32, m, pt, cpu); cpu.ecx = 0x1997100u32; emit::push_s(0x1348C9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390DC0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997100u32, 0x15A4FDCu32); emit::push_s(0x1348CB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348CC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348CC0.
 pub fn f_01348cc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3C4Cu32, m, pt, cpu); cpu.ecx = 0x1997860u32; emit::push(0x1348CDC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390DD0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997860u32, 0x15A5024u32); emit::push(0x1348CF0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3C4Cu32, m, pt, cpu); cpu.ecx = 0x1997860u32; emit::push_s(0x1348CDC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390DD0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997860u32, 0x15A5024u32); emit::push_s(0x1348CF0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348D00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348D00.
 pub fn f_01348d00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3C60u32, m, pt, cpu); cpu.ecx = 0x1997760u32; emit::push(0x1348D1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390DE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997760u32, 0x15A506Cu32); emit::push(0x1348D30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3C60u32, m, pt, cpu); cpu.ecx = 0x1997760u32; emit::push_s(0x1348D1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390DE0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997760u32, 0x15A506Cu32); emit::push_s(0x1348D30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348D40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348D40.
 pub fn f_01348d40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3C70u32, m, pt, cpu); cpu.ecx = 0x1996F60u32; emit::push(0x1348D5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390DF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996F60u32, 0x15A50B4u32); emit::push(0x1348D70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3C70u32, m, pt, cpu); cpu.ecx = 0x1996F60u32; emit::push_s(0x1348D5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390DF0u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996F60u32, 0x15A50B4u32); emit::push_s(0x1348D70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348D80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348D80.
 pub fn f_01348d80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3C84u32, m, pt, cpu); cpu.ecx = 0x19970C0u32; emit::push(0x1348D9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390E00u32, m, pt, cpu); m.fast_set_u32(pt, 0x19970C0u32, 0x15A50FCu32); emit::push(0x1348DB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3C84u32, m, pt, cpu); cpu.ecx = 0x19970C0u32; emit::push_s(0x1348D9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390E00u32, m, pt, cpu); m.fast_set_u32(pt, 0x19970C0u32, 0x15A50FCu32); emit::push_s(0x1348DB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348DC0 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348DC0.
 pub fn f_01348dc0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3C9Cu32, m, pt, cpu); cpu.ecx = 0x19976A0u32; emit::push(0x1348DDC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390E10u32, m, pt, cpu); m.fast_set_u32(pt, 0x19976A0u32, 0x15A5144u32); emit::push(0x1348DF0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3C9Cu32, m, pt, cpu); cpu.ecx = 0x19976A0u32; emit::push_s(0x1348DDC, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390E10u32, m, pt, cpu); m.fast_set_u32(pt, 0x19976A0u32, 0x15A5144u32); emit::push_s(0x1348DF0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348E00 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348E00.
 pub fn f_01348e00(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3CB0u32, m, pt, cpu); cpu.ecx = 0x1996D40u32; emit::push(0x1348E1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390E20u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996D40u32, 0x15A518Cu32); emit::push(0x1348E30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3CB0u32, m, pt, cpu); cpu.ecx = 0x1996D40u32; emit::push_s(0x1348E1C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390E20u32, m, pt, cpu); m.fast_set_u32(pt, 0x1996D40u32, 0x15A518Cu32); emit::push_s(0x1348E30, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348E40 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348E40.
 pub fn f_01348e40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3CC4u32, m, pt, cpu); cpu.ecx = 0x1997380u32; emit::push(0x1348E5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390E30u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997380u32, 0x15A51D4u32); emit::push(0x1348E70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3CC4u32, m, pt, cpu); cpu.ecx = 0x1997380u32; emit::push_s(0x1348E5C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390E30u32, m, pt, cpu); m.fast_set_u32(pt, 0x1997380u32, 0x15A51D4u32); emit::push_s(0x1348E70, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x01348E80 (DDDA.exe 2017-12-13 Steam), Supplementary::entry_01348E80.
 pub fn f_01348e80(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x0u32, m, pt, cpu); emit::push(0x78u32, m, pt, cpu); emit::push(0x1996E20u32, m, pt, cpu); emit::push(0x15A3CD8u32, m, pt, cpu); cpu.ecx = 0x19974A0u32; emit::push(0x1348E9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push(0x1390E40u32, m, pt, cpu); m.fast_set_u32(pt, 0x19974A0u32, 0x15A521Cu32); emit::push(0x1348EB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x0u32, m, pt, cpu); emit::push_s(0x78u32, m, pt, cpu); emit::push_s(0x1996E20u32, m, pt, cpu); emit::push_s(0x15A3CD8u32, m, pt, cpu); cpu.ecx = 0x19974A0u32; emit::push_s(0x1348E9C, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_lifted(m, cpu, 0x00CF5780))(m, cpu);  emit::push_s(0x1390E40u32, m, pt, cpu); m.fast_set_u32(pt, 0x19974A0u32, 0x15A521Cu32); emit::push_s(0x1348EB0, m, pt, cpu); x86::call_ext(m, cpu, 0x12ED8D8u32); cpu.ecx = emit::pop_s(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }

@@ -1939,6 +1939,8 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
         leave(&rt);
     }
     let mut cpu = Cpu { esp: stack_top - 16, fs_base, ..Cpu::default() };
+    #[cfg(feature = "stack-window")]
+    crate::session::give_stack_window(&mut memory, &mut cpu, stack_top, stack_size);
     cpu.esp -= 4;
     memory.set_u32(cpu.esp, param);
     cpu.esp -= 4;

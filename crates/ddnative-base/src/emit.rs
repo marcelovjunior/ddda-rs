@@ -95,27 +95,36 @@ pub fn store64(x: [u32; 4], m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: 
     m.fast_set_u64_words(pt, a, [x[0], x[1]]);
 }
 
-/// A dword load from the guest stack (L190): inside the CPU's stack window one plain host load,
-/// else the page-table access. For addresses formed from ESP or EBP.
+/// A dword load from the guest stack (L190): with feature `stack-window`, inside the CPU's stack
+/// window one host load, else (and without the feature) the page-table access. For addresses
+/// formed from ESP or EBP.
 #[inline(always)]
 pub fn stack_u32(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &Cpu, addr: u32) -> u32 {
-    let off = addr.wrapping_sub(cpu.stack_lo);
-    if off < cpu.stack_len.wrapping_sub(3) && addr & 3 == 0 {
-        // SAFETY: the window is a live contiguous host block of stack_len bytes, the dword aligned
-        // inside it; ordinary (non-atomic) access is exact on the owning thread's own stack
-        return u32::from_le(unsafe { std::ptr::read_volatile((cpu.stack_host + off as usize) as *const u32) });
+    #[cfg(feature = "stack-window")]
+    {
+        let off = addr.wrapping_sub(cpu.stack_lo);
+        if off < cpu.stack_span && addr & 3 == 0 {
+            // SAFETY: the window is a live contiguous host block (Cpu::set_stack_window), the
+            // dword aligned inside it; same bytes the page table serves
+            return u32::from_le(unsafe { (*((cpu.stack_host + off as usize) as *const std::sync::atomic::AtomicU32)).load(std::sync::atomic::Ordering::Relaxed) });
+        }
     }
+    let _ = cpu;
     m.fast_u32(pt, addr)
 }
 
 /// A dword store to the guest stack, as [`stack_u32`].
 #[inline(always)]
 pub fn stack_set_u32(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &Cpu, addr: u32, v: u32) {
-    let off = addr.wrapping_sub(cpu.stack_lo);
-    if off < cpu.stack_len.wrapping_sub(3) && addr & 3 == 0 {
-        // SAFETY: as stack_u32
-        return unsafe { std::ptr::write_volatile((cpu.stack_host + off as usize) as *mut u32, v.to_le()) };
+    #[cfg(feature = "stack-window")]
+    {
+        let off = addr.wrapping_sub(cpu.stack_lo);
+        if off < cpu.stack_span && addr & 3 == 0 {
+            // SAFETY: as stack_u32
+            return unsafe { (*((cpu.stack_host + off as usize) as *const std::sync::atomic::AtomicU32)).store(v.to_le(), std::sync::atomic::Ordering::Relaxed) };
+        }
     }
+    let _ = cpu;
     m.fast_set_u32(pt, addr, v)
 }
 

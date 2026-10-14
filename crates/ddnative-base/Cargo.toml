@@ -17,6 +17,10 @@ lean-access = []
 # L190: let the compiler inline the guest memory accessors into the shards (only sensible when the
 # shards are built at opt-level 2 or higher; at opt-level 0 each access would grow the shard 4x).
 inline-access = []
+# L190: stack accesses (ESP/EBP-based dwords, push, pop) in the shards go to the CPU's stack window,
+# one contiguous host block, instead of through the page table. Needs the runtime to set the window
+# (ddruntime does when this feature is on) and shards built at opt-level 2 or higher.
+stack-window = []
 
 # The tests run x87 code and lifted calls: the runtime policy behind them (L74).
 [dev-dependencies]

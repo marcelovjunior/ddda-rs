@@ -316,7 +316,7 @@ attributed to the nearest lifted function without a port, `scripts/hot_list.py`)
 `play-fast`'s opt-level-0 shards 14 2.9%, 08 2.9%, 03 2.7%, 11 2.5%, 29 2.4%, 24 2.4%, 09 2.3%,
 16 2.3% (19.4% together; the other opt-level-0 shards 3.4%).
 
-**What to build.** `play-hot` (new profile, `scripts/build_play.sh --profile play-hot TAG`,
+**What to build.** (Superseded: the user's play builds, `l172_replay_build.sh` with profile `play-o2` in R172, already build every shard at opt-level 2, so `play-hot` adds nothing there; it only matters for `play-fast`-style builds.) `play-hot` (new profile, `scripts/build_play.sh --profile play-hot TAG`,
 target `C:/ddda-targets/playhot`) is `play-fast` with those eight shards at opt-level 1 too:
 the 19% of lifted samples they hold should run about 2.5x faster (an estimated 8-11% of lifted
 CPU; unmeasured in game). `scripts/hot_list.py` picks the functions for a finer cut from a
@@ -325,4 +325,75 @@ inside the generated code. `lift.py gen` with the *committed* hot list rewrites 
 generated files and takes 11.5 minutes, so the tracked shards no longer match the generator and
 its data; a deliberate regeneration plus gate by the lifter owner is needed before the hot
 package can grow (its capacity is 2000 functions; 83 now).
+
+## 11. What dominates lifted code at opt-level 2, and the stack window (L190)
+
+**Where the time is, measured in the game.** Two gameplay captures from `play-o2` builds
+(`stacks_ab_o2a/o2b`, 3,000 busy samples of the guest threads outside the render worker), leaf
+function of each sample, attributed with `scripts/sample_profile.py`'s symbol decoder:
+
+| Share | What |
+|---:|---|
+| 24.8% | `fast_u32` (guest dword loads) |
+| 9.1% | `fast_set_u32` (guest dword stores) |
+| 3.0% | `fast_u8`, `fast_u16` |
+| 2.8% | `GuestMemory::page_table` (the call every lifted function makes at entry) |
+| 2.8% | memory slow paths (`u32`, `set_u32`, `read_bytes`) and 2.1% `write_bulk` |
+| 18.5% | the lifted bodies themselves (leaf) |
+| 6.8% | call/dispatch (`call_ext`, `run_binding`, the install closure) |
+| 5.9% | x87 (`X87::real_memory`, hardware x87 per operation, 10 ns) |
+| 4.6% | flag helpers; 2.7% SSE helpers; 0.7% push/pop; 1% ports |
+
+So at opt-level 2 **44% of the guest-thread time is the memory helpers**, three times the lifted
+code itself. Every x86 instruction with a memory operand is one out-of-line call.
+
+**What does not help** (all measured):
+- Inlining the accessors into O2 shards (`ddnative-base` feature `inline-access`): remap 1998 ->
+  1950 ns, swing 60 -> 63 ns, +9% shard size. The acquire/release atomics keep LLVM from merging
+  or moving the loads, so inlining only moves the call.
+- Load CSE in the generator: in `lift_31` only 1.2% of the dword loads repeat an address with no
+  store, call or register write in between (the s4 ports' CSE gains came from their frame
+  array, not from repeated loads).
+- A cheaper helper body: the aligned fast path is already 11 instructions (`lean-access` took
+  it from 2.02 to 1.77 ns); `page_table()` is a relaxed load and a pointer.
+- More opt-level: opt-level 1/2/3 are within 5% of each other on the lifted functions; only 0
+  (2.5x slower) is different, and `play-o2` has none.
+
+**What the accesses are.** 52% of the generated code's dword loads and stores are through ESP or
+EBP (`esp` 48.5%: stores 26.5% and loads 22.0% of all accesses; `ebp` 3.5%), the stack, which is
+one contiguous region per thread. Those do not need the page table.
+
+**The change: a stack window** (commit "L190: stack window ..."). Every guest thread's `Cpu` carries
+`stack_lo / stack_span / stack_host`: the top 256 KiB of its guest stack, backed by ONE contiguous
+host block that the page table's entries point into (`PageTable::install_external`,
+`GuestMemory::install_window`), so the table and the window serve the same bytes. The lifter output
+uses `emit::stack_u32 / stack_set_u32 / push_s / pop_s` for ESP/EBP-based dwords, push and pop:
+inside the window one range check and a plain load or store, outside it (or with the feature off)
+`m.fast_u32` as before. The text pass is `research/native/stack_window.py`; it is applied to the
+1,468 tracked shard files that contain such accesses (1,306,065 sites) and hooked into
+`lift.py gen` (`LIFT_STACK_WINDOW=0` disables). The tracked shards were not regenerated: `lift.py
+gen` with the committed hot list reproduces them except 756 files of shift formatting (4.9k lines,
+about 12 minutes), so the pass was applied to the tracked text instead.
+
+- Features: `ddnative-base/stack-window` (off by default: with it off the helpers are one trivial
+  call that inlines to the old code, so opt-level-0 builds are unchanged), `ddruntime/stack-window`
+  (sets the window in `run_thread` and `Session::call`; `DDRUNTIME_STACK_WINDOW=0` runs without it).
+- Prototype on the recorded cases (O3 harness, lifted vs lifted with the window): `B89790` 1.08x,
+  `B89FE0` 1.07x, `B8A770` 1.26x, `FA5860` 1.22x. These functions are call- and port-heavy; code that
+  is stack-heavy gains more. At the share above (52% of accesses, 34% of the guest-thread time in
+  the two access helpers) the whole-process gain should be a few percent to ten percent; it is not
+  measured in game yet.
+- Cost: shard compile time +60% and size +16% with the feature on (`lift_31` at opt-level 2: 18 s ->
+  29 s, 9.3 -> 10.8 MB).
+- Evidence: `crates/ddnative-base/tests/stack_window.rs` (window and table agree at the edges, unaligned,
+  outside; an empty window never reaches the host), `l190_bench.rs stack_window_variants_equal_the_originals`
+  (1,860 recorded cases: the rewritten lifted bodies give the same registers and memory as the
+  originals with the window installed), `cargo check -p ddnative` (all 33 shards compile), the gate's
+  `cargo test -p ddnative -p ddnative-base` with the feature off.
+
+**To measure it.** In `l172_replay_build.sh` the ddplay build line becomes
+`cargo build -q --profile play-o2 -p ddplay --features emu,ddruntime/parallel-shadow,ddruntime/stack-window`
+(`ddruntime/stack-window` enables `ddnative-base/stack-window`). A/B: the same exe with
+`DDRUNTIME_STACK_WINDOW=0` (window never installed: the helpers fall to the page table) against
+the default. Merge `task/L190-hot-paths`; `ddruntime/src/threads.rs` gets a 3-line hunk in `run_thread`.
 

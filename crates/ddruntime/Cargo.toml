@@ -36,6 +36,8 @@ hostdisplay = { path = "../hostdisplay" }
 default = ["game"]
 game = ["dep:ddnative", "dep:ddports"]
 # L172 proof builds only: leaves the ordinary lifted-call hot path unchanged.
+# L190: guest threads get a stack window (ddnative-base feature stack-window).
+stack-window = ["ddnative-base/stack-window"]
 parallel-shadow = ["ddnative-base/private-replay", "ddnative-host/private-replay"]
 crt-check = ["dep:ddlift-05", "dep:ddlift-06"]
 # `emu`: the diagnostic emulator fallback for untranslated functions
