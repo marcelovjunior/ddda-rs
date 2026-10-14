@@ -63,6 +63,25 @@ pub(super) enum Decision {
     Parallel,
 }
 
+/// At least one guard proof passed (nothing is published before).
+static PROVEN: AtomicBool = AtomicBool::new(false);
+/// The traversal number the next proof is due at after an inconclusive one.
+static PROOF_DUE: AtomicU64 = AtomicU64::new(u64::MAX);
+static INCONCLUSIVE: AtomicU64 = AtomicU64::new(0);
+/// Time spent waiting for the other participants to park, and windows
+/// that became exclusive only after waiting.
+static WAITED_US: AtomicU64 = AtomicU64::new(0);
+static WAITED: AtomicU64 = AtomicU64::new(0);
+
+/// How long a traversal waits for the other participants to park before it
+/// runs serially (`DDRUNTIME_PARALLEL_SHADOW_WAIT_US`, default 2000).
+fn wait_limit() -> std::time::Duration {
+    static US: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    std::time::Duration::from_micros(*US.get_or_init(|| {
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_WAIT_US").ok().and_then(|v| v.parse().ok()).unwrap_or(2000)
+    }))
+}
+
 pub(super) fn decide() -> Decision {
     let call = CALLS.fetch_add(1, Relaxed);
     if call % 512 == 511 {
@@ -70,34 +89,82 @@ pub(super) fn decide() -> Decision {
     }
     if FALLBACK.load(Relaxed) {
         Decision::Serial
-    } else if call % check_every() == 0 {
+    } else if call % check_every() == 0 || call >= PROOF_DUE.load(Relaxed) {
+        PROOF_DUE.store(u64::MAX, Relaxed);
         Decision::Proof
+    } else if !PROVEN.load(Relaxed) {
+        Decision::Serial
     } else {
         Decision::Parallel
     }
 }
 
-/// The proof of a guard traversal: any refusal ends publication.
+/// A proof that could not be carried out (the capture or the serial replay
+/// could not reproduce this traversal): no evidence either way.
+fn inconclusive(reason: &str) -> bool {
+    [
+        "replay rejected",
+        "incomplete/incoherent capture",
+        "serial stream capture refused",
+        "captured shader object missing",
+        "original serial replay",
+        "traversal appended no commands",
+        "capture scheduler pointer",
+        "replay needs more than",
+    ]
+    .iter()
+    .any(|p| reason.starts_with(p))
+}
+
+/// The proof of a guard traversal. Passed: publication may run. Refuted
+/// (serial and parallel differ, or anything not listed in [`inconclusive`]):
+/// publication OFF for the rest of the run. Inconclusive: counted, and
+/// another proof is due 16 traversals later.
 pub(super) fn proof_result(result: &Result<usize, String>) {
     PROOFS.fetch_add(1, Relaxed);
-    if let Err(reason) = result {
-        if !FALLBACK.swap(true, Relaxed) {
-            eprintln!("parallel-shadow publish: guard proof refused, publication OFF for this run: {reason}");
+    match result {
+        Ok(_) => PROVEN.store(true, Relaxed),
+        Err(reason) if inconclusive(reason) => {
+            if INCONCLUSIVE.fetch_add(1, Relaxed) < 8 {
+                eprintln!("parallel-shadow publish: guard proof inconclusive: {reason}");
+            }
+            PROOF_DUE.store(CALLS.load(Relaxed) + 16, Relaxed);
+        }
+        Err(reason) => {
+            if !FALLBACK.swap(true, Relaxed) {
+                eprintln!("parallel-shadow publish: guard proof refuted, publication OFF for this run: {reason}");
+            }
         }
     }
 }
 
 fn report() {
     eprintln!(
-        "parallel-shadow publish: traversals {} windows {} not exclusive {} proofs {} units {} woke {} woke inside {} fallback {}",
-        CALLS.load(Relaxed), WINDOWS.load(Relaxed), NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed),
-        UNITS.load(Relaxed), WOKE.load(Relaxed), WOKE_INSIDE.load(Relaxed), FALLBACK.load(Relaxed)
+        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, proven {}) units {} lanes helped {} task errors {} woke {} woke inside {} fallback {}",
+        CALLS.load(Relaxed), WINDOWS.load(Relaxed), WAITED.load(Relaxed), WAITED_US.load(Relaxed),
+        NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed), INCONCLUSIVE.load(Relaxed), PROVEN.load(Relaxed),
+        UNITS.load(Relaxed), HELPED.load(Relaxed), TASK_ERRORS.load(Relaxed), WOKE.load(Relaxed),
+        WOKE_INSIDE.load(Relaxed), FALLBACK.load(Relaxed)
     );
 }
+
+/// S2: lanes run as waits::help tasks on the parked participants
+/// (`DDRUNTIME_PARALLEL_SHADOW_HELPERS=0`: S1, every lane on the window's
+/// owner).
+fn helpers_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDRUNTIME_PARALLEL_SHADOW_HELPERS").as_deref() != Ok("0"))
+}
+
+/// Lanes run by a helper thread, and lane tasks that failed.
+static HELPED: AtomicU64 = AtomicU64::new(0);
+static TASK_ERRORS: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     /// The private scheduler of this thread's open window (0: none).
     static WINDOW_SCHEDULER: Cell<u32> = const { Cell::new(0) };
+    /// This thread owns a live window whose parked participants take tasks.
+    static LIVE_WINDOW: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(super) fn window_scheduler() -> u32 {
@@ -146,6 +213,24 @@ fn participant_events(m: &dyn Mem, scheduler: u32) -> (Vec<u32>, Vec<u32>) {
 pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     let scheduler = m.u32(SCHEDULER_GLOBAL);
     let (starts, dones) = participant_events(m, scheduler);
+    // the others are usually still running units of the outer batch: wait
+    // (bounded) until they are all parked, without a window (a participant
+    // that parks while one is open would count as running inside it)
+    let start = std::time::Instant::now();
+    let mut waited = false;
+    while crate::waits::verdict(&crate::threads::waits::others(), &starts, &dones).is_none() {
+        if start.elapsed() >= wait_limit() {
+            WAITED_US.fetch_add(start.elapsed().as_micros() as u64, Relaxed);
+            NOT_EXCLUSIVE.fetch_add(1, Relaxed);
+            return false;
+        }
+        waited = true;
+        std::thread::yield_now();
+    }
+    if waited {
+        WAITED.fetch_add(1, Relaxed);
+        WAITED_US.fetch_add(start.elapsed().as_micros() as u64, Relaxed);
+    }
     // open first (a waking participant is then held and flagged), then check
     let guarded: Vec<u32> = starts.iter().chain(&dones).copied().collect();
     let Some(window) = crate::threads::waits::open(&guarded) else {
@@ -179,7 +264,9 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
         WOKE.fetch_add(1, Relaxed);
         return false;
     }
+    LIVE_WINDOW.with(|w| w.set(helpers_enabled()));
     let result = run_window(m, cpu, original, &storage);
+    LIVE_WINDOW.with(|w| w.set(false));
     if window.violated() {
         WOKE_INSIDE.fetch_add(1, Relaxed);
     }
@@ -192,6 +279,59 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
         }
     }
     true
+}
+
+/// One lane of a private batch: its recording context and its jobs, run in
+/// order with DBD8D0's callback registers and return addresses
+/// (0x00DBD9CB / 0x00DBDA4C / 0x00DBDABC for modes 1 to 3).
+struct Lane {
+    scheduler: u32,
+    mode: u32,
+    count: u32,
+    context: u32,
+    jobs: std::ops::Range<usize>,
+}
+
+impl Lane {
+    /// `base`: the registers every callback starts from (its ESP is restored
+    /// after each).
+    fn run(&self, m: &mut dyn Mem, base: &Cpu) {
+        let (scheduler, mode, context) = (self.scheduler, self.mode, self.context);
+        for job in self.jobs.clone() {
+            let entry = scheduler + 0xc0 + job as u32 * if mode < 2 { 8 } else { 12 };
+            let mut c = base.clone();
+            c.ecx = m.u32(entry);
+            let target = m.u32(entry + 4);
+            c.esi = entry;
+            c.edi = self.count;
+            if mode == 1 || mode == 3 {
+                c.ebx = context;
+                c.ebp = scheduler;
+            } else {
+                c.ebx = scheduler;
+            }
+            if mode >= 2 {
+                c.edx = m.u32(entry + 8);
+                c.eax = target;
+                let argument = c.edx;
+                push(m, &mut c, argument);
+            }
+            if mode == 1 || mode == 3 {
+                push(m, &mut c, context);
+            }
+            if mode == 1 {
+                c.edx = target;
+            }
+            push(m, &mut c, match mode {
+                1 => 0xdbd9cb,
+                2 => 0xdbda4c,
+                _ => 0xdbdabc,
+            });
+            x86::call_ext(m, &mut c, target);
+            assert_eq!(c.esp, base.esp, "parallel-shadow publish: job callback stack ABI");
+            UNITS.fetch_add(1, Relaxed);
+        }
+    }
 }
 
 /// The window's body (the caller holds the window): the top-level globals,
@@ -272,41 +412,48 @@ pub(super) fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) {
     m.set_u32(scheduler + 0x94, mode);
     let incoming = cpu.clone();
     let ranges = lanes::partitions(count, if multiple { 2 } else { 1 }).expect("lane partition");
-    for (lane, jobs) in ranges.into_iter().enumerate() {
-        let context = m.u32(scheduler + 0x1bdd0 + lane as u32 * 0x20);
-        for job in jobs {
-            let entry = scheduler + 0xc0 + job as u32 * if mode < 2 { 8 } else { 12 };
-            let mut c = incoming.clone();
-            c.ecx = m.u32(entry);
-            let target = m.u32(entry + 4);
-            c.esi = entry;
-            c.edi = count as u32;
-            if mode == 1 || mode == 3 {
-                c.ebx = context;
-                c.ebp = scheduler;
-            } else {
-                c.ebx = scheduler;
-            }
-            if mode >= 2 {
-                c.edx = m.u32(entry + 8);
-                c.eax = target;
-                let argument = c.edx;
-                push(m, &mut c, argument);
-            }
-            if mode == 1 || mode == 3 {
-                push(m, &mut c, context);
-            }
-            if mode == 1 {
-                c.edx = target;
-            }
-            push(m, &mut c, match mode {
-                1 => 0xdbd9cb,
-                2 => 0xdbda4c,
-                _ => 0xdbdabc,
-            });
-            x86::call_ext(m, &mut c, target);
-            assert_eq!(c.esp, incoming.esp, "parallel-shadow publish: job callback stack ABI");
-            UNITS.fetch_add(1, Relaxed);
+    let lanes: Vec<Lane> = ranges
+        .into_iter()
+        .enumerate()
+        .map(|(lane, jobs)| Lane {
+            scheduler,
+            mode,
+            count: count as u32,
+            context: m.u32(scheduler + 0x1bdd0 + lane as u32 * 0x20),
+            jobs,
+        })
+        .collect();
+    if multiple && LIVE_WINDOW.with(Cell::get) {
+        // S2: one task per lane, taken by the parked participants and this
+        // thread. Each starts from this thread's registers and x87 image
+        // (control word) on its own thread's TEB and stack, as DBD8D0's
+        // workers run their claimed units on theirs.
+        let me = crate::threads::current_tid();
+        let tasks: Vec<crate::threads::waits::Task> = lanes
+            .into_iter()
+            .map(|lane| {
+                let registers = incoming.clone();
+                Box::new(move |m: &mut dyn Mem, task: &mut Cpu| {
+                    if crate::threads::current_tid() != me {
+                        HELPED.fetch_add(1, Relaxed);
+                    }
+                    let mut base = registers;
+                    base.esp = task.esp;
+                    base.fs_base = task.fs_base;
+                    lane.run(m, &base);
+                    *task = base;
+                    Ok(())
+                }) as crate::threads::waits::Task
+            })
+            .collect();
+        let results = crate::threads::waits::help(m, &incoming, tasks);
+        if let Some(error) = results.into_iter().find_map(Result::err) {
+            TASK_ERRORS.fetch_add(1, Relaxed);
+            panic!("parallel-shadow publish: lane task failed: {error}");
+        }
+    } else {
+        for lane in lanes {
+            lane.run(m, &incoming);
         }
     }
     if multiple {

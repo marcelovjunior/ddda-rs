@@ -178,6 +178,122 @@ pub fn sprimitive_sort(m: &mut dyn Mem, c: &mut Cpu) {
     }
 }
 '''
+STATE = '''
+/// 0x01192260, `owner->push_snapshot() -> error` (thiscall): save the two
+/// words at `+0x74` / `+0x78` as a 16-byte record from `+4` on the owner's
+/// stack (depth `+0x64`, at most six) and count it. Returns 9 when full.
+// Translated from 0x01192260 (DDDA.exe 2017-12-13 Steam).
+pub fn owner_push_snapshot(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    c.eax = push_snapshot(m, pg, c.ecx);
+    c.esp = entry.wrapping_add(4);
+}
+
+fn push_snapshot(m: &mut dyn Mem, pg: Pages, owner: u32) -> u32 {
+    let depth = pg.u32(m, owner.wrapping_add(0x64));
+    if depth >= 6 {
+        return 9;
+    }
+    let record = owner.wrapping_add(depth.wrapping_mul(16)).wrapping_add(4);
+    let first = pg.u32(m, owner.wrapping_add(0x74));
+    pg.set_u32(m, record, first);
+    let second = pg.u32(m, owner.wrapping_add(0x78));
+    pg.set_u32(m, record.wrapping_add(4), second);
+    pg.set_u32(m, record.wrapping_add(8), 0);
+    pg.set_u8(m, record.wrapping_add(0xc), 0);
+    let again = pg.u32(m, owner.wrapping_add(0x64)).wrapping_add(1);
+    pg.set_u32(m, owner.wrapping_add(0x64), again);
+    0
+}
+
+/// 0x01192290, `owner->pop_snapshot() -> error` (thiscall): restore the
+/// top record into `+0x74` / `+0x78` and subtract its third word from
+/// `+0x80`. Returns 10 when empty.
+// Translated from 0x01192290 (DDDA.exe 2017-12-13 Steam).
+pub fn owner_pop_snapshot(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    c.eax = pop_snapshot(m, pg, c.ecx);
+    c.esp = entry.wrapping_add(4);
+}
+
+fn pop_snapshot(m: &mut dyn Mem, pg: Pages, owner: u32) -> u32 {
+    let depth = pg.u32(m, owner.wrapping_add(0x64));
+    if depth == 0 {
+        return 0xa;
+    }
+    let depth = depth - 1;
+    pg.set_u32(m, owner.wrapping_add(0x64), depth);
+    let record = owner.wrapping_add(depth.wrapping_mul(16)).wrapping_add(4);
+    let first = pg.u32(m, record);
+    pg.set_u32(m, owner.wrapping_add(0x74), first);
+    let second = pg.u32(m, record.wrapping_add(4));
+    pg.set_u32(m, owner.wrapping_add(0x78), second);
+    let amount = pg.u32(m, record.wrapping_add(8));
+    let total = pg.u32(m, owner.wrapping_add(0x80)).wrapping_sub(amount);
+    pg.set_u32(m, owner.wrapping_add(0x80), total);
+    0
+}
+
+/// 0x0111D610, `pool->push_state(value) -> error` (thiscall, `ret 4`): open
+/// a nested list: snapshot the owner (`[pool + 4]`, 0x01192260, its error is
+/// ignored) and push a 12-byte record (the value byte, two zero words) from
+/// `pool + 0xC` on the pool's stack (depth `+0x54`, at most six). Returns 9
+/// when the pool's stack is full.
+// Translated from 0x0111D610 (DDDA.exe 2017-12-13 Steam).
+pub fn pool_push_state(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let pool = c.ecx;
+    let depth = pg.u32(m, pool.wrapping_add(0x54));
+    c.eax = if depth >= 6 {
+        9
+    } else {
+        let owner = pg.u32(m, pool.wrapping_add(4));
+        push_snapshot(m, pg, owner);
+        let value = pg.u8(m, entry.wrapping_add(4));
+        let slot = pool.wrapping_add(depth.wrapping_mul(12).wrapping_add(12));
+        pg.set_u32(m, slot.wrapping_add(4), 0);
+        pg.set_u32(m, slot.wrapping_add(8), 0);
+        pg.set_u8(m, slot, value);
+        let again = pg.u32(m, pool.wrapping_add(0x54)).wrapping_add(1);
+        pg.set_u32(m, pool.wrapping_add(0x54), again);
+        0
+    };
+    c.esp = entry.wrapping_add(8);
+}
+
+/// 0x0111D650, `pool->pop_state() -> error` (thiscall): close the nested
+/// list: restore the owner's snapshot (0x01192290, error ignored) and drop
+/// the pool's top record. Returns 10 when the pool's stack is empty.
+// Translated from 0x0111D650 (DDDA.exe 2017-12-13 Steam).
+pub fn pool_pop_state(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let pool = c.ecx;
+    c.eax = if pg.u32(m, pool.wrapping_add(0x54)) == 0 {
+        0xa
+    } else {
+        let owner = pg.u32(m, pool.wrapping_add(4));
+        pop_snapshot(m, pg, owner);
+        let again = pg.u32(m, pool.wrapping_add(0x54)).wrapping_sub(1);
+        pg.set_u32(m, pool.wrapping_add(0x54), again);
+        0
+    };
+    c.esp = entry.wrapping_add(4);
+}
+
+/// 0x010B7440, the kind-3 draw job target (thiscall, tail thunk): jump to
+/// the unit's virtual +0x3C with the caller's arguments and return address
+/// untouched (`mov eax, [ecx]; jmp [eax + 0x3c]`).
+// Translated from 0x010B7440 (DDDA.exe 2017-12-13 Steam).
+pub fn draw_job_thunk(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let target = pg.u32(m, pg.u32(m, c.ecx).wrapping_add(0x3c));
+    call_ext(m, c, target);
+}
+'''
 THUNKS = '''
 /// 0x0107FF00, `sPrimitive::begin(a0, a1, a2, a3)` (cdecl, caller pops):
 /// forward the four stack arguments to virtual +0x2C of the singleton at
@@ -223,5 +339,5 @@ fn dispatch(m: &mut dyn Mem, c: &mut Cpu, count: u32, slot: u32, known: u32, bac
 vf11 = translate(0xe61010, 0xe61077, 'sprimitive_vf11', VF11_DOC)
 vf12 = translate(0xe68390, 0xe68a24, 'sprimitive_vf12', VF12_DOC)
 (ROOT / 'crates/mtcore/src/shadow_primitive.rs').write_text(HEADER + '\n' + vf11 + '\n' + vf12 + THUNKS, newline='\n') if False else None
-open(ROOT / 'crates/mtcore/src/shadow_primitive.rs', 'w', newline='\n').write(HEADER + '\n' + vf11 + '\n' + vf12 + SORT + THUNKS)
+open(ROOT / 'crates/mtcore/src/shadow_primitive.rs', 'w', newline='\n').write(HEADER + '\n' + vf11 + '\n' + vf12 + SORT + STATE + THUNKS)
 print('ok')

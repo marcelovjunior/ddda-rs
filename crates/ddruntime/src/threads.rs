@@ -1052,6 +1052,16 @@ impl EventCell {
         }
     }
 
+    /// Wake the threads waiting for it without changing it, so that they run
+    /// their rechecks (a published task, L172).
+    fn poke(&self, object: u32) {
+        #[cfg(windows)]
+        if self.address_waiters.load(SeqCst) > 0 {
+            address_wait::wake(&self.set);
+        }
+        signal_key(key::object(object));
+    }
+
     /// Set or reset; the threads waiting for it recheck (`object`: its id).
     fn store(&self, object: u32, value: bool) {
         self.set.store(value, SeqCst);
@@ -1517,11 +1527,15 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
                 if deadline.is_some_and(|d| Instant::now() >= d) {
                     break WAIT_TIMEOUT;
                 }
+                if waits::help_due(handles) {
+                    break waits::WAIT_HELP;
+                }
                 let keys: Vec<u64> = kernel(|k| handles.iter().filter_map(|&h| k.object_of(h)).map(key::object).collect());
                 // Recheck independent events/semaphores after registration:
                 // releases between the snapshot and parking cannot be lost.
                 wait_until(&keys, deadline, || events.iter().any(|(o, e)| !seen_set.contains(o) && e.is_set())
-                    || semaphores.iter().any(|(o, e)| !seen_set.contains(o) && e.ready()));
+                    || semaphores.iter().any(|(o, e)| !seen_set.contains(o) && e.ready())
+                    || waits::help_due(handles));
             }
         }
     };
@@ -1532,7 +1546,7 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
 }
 
 /// A wait for one event without the guest lock (L86).
-fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
+fn wait_event(handle: u32, object: u32, e: &EventCell, ms: u32) -> u32 {
     if e.take() {
         return WAIT_OBJECT_0;
     }
@@ -1551,6 +1565,9 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
             if e.is_set() && e.take() {
                 return WAIT_OBJECT_0;
             }
+            if waits::help_due(&[handle]) {
+                return waits::WAIT_HELP;
+            }
             std::hint::spin_loop();
             n += 1;
             if n % 64 == 0 && (start.elapsed() >= CS_SPIN || deadline.is_some_and(|d| Instant::now() >= d)) {
@@ -1560,7 +1577,7 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
     }
     #[cfg(windows)]
     if address_wait::enabled() && parallel() && !holds_lock() {
-        return address_wait::event(e, deadline);
+        return address_wait::event(handle, e, deadline);
     }
     e.waiters.fetch_add(1, SeqCst);
     let r = loop {
@@ -1570,7 +1587,10 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
         if deadline.is_some_and(|d| Instant::now() >= d) {
             break WAIT_TIMEOUT;
         }
-        wait_until(&[key::object(object)], deadline, || e.is_set());
+        if waits::help_due(&[handle]) {
+            break waits::WAIT_HELP;
+        }
+        wait_until(&[key::object(object)], deadline, || e.is_set() || waits::help_due(&[handle]));
     };
     e.waiters.fetch_sub(1, SeqCst);
     r
@@ -1578,7 +1598,7 @@ fn wait_event(object: u32, e: &EventCell, ms: u32) -> u32 {
 
 /// The sleeper protocol rechecks after registration; count releases notify
 /// outside the narrow gate, so neither a lost wake nor a lock inversion occurs.
-fn wait_semaphore(object: u32, e: &SemaphoreCell, ms: u32) -> u32 {
+fn wait_semaphore(handle: u32, object: u32, e: &SemaphoreCell, ms: u32) -> u32 {
     if e.take() { return WAIT_OBJECT_0; }
     sync_profile::contention();
     if ms == 0 { return WAIT_TIMEOUT; }
@@ -1586,7 +1606,8 @@ fn wait_semaphore(object: u32, e: &SemaphoreCell, ms: u32) -> u32 {
     loop {
         if e.take() { return WAIT_OBJECT_0; }
         if deadline.is_some_and(|d| Instant::now() >= d) { return WAIT_TIMEOUT; }
-        wait_until(&[key::object(object)], deadline, || e.ready());
+        if waits::help_due(&[handle]) { return waits::WAIT_HELP; }
+        wait_until(&[key::object(object)], deadline, || e.ready() || waits::help_due(&[handle]));
     }
 }
 
@@ -1609,10 +1630,11 @@ mod address_wait {
         // SAFETY: EventCell lives in an Arc for the entire wait/signal.
         unsafe { WakeByAddressAll(value.as_ptr().cast()) }
     }
-    pub(super) fn event(e: &EventCell, deadline: Option<Instant>) -> u32 {
+    pub(super) fn event(handle: u32, e: &EventCell, deadline: Option<Instant>) -> u32 {
         e.address_waiters.fetch_add(1, SeqCst);
         let result = loop {
             if e.take() { break WAIT_OBJECT_0; }
+            if waits::help_due(&[handle]) { break waits::WAIT_HELP; }
             let ms = match deadline {
                 None => INFINITE,
                 Some(d) => {
@@ -1635,19 +1657,49 @@ mod address_wait {
 
 pub(crate) use crate::waits;
 
+/// Milliseconds left until `deadline` (INFINITE without one; 0 once passed),
+/// for a wait that resumes after running tasks.
+fn remaining_ms(deadline: Option<Instant>) -> u32 {
+    match deadline {
+        None => INFINITE,
+        Some(d) => d.saturating_duration_since(Instant::now()).as_nanos().div_ceil(1_000_000).min((INFINITE - 1) as u128) as u32,
+    }
+}
+
+/// Wake the waiters of `handle` without changing it (a published task,
+/// L172): events and semaphores recheck their conditions.
+pub(crate) fn poke_handle(handle: u32) {
+    if let Some((o, e)) = event_of(handle) {
+        e.poke(o);
+    } else if let Some((o, _)) = semaphore_of(handle) {
+        signal_key(key::object(o));
+    }
+}
+
 /// WaitForSingleObject(handle, ms).
 /// Events and semaphores wait without the service lock; mutexes and thread
 /// objects retain the service-locked path.
 pub fn wait_for_single_object(m: &mut dyn Mem, cpu: &mut Cpu) {
     let (h, ms) = (arg(m, cpu, 0), arg(m, cpu, 1));
-    let _blocked = waits::blocked(&[h]);
-    cpu.eax = match event_of(h) {
-        Some((o, e)) => wait_event(o, &e, ms),
-        None => match semaphore_of(h) {
-            Some((o, e)) => wait_semaphore(o, &e, ms),
-            None => { let _lock = service(); wait(&[h], false, ms) }
+    let blocked = waits::blocked(&[h]);
+    let deadline = (ms != INFINITE).then(|| Instant::now() + Duration::from_millis(ms as u64));
+    let mut left = ms;
+    cpu.eax = loop {
+        let r = match event_of(h) {
+            Some((o, e)) => wait_event(h, o, &e, left),
+            None => match semaphore_of(h) {
+                Some((o, e)) => wait_semaphore(h, o, &e, left),
+                None => { let _lock = service(); wait(&[h], false, left) }
+            }
+        };
+        if r != waits::WAIT_HELP {
+            break r;
         }
+        // an open window published tasks: run them here, then wait on
+        without_lock(|| waits::run_pending(m, cpu));
+        left = remaining_ms(deadline);
     };
+    blocked.pass(m, cpu);
     ret(m, cpu, 8);
 }
 
@@ -1660,8 +1712,19 @@ pub fn wait_for_multiple_objects(m: &mut dyn Mem, cpu: &mut Cpu) {
     } else {
         let mut handles = [0; 64];
         for k in 0..n { handles[k as usize] = m.u32(p + 4 * k); }
-        let _blocked = waits::blocked(&handles[..n as usize]);
-        cpu.eax = wait(&handles[..n as usize], all, ms);
+        let blocked = waits::blocked(&handles[..n as usize]);
+        let deadline = (ms != INFINITE).then(|| Instant::now() + Duration::from_millis(ms as u64));
+        let mut left = ms;
+        cpu.eax = loop {
+            let r = wait(&handles[..n as usize], all, left);
+            if r != waits::WAIT_HELP {
+                break r;
+            }
+            // (this service holds the guest lock: tasks run without it)
+            without_lock(|| waits::run_pending(m, cpu));
+            left = remaining_ms(deadline);
+        };
+        blocked.pass(m, cpu);
     }
     ret(m, cpu, 16);
 }
@@ -2112,6 +2175,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     include!("sync_followup.rs");
     include!("sync_bench.rs");
+    include!("waits_help_tests.rs");
 
     #[test]
     fn event_cache_invalidates_closed_handles_and_runtime_identity() {
@@ -2236,9 +2300,9 @@ mod tests {
     #[test]
     fn address_event_timeout_manual_and_auto_reset() {
         let e = EventCell::new(false, false);
-        assert_eq!(address_wait::event(&e, Some(Instant::now())), WAIT_TIMEOUT);
+        assert_eq!(address_wait::event(0, &e, Some(Instant::now())), WAIT_TIMEOUT);
         e.store(1, true);
-        assert_eq!(address_wait::event(&e, Some(Instant::now())), WAIT_OBJECT_0);
+        assert_eq!(address_wait::event(0, &e, Some(Instant::now())), WAIT_OBJECT_0);
         assert!(!e.take());
         for manual in [false, true] {
             let e = EventCell::new(manual, false);
@@ -2247,7 +2311,7 @@ mod tests {
                 let (e, barrier) = (e.clone(), barrier.clone());
                 std::thread::spawn(move || {
                     barrier.wait();
-                    address_wait::event(&e, Some(Instant::now() + Duration::from_millis(250)))
+                    address_wait::event(0, &e, Some(Instant::now() + Duration::from_millis(250)))
                 })
             }).collect();
             barrier.wait();
@@ -2269,13 +2333,13 @@ mod tests {
         let (aa, bb) = (a.clone(), b.clone());
         let worker = std::thread::spawn(move || {
             for _ in 0..5000 {
-                assert_eq!(address_wait::event(&aa, Some(Instant::now() + Duration::from_secs(5))), WAIT_OBJECT_0);
+                assert_eq!(address_wait::event(0, &aa, Some(Instant::now() + Duration::from_secs(5))), WAIT_OBJECT_0);
                 bb.store(2, true);
             }
         });
         for _ in 0..5000 {
             a.store(1, true);
-            assert_eq!(address_wait::event(&b, Some(Instant::now() + Duration::from_secs(5))), WAIT_OBJECT_0);
+            assert_eq!(address_wait::event(0, &b, Some(Instant::now() + Duration::from_secs(5))), WAIT_OBJECT_0);
         }
         worker.join().unwrap();
     }

@@ -21,11 +21,23 @@
 //!   redirect and aborts. The woken thread is held regardless, so the
 //!   violation can never reach guest code before the window closes.
 //!
+//! * Helpers (P1, s8): the window's owner can run tasks ([`help`]) on the
+//!   threads it holds: a thread parked in a guarded wait stops waiting
+//!   ([`WAIT_HELP`], the wait services' early return), runs published tasks
+//!   without the guest lock on a CPU of its own (its TEB, an empty x87
+//!   stack, a stack below its own), then waits on with the time that is
+//!   left. A thread held at the gate (its wait returned) takes tasks too.
+//!   Helper wakes only poke the guarded events (they recheck and wait on);
+//!   no event is ever set or consumed for a helper.
+//!
 //! The registry is a value so tests drive it with explicit thread ids; the
 //! game uses the global one through the free functions. Inactive (one
 //! relaxed load per wait) unless publish mode enabled it.
 
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+use ddnative_base::mem::Mem;
+use ddnative_base::x86::Cpu;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::{Relaxed, SeqCst}};
 use std::sync::{Condvar, Mutex, MutexGuard};
 
 pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -81,6 +93,12 @@ impl Registry {
     /// `tid`'s wait returned: held here while a window guarding one of its
     /// handles is open (owned by another thread), then removed.
     pub(crate) fn leave(&self, tid: u32) {
+        self.leave_helping(tid, None)
+    }
+
+    /// [`leave`](Self::leave); while held, `help` (if any) runs whenever
+    /// tasks are published, with the registry unlocked.
+    pub(crate) fn leave_helping(&self, tid: u32, mut help: Option<&mut dyn FnMut()>) {
         let mut st = self.lock();
         let Some(i) = st.entries.iter().position(|e| e.tid == tid) else { return };
         st.entries[i].woken = true;
@@ -96,11 +114,37 @@ impl Registry {
                 st.violations += 1;
                 counted = true;
             }
+            if let Some(help) = help.as_mut() {
+                if PENDING.load(SeqCst) > 0 && TASKS_RUNTIME.load(SeqCst) == runtime_identity() {
+                    drop(st);
+                    help();
+                    st = self.lock();
+                    continue;
+                }
+            }
             st = self.closed.wait(st).unwrap_or_else(|e| e.into_inner());
         }
         if let Some(i) = st.entries.iter().position(|e| e.tid == tid) {
             st.entries.swap_remove(i);
         }
+    }
+
+    /// Whether a window is open that guards one of `handles`.
+    fn guards(&self, handles: &[u32]) -> bool {
+        let st = self.lock();
+        st.owner != 0 && intersects(handles, &st.guarded)
+    }
+
+    /// Every handle of the parked threads whose wait the open window guards.
+    fn guarded_waiters(&self) -> Vec<Box<[u32]>> {
+        let st = self.lock();
+        st.entries.iter().filter(|e| !e.woken && intersects(&e.handles, &st.guarded)).map(|e| e.handles.clone()).collect()
+    }
+
+    /// Wake the gated threads (new tasks).
+    fn notify_closed(&self) {
+        let _st = self.lock();
+        self.closed.notify_all();
     }
 
     /// The handles each other thread is parked on now (waits not yet returned).
@@ -183,11 +227,167 @@ pub(crate) fn blocked(handles: &[u32]) -> Blocked {
     Blocked(Some(tid))
 }
 
+impl Blocked {
+    /// The gate, for a wait that is returning: held (registered as parked)
+    /// while a window guarding its handles is open, running the tasks the
+    /// window's owner publishes; call before returning to the guest.
+    pub(crate) fn pass(&self, m: &mut dyn Mem, cpu: &Cpu) {
+        if let Some(tid) = self.0 {
+            GLOBAL.leave_helping(tid, Some(&mut || crate::threads::without_lock(|| run_pending(m, cpu))));
+        }
+    }
+}
+
 impl Drop for Blocked {
     fn drop(&mut self) {
         if let Some(tid) = self.0 {
             GLOBAL.leave(tid);
         }
+    }
+}
+
+// ---- helpers: tasks run on the parked threads ------------------------------------
+
+/// A unit of work for a thread held in a guarded wait (or the window's
+/// owner): it runs with that thread's own memory view and a CPU prepared
+/// for it (its TEB, a stack below the thread's own, an empty x87 stack).
+pub(crate) type Task = Box<dyn FnOnce(&mut dyn Mem, &mut Cpu) -> Result<(), String> + Send>;
+
+/// Tasks published by [`help`] and their results.
+struct Board {
+    queue: VecDeque<(usize, Task)>,
+    results: Vec<Option<Result<(), String>>>,
+    outstanding: usize,
+    /// a [`help`] call is running (one at a time)
+    active: bool,
+}
+
+static BOARD: Mutex<Board> = Mutex::new(Board { queue: VecDeque::new(), results: Vec::new(), outstanding: 0, active: false });
+static DONE: Condvar = Condvar::new();
+/// Tasks published and not yet taken: the cheap test of the wait loops.
+static PENDING: AtomicU32 = AtomicU32::new(0);
+/// The runtime (its guest lock's identity) the published tasks belong to: a
+/// thread of another runtime (tests run several in one process) never takes
+/// them, whatever its handle values.
+static TASKS_RUNTIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn runtime_identity() -> u64 {
+    crate::runtime::pin().lock.identity()
+}
+
+/// What a wait returns, internally, when it stopped to let its thread run
+/// tasks (never a Win32 wait result).
+pub(crate) const WAIT_HELP: u32 = 0x7FFF_0001;
+
+/// How far below its own stack pointer a task starts its stack.
+const STACK_MARGIN: u32 = 0x400;
+
+/// Whether a wait on `handles` should stop to run tasks: some are published
+/// and the open window guards the wait.
+#[inline]
+pub(crate) fn help_due(handles: &[u32]) -> bool {
+    PENDING.load(SeqCst) > 0 && TASKS_RUNTIME.load(SeqCst) == runtime_identity() && GLOBAL.guards(handles)
+}
+
+/// The CPU a task starts with: the service's registers and TEB, an empty x87
+/// stack, and a stack of its own below the thread's stack pointer.
+fn task_cpu(service: &Cpu) -> Cpu {
+    let mut cpu = service.clone();
+    cpu.st = Default::default();
+    cpu.esp = service.esp.wrapping_sub(STACK_MARGIN) & !0xf;
+    cpu
+}
+
+fn take() -> Option<(usize, Task)> {
+    let mut b = BOARD.lock().unwrap_or_else(|e| e.into_inner());
+    let t = b.queue.pop_front();
+    if t.is_some() {
+        PENDING.fetch_sub(1, SeqCst);
+    }
+    t
+}
+
+fn complete(index: usize, result: Result<(), String>) {
+    let mut b = BOARD.lock().unwrap_or_else(|e| e.into_inner());
+    b.results[index] = Some(result);
+    b.outstanding -= 1;
+    if b.outstanding == 0 {
+        DONE.notify_all();
+    }
+}
+
+/// Run published tasks, one at a time, until none is left to take, on this
+/// thread with its own `m` and a CPU derived from `service` (the CPU of the
+/// service it is in, or the owner's).
+pub(crate) fn run_pending(m: &mut dyn Mem, service: &Cpu) {
+    while let Some((index, task)) = take() {
+        let mut cpu = task_cpu(service);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task(m, &mut cpu)));
+        // x87 and MXCSR as the service found them: the task's x87 state goes
+        // (the thread's own was parked when the service began) and the host
+        // default MXCSR is back whatever the task left
+        if cpu.st.home != 0 {
+            (ddnative_base::hooks::get().x87_release)(&mut cpu.st);
+        }
+        ddnative_base::x87::park();
+        if ddnative_base::x86::stmxcsr() != ddnative_base::x86::MXCSR_DEFAULT {
+            ddnative_base::x86::ldmxcsr(ddnative_base::x86::MXCSR_DEFAULT);
+        }
+        complete(index, match result {
+            Ok(r) => r,
+            Err(payload) => Err(payload.downcast_ref::<&str>().map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "task panicked".into())),
+        });
+    }
+}
+
+/// Wake every thread in a wait the open window guards, so that it sees the
+/// tasks (a poke: nothing is set, taken or consumed), and the gated ones.
+fn poke_guarded() {
+    for handles in GLOBAL.guarded_waiters() {
+        for &h in handles.iter() {
+            crate::threads::poke_handle(h);
+        }
+    }
+    GLOBAL.notify_closed();
+}
+
+/// Run `tasks` on the threads held in the open window's guarded waits and on
+/// the calling thread (the window's owner, with its `m` and `cpu`:
+/// `cpu.mxcsr` is the guest MXCSR the tasks run under, their stacks start
+/// below `cpu.esp`). Returns when every task has finished, with its result
+/// in task order; a task that panics is an `Err`. With no helper the owner
+/// runs them all.
+pub(crate) fn help(m: &mut dyn Mem, cpu: &Cpu, tasks: Vec<Task>) -> Vec<Result<(), String>> {
+    let n = tasks.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    {
+        let mut b = BOARD.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(!b.active, "waits::help is already running");
+        b.active = true;
+        b.queue = tasks.into_iter().enumerate().collect();
+        b.results = (0..n).map(|_| None).collect();
+        b.outstanding = n;
+        TASKS_RUNTIME.store(runtime_identity(), SeqCst);
+        PENDING.store(n as u32, SeqCst);
+    }
+    poke_guarded();
+    run_pending(m, cpu);
+    let mut b = BOARD.lock().unwrap_or_else(|e| e.into_inner());
+    while b.outstanding > 0 {
+        b = DONE.wait(b).unwrap_or_else(|e| e.into_inner());
+    }
+    b.active = false;
+    std::mem::take(&mut b.results).into_iter().map(|r| r.expect("a finished task has a result")).collect()
+}
+
+impl Window<'_> {
+    /// [`help`] for this window's owner.
+    pub(crate) fn help(&self, m: &mut dyn Mem, cpu: &Cpu, tasks: Vec<Task>) -> Vec<Result<(), String>> {
+        help(m, cpu, tasks)
     }
 }
 

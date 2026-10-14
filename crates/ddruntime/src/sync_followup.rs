@@ -163,7 +163,7 @@ fn semaphore_single_wait_ping_pong_and_deadlines_lose_no_wakes() {
         }
     }));
     let empty = SemaphoreCell::new(0, 1);
-    assert_eq!(wait_semaphore(0x7777, &empty, 2), WAIT_TIMEOUT);
+    assert_eq!(wait_semaphore(0, 0x7777, &empty, 2), WAIT_TIMEOUT);
 }
 
 #[test]
