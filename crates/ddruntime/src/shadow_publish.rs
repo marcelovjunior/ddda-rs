@@ -39,6 +39,14 @@ pub(super) fn enabled() -> bool {
     })
 }
 
+/// Guard proofs are opt-in (`DDRUNTIME_PARALLEL_SHADOW_CHECK=N`, head
+/// #14617, user order): a proof stalls the frame for about a second. Without
+/// it every exclusive traversal publishes, unproven, and nothing turns
+/// publication off.
+fn checking() -> bool {
+    std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_CHECK").is_some()
+}
+
 fn check_every() -> u64 {
     static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
@@ -76,11 +84,11 @@ static WAITED_US: AtomicU64 = AtomicU64::new(0);
 static WAITED: AtomicU64 = AtomicU64::new(0);
 
 /// How long a traversal waits for the other participants to park before it
-/// runs serially (`DDRUNTIME_PARALLEL_SHADOW_WAIT_US`, default 2000).
+/// runs serially (`DDRUNTIME_PARALLEL_SHADOW_WAIT_US`, default 0: s2d 33.7 fps vs 33.0 with 500 and 30.3 with 2000).
 fn wait_limit() -> std::time::Duration {
     static US: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     std::time::Duration::from_micros(*US.get_or_init(|| {
-        std::env::var("DDRUNTIME_PARALLEL_SHADOW_WAIT_US").ok().and_then(|v| v.parse().ok()).unwrap_or(2000)
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_WAIT_US").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
     }))
 }
 
@@ -93,7 +101,9 @@ pub(super) fn decide(context: u32) -> Decision {
     if call % 512 == 511 {
         report();
     }
-    if FALLBACK.load(Relaxed) {
+    if !checking() {
+        Decision::Parallel
+    } else if FALLBACK.load(Relaxed) {
         Decision::Serial
     } else if call % check_every() == 0 {
         Decision::Proof
@@ -156,10 +166,10 @@ pub(super) fn proof_result(context: u32, result: &Result<usize, String>) {
 
 fn report() {
     eprintln!(
-        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, contexts proven {}) units {} lanes helped {} task errors {} woke {} woke inside {} fallback {}",
+        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, contexts proven {}) units {} lanes helped {} task errors {} window errors {} woke {} woke inside {} fallback {}",
         CALLS.load(Relaxed), WINDOWS.load(Relaxed), WAITED.load(Relaxed), WAITED_US.load(Relaxed),
         NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed), INCONCLUSIVE.load(Relaxed), PROVEN.lock().unwrap_or_else(|e| e.into_inner()).len(),
-        UNITS.load(Relaxed), HELPED.load(Relaxed), TASK_ERRORS.load(Relaxed), WOKE.load(Relaxed),
+        UNITS.load(Relaxed), HELPED.load(Relaxed), TASK_ERRORS.load(Relaxed), WINDOW_ERRORS.load(Relaxed), WOKE.load(Relaxed),
         WOKE_INSIDE.load(Relaxed), FALLBACK.load(Relaxed)
     );
 }
@@ -302,13 +312,19 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     drop(window);
     if let Err(reason) = result {
         // the published state is the original parallel branch's, but not
-        // proven equal: stop publishing
-        if !FALLBACK.swap(true, Relaxed) {
-            eprintln!("parallel-shadow publish: {reason}; publication OFF");
+        // the proven shape: with guard proofs on, stop publishing; without
+        // them (the default) count it and go on
+        if WINDOW_ERRORS.fetch_add(1, Relaxed) < 8 {
+            eprintln!("parallel-shadow publish: window error: {reason}");
+        }
+        if checking() && !FALLBACK.swap(true, Relaxed) {
+            eprintln!("parallel-shadow publish: publication OFF");
         }
     }
     true
 }
+
+static WINDOW_ERRORS: AtomicU64 = AtomicU64::new(0);
 
 /// One lane of a private batch: its recording context and its jobs, run in
 /// order with DBD8D0's callback registers and return addresses
@@ -406,8 +422,20 @@ pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, stora
     let initial_roots = m.u32(context + 0x48);
     let initial_lanes: Vec<u32> = (0..2).map(|lane| m.u32(lane_base + lane * LANE_BYTES + 0x74)).collect();
     WINDOW_SCHEDULER.with(|w| w.set(private_scheduler));
-    original(m, cpu);
+    // a panic in the traversal must not leave the redirect behind (the
+    // window itself is released by the caller's drop while unwinding)
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| original(m, cpu)));
     WINDOW_SCHEDULER.with(|w| w.set(0));
+    if let Err(payload) = ran {
+        m.set_u32(SCHEDULER_GLOBAL, scheduler);
+        m.set_u8(NESTING, nesting[0]);
+        m.set_u8(NESTING_OTHER, nesting[1]);
+        if use_secondary {
+            m.set_u32(context + 0x54, 0);
+        }
+        cpu.ecx = manager;
+        std::panic::resume_unwind(payload);
+    }
     let balanced = [m.u8(NESTING), m.u8(NESTING_OTHER)] == [0, 0] && m.u32(SCHEDULER_GLOBAL) == private_scheduler;
     m.set_u32(SCHEDULER_GLOBAL, scheduler);
     m.set_u8(NESTING, nesting[0]);
@@ -510,4 +538,48 @@ pub(super) fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) {
         m.set_u32(scheduler + offset, 0);
     }
     cpu.esp = cpu.esp.wrapping_add(8);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::{GuestMemory, READ, WRITE};
+
+    /// L172 P3: a panic inside the traversal restores the globals, and the
+    /// window the caller holds is released while unwinding (the gated threads
+    /// of the outer batch must never stay held).
+    #[test]
+    fn a_panic_in_the_traversal_restores_the_redirect_and_releases_the_window() {
+        let mut m = GuestMemory::new();
+        for (base, size) in [(0x018d_0000u32, 0x1000u32), (0x0200_0000, 0x1c150), (0x0300_0000, 0xd40 + 8 * LANE_BYTES), (0x0600_0000, 0x1c150),
+                             (0x0700_0000, 0xd40 + 8 * LANE_BYTES), (0x0400_0000, 0x1000), (0x0500_0000, 0x1000)] {
+            m.map(base, (size + 0xfff) & !0xfff, READ | WRITE).unwrap();
+        }
+        let (scheduler, manager, context, stack) = (0x0200_0000u32, 0x0300_0000u32, 0x0400_0000u32, 0x0500_0800u32);
+        m.set_u32(SCHEDULER_GLOBAL, scheduler);
+        m.set_u8(NESTING, 3);
+        m.set_u8(NESTING_OTHER, 5);
+        m.set_u32(context + 0x54, 0);
+        m.set_u32(stack + 4, context);
+        let storage = Storage { scheduler: 0x0600_0000, manager: 0x0700_0000, secondary: (0x0500_0000, 0x100), prefilled: false };
+        let mut cpu = Cpu { esp: stack, ecx: manager, ..Cpu::default() };
+        fn failing(_: &mut dyn Mem, _: &mut Cpu) {
+            panic!("traversal fails");
+        }
+        crate::threads::waits::ENABLED.store(true, Relaxed);
+        let window = crate::threads::waits::open(&[0x7777]).expect("window");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = window;
+            let _ = run_window(&mut m, &mut cpu, failing, &storage);
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(m.u32(SCHEDULER_GLOBAL), scheduler, "the scheduler global was left redirected");
+        assert_eq!((m.u8(NESTING), m.u8(NESTING_OTHER)), (3, 5), "the nesting bytes were left reset");
+        assert_eq!(m.u32(context + 0x54), 0);
+        assert_eq!(cpu.ecx, manager);
+        assert_eq!(window_scheduler(), 0);
+        // released: a new window can be opened
+        assert!(crate::threads::waits::open(&[0x7777]).is_some(), "the window was not released by the unwind");
+        crate::threads::waits::ENABLED.store(false, Relaxed);
+    }
 }
