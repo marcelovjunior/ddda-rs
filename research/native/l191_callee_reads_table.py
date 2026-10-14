@@ -27,7 +27,10 @@ SYNTHETIC = (0x2000_0000, 0x4000_0000)
 MARKERS = ((0x0120_0000, 0x0120_0020), (0x0DEA_0000, 0x0DEA_0030))  # + record_material.py VF_BOUNDS/SECOND/THIRD stubs (ret 4)
 # recorded targets whose callee is not known (no lifted body, not a recorder marker):
 # the reads are unknown, so the register check is not made. Open: see docs/tasks/L191-haiku-ports.md.
-OPEN = {0x0DEAD100: 'routine of the joints recording (L165 job_joints.json, case 480): no lifted body'}
+OPEN = {
+    0x0DEAD100: 'routine of the joints recording (L165 job_joints.json, case 480): no lifted body',
+    0x0200_0000: 'CALLBACK object of the L174/L178/draw recorders (record_l178.py): a harness callback, not game code',
+}
 LITERAL = re.compile(r'"(E:/ddda-re/notes/[^"]+\.json)"')
 NATIVE_DIR = re.compile(r'native-L\d+')
 NAMED = re.compile(r'vectors\("([A-Za-z0-9_]+\.json)"\)')

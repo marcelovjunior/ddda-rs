@@ -319,7 +319,7 @@ pub fn saved_reads(target: u32) -> &'static [usize] {
         0x012f161f => &[],
         0x012f2f20 => &[],
         0x012f3690 => &[],
-        0x02000000 => &[3, 5, 6, 7], // no lifted body: conservative
+        0x02000000 => &[], // OPEN: unknown reads, not checked (see docs)
         0x0d000000 => &[3, 5, 6, 7], // no lifted body: conservative
         0x0d000034 => &[3, 5, 6, 7], // no lifted body: conservative
         0x0d000040 => &[3, 5, 6, 7], // no lifted body: conservative

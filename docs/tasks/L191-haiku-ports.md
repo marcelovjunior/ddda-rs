@@ -120,3 +120,53 @@ a path the caller never takes); the scribble rule covers the rest.
   listener once (one slice instead of six page lookups; done in 88e3c98c, a 1.01x to 1.08x
   gain in the bench, below the gate); keep an owner/channel index maintained by the
   add/remove paths (needs those paths ported too).
+
+## Strict audit of the playtest_fast2 ports (2026-10-14)
+
+Scope: every port the playtest enables (`playtest_fast2.bat`: `DDRUNTIME_SEMANTIC`,
+`SEMANTIC_L184`, `GEOMETRY_PORT`, `SHADOW_PASS`, `SHADOW_TRAVERSAL`, `JOB_SHADOW_SAVE`,
+`JOB_HASH`, `MATERIAL`, `CULL`, `LIGHTS`) plus the default-on ABI tables (mtcore abi and
+hot, mtmath, mtframe, mtdraw abi). Ports that the playtest skips are marked.
+
+Checks at each recorded guest call: the callee's stack and ECX as before, and the
+callee-saved registers the callee reads before writing them (EBX, EBP, ESI, EDI), from its
+lifted code (`research/native/l191_callee_reads_table.py` writes
+`crates/mtcore/tests/support/callee_reads.rs`). The recorded return state is replayed,
+including ECX and EDX. The L191 harness checks the four callee-saved registers at every
+call. A blanket check of all four at every call fails on values no callee reads (lifted
+code uses EBX and ESI as scratch), so the other harnesses check the registers the callee
+reads. EAX and the full register set are checked at return.
+
+| Port (address, gate) | Harness | Checked | Result |
+|---|---|---|---|
+| 0x00885DC0 vf08 (L184; skipped) | semantic_l191 | all four at every call, ECX/EDX replayed, EAX, memory | fixed: tail call ECX (249049f9); pass |
+| 0x00886880 vf11, 0x0084C720 char vf09, 0x00886530 vf09, 0x01165B40 probe, 0x0116B670 owner (L184) | semantic_l191 | as above | pass |
+| 0x00DD42C0 dispatch_event (SEMANTIC) | semantic | callee reads, ECX/EDX replayed; paged equivalence, 3 mutations | fixed: ESI at owner call (88e3c98c); pass |
+| 0x01054700 update_joints (SEMANTIC) | semantic (recorded); semantic_c2 (stubbed callees, not recorded) | callee reads (recorded only) | OPEN: routine 0x0DEAD100 (no lifted body) in case 480, not checked |
+| 0x00E0EC50, 0x00E10FC0, 0x00FEDD60, 0x005B31A0, 0x00CD8760 (SEMANTIC) | semantic | callee reads | pass |
+| 0x00FF1920, 0x00FF14D0, 0x00FEFB90 (SEMANTIC) | semantic_draw_a | callee reads, ECX/EDX replayed | pass; 0x01200000 BEGIN/END markers read nothing |
+| 0x00EA23F0, 0x00FED190, 0x00E0F3C0, 0x01008200, 0x00FEE320, 0x00FFC350, 0x01145BF0 (SEMANTIC) | semantic_draw_c | callee reads | pass |
+| 0x00E0E5E0, 0x010655A0, 0x01066C60, 0x00FFC9F0, 0x01140180 (SEMANTIC) | semantic_draw_b | ECX and ESP only; the recording stores no callee-saved registers | not checked: needs re-recording with registers |
+| 0x010658B0 apply_pass_state (SEMANTIC) | semantic_c2 | 0x01062F20 is a stub (not recorded): its registers are not checked | pass (ABI level) |
+| 0x010A35D0 query_bounds_tree (SEMANTIC) | semantic_jobs | callee reads | pass |
+| 0x00C24640 draw_instanced_mesh (SEMANTIC) | no recorded test in this audit | none | not checked |
+| 0x00FED480 save_state (JOB_SHADOW_SAVE) | job_shadow | full registers at each call | pass |
+| 0x00E0E5E0 dependency_hash (JOB_HASH) | job_hash | final registers | pass |
+| 0x00DB63E0 traverse (SHADOW_TRAVERSAL) | shadow_traversal | full registers at each call | pass |
+| 0x00EFD240 setup (SHADOW_PASS) | shadow_pass | full registers at each call | pass |
+| S1 to S10 groups: 0x005D1AF0 ... 0x00FE4780 (L184) | semantic_s1 to s10 | callee reads, ECX/EDX replayed | pass |
+| 0x00860AC0 constraint_edit_apply, 0x00865990 euler_twist (L184; skipped) | semantic_s5 | callee reads | fails at HEAD too; ignored with reason |
+| 0x01066B10 bind_parameter, 0x01067790 colour, 0x01062F20 update_material (MATERIAL) | mtdraw material | callee reads, ECX/ESP | pass |
+| 0x010655A0 apply (mtdraw copy, unregistered) | mtdraw material | callee reads | fixed: EDI = this before the finalizer call (76f007b6); pass |
+| 0x00FF0780, 0x00FF0AD0, 0x00FF0D20, 0x00FF0E60 cull (CULL) | mtdraw material | callee reads | pass |
+| 0x0049B1A0 scene_lights (LIGHTS) | mtdraw material | callee reads; 0x0DEA0000 recorder stubs read nothing | pass |
+| 0x00FE9580 build_geometry (GEOMETRY_PORT) | ddruntime procedural_geometry | all GPRs, XMM, flags, stack at each call; full callee state replayed | pass (original vectors present) |
+| default-on ABI tables (mtcore abi, hot; mtmath; mtframe; mtdraw abi) | differential (each crate) | all eight registers at each call and at return, memory | pass |
+
+Bugs found and fixed by this audit: 0x00885DC0 tail-call ECX (249049f9), 0x00DD42C0 ESI on
+an empty listener list (88e3c98c), 0x00D7CF70 registers at the tetrahedron call
+(5d626f8a), and the unregistered 0x010655A0 copy's EDI (76f007b6).
+
+Open: 0x01054700 case 480 (routine 0x0DEAD100), 0x02000000 as the recorders' CALLBACK
+object (not game code, not checked), and the EFLAGS at calls outside the L191 ports
+(only the geometry test compares flags at calls; the L191 flag audit above covers its ports).
