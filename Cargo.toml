@@ -696,17 +696,6 @@ debug = "line-tables-only"
 [profile.play.package.ddnative-host]
 debug = "line-tables-only"
 
-# BEGIN generated hot shards
-[profile.dev.package.ddlift-hot-00]
-opt-level = 0
-debug = 1
-[profile.release.package.ddlift-hot-00]
-opt-level = 1
-[profile.play.package.ddlift-hot-00]
-opt-level = 1
-incremental = false
-# END generated hot shards
-
 # L190 `play-hot`: `play-fast` with the busiest opt-level-0 shards built at opt-level 1 as well.
 # An opt-level-1 shard runs its functions about 2.5x faster than opt-level 0 (HOT_PATHS.md
 # section 10); on five saved gameplay captures these eight held 19.4% of the busy samples that
@@ -747,3 +736,14 @@ incremental = false
 [profile.play-hot.package.ddlift-29]
 opt-level = 1
 incremental = false
+
+# BEGIN generated hot shards
+[profile.dev.package.ddlift-hot-00]
+opt-level = 0
+debug = 1
+[profile.release.package.ddlift-hot-00]
+opt-level = 1
+[profile.play.package.ddlift-hot-00]
+opt-level = 1
+incremental = false
+# END generated hot shards

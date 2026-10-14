@@ -92,6 +92,8 @@ impl Session {
     /// of the session stack.
     pub fn call(&mut self, target: u32, ecx: u32, args: &[u32]) -> Outcome {
         let mut cpu = Cpu { esp: STACK_TOP - 0x100, ecx, fs_base: crate::seh::TEB_BASE, ..Cpu::default() };
+        #[cfg(feature = "stack-window")]
+        give_stack_window(&mut self.mem, &mut cpu, STACK_TOP, STACK_SIZE);
         for &a in args.iter().rev() {
             cpu.esp -= 4;
             self.mem.set_u32(cpu.esp, a);
@@ -320,5 +322,36 @@ impl Session {
             }
         }
         out
+    }
+}
+
+/// The size of the stack window (feature `stack-window`): the top of the stack, where frames live.
+#[cfg(feature = "stack-window")]
+const STACK_WINDOW: u32 = 256 << 10;
+
+/// Give `cpu` the stack window over the top of its guest stack (L190): one contiguous host block
+/// behind the lazily mapped stack pages, installed once per stack (the window of a stack that
+/// already has one, or whose pages were touched, is left to the page table). Set
+/// `DDRUNTIME_STACK_WINDOW=0` to run without it.
+#[cfg(feature = "stack-window")]
+pub(crate) fn give_stack_window(mem: &mut GuestMemory, cpu: &mut Cpu, top: u32, size: u32) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static WINDOWS: Mutex<Option<HashMap<u32, (u32, u32, usize)>>> = Mutex::new(None);
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !ENABLED.get_or_init(|| !std::env::var_os("DDRUNTIME_STACK_WINDOW").is_some_and(|v| v == "0")) {
+        return;
+    }
+    let len = STACK_WINDOW.min(size);
+    let lo = top - len;
+    let mut windows = WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    let entry = windows.get_or_insert_with(HashMap::new).get(&top).copied().or_else(|| {
+        let host = mem.install_window(lo, len)?;
+        windows.as_mut().unwrap().insert(top, (lo, len, host as usize));
+        Some((lo, len, host as usize))
+    });
+    if let Some((lo, len, host)) = entry {
+        // SAFETY: the block is leaked and is the memory behind those guest pages
+        unsafe { cpu.set_stack_window(lo, len, host as *mut u8) };
     }
 }

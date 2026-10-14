@@ -101,3 +101,52 @@ pub fn store64(x: [u32; 4], m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: 
 pub fn scheduler_global(m: &dyn Mem, pt: Option<NonNull<PageTable>>) -> u32 {
     crate::sched::scheduler_global(m, pt)
 }
+
+/// A dword load from the guest stack (L190): with feature `stack-window`, inside the CPU's stack
+/// window one host load, else (and without the feature) the page-table access. For addresses
+/// formed from ESP or EBP.
+#[inline(always)]
+pub fn stack_u32(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &Cpu, addr: u32) -> u32 {
+    #[cfg(feature = "stack-window")]
+    {
+        let off = addr.wrapping_sub(cpu.stack_lo);
+        if off < cpu.stack_span && addr & 3 == 0 {
+            // SAFETY: the window is a live contiguous host block (Cpu::set_stack_window), the
+            // dword aligned inside it; same bytes the page table serves
+            return u32::from_le(unsafe { (*((cpu.stack_host + off as usize) as *const std::sync::atomic::AtomicU32)).load(std::sync::atomic::Ordering::Relaxed) });
+        }
+    }
+    let _ = cpu;
+    m.fast_u32(pt, addr)
+}
+
+/// A dword store to the guest stack, as [`stack_u32`].
+#[inline(always)]
+pub fn stack_set_u32(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &Cpu, addr: u32, v: u32) {
+    #[cfg(feature = "stack-window")]
+    {
+        let off = addr.wrapping_sub(cpu.stack_lo);
+        if off < cpu.stack_span && addr & 3 == 0 {
+            // SAFETY: as stack_u32
+            return unsafe { (*((cpu.stack_host + off as usize) as *const std::sync::atomic::AtomicU32)).store(v.to_le(), std::sync::atomic::Ordering::Relaxed) };
+        }
+    }
+    let _ = cpu;
+    m.fast_set_u32(pt, addr, v)
+}
+
+/// `push v` with the stack window.
+#[inline(always)]
+pub fn push_s(v: u32, m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) {
+    cpu.esp = cpu.esp.wrapping_sub(4);
+    let esp = cpu.esp;
+    stack_set_u32(m, pt, cpu, esp, v);
+}
+
+/// `pop` with the stack window.
+#[inline(always)]
+pub fn pop_s(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) -> u32 {
+    let v = stack_u32(m, pt, cpu, cpu.esp);
+    cpu.esp = cpu.esp.wrapping_add(4);
+    v
+}
