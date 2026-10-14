@@ -1116,9 +1116,11 @@
   light serial tests 133 pass. All 29,198 IR roundtrips are exact.
 - Preliminary 1,000-shader Vulkan sample: 4.31 -> 1.05 ms including translation
   and cache I/O. Filesystem residency matters; whole-corpus paired timing pending.
-- Initial GPU pass: 29 executed cases pass before yielding to L90's gate.
-- Next: remaining targets, warm GPU repeat and full paired timing after GPU
-  release. Details: `docs/tasks/L83-naga-direct.md`.
+- Initial GPU pass: 32 executed cases pass. Production commit `46583548`;
+  head ran combined L90+L83 (4.9 vs 4.7 FPS; not isolated L83 evidence).
+- Next: target-format shards, warm GPU repeat and full paired timing after
+  head's CPU-quiet window ends. No L83 jobs running. Details:
+  `docs/tasks/L83-naga-direct.md`.
 
 ### L66 hot/cold build (2026-10-12)
 
