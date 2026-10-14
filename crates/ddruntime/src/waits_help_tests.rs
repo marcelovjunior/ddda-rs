@@ -26,14 +26,20 @@ fn wait_for_blocked(n: usize) {
     std::thread::sleep(Duration::from_millis(20));
 }
 
+/// The window, the task board and the enable flag are process-wide: these
+/// tests take turns.
+static WINDOW_TESTS: Mutex<()> = Mutex::new(());
+
 /// L172 P1: the owner's tasks run on the threads parked in guarded waits
 /// (own thread ids), with an empty x87 stack and the default MXCSR left
 /// behind; the parked threads stay held until the window closes; a task
 /// that panics is an Err and the others still run.
 #[test]
 fn helpers_run_tasks_on_parked_threads_behind_the_gate() {
+    let _turn = WINDOW_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     ddnative_host::install();
-    let (rt, m) = sync_runtime();
+    let (rt, mut m) = sync_runtime();
+    m.map(0x02F0_0000, 0x20_0000, READ | WRITE).unwrap();
     waits::ENABLED.store(true, Ordering::SeqCst);
     let r = sync_registry(true);
     let workers = 4usize;
@@ -51,7 +57,7 @@ fn helpers_run_tasks_on_parked_threads_behind_the_gate() {
 
     // the owner: the test thread, as guest thread 0x4000
     runtime::local(|l| l.guest_tid.set(0x4000));
-    assert!(waits::open(&events));
+    let window = waits::open(&events).expect("window");
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut tasks: Vec<waits::Task> = Vec::new();
     for i in 0..12u32 {
@@ -65,6 +71,15 @@ fn helpers_run_tasks_on_parked_threads_behind_the_gate() {
             mem.set_u32(DATA + 0x300 + 4 * i, current_tid());
             ddnative_base::x86::ldmxcsr(0x1FA0); // and a changed MXCSR
             seen.lock().unwrap().push(current_tid());
+            if i < 3 {
+                // the first tasks wait for a second thread to start one: only a
+                // parked helper can be that thread
+                let t = Instant::now();
+                while seen.lock().unwrap().iter().collect::<std::collections::HashSet<_>>().len() < 2 {
+                    assert!(t.elapsed() < Duration::from_secs(5), "no helper joined in");
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+            }
             std::thread::sleep(Duration::from_millis(3));
             if i == 7 {
                 panic!("task seven fails");
@@ -74,8 +89,7 @@ fn helpers_run_tasks_on_parked_threads_behind_the_gate() {
     }
     let mut owner_mem = m.share();
     let owner_cpu = Cpu { esp: 0x0310_0000 - 0x100, ..Cpu::default() };
-    let _ = owner_mem.map(0x02F0_0000, 0x20_0000, READ | WRITE);
-    let results = waits::help(&mut owner_mem, &owner_cpu, tasks);
+    let results = window.help(&mut owner_mem, &owner_cpu, tasks);
     assert_eq!(results.len(), 12);
     for (i, r) in results.iter().enumerate() {
         if i == 7 {
@@ -104,10 +118,10 @@ fn helpers_run_tasks_on_parked_threads_behind_the_gate() {
         let ran = ran.clone();
         Box::new(move |_: &mut dyn Mem, _: &mut Cpu| { std::thread::sleep(Duration::from_millis(2)); ran.fetch_add(1, Ordering::SeqCst); Ok(()) }) as waits::Task
     }).collect();
-    assert!(waits::help(&mut owner_mem, &owner_cpu, again).iter().all(|r| r.is_ok()));
+    assert!(window.help(&mut owner_mem, &owner_cpu, again).iter().all(|r| r.is_ok()));
     assert_eq!(ran.load(Ordering::SeqCst), 8);
     assert_eq!(returned.load(Ordering::SeqCst), 0);
-    waits::close();
+    drop(window);
     for t in threads {
         t.join().unwrap();
     }
@@ -119,18 +133,19 @@ fn helpers_run_tasks_on_parked_threads_behind_the_gate() {
 /// in order of the results.
 #[test]
 fn the_owner_alone_completes_the_tasks() {
+    let _turn = WINDOW_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     ddnative_host::install();
     let (_rt, mut m) = sync_runtime();
     waits::ENABLED.store(true, Ordering::SeqCst);
     runtime::local(|l| l.guest_tid.set(0x4000));
-    assert!(waits::open(&[0x7777]));
+    let window = waits::open(&[0x7777]).expect("window");
     let tasks: Vec<waits::Task> = (0..5u32).map(|i| Box::new(move |mem: &mut dyn Mem, _: &mut Cpu| {
         mem.set_u32(DATA + 0x340 + 4 * i, i + 1);
         Ok(())
     }) as waits::Task).collect();
     let cpu = Cpu { esp: DATA + 0x800, ..Cpu::default() };
-    let results = waits::help(&mut m, &cpu, tasks);
-    waits::close();
+    let results = window.help(&mut m, &cpu, tasks);
+    drop(window);
     assert!(results.iter().all(|r| r.is_ok()));
     for i in 0..5u32 {
         assert_eq!(m.u32(DATA + 0x340 + 4 * i), i + 1);

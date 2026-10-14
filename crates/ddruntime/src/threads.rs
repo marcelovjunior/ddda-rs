@@ -1566,252 +1566,24 @@ mod address_wait {
     }
 }
 
-/// L172 (claude-9): which guest threads are blocked in a wait, and on which
-/// handles, for the parallel shadow window (crate::shadow_replay's publish
-/// mode), and the window's gate: while a window is open, a thread whose
-/// wait concerns one of the window's handles does not return to guest code
-/// until the window closes. Inactive (one relaxed load per wait) unless
-/// publish mode enabled it.
-pub(crate) mod waits {
-    use super::*;
-    use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::{Relaxed, SeqCst}};
-    use std::sync::{Condvar, Mutex};
+pub(crate) use crate::waits;
 
-    pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
-    static BLOCKED: Mutex<Vec<(u32, Box<[u32]>)>> = Mutex::new(Vec::new());
-    /// the window: its owner (0: none) and the handles it guards
-    static OWNER: AtomicU32 = AtomicU32::new(0);
-    static GUARDED: Mutex<Vec<u32>> = Mutex::new(Vec::new());
-    static CLOSED: Condvar = Condvar::new();
-
-    /// A unit of work for a thread held in a guarded wait (or the window's
-    /// owner): it runs with that thread's own memory view and a CPU prepared
-    /// for it (its TEB, a stack below the thread's own, an empty x87 stack).
-    pub(crate) type Task = Box<dyn FnOnce(&mut dyn Mem, &mut Cpu) -> Result<(), String> + Send>;
-
-    /// Tasks published by [`help`] and their results.
-    struct Board {
-        queue: VecDeque<(usize, Task)>,
-        results: Vec<Option<Result<(), String>>>,
-        outstanding: usize,
-        /// a [`help`] call is running (one at a time)
-        active: bool,
+/// Milliseconds left until `deadline` (INFINITE without one; 0 once passed),
+/// for a wait that resumes after running tasks.
+fn remaining_ms(deadline: Option<Instant>) -> u32 {
+    match deadline {
+        None => INFINITE,
+        Some(d) => d.saturating_duration_since(Instant::now()).as_nanos().div_ceil(1_000_000).min((INFINITE - 1) as u128) as u32,
     }
-    static BOARD: Mutex<Board> = Mutex::new(Board { queue: VecDeque::new(), results: Vec::new(), outstanding: 0, active: false });
-    static DONE: Condvar = Condvar::new();
-    /// Tasks published and not yet taken: the cheap test of the wait loops.
-    static PENDING: AtomicU32 = AtomicU32::new(0);
+}
 
-    /// What a wait returns, internally, when it stopped to let its thread run
-    /// tasks (never a Win32 wait result).
-    pub(crate) const WAIT_HELP: u32 = 0x7FFF_0001;
-
-    /// How far below its own stack pointer a thread's task starts its stack.
-    const STACK_MARGIN: u32 = 0x400;
-
-    /// Registers the current thread as blocked on `handles` until dropped.
-    /// The services call [`Blocked::pass`] before they return to the guest.
-    pub(crate) struct Blocked(Option<u32>);
-
-    pub(crate) fn blocked(handles: &[u32]) -> Blocked {
-        if !ENABLED.load(Relaxed) {
-            return Blocked(None);
-        }
-        let tid = super::current_tid();
-        BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).push((tid, handles.into()));
-        Blocked(Some(tid))
-    }
-
-    /// Whether a window is open that guards one of `handles` (and `tid` does
-    /// not own it): a wait on them must not return to the guest yet.
-    fn gated(tid: u32, handles: &[u32]) -> bool {
-        let owner = OWNER.load(SeqCst);
-        if owner == 0 || owner == tid {
-            return false;
-        }
-        let guarded = GUARDED.lock().unwrap_or_else(|e| e.into_inner());
-        handles.iter().any(|h| guarded.contains(h))
-    }
-
-    impl Blocked {
-        /// The gate: while a window guarding this wait's handles is open the
-        /// thread stays here (registered as blocked) instead of returning
-        /// to guest code, and runs the tasks the window's owner publishes.
-        pub(crate) fn pass(&self, m: &mut dyn Mem, cpu: &Cpu) {
-            let Some(tid) = self.0 else { return };
-            loop {
-                let list = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
-                let mine = list.iter().find(|(t, _)| *t == tid).map(|e| e.1.clone());
-                let Some(handles) = mine else { return };
-                if !gated(tid, &handles) {
-                    return;
-                }
-                if PENDING.load(SeqCst) > 0 {
-                    drop(list);
-                    super::without_lock(|| run_pending(m, cpu));
-                    continue;
-                }
-                // woken by close() and by a new batch of tasks
-                drop(CLOSED.wait(list).unwrap_or_else(|e| e.into_inner()));
-            }
-        }
-    }
-
-    impl Drop for Blocked {
-        fn drop(&mut self) {
-            let Some(tid) = self.0 else { return };
-            let mut list = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(i) = list.iter().position(|(t, _)| *t == tid) {
-                list.swap_remove(i);
-            }
-        }
-    }
-
-    /// The handles each other thread is blocked on now.
-    pub(crate) fn others() -> Vec<(u32, Box<[u32]>)> {
-        let me = super::current_tid();
-        BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).iter().filter(|(t, _)| *t != me).cloned().collect()
-    }
-
-    /// Open the window guarding `handles` (false: another window is open).
-    pub(crate) fn open(handles: &[u32]) -> bool {
-        let me = super::current_tid();
-        *GUARDED.lock().unwrap_or_else(|e| e.into_inner()) = handles.to_vec();
-        OWNER.compare_exchange(0, me, SeqCst, SeqCst).is_ok()
-    }
-
-    /// Close the window and let the gated threads continue.
-    pub(crate) fn close() {
-        let _list = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
-        OWNER.store(0, SeqCst);
-        CLOSED.notify_all();
-    }
-
-    /// Whether a wait on `handles` should stop to run tasks: some are
-    /// published and the wait is one the open window guards.
-    #[inline]
-    pub(crate) fn help_due(handles: &[u32]) -> bool {
-        PENDING.load(SeqCst) > 0 && help_due_slow(handles)
-    }
-
-    #[cold]
-    fn help_due_slow(handles: &[u32]) -> bool {
-        OWNER.load(SeqCst) != 0 && {
-            let guarded = GUARDED.lock().unwrap_or_else(|e| e.into_inner());
-            handles.iter().any(|h| guarded.contains(h))
-        }
-    }
-
-    /// The CPU a task starts with: the service's registers and TEB, an empty
-    /// x87 stack, and a stack of its own below the thread's stack pointer.
-    fn task_cpu(service: &Cpu) -> Cpu {
-        let mut cpu = service.clone();
-        cpu.st = Default::default();
-        cpu.esp = service.esp.wrapping_sub(STACK_MARGIN) & !0xf;
-        cpu
-    }
-
-    fn take() -> Option<(usize, Task)> {
-        let mut b = BOARD.lock().unwrap_or_else(|e| e.into_inner());
-        let t = b.queue.pop_front();
-        if t.is_some() {
-            PENDING.fetch_sub(1, SeqCst);
-        }
-        t
-    }
-
-    fn complete(index: usize, result: Result<(), String>) {
-        let mut b = BOARD.lock().unwrap_or_else(|e| e.into_inner());
-        b.results[index] = Some(result);
-        b.outstanding -= 1;
-        if b.outstanding == 0 {
-            DONE.notify_all();
-        }
-    }
-
-    /// Run published tasks, one at a time, until none is left to take, on
-    /// this thread with its own `m` and a CPU derived from `service` (the
-    /// CPU of the service it is in, or the owner's).
-    pub(crate) fn run_pending(m: &mut dyn Mem, service: &Cpu) {
-        while let Some((index, task)) = take() {
-            let mut cpu = task_cpu(service);
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| task(m, &mut cpu)));
-            // x87 and MXCSR as the service found them: the task's x87 state
-            // goes (the thread's own was parked when the service began) and
-            // the host default MXCSR is back whatever the task left
-            if cpu.st.home != 0 {
-                (ddnative_base::hooks::get().x87_release)(&mut cpu.st);
-            }
-            ddnative_base::x87::park();
-            if ddnative_base::x86::stmxcsr() != ddnative_base::x86::MXCSR_DEFAULT {
-                ddnative_base::x86::ldmxcsr(ddnative_base::x86::MXCSR_DEFAULT);
-            }
-            complete(index, match result {
-                Ok(r) => r,
-                Err(payload) => Err(payload.downcast_ref::<&str>().map(|s| s.to_string())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "task panicked".into())),
-            });
-        }
-    }
-
-    /// Wake every thread in a wait the open window guards, so that it sees
-    /// the tasks (and the gated ones: the gate's condition variable).
-    fn poke_guarded() {
-        let guarded = GUARDED.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let waiters: Vec<Box<[u32]>> = BLOCKED.lock().unwrap_or_else(|e| e.into_inner()).iter()
-            .filter(|(_, hs)| hs.iter().any(|h| guarded.contains(h))).map(|e| e.1.clone()).collect();
-        for handles in waiters {
-            for &h in handles.iter() {
-                if let Some((o, e)) = event_of(h) {
-                    e.poke(o);
-                } else if let Some((o, _)) = semaphore_of(h) {
-                    signal_key(key::object(o));
-                }
-            }
-        }
-        let _list = BLOCKED.lock().unwrap_or_else(|e| e.into_inner());
-        CLOSED.notify_all();
-    }
-
-    /// Run `tasks` on the threads held in the open window's guarded waits and
-    /// on the calling thread (the window's owner, with its `m` and `cpu`:
-    /// `cpu.mxcsr` is the guest MXCSR the tasks run under, their stacks start
-    /// below `cpu.esp`). Returns when every task has finished, with its
-    /// result in task order; a task that panics is an `Err`. With no helper
-    /// the owner runs them all.
-    pub(crate) fn help(m: &mut dyn Mem, cpu: &Cpu, tasks: Vec<Task>) -> Vec<Result<(), String>> {
-        let n = tasks.len();
-        if n == 0 {
-            return Vec::new();
-        }
-        {
-            let mut b = BOARD.lock().unwrap_or_else(|e| e.into_inner());
-            assert!(!b.active, "waits::help is already running");
-            b.active = true;
-            b.queue = tasks.into_iter().enumerate().collect();
-            b.results = (0..n).map(|_| None).collect();
-            b.outstanding = n;
-            PENDING.store(n as u32, SeqCst);
-        }
-        poke_guarded();
-        run_pending(m, cpu);
-        let mut b = BOARD.lock().unwrap_or_else(|e| e.into_inner());
-        while b.outstanding > 0 {
-            b = DONE.wait(b).unwrap_or_else(|e| e.into_inner());
-        }
-        b.active = false;
-        std::mem::take(&mut b.results).into_iter().map(|r| r.expect("a finished task has a result")).collect()
-    }
-
-    /// Milliseconds left until `deadline` (INFINITE without one; 0 once
-    /// passed), for a wait that resumes after running tasks.
-    pub(crate) fn remaining(deadline: Option<Instant>) -> u32 {
-        match deadline {
-            None => INFINITE,
-            Some(d) => d.saturating_duration_since(Instant::now()).as_nanos().div_ceil(1_000_000).min((INFINITE - 1) as u128) as u32,
-        }
+/// Wake the waiters of `handle` without changing it (a published task,
+/// L172): events and semaphores recheck their conditions.
+pub(crate) fn poke_handle(handle: u32) {
+    if let Some((o, e)) = event_of(handle) {
+        e.poke(o);
+    } else if let Some((o, _)) = semaphore_of(handle) {
+        signal_key(key::object(o));
     }
 }
 
@@ -1836,7 +1608,7 @@ pub fn wait_for_single_object(m: &mut dyn Mem, cpu: &mut Cpu) {
         }
         // an open window published tasks: run them here, then wait on
         without_lock(|| waits::run_pending(m, cpu));
-        left = waits::remaining(deadline);
+        left = remaining_ms(deadline);
     };
     blocked.pass(m, cpu);
     ret(m, cpu, 8);
@@ -1861,7 +1633,7 @@ pub fn wait_for_multiple_objects(m: &mut dyn Mem, cpu: &mut Cpu) {
             }
             // (this service holds the guest lock: tasks run without it)
             without_lock(|| waits::run_pending(m, cpu));
-            left = waits::remaining(deadline);
+            left = remaining_ms(deadline);
         };
         blocked.pass(m, cpu);
     }
