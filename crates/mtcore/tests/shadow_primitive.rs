@@ -375,3 +375,73 @@ fn sprimitive_sort_matches_original() {
     );
     assert!(n >= 1000, "{n} cases");
 }
+
+// verifies the state-stack helper `pool_push_state` (ABI level; the owner helper behind it runs as real code)
+#[test]
+fn pool_push_state_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_options(
+        "E:/ddda-re/notes/native-L172p2b/state_push.json",
+        mtcore::shadow_primitive::pool_push_state,
+        true,
+        &[],
+        false,
+    );
+    assert!(n >= 1000, "{n} cases");
+}
+
+// verifies the state-stack helper `pool_pop_state` (ABI level; the owner helper behind it runs as real code)
+#[test]
+fn pool_pop_state_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_options(
+        "E:/ddda-re/notes/native-L172p2b/state_pop.json",
+        mtcore::shadow_primitive::pool_pop_state,
+        true,
+        &[],
+        false,
+    );
+    assert!(n >= 1000, "{n} cases");
+}
+
+// verifies the state-stack helper `owner_push_snapshot` (ABI level; the owner helper behind it runs as real code)
+#[test]
+fn owner_push_snapshot_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_options(
+        "E:/ddda-re/notes/native-L172p2b/state_owner_push.json",
+        mtcore::shadow_primitive::owner_push_snapshot,
+        true,
+        &[],
+        false,
+    );
+    assert!(n >= 1000, "{n} cases");
+}
+
+// verifies the state-stack helper `owner_pop_snapshot` (ABI level; the owner helper behind it runs as real code)
+#[test]
+fn owner_pop_snapshot_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_options(
+        "E:/ddda-re/notes/native-L172p2b/state_owner_pop.json",
+        mtcore::shadow_primitive::owner_pop_snapshot,
+        true,
+        &[],
+        false,
+    );
+    assert!(n >= 1000, "{n} cases");
+}
+
+// verifies the state-stack helper `draw_job_thunk` (ABI level; the owner helper behind it runs as real code)
+#[test]
+fn draw_job_thunk_matches_original() {
+    ddnative_host::install();
+    let n = abi_cases_options(
+        "E:/ddda-re/notes/native-L172p2b/state_thunk.json",
+        mtcore::shadow_primitive::draw_job_thunk,
+        true,
+        &[],
+        false,
+    );
+    assert!(n >= 1000, "{n} cases");
+}
