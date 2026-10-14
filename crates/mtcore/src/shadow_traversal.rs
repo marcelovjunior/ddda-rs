@@ -45,12 +45,16 @@ pub fn traverse(m: &mut dyn Mem, c: &mut Cpu) {
     call(m, &p, c, 0x1147970, 0xdb63f4);
     c.edi = p.u32(m, c.esp.wrapping_add(0x30));
     c.ecx = p.u16(m, c.edi.wrapping_add(0x16a)) as u32;
-    c.eax = p.u32(m, 0x18d0b28);
+    c.eax = ddnative_base::sched::scheduler_global_pages(m, &p);
     c.ebx = p.u32(m, c.eax.wrapping_add(0x98));
     p.set_u32(m, c.esp.wrapping_add(0x18), c.ecx);
     c.ecx = (c.ecx & !255) | p.u8(m, c.edi.wrapping_add(0x168)) as u32;
     c.eax = 1u32 << (c.ecx & 31);
-    c.fl.alu_sub(p.u8(m, 0x18d0bb0) as u32, 0, 8);
+    // L172: a thread running the parallel shadow's private top-level
+    // traversal sees the batch flag clear (it stays set for the other
+    // threads, whose outer batch is in flight)
+    let nesting = if ddnative_base::sched::top_level() { 0 } else { p.u8(m, 0x18d0bb0) };
+    c.fl.alu_sub(nesting as u32, 0, 8);
     p.set_u32(m, c.esp.wrapping_add(0x24), c.ebx);
     p.set_u32(m, c.esp.wrapping_add(0x1c), c.eax);
     let nested = !c.fl.zf();
@@ -178,27 +182,27 @@ fn queued(m: &mut dyn Mem, p: &Pages, c: &mut Cpu) {
     call(m, p, c, 0x107ff00, 0xdb6456);
     // Original context-lane addresses, embedded LEA displacements at
     // DB6456..DB64D8. Preserve the distinct scratch register results.
-    c.edx = p.u32(m, 0x18d0b28);
+    c.edx = ddnative_base::sched::scheduler_global_pages(m, p);
     p.set_u32(m, c.edx.wrapping_add(0x1bdd0), c.esi);
-    c.ecx = p.u32(m, 0x18d0b28);
+    c.ecx = ddnative_base::sched::scheduler_global_pages(m, p);
     c.eax = c.ebp.wrapping_add(0x349c4);
     p.set_u32(m, c.ecx.wrapping_add(0x1bdf0), c.eax);
-    c.eax = p.u32(m, 0x18d0b28);
+    c.eax = ddnative_base::sched::scheduler_global_pages(m, p);
     c.edx = c.ebp.wrapping_add(0x68648);
     p.set_u32(m, c.eax.wrapping_add(0x1be10), c.edx);
-    c.edx = p.u32(m, 0x18d0b28);
+    c.edx = ddnative_base::sched::scheduler_global_pages(m, p);
     c.ecx = c.ebp.wrapping_add(0x9c2cc);
     p.set_u32(m, c.edx.wrapping_add(0x1be30), c.ecx);
-    c.ecx = p.u32(m, 0x18d0b28);
+    c.ecx = ddnative_base::sched::scheduler_global_pages(m, p);
     c.eax = c.ebp.wrapping_add(0xcff50);
     p.set_u32(m, c.ecx.wrapping_add(0x1be50), c.eax);
-    c.eax = p.u32(m, 0x18d0b28);
+    c.eax = ddnative_base::sched::scheduler_global_pages(m, p);
     c.edx = c.ebp.wrapping_add(0x103bd4);
     p.set_u32(m, c.eax.wrapping_add(0x1be70), c.edx);
-    c.edx = p.u32(m, 0x18d0b28);
+    c.edx = ddnative_base::sched::scheduler_global_pages(m, p);
     c.ecx = c.ebp.wrapping_add(0x137858);
     p.set_u32(m, c.edx.wrapping_add(0x1be90), c.ecx);
-    c.ecx = p.u32(m, 0x18d0b28);
+    c.ecx = ddnative_base::sched::scheduler_global_pages(m, p);
     c.eax = c.ebp.wrapping_add(0x16b4dc);
     p.set_u32(m, c.ecx.wrapping_add(0x1beb0), c.eax);
     c.ecx = p.u32(m, 0x18d09e0);
@@ -223,7 +227,7 @@ fn queued(m: &mut dyn Mem, p: &Pages, c: &mut Cpu) {
                 if c.eax != 0 {
                     loop {
                         if queued_eligible(m, p, c) {
-                            c.ecx = p.u32(m, 0x18d0b28);
+                            c.ecx = ddnative_base::sched::scheduler_global_pages(m, p);
                             c.edx = p.u32(m, c.ecx.wrapping_add(0x8c));
                             c.esi = c.ecx.wrapping_add(c.edx.wrapping_mul(8)).wrapping_add(0xc0);
                             c.edx = c.edx.wrapping_add(1);
@@ -254,7 +258,7 @@ fn queued(m: &mut dyn Mem, p: &Pages, c: &mut Cpu) {
         }
         c.ebx = p.u32(m, c.esp.wrapping_add(0x24));
     }
-    c.ecx = p.u32(m, 0x18d0b28);
+    c.ecx = ddnative_base::sched::scheduler_global_pages(m, p);
     push(m, p, c, 1);
     call(m, p, c, 0xdbe560, 0xdb6606);
     push(m, p, c, c.ebx);

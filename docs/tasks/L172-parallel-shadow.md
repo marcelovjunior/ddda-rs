@@ -820,3 +820,32 @@ Publication is now per recording context (the traversal's argument): a
 context publishes only after a proof passed on it; unproven contexts get
 proofs with a doubling backoff. The failing kind's captures are in
 `C:/ddda-targets/L172/dumps` (private) for the serial-replay gap.
+
+### Proofs off, fps (claude-9, head #14617 user order)
+
+Guard proofs are opt-in (`DDRUNTIME_PARALLEL_SHADOW_CHECK=N`); default
+publish mode captures nothing, never falls back (window errors counted),
+waits 0 us for exclusivity (measured best: WAIT_US 0 33.73, 500 32.96, 2000
+30.33). Partial manager copy (header + lanes 0..1) verified offline on the
+two reference captures and dump 1417 including the definedness runs.
+
+| run (binary 3d2999f8, C+X env) | heavy-window fps |
+|---|---|
+| s3a publish | 31.77 (2140 windows of 10752 traversals, 63k units, 3178 helped lanes, 0 errors) |
+| base4 | 32.72 |
+| s3b publish | 33.82 |
+
+No measurable gain: only the light traversals (~30 units) find every
+participant parked; the heavy ones overlap the outer batch and stay serial.
+Reaching them needs the parallel branch while the outer batch runs (a
+private scheduler view per thread instead of the global redirect, or the
+lanes queued into the outer batch). Playtest launcher:
+`E:/ddda-re/play/playtest_parallel.bat` (binary copy
+`C:/ddda-targets/r172/runs/playtest`).
+
+Open: the inconclusive kind (`original serial replay stream differs from
+live serial`) is vertex constant c4.xyz at one entry (residue bytes at
+0x64859E30 in dump 1400): the live-vs-serial check lacks the unread-constant
+rule the serial/parallel check has.
+
+Next action: the head's decision on the non-exclusive design above.

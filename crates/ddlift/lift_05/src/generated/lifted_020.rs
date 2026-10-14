@@ -651,7 +651,7 @@ pub fn f_012c1770(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x12C17AB => { cpu.esi = cpu.esi ^ cpu.esi; pc = 0x12C17AD; continue; }
             0x12C17AD => { cpu.fl.alu_and(cpu.edi, cpu.edi, 32); pc = 0x12C17AF; continue; }
             0x12C17AF => { pc = if cpu.fl.zf() { 0x12C17D2 } else { 0x12C17B1 }; continue; }
-            0x12C17B1 => { cpu.ecx = m.fast_u32(pt, 0x18D0B28u32); pc = 0x12C17B7; continue; }
+            0x12C17B1 => { cpu.ecx = emit::scheduler_global(m, pt); pc = 0x12C17B7; continue; }
             0x12C17B7 => { emit::push(cpu.esi, m, pt, cpu); pc = 0x12C17B8; continue; }
             0x12C17B8 => { emit::push(0x12C1680u32, m, pt, cpu); pc = 0x12C17BD; continue; }
             0x12C17BD => { emit::push(cpu.ebx, m, pt, cpu); pc = 0x12C17BE; continue; }
@@ -665,7 +665,7 @@ pub fn f_012c1770(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x12C17D2 => { cpu.ebp = cpu.ebp ^ cpu.ebp; pc = 0x12C17D4; continue; }
             0x12C17D4 => { cpu.fl.alu_and(cpu.edi, cpu.edi, 32); pc = 0x12C17D6; continue; }
             0x12C17D6 => { pc = if cpu.fl.zf() { 0x12C186B } else { 0x12C17DC }; continue; }
-            0x12C17DC => { cpu.esi = m.fast_u32(pt, 0x18D0B28u32); pc = 0x12C17E2; continue; }
+            0x12C17DC => { cpu.esi = emit::scheduler_global(m, pt); pc = 0x12C17E2; continue; }
             0x12C17E2 => { cpu.eax = m.fast_u32(pt, cpu.ebx.wrapping_add(0x68)); pc = 0x12C17E5; continue; }
             0x12C17E5 => { cpu.ecx = m.fast_u32(pt, cpu.eax.wrapping_add(cpu.ebp.wrapping_mul(8))); pc = 0x12C17E8; continue; }
             0x12C17E8 => { cpu.edi = m.fast_u32(pt, cpu.eax.wrapping_add(cpu.ebp.wrapping_mul(8)).wrapping_add(0x4)); pc = 0x12C17EC; continue; }
@@ -687,7 +687,7 @@ pub fn f_012c1770(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x12C1826 => { { let t = m.fast_u32(pt, 0x139D15Cu32); emit::push(0x12C182C, m, pt, cpu);  x86::call_ext(m, cpu, t);  } pc = 0x12C182C; continue; }
             0x12C182C => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.edi), 0x0u32, 32); pc = 0x12C182F; continue; }
             0x12C182F => { pc = if (!cpu.fl.zf()) { 0x12C1824 } else { 0x12C1831 }; continue; }
-            0x12C1831 => { cpu.esi = m.fast_u32(pt, 0x18D0B28u32); pc = 0x12C1837; continue; }
+            0x12C1831 => { cpu.esi = emit::scheduler_global(m, pt); pc = 0x12C1837; continue; }
             0x12C1837 => { { let a = cpu.ebp & u32::MAX; let r = a.wrapping_add(1) & u32::MAX; cpu.ebp = r; } pc = 0x12C1838; continue; }
             0x12C1838 => { cpu.fl.alu_sub(cpu.ebp, m.fast_u32(pt, cpu.esp.wrapping_add(0x10)), 32); pc = 0x12C183C; continue; }
             0x12C183C => { pc = if cpu.fl.cf() { 0x12C17E2 } else { 0x12C183E }; continue; }

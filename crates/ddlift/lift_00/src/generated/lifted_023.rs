@@ -279,7 +279,7 @@ pub fn f_0104b670(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x0104B690 (DDDA.exe 2017-12-13 Steam), sVibration::vf12.
 pub fn f_0104b690(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    cpu.ecx = m.fast_u32(pt, 0x18D0B28u32); cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x20)); cpu.edx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x24)); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.ecx = emit::scheduler_global(m, pt); cpu.eax = m.fast_u32(pt, cpu.ecx.wrapping_add(0x20)); cpu.edx = m.fast_u32(pt, cpu.ecx.wrapping_add(0x24)); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x0104B6A0 (DDDA.exe 2017-12-13 Steam), Global::FUN_0104b6a0.

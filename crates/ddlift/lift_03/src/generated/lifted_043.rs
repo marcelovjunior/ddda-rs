@@ -354,7 +354,7 @@ pub fn f_011fa380(m: &mut dyn Mem, cpu: &mut Cpu) {
         match pc {
             0x11FA380 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x54)), 0, 0, 0]; { cpu.xmm[1] = emit::xorps(cpu.xmm[1], cpu.xmm[1]); } cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); emit::push(cpu.esi, m, pt, cpu); cpu.esi = cpu.ecx.wrapping_add(0x50); pc = if cpu.fl.cf() { 0x11FA3A0 } else { 0x11FA391 }; continue; }
             0x11FA391 => { cpu.ecx = cpu.esi; emit::push(0x11FA398, m, pt, cpu); x86::call_ext(m, cpu, 0x11F9020u32); cpu.st.real_memory::<0x00d9, 4, false>(m, cpu.esi.wrapping_add(0x8)); cpu.st.real_memory::<0x18d9, 4, true>(m, cpu.esi.wrapping_add(0x4)); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
-            0x11FA3A0 => { cpu.eax = m.fast_u32(pt, 0x18D0B28u32); cpu.xmm[0][0] = x86::subss(cpu.xmm[0][0], m.fast_u32(pt, cpu.eax.wrapping_add(0x70))); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x4), cpu.xmm[0][0]); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
+            0x11FA3A0 => { cpu.eax = emit::scheduler_global(m, pt); cpu.xmm[0][0] = x86::subss(cpu.xmm[0][0], m.fast_u32(pt, cpu.eax.wrapping_add(0x70))); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x4), cpu.xmm[0][0]); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }
     }

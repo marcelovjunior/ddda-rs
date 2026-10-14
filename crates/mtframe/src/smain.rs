@@ -8,6 +8,15 @@ use ddnative_base::mem::Mem;
 /// The global `sMain*` (its constructor 0x00DBE810 stores `this` here).
 pub const INSTANCE: u32 = 0x018D_0B28;
 
+/// `*INSTANCE` as this thread sees it (ddnative-base sched.rs, L172: the
+/// parallel shadow's lanes see their private copy).
+pub fn instance(m: &dyn Mem) -> u32 {
+    match ddnative_base::sched::view() {
+        0 => m.u32(INSTANCE),
+        private => private,
+    }
+}
+
 /// The timing fields of `sMain`, +0x00..+0xA0 (the object is larger;
 /// [`QpcLayout`] is the counter block at +0x1BFE0).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -101,7 +110,7 @@ macro_rules! at {
 impl Main {
     /// The running instance, `*INSTANCE`.
     pub fn get(m: &dyn Mem) -> Main {
-        Main(m.u32(INSTANCE))
+        Main(instance(m))
     }
     pub fn field(self, offset: u32) -> u32 {
         self.0.wrapping_add(offset)

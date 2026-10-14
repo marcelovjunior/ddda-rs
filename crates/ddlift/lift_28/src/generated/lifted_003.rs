@@ -794,7 +794,7 @@ pub fn f_00e0ce20(m: &mut dyn Mem, cpu: &mut Cpu) {
 // Translated from 0x00E0CE50 (DDDA.exe 2017-12-13 Steam), uGUI::vf09.
 pub fn f_00e0ce50(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();
-    cpu.xmm[0] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x128)), 0, 0, 0]; cpu.eax = m.fast_u32(pt, 0x18D0B28u32); cpu.xmm[0][0] = x86::mulss(cpu.xmm[0][0], m.fast_u32(pt, cpu.ecx.wrapping_add(0x14))); cpu.xmm[0][0] = x86::divss(cpu.xmm[0][0], m.fast_u32(pt, cpu.eax.wrapping_add(0x38))); emit::push(cpu.ecx, m, pt, cpu); m.fast_set_u32(pt, cpu.esp, cpu.xmm[0][0]); emit::push(0xE0CE72, m, pt, cpu); x86::call_ext(m, cpu, 0xE0BED0u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
+    cpu.xmm[0] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x128)), 0, 0, 0]; cpu.eax = emit::scheduler_global(m, pt); cpu.xmm[0][0] = x86::mulss(cpu.xmm[0][0], m.fast_u32(pt, cpu.ecx.wrapping_add(0x14))); cpu.xmm[0][0] = x86::divss(cpu.xmm[0][0], m.fast_u32(pt, cpu.eax.wrapping_add(0x38))); emit::push(cpu.ecx, m, pt, cpu); m.fast_set_u32(pt, cpu.esp, cpu.xmm[0][0]); emit::push(0xE0CE72, m, pt, cpu); x86::call_ext(m, cpu, 0xE0BED0u32); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return;
 }
 
 // Translated from 0x00E0CE80 (DDDA.exe 2017-12-13 Steam), cAIResource::vf08.

@@ -2859,10 +2859,20 @@ def cpu_arm(arm, start=None, fast=True):
 MEM_ACCESS = re.compile(r'"(?:\\.|[^"\\])*"|\bm\.(u8|u16|u32|set_u8|set_u16|set_u32)\(')
 
 
+# L172: a 32-bit load of the scheduler global [0x018D0B28] reads this
+# thread's view of it (ddnative-base sched.rs): the parallel shadow lanes see
+# their private scheduler, every other thread the memory word. Writes stay
+# plain stores.
+SCHEDULER_LOAD = "m.fast_u32(pt, 0x18D0B28u32)"
+SCHEDULER_VIEW = "emit::scheduler_global(m, pt)"
+
+
 def fast_memory(arm):
     """Lower `m.u32(a)` to `m.fast_u32(pt, a)` (all six accessors), leaving
-    Rust strings untouched. Gen-time only: cached arms keep `m.u32`."""
-    return MEM_ACCESS.sub(lambda m: f"m.fast_{m[1]}(pt, " if m[1] else m[0], arm)
+    Rust strings untouched, and the scheduler global's loads to its
+    per-thread view. Gen-time only: cached arms keep `m.u32`."""
+    lowered = MEM_ACCESS.sub(lambda m: f"m.fast_{m[1]}(pt, " if m[1] else m[0], arm)
+    return lowered.replace(SCHEDULER_LOAD, SCHEDULER_VIEW)
 
 
 def straight_line(addr, arms):

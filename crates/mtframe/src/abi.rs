@@ -58,7 +58,7 @@ pub fn f_00fb64d0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let effects = Effects(this);
     // the original loads sMain into eax once it finds effects running
     if effects.running(m) {
-        cpu.eax = m.u32(crate::smain::INSTANCE);
+        cpu.eax = crate::smain::instance(m);
     }
     let cell = RefCell::new(&mut *cpu);
     effect::update(m, effects, |m, step| {
