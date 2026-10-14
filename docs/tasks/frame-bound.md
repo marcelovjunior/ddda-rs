@@ -81,3 +81,16 @@ Done: the clock reads are gated by DDRUNTIME_NDRAW_STATS (commit "L180: no clock
 Left for whoever has a line-level profiler (perf/VTune/`--profile` with `debug = line-tables-only` + dbghelp SymGetLineFromAddr):
 split draw_call into non-inlined phases to attribute its 21.7%; replace the scratch `[Constants;2]` take/default with a reused pair;
 per-draw Arc clones (render_states, textures, targets array clone, vertices) -> one Arc<DrawParts> per kept binding.
+
+## State and next steps (shadow agent, 2026-10-14 end of session)
+- fast2 (playtest_fast2): claude-2 L180 commits, L190 ports + lean-access + stack window, L191 ports (885DC0 fixed), Present device cache, no
+  per-draw clocks. Stack window A/B on one exe: on 61.4/59.5, off (DDRUNTIME_STACK_WINDOW=0) 55.7/58.3. The merge of task/L190-hot-paths needed the
+  generated shards to be "mine + `research/native/stack_window.py`" (217 conflicts, resolved by --ours then the script); R172's Cargo.toml needs the
+  play-o2 + hot-shard blocks kept (the build script's merge into R172 stops silently on a conflict: run it and read its output).
+- Build recipe: `EXTRA_FEATURES=ddruntime/stack-window bash E:/ddda-re/tools/l172_replay_build.sh --ddplay` (full shard rebuild ~17 min; ddplay.exe + pdb are
+  copied to C:/ddda-targets/r172/runs/shadow2/). Run with scratchpad run.sh logic; force FullScreen=OFF in the sandbox config (user config is 240 Hz
+  fullscreen, which stops the game at boot with ERR09).
+- Parallel shadow: parked (docs above). Ceiling of the whole shadow traversal ~10%; needs lane-id-per-idle-participant + masked sPrimitive vf11/vf12.
+- Open levers by size: main-thread sim half 9.5 ms (passes A/C 4.3 ms), memory helpers (hotpath), render worker draw_call (needs a line-level profile),
+  GPU time unmeasured (timestamp queries; see docs/DECOUPLED_RENDER.md section 10), DBE560 join ~1.2 ms (inline of small batches did not help).
+- Known-bad: DDRUNTIME_SHADOW_TOP=1 panics (x86.rs:251); JOB_INLINE=8 harmful; parallel shadow view mode crashes.
