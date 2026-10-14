@@ -25,24 +25,27 @@ import unicorn.x86_const as x
 
 DRAW_MESH, DRAW_MESH_LENGTH = 0xEA5320, 0x747
 CALLBACK = 0x1200000
-REAL = {DRAW_MESH: DRAW_MESH_LENGTH, 0xFED940: 0xD, 0xFEEF20: 0x54, 0xFEE320: 0xBF7}
+ENTRY_UNDER_TEST = DRAW_MESH
+QUAD, QUAD_LENGTH = 0xF11610, 0x3A8
+REAL = {DRAW_MESH: DRAW_MESH_LENGTH, QUAD: QUAD_LENGTH, 0xFED940: 0xD, 0xFEEF20: 0x54, 0xFEE320: 0xBF7}
 # stubs: address -> number of stack arguments
-STUBS = {0xDA7D70: 1, 0xE132B0: 7, 0x12EFEA0: 3, 0xEA42E0: 3, 0xFF14D0: 0, 0xFED190: 2, 0xEA23F0: 2,
+STUBS = {0xFEFB90: 4, 0xDA7D70: 1, 0xE132B0: 7, 0x12EFEA0: 3, 0xEA42E0: 3, 0xFF14D0: 0, 0xFED190: 2, 0xEA23F0: 2,
          0xFED890: 1, 0xFF1920: 0, CALLBACK: 4}
 for a in list(CALLEES):
     del CALLEES[a]
-LATE = {0xEA42E0: 3, CALLBACK: 4}  # pages mapped after the base constructor
+LATE = {0xEA42E0: 3, CALLBACK: 4, 0xFEFB90: 4}  # pages mapped after the base constructor
 CALLEES.update({k: v for k, v in STUBS.items() if k not in LATE})
 for a in (0xFED940, 0xFEEF20):
     ENTRIES.pop(a, None)
-ENTRIES.update(REAL)
+ENTRIES.update({k: v for k, v in REAL.items() if k != QUAD})
 
 
 class MeshReal(CommitOracle):
     def __init__(self):
         super().__init__()
-        for a, n in ((0xEA4000, 0x1000), (CALLBACK, 0x1000)):
+        for a, n in ((0xEA4000, 0x1000), (CALLBACK, 0x1000), (0xFEF000, 0x1000), (0xF11000, 0x1000)):
             self.uc.mem_map(a, n)
+        self.uc.mem_write(QUAD, h.code(QUAD, QUAD_LENGTH))
         for a, n in LATE.items():
             CALLEES[a] = n
             self.uc.mem_write(a, bytes([0xC3]))
@@ -112,14 +115,8 @@ class MeshReal(CommitOracle):
         call.update(effects=effects, result=result & 0xFFFFFFFF, return_esp=esp + cleanup)
         self.calls.append(call)
 
-    def mesh_case(self, seed):
-        self.active = False
-        self.seed = seed
-        self.rng = rng = random.Random(seed)
+    def init_context(self, seed, rng):
         uc = self.uc
-        uc.mem_write(BASE, bytes(base.SIZE))
-        uc.mem_write(0, bytes(4096))
-        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
         word, get = self.word, self.get
         # ---- the draw context and its state-commit data (as record_l177.run) ----
         context = BASE + 0x20000
@@ -190,6 +187,19 @@ class MeshReal(CommitOracle):
         word(context + 0x1CC, slot | (rng.getrandbits(20) << 12))
         word(bank + slot * 8, model_tbl)
         word(context + 0x48, rng.getrandbits(32))
+        return dict(context=context, bank=bank, model_tbl=model_tbl, resource=resource)
+
+    def mesh_case(self, seed):
+        self.active = False
+        self.seed = seed
+        self.rng = rng = random.Random(seed)
+        uc = self.uc
+        uc.mem_write(BASE, bytes(base.SIZE))
+        uc.mem_write(0, bytes(4096))
+        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
+        word, get = self.word, self.get
+        ctxinfo = self.init_context(seed, rng)
+        context, bank, model_tbl, resource = (ctxinfo[k] for k in ('context', 'bank', 'model_tbl', 'resource'))
         # ---- the model, mesh and primitives (as record_l173_mesh) ----
         dm, mesh, materials, position = BASE + 0x110000, BASE + 0x120000, BASE + 0x121000, BASE + 0x122000
         prims, stream, vertices, lods, bounds = BASE + 0x123000, BASE + 0x124000, BASE + 0x125000, BASE + 0x126000, BASE + 0x127000
@@ -295,22 +305,119 @@ class MeshReal(CommitOracle):
                     calls=self.calls, visited=sorted(self.visited), x87_oracle=base.x87_host.VERSION)
 
 
+    def quad_case(self, seed):
+        self.active = False
+        self.seed = seed
+        self.rng = rng = random.Random(seed)
+        uc = self.uc
+        uc.mem_write(BASE, bytes(base.SIZE))
+        uc.mem_write(0, bytes(4096))
+        uc.mem_write(STACK, rng.randbytes(STACK_SIZE))
+        word, get = self.word, self.get
+        info = self.init_context(seed, rng)
+        context, resource = info['context'], info['resource']
+        this = BASE + 0x1C0000
+        first_a, first_b, table = this + 0x1000, this + 0x2000, this + 0x3000
+        word(this + 0x198, rng.getrandbits(32))
+        word(this + 0x80, first_a)
+        word(first_a + 0x60, first_b)
+        word(this + 0xAB4, table)
+        group, kind = rng.randrange(0, 21), rng.randrange(0, 4)
+        t = kind * 0x15
+        pick = lambda: rng.choice((0, resource + 256 * rng.randrange(16)))
+        for k in range(0, 100):
+            word(first_b + 0x10 + 4 * k, pick())
+        for k in range(0, 100):
+            word(table + 0x24 + 4 * k, pick())
+        base_row = kind * 0x54
+        shift = rng.randrange(0, 6)
+        word(table + base_row + 8, shift)
+        word(table + base_row + 0xC, rng.randrange(0, 6))
+        word(table + base_row + 0x14, pick())
+        # the material call's object: [[obj + 0x44]]
+        objects = BASE + 0x1D0000
+        for k in range(100):
+            if get(table + 0x24 + 4 * k) == 0 or True:
+                pass
+        for k in range(100):
+            o = objects + 0x100 * (k % 8)
+            word(o + 0x44, objects + 0x1000 + 8 * (k % 8))
+            word(objects + 0x1000 + 8 * (k % 8), rng.getrandbits(32))
+        for k in range(100):
+            word(table + 0x24 + 4 * k, objects + 0x100 * (k % 8) if rng.random() < 0.0 else get(table + 0x24 + 4 * k))
+        # the fourth table entry must be an object, not a resource
+        column = get(table + base_row + 0xC) + t
+        word(table + 0x24 + 4 * column, objects + 0x100 * rng.randrange(8))
+        for i in range(16):
+            word(resource + 256 * i + 0xC, rng.getrandbits(32))
+            word(resource + 256 * i + 4, rng.getrandbits(32))
+        word(0x161C280, 0x80000000)
+        word(0x18D2CE8, rng.getrandbits(32))
+        # the slot registers: sometimes already bound to the wanted resource
+        for off in (0x1F40, 0x1F48, 0x1F58):
+            word(context + off, rng.choice((0, resource, resource + 256, rng.getrandbits(32))))
+            word(context + off + 4, rng.choice((0, rng.getrandbits(32))))
+        first = get(first_b + 0x10 + 4 * (t + group))
+        if rng.random() < 0.4:
+            word(context + 0x1F40, first)
+            word(context + 0x1F44, (get(first + 0xC) | 0x2D4EF000) if first else 0)
+        word(context + 0x164, rng.getrandbits(32))
+        word(context + 0x5C, rng.choice((0, 0x80, 0x100, 0x50, 0x150, 0x10, 0x40, 0x1C0)))
+        word(context + 0x6C, rng.randrange(0, 5))
+        word(context + 0x74, rng.getrandbits(32))
+        word(context + 0x44, BASE + 0x130000)
+        word(context + 0x48, 0)
+        word(context + 0x178, rng.getrandbits(32))
+        uc.mem_write(context + 0x169, bytes([rng.choice((0xFF, 0, 1, 2, 3))]))
+        self.initial, self.written, self.visited, self.calls = {}, set(), set(), []
+        for r in REGS:
+            uc.reg_write(r, rng.getrandbits(32))
+        uc.reg_write(x.UC_X86_REG_ECX, this)
+        uc.reg_write(x.UC_X86_REG_ESP, SP)
+        for i, v in enumerate([h.RET, context, group, kind]):
+            word(SP + i * 4, v)
+        uc.reg_write(x.UC_X86_REG_EFLAGS, 0x202)
+        uc.reg_write(x.UC_X86_REG_FPCW, 0x7F | ([0, 0x200, 0x300][(seed // 4) % 3]) | ((seed % 4) << 10))
+        uc.reg_write(x.UC_X86_REG_FPSW, 0)
+        uc.reg_write(x.UC_X86_REG_FPTAG, 0xFFFF)
+        uc.reg_write(x.UC_X86_REG_MXCSR, 0x1F80 | ((seed % 4) << 13) | ([0, 0x40, 0x8000, 0x8040][(seed // 4) % 4]))
+        self.remember(SP, 16)
+        self.entry = ENTRY_UNDER_TEST
+        import x87_host
+        from record_l175 import effective_address
+        self.host = x87_host.Oracle(effective_address)
+        before = self.snapshot(False)
+        self.active = True
+        try:
+            uc.emu_start(ENTRY_UNDER_TEST, h.RET, count=400000)
+        except Exception:
+            print('fault EIP/ESP', hex(uc.reg_read(x.UC_X86_REG_EIP)), hex(uc.reg_read(x.UC_X86_REG_ESP)), flush=True)
+            raise
+        self.host.flush(uc)
+        assert self.host.problem is None, self.host.problem
+        assert uc.reg_read(x.UC_X86_REG_EIP) == h.RET
+        self.active = False
+        return dict(entry=ENTRY_UNDER_TEST, seed=seed, before=before, initial=sorted(self.initial.items()), after=self.snapshot(),
+                    calls=self.calls, visited=sorted(self.visited), x87_oracle=base.x87_host.VERSION)
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--cases', type=int, default=1500)
+    parser.add_argument('--entry', default='mesh', choices=('mesh', 'quad'))
     args = parser.parse_args()
+    ENTRY_UNDER_TEST = QUAD if args.entry == 'quad' else DRAW_MESH
     oracle = MeshReal()
     cases = []
     for seed in range(args.cases):
         try:
-            cases.append(oracle.mesh_case(seed))
+            cases.append(oracle.quad_case(seed) if args.entry == 'quad' else oracle.mesh_case(seed))
         except Exception:
             print('failed seed', seed, flush=True)
             raise
     out = Path('E:/ddda-re/notes/native-L184')
     out.mkdir(exist_ok=True)
-    path = out / 'draw_mesh_real.json'
-    path.write_text(json.dumps(dict(code_sha256=hashlib.sha256(h.code(DRAW_MESH, DRAW_MESH_LENGTH)).hexdigest(), cases=cases)))
+    path = out / ('draw_with_resources.json' if args.entry == 'quad' else 'draw_mesh_real.json')
+    path.write_text(json.dumps(dict(code_sha256=hashlib.sha256(h.code(ENTRY_UNDER_TEST, REAL[ENTRY_UNDER_TEST])).hexdigest(), cases=cases)))
     visited = set().union(*(set(c['visited']) for c in cases))
     print(len(cases), 'cases;', len(visited), 'instructions visited;', sum(len(c['calls']) for c in cases), 'calls')

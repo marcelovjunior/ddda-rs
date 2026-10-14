@@ -522,9 +522,12 @@ fn floating_control(c: &mut Cpu, before: &Value) -> FloatingControl {
 /// calls are the stubs; each call must see the recorded registers, stack
 /// arguments, memory so far and (for the listener callback) the sphere.
 fn draw_mesh_real_cases(body: LiftFn) -> usize {
+    real_callee_cases("E:/ddda-re/notes/native-L184/draw_mesh_real.json", body)
+}
+
+fn real_callee_cases(path: &str, body: LiftFn) -> usize {
     use ddnative_base::x86;
     use std::{cell::Cell, rc::Rc};
-    let path = "E:/ddda-re/notes/native-L184/draw_mesh_real.json";
     let text = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
@@ -626,4 +629,15 @@ fn draw_mesh_folded_matches_original() {
     let n = draw_mesh_real_cases(mtcore::semantic_draw::draw_mesh_folded);
     assert!(n >= 1000, "{n} cases");
     eprintln!("{n} ABI-level draw_mesh (folded) cases passed");
+}
+
+// verifies 0x00f11610 (the primitive state flush 0x00feef20 and its commit run natively)
+#[test]
+fn draw_with_resources_matches_original() {
+    let n = real_callee_cases(
+        "E:/ddda-re/notes/native-L184/draw_with_resources.json",
+        mtcore::semantic_s9::draw_with_resources,
+    );
+    assert!(n >= 1000, "{n} cases");
+    eprintln!("{n} ABI-level draw_with_resources cases passed");
 }

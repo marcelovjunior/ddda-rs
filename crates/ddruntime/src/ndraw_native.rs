@@ -843,13 +843,13 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         Some(p) if same_part(p, &meta, alpha, &written, &banks) => p.clone(),
         _ => {
             let key = content_key(&meta, alpha, &written, &banks);
-            match c.by_content.get_mut(&key) {
-                Some((seen, p)) if same_part(p, &meta, alpha, &written, &banks) => {
-                    *seen = c.frame;
+            let kept = find_kept(&mut c.by_content, &mut c.by_content_old, key, c.frame, |p| same_part(p, &meta, alpha, &written, &banks));
+            match kept {
+                Some(p) => {
                     c.built[3] += 1;
-                    p.clone()
+                    p
                 }
-                _ => {
+                None => {
                     let part = Arc::new(BindingPart {
                         meta,
                         alpha,
@@ -1224,11 +1224,8 @@ impl Mirror {
         });
         // an earlier frame's list of the same content: kept (no allocation,
         // and no drop later)
-        if let Some((seen, list)) = c.texture_lists.get_mut(&key) {
-            if list.iter().eq(found.iter().flatten()) {
-                *seen = c.frame;
-                return list.clone();
-            }
+        if let Some(list) = find_kept(&mut c.texture_lists, &mut c.texture_lists_old, key, c.frame, |list| list.iter().eq(found.iter().flatten())) {
+            return list;
         }
         // the slots bound, in order: an exact-length iterator, so the slice
         // is allocated once (no Vec first)
@@ -1505,8 +1502,10 @@ pub struct Caches {
     /// last used in: a binding at a new address with content seen lately
     /// takes that part (no allocation, and no drop later)
     by_content: FxMap<u64, (u64, Arc<BindingPart>)>,
+    by_content_old: FxMap<u64, (u64, Arc<BindingPart>)>,
     /// texture lists by content, with the frame they were last used in
     texture_lists: FxMap<u64, (u64, Arc<[TextureBinding]>)>,
+    texture_lists_old: FxMap<u64, (u64, Arc<[TextureBinding]>)>,
     /// the previous decided draw (none: a frame's start, or a command the
     /// default path applied came between)
     last: Option<LastDraw>,
@@ -1536,13 +1535,22 @@ impl Caches {
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
         self.last = None;
-        // bindings and contents unused for three frames go (every eighth
-        // frame; L180: clearing the whole table dropped every part at once)
+        // bindings unused for three frames go; contents and texture lists
+        // unused for a generation (8 to 16 frames) go as a whole, dropped
+        // on another thread (every eighth frame; L180: clearing everything
+        // at once, then sweeping, cost the render worker the drops)
         if self.frame % 8 == 0 {
             let frame = self.frame;
             self.bindings.retain(|_, (seen, _)| *seen + 3 > frame);
-            self.by_content.retain(|_, (seen, _)| *seen + 3 > frame);
-            self.texture_lists.retain(|_, (seen, _)| *seen + 3 > frame);
+            let capacity = self.by_content.len();
+            let current = std::mem::replace(&mut self.by_content, FxMap::with_capacity_and_hasher(capacity, Default::default()));
+            let parts = std::mem::replace(&mut self.by_content_old, current);
+            let capacity = self.texture_lists.len();
+            let current = std::mem::replace(&mut self.texture_lists, FxMap::with_capacity_and_hasher(capacity, Default::default()));
+            let lists = std::mem::replace(&mut self.texture_lists_old, current);
+            if !parts.is_empty() || !lists.is_empty() {
+                drop_elsewhere((parts, lists));
+            }
         }
         if self.streams.len() > 16384 {
             self.streams.clear();
@@ -1633,6 +1641,46 @@ impl FrameInfo {
 }
 
 /// Look up `key` in a per-frame map, building it on a miss.
+/// A value kept by content in two generations of tables (L180): this
+/// generation's, else the previous one's (moved back into this one); `same`
+/// confirms the key's match. The previous generation's leftovers go as a
+/// whole (`Caches::begin_frame`), not by sweeping the table.
+fn find_kept<T: ?Sized>(
+    current: &mut FxMap<u64, (u64, Arc<T>)>,
+    old: &mut FxMap<u64, (u64, Arc<T>)>,
+    key: u64,
+    frame: u64,
+    same: impl Fn(&T) -> bool,
+) -> Option<Arc<T>> {
+    if let Some((seen, v)) = current.get_mut(&key) {
+        if same(v) {
+            *seen = frame;
+            return Some(v.clone());
+        }
+        return None;
+    }
+    let (_, v) = old.remove(&key)?;
+    if !same(&v) {
+        return None;
+    }
+    current.insert(key, (frame, v.clone()));
+    Some(v)
+}
+
+/// Drop `value` on a thread of its own (L180: the parts and lists a
+/// generation leaves, off the render worker).
+fn drop_elsewhere<T: Send + 'static>(value: T) {
+    static DROPPER: std::sync::OnceLock<Option<std::sync::Mutex<std::sync::mpsc::Sender<Box<dyn Send>>>>> = std::sync::OnceLock::new();
+    let sender = DROPPER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Box<dyn Send>>();
+        std::thread::Builder::new().name("ndraw-drop".into()).spawn(move || rx.into_iter().for_each(drop)).ok()?;
+        Some(std::sync::Mutex::new(tx))
+    });
+    if let Some(tx) = sender {
+        let _ = tx.lock().unwrap_or_else(|e| e.into_inner()).send(Box::new(value));
+    }
+}
+
 /// A part kept across frames (L180): built again the first time
 /// a frame uses them, and the earlier part kept if it is the same (no
 /// allocation, and no drop at the frame's start, for an unchanged binding).
@@ -2863,6 +2911,26 @@ mod tests {
         let other = binding_part(&g, &mut c, 0x5000, None, None).ok().unwrap();
         assert!(!Arc::ptr_eq(&first, &other));
         assert_eq!(other.alpha, Some((3, 7)));
+    }
+
+    /// L180: values kept by content in two generations: this generation's
+    /// by key (confirmed), else the previous one's, moved back; a key whose
+    /// content differs finds nothing.
+    #[test]
+    fn kept_values_come_from_either_generation_and_move_back() {
+        let (mut current, mut old): (FxMap<u64, (u64, Arc<u32>)>, FxMap<u64, (u64, Arc<u32>)>) = Default::default();
+        let five = Arc::new(5);
+        old.insert(1, (3, five.clone()));
+        current.insert(2, (3, Arc::new(6)));
+        let got = find_kept(&mut current, &mut old, 1, 9, |v| *v == 5).unwrap();
+        assert!(Arc::ptr_eq(&got, &five));
+        assert!(old.is_empty() && current[&1].0 == 9);
+        assert_eq!(*find_kept(&mut current, &mut old, 2, 9, |v| *v == 6).unwrap(), 6);
+        assert!(find_kept(&mut current, &mut old, 2, 9, |v| *v == 7).is_none());
+        assert!(find_kept(&mut current, &mut old, 3, 9, |_| true).is_none());
+        old.insert(4, (3, Arc::new(8)));
+        assert!(find_kept(&mut current, &mut old, 4, 9, |v| *v == 1).is_none());
+        assert!(!current.contains_key(&4));
     }
 
     /// Parts kept across frames: the same frame's part from the map; a new
