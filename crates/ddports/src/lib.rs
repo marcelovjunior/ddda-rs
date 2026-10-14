@@ -198,6 +198,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x0084_c720, mtcore::semantic_l191::character_vf09),
             (0x0088_6530, mtcore::semantic_l191::obj_model_vf09),
             (0x0116_5b40, mtcore::semantic_l191::probe_search_step),
+            (0x0116_b670, mtcore::semantic_l191::owner_visit),
         ] {
             if !semantic_selected(a) {
                 continue;

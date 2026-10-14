@@ -560,3 +560,209 @@ pub fn probe_search_step(m: &mut dyn Mem, c: &mut Cpu) {
     c.eax = result;
     c.esp = entry.wrapping_add(0x14);
 }
+
+/// Four words at `a` (a 16-byte vector).
+fn vec4(m: &dyn Mem, pg: Pages, a: u32) -> [u32; 4] {
+    std::array::from_fn(|k| pg.u32(m, a.wrapping_add(4 * k as u32)))
+}
+
+/// The visit body of `owner_visit` (0x0116B670) between its prologue and epilogue.
+/// `frame` is the original's ESP after its pushes; `eax` is the result of
+/// 0x00FB3790. Returns the final EAX.
+fn owner_visit_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, entry: u32, frame: u32, this: u32, mut eax: u32) -> u32 {
+    let ebx = pg.u32(m, entry.wrapping_add(4)); // the request record (arg 1)
+    pg.set_u32(m, frame + 0x10, eax);
+    let mut ecx = pg.u32(m, ebx.wrapping_add(4));
+    if pg.u32(m, ecx.wrapping_add(0x10)) == 0 {
+        return eax;
+    }
+    // 0x0110_7CC0 (no arguments) returns the block the rest reads.
+    c.ebx = ebx;
+    eax = call_from(m, c, pg, frame, ecx, &[], 0x0116_b69c, |m, c| call_guest(m, c, 0x0110_7cc0));
+    let esi = eax;
+    c.esi = esi;
+    pg.set_u32(m, frame + 0x14, esi);
+    pg.set_u32(m, frame + 0x0c, 0);
+    ecx = 0;
+
+    if pg.u8(m, this.wrapping_add(0x0c)) != 0 {
+        // Two calls of 0x011787C0 on the local vector V = frame + 0x14 (six words each).
+        // the local vector V (frame + 0x20): the words the lifted body stores at
+        // esp + 0x30..0x64 while its pushes are in flight
+        let v = frame + 0x20;
+        let r0 = pg.u32(m, frame + 0x10);
+        let (a, b) = (pg.u32(m, esi), pg.u32(m, esi + 4));
+        let (d, e) = (pg.u32(m, esi + 8), pg.u32(m, esi + 0x10));
+        let (g, h) = (pg.u32(m, esi + 0x14), pg.u32(m, esi + 0x18));
+        let stamp = pg.u32(m, 0x0162_adb0);
+        pg.set_u32(m, v, 0x0159_4890);
+        pg.set_u32(m, v + 4, 7);
+        pg.set_u32(m, v + 8, stamp);
+        pg.set_u32(m, v + 0x10, a);
+        pg.set_u32(m, v + 0x14, b);
+        pg.set_u32(m, v + 0x18, d);
+        pg.set_u32(m, v + 0x1c, 0);
+        pg.set_u32(m, v + 0x20, e);
+        pg.set_u32(m, v + 0x24, g);
+        pg.set_u32(m, v + 0x28, h);
+        pg.set_u32(m, v + 0x2c, 0);
+        let first = call_from(m, c, pg, frame, this.wrapping_add(0x61c), &[v, this, 0x0116_ad60, ebx, 0, r0], 0x0116_b73c, |m, c| {
+            call_guest(m, c, 0x0117_87c0)
+        });
+        c.esi = first;
+        let second = call_from(m, c, pg, frame, this.wrapping_add(0xe54), &[v, this, 0x0116_ae90, ebx, 0, r0], 0x0116_b75c, |m, c| {
+            call_guest(m, c, 0x0117_87c0)
+        });
+        pg.set_u32(m, frame + 0x0c, first | second);
+        c.esi = first | second;
+        eax = second;
+    } else {
+        // Scan the first table: entries whose masks match, then a count of records.
+        eax = pg.u32(m, this.wrapping_add(0x5f0));
+        pg.set_u32(m, frame + 0x1c, eax);
+        pg.set_u32(m, frame + 0x10, 0);
+        if eax != 0 {
+            let count = eax;
+            let mut k = 0u32;
+            loop {
+                let table = pg.u32(m, this.wrapping_add(0x5fc));
+                let record = pg.u32(m, table.wrapping_add(k.wrapping_mul(4)));
+                ecx = record;
+                c.ebx = record;
+                c.esi = esi;
+                let p = call_from(m, c, pg, frame, record, &[], 0x0116_b791, |m, c| call_guest(m, c, 0x0057_b8c0));
+                eax = p;
+                // four lanes: (A < B) or (C < D) against the constant mask
+                let (a, bv) = (vec4(m, pg, esi.wrapping_add(0x10)), vec4(m, pg, p));
+                let (cv, dv) = (vec4(m, pg, p.wrapping_add(0x10)), vec4(m, pg, esi));
+                let key = vec4(m, pg, 0x018d_0640);
+                let mut mask = 0u32;
+                for lane in 0..4 {
+                    let lt1 = f32::from_bits(a[lane]) < f32::from_bits(bv[lane]);
+                    let lt2 = f32::from_bits(cv[lane]) < f32::from_bits(dv[lane]);
+                    let sel = if lt1 || lt2 { 0xffff_ffffu32 } else { 0 };
+                    if sel == key[lane] {
+                        mask |= 1 << lane;
+                    }
+                }
+                eax = mask;
+                if mask == 0xf {
+                    // the record's block: 0x01107E40 (no arguments), then a loop over its count
+                    let r3 = call_from(m, c, pg, frame, record, &[], 0x0116_b7c6, |m, c| call_guest(m, c, 0x0110_7e40));
+                    eax = r3;
+                    pg.set_u32(m, frame + 0x18, r3);
+                    if r3 != 0 {
+                        let mut j = 0u32;
+                        loop {
+                            c.esi = j;
+                            let r4 = call_from(m, c, pg, frame, record, &[j], 0x0116_b7d8, |m, c| call_guest(m, c, 0x0110_7e30));
+                            let first_arg = pg.u32(m, entry.wrapping_add(4));
+                            let r5 = call_from(m, c, pg, frame, this, &[first_arg, r4, 0], 0x0116_b7e6, |m, c| {
+                                call_guest(m, c, 0x0116_9a50)
+                            });
+                            eax = r5;
+                            let set = (r5 & 0xff) != 0;
+                            let old = pg.u32(m, frame + 0x0c);
+                            pg.set_u32(m, frame + 0x0c, old | set as u32);
+                            j = j.wrapping_add(1);
+                            if j >= r3 {
+                                break;
+                            }
+                        }
+                    }
+                }
+                c.esi = esi;
+                let k_next = pg.u32(m, frame + 0x10).wrapping_add(1);
+                pg.set_u32(m, frame + 0x10, k_next);
+                k = k_next;
+                eax = k_next;
+                if k_next >= count {
+                    break;
+                }
+            }
+        }
+        // 0x116B80F: EBX is the request record again.
+        let count = pg.u32(m, this.wrapping_add(0xe44));
+        pg.set_u32(m, frame + 0x1c, count);
+        c.esi = 0;
+        c.ebx = pg.u32(m, entry.wrapping_add(4));
+        if count != 0 {
+            let mut i = 0u32;
+            loop {
+                let table = pg.u32(m, this.wrapping_add(0xe50));
+                let item = pg.u32(m, table.wrapping_add(i.wrapping_mul(4)));
+                eax = pg.u32(m, item.wrapping_add(0xc));
+                if eax != 0 {
+                    let arg1 = pg.u32(m, entry.wrapping_add(4));
+                    c.esi = i;
+                    c.ebx = arg1;
+                    let r6 = call_from(m, c, pg, frame, this, &[arg1, eax, 0], 0x0116_b83d, |m, c| call_guest(m, c, 0x0116_9a50));
+                    eax = r6;
+                    let set = (r6 & 0xff) != 0;
+                    let old = pg.u32(m, frame + 0x0c);
+                    pg.set_u32(m, frame + 0x0c, old | set as u32);
+                }
+                i = i.wrapping_add(1);
+                c.esi = i;
+                if i >= pg.u32(m, frame + 0x1c) {
+                    break;
+                }
+            }
+        }
+    }
+
+    // 0x116B851: a zero flag word leaves at once.
+    if pg.u32(m, frame + 0x0c) == 0 {
+        return eax;
+    }
+    let ebx = pg.u32(m, entry.wrapping_add(4));
+    let target_ecx = pg.u32(m, ebx.wrapping_add(8));
+    if target_ecx == 0 {
+        return eax;
+    }
+    eax = pg.u32(m, ebx.wrapping_add(0xc));
+    if eax == 0 {
+        return eax;
+    }
+    // the record's indirect method, nine words (arg 1 = 2, arg 2 = [ebx+4], ...)
+    let args = [2, pg.u32(m, ebx.wrapping_add(4)), 0, 0, pg.u32(m, ebx.wrapping_add(0x18)), 0, 0, 0, 0];
+    c.eax = eax;
+    c.ebx = pg.u32(m, entry.wrapping_add(4));
+    let target = eax;
+    call_from(m, c, pg, frame, target_ecx, &args, 0x0116_b87e, |m, c| call_guest(m, c, target))
+}
+
+// Translated from 0x0116B670 (DDDA.exe 2017-12-13 Steam), Global::FUN_0116b670.
+/// 0x0116B670, `Global::FUN_0116b670(record)` (thiscall with one stack word,
+/// `ret 4`): the visit of an owner `this` for one request record. The first
+/// callee (0x00FB3790) decides whether there is work; the record's block is
+/// then checked, a vector test (0x0057B8C0 with the constant at 0x018D0640)
+/// selects entries, two calls of 0x011787C0 run on a local vector, and the
+/// record's indirect method runs last. EAX is the final callee's result.
+pub fn owner_visit(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let saved = (c.ebx, c.ebp, c.esi, c.edi);
+    // Prologue: EBP at entry - 4, the frame aligned to 16 with 0x44 locals, then EBX, ESI, EDI.
+    let frame = ((entry.wrapping_sub(4)) & !15).wrapping_sub(0x50);
+    pg.set_u32(m, entry.wrapping_sub(4), saved.1);
+    pg.set_u32(m, frame + 8, saved.0);
+    pg.set_u32(m, frame + 4, saved.2);
+    pg.set_u32(m, frame, saved.3);
+
+    // the prologue: EBP is the frame base, EDI the owner
+    c.ebp = entry.wrapping_sub(4);
+    c.edi = this;
+    let first = call_from(m, c, pg, frame, this, &[], 0x0116_b683, |m, c| call_guest(m, c, 0x00fb_3790));
+    let eax = owner_visit_body(m, c, pg, entry, frame, this, first);
+
+    // Epilogue: ret 4.
+    c.edi = pg.u32(m, frame);
+    c.esi = pg.u32(m, frame + 4);
+    c.ebx = pg.u32(m, frame + 8);
+    c.ebp = pg.u32(m, entry.wrapping_sub(4));
+    c.eax = eax;
+    c.esp = entry.wrapping_add(8);
+}
+

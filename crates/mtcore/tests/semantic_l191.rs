@@ -246,3 +246,22 @@ fn probe_search_step_matches_original() {
     assert!(cases >= 1000, "{cases} cases");
     eprintln!("{cases} ABI-level probe cases passed; calls {made:x?}");
 }
+
+
+// verifies 0x0116b670 (ABI level; ret 4; EAX returned; the callees as recorded stubs)
+#[test]
+fn owner_visit_matches_original() {
+    let callees = [
+        Callee { target: 0x00fb_3790, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0110_7cc0, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0057_b8c0, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0110_7e40, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0110_7e30, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x0116_9a50, reads: &[ECX], stack_args: 3 },
+        Callee { target: 0x0117_87c0, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x3000_0800, reads: &[ECX], stack_args: 9 },
+    ];
+    let (cases, made) = run_cases(&vectors("vis_116b670.json"), mtcore::semantic_l191::owner_visit, true, &callees, &[]);
+    assert!(cases >= 1000, "{cases} cases");
+    eprintln!("{cases} ABI-level owner_visit cases passed; calls {made:x?}");
+}

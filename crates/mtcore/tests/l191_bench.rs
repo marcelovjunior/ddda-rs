@@ -141,3 +141,9 @@ fn bench_obj_model_vf09() {
 fn bench_probe_search_step() {
     bench(&format!("{DIR}probe_1165b40.json"), "0x01165B40", &[("lifted", lifted::f_01165b40), ("port", mtcore::semantic_l191::probe_search_step)]);
 }
+
+#[test]
+#[ignore]
+fn bench_owner_visit() {
+    bench(&format!("{DIR}vis_116b670.json"), "0x0116B670", &[("lifted", lifted::f_0116b670), ("port", mtcore::semantic_l191::owner_visit)]);
+}
