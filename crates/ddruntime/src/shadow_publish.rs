@@ -231,7 +231,24 @@ static NO_HELPERS: AtomicU64 = AtomicU64::new(0);
 /// opened only so that participants parked in their waits take the lane
 /// tasks (s8's help()); if another thread's window is open, this one runs
 /// its lanes itself.
+/// Debug (`DDRUNTIME_PARALLEL_SHADOW_TRACE=1`): one line per window and
+/// private batch: thread, batch flags, the real scheduler's queue words.
+fn trace(m: &dyn Mem, what: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_TRACE").is_some()) {
+        return;
+    }
+    let real = m.u32(SCHEDULER_GLOBAL);
+    eprintln!(
+        "parallel-shadow trace {what} tid={:#x} view={:#x} top={} flags={}/{} real={real:#x} +8c={} +90={} +94={} +98={} +b8={} +1c148={} +1c14c={}",
+        crate::threads::current_tid(), ddnative_base::sched::view(), ddnative_base::sched::top_level(),
+        m.u8(NESTING), m.u8(NESTING_OTHER), m.u32(real + 0x8c), m.u32(real + 0x90), m.u32(real + 0x94),
+        m.u32(real + 0x98), m.u8(real + 0xb8), m.u32(real + 0x1c148), m.u32(real + 0x1c14c)
+    );
+}
+
 fn run_view(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
+    trace(m, "window begin");
     if ddnative_base::sched::view() != 0 {
         // already inside a private traversal's lanes: serial, as with the
         // batch flag set
@@ -264,6 +281,7 @@ fn run_view(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     let result = run_window_with(m, cpu, original, &storage, true);
     LIVE_WINDOW.with(|w| w.set(false));
     drop(window);
+    trace(m, "window end");
     window_result(result);
     true
 }
@@ -542,6 +560,7 @@ fn run_window_with(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, storage: &S
 /// units run here, lane by lane, as DBD8D0's modes 1 to 3 call them (the
 /// proof replay's private_schedule on live memory).
 pub(super) fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) {
+    trace(m, &format!("dispatch ecx={:#x} count={} mode={}", cpu.ecx, m.u32(cpu.ecx + 0x8c), m.u32(cpu.esp + 4)));
     let scheduler = cpu.ecx;
     let count = m.u32(scheduler + 0x8c) as usize;
     let mode = m.u32(cpu.esp + 4);
