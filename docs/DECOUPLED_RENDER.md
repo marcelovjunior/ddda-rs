@@ -592,3 +592,13 @@ treated as tick-bound passes, as section 4.2 already assumes.
 **Gotcha found while measuring:** the user's config.ini was changed to FullScreen=ON, RefreshRate=240Hz; the game then stops at boot
 with "ERR09: Unsupported function" / MissingInstruction at 0x12F507F (device creation) in the sandbox. Runs must force
 FullScreen=OFF in the sandbox copy.
+
+**V2 resolved by experiment (resolution test, shadow agent):** the same exe (fast2 with L191 audit fixes), benchmark save, windowed,
+Resolution=1280x720 in the sandbox config copy only (confirmed: the worker's main target was 1280x720, shadow maps unchanged at 512x1536).
+720p: 60.2 / 60.5 fps (unfiltered mean t=46-84, with `DDRUNTIME_MEASURE` timers on) against 1080p 61.6 / 63.0 (no timers). **fps does not
+rise with 44% fewer pixels, so the benchmark scene is CPU-bound, not GPU-bound, at 1080p**: the 1080p GPU work is below the CPU frame time
+(~16 ms) and the earlier "queue 98% busy" reading was a polling artifact. This does not give the GPU time itself (it could be anywhere from 1
+to 15 ms), so whether 240 fps (4.2 ms) fits the GPU is still open: a 720p run only proves GPU time <= the CPU frame. The pixel-bound share can
+be bounded further by running at 540p or 360p, and a real answer needs `Features::TIMESTAMP_QUERY` (not implemented: no existing timestamp
+plumbing in ddgpu, the passes are written in `vk/pass.rs` and `native.rs`, more than the 30 minutes allowed). 720p worker sink decode: 1537 draws,
+5.34 ms (1080p: 1448 draws, 5.38 ms): the sink cost is per draw, independent of resolution.
