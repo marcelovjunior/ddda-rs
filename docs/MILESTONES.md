@@ -487,6 +487,21 @@
   both failures pass isolated retries. Details: `docs/tasks/L161-codegen.md`.
 - Next: head combined generation/gate with the switch enabled, then
   matched image/FPS acceptance.
+### L157 guest frame wait chain (2026-10-13)
+
+- Source confirms early render kick / double-buffered update overlap / late
+  completion join then main-thread Present. Concrete request/completion
+  handles matched by L153: `0xF0005C/0xF00060`; no new runtime behavior.
+- Late-game c26s0/s1: **69.254/69.322 job joins per frame**, residual
+  **18.644/17.813 ms/frame**; main render join **0.262/0.795 ms/frame**.
+  Profile-on non-VK figures, not FPS acceptance. c26vk main **512/669**
+  join samples; render **323/669** awaiting main, backend **397/669**
+  awaiting commands. Sample shares are not additive stage timings.
+- Analysis verified against lifted code, private dumps, runtime queue and
+  independent wait ranking; no game/GPU/shard runs. Worker job census
+  currently misses worker dispatch sites. Next: corrected lightweight
+  worker census to separate job imbalance from wake delay. Details:
+  `docs/tasks/L157-waitchain.md`.
 
 ### L153 game-thread synchronization (2026-10-13)
 
