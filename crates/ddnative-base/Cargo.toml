@@ -10,6 +10,10 @@ test = false
 
 [features]
 private-replay = []
+# L190: leaner guest memory helpers (aligned dword and byte fast paths, push/pop out of line).
+# On by default; --no-default-features restores the L77 helpers for A/B timing.
+default = ["lean-access"]
+lean-access = []
 
 # The tests run x87 code and lifted calls: the runtime policy behind them (L74).
 [dev-dependencies]

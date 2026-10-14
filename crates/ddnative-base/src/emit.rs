@@ -16,15 +16,26 @@ use std::ptr::NonNull;
 mod flags;
 
 /// `push v`: ESP -= 4, then the dword store at the new ESP.
-#[inline]
+// L190 (feature `lean-access`): one optimised out-of-line copy with the store
+// inlined, not an unoptimised copy per opt-level-0 shard that calls
+// `fast_set_u32` (measured in HOT_PATHS.md section 10).
+#[cfg_attr(feature = "lean-access", inline(never))]
+#[cfg_attr(not(feature = "lean-access"), inline)]
 pub fn push(v: u32, m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) {
     cpu.esp = cpu.esp.wrapping_sub(4);
+    #[cfg(feature = "lean-access")]
+    m.fast_set_u32_inner(pt, cpu.esp, v);
+    #[cfg(not(feature = "lean-access"))]
     m.fast_set_u32(pt, cpu.esp, v);
 }
 
 /// `pop`: the dword at ESP, then ESP += 4; the caller stores the value.
-#[inline]
+#[cfg_attr(feature = "lean-access", inline(never))]
+#[cfg_attr(not(feature = "lean-access"), inline)]
 pub fn pop(m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, cpu: &mut Cpu) -> u32 {
+    #[cfg(feature = "lean-access")]
+    let v = m.fast_u32_inner(pt, cpu.esp);
+    #[cfg(not(feature = "lean-access"))]
     let v = m.fast_u32(pt, cpu.esp);
     cpu.esp = cpu.esp.wrapping_add(4);
     v

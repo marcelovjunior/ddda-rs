@@ -101,7 +101,7 @@ L180 render-worker sink plus the L172 view-mode scheduler tree (base5).
 | `semantic_s1` | `FEDB80/FEDC00` save/restore recording state (8.4x/5.9x), `F23260` draw_attachment 2.5x, tick_gauges, update_instancing | |
 | `semantic_s2/s3` | cast chain `FAC6F0 DEA870 11787C0`, shader_lookup, cull helpers, classify_overlap `EA1EE0`, any_member_test `E61010` | 2-6x |
 | `semantic_s4..s8` | actor/joint/pose/motion filter (`6419 -> 203 ns` 31x), GJK sweep `D7CF70` (3.4x), CRT math | 3-30x |
-| `semantic_l190` (L190) | `FA5860` uSwingModel::vf11 swing_model_draw_unit, `B8B800` rebuild_skin_remap (ESI = model) | 1.8-2.5x, 14.7x (6930 -> 471 ns) |
+| `semantic_l190` (L190) | `FA5860` uSwingModel::vf11 swing_model_draw_unit, `B8B800` rebuild_skin_remap (ESI = model), `B89790` uPlayerBase::vf208 player_draw_parts, `B89FE0` player_draw_part (ESI = context), `B8A770` prepare_part_blocks (EDI = part) | 1.9x, 17-19x (7100 -> 400 ns), 2.3x, 1.9x, 2.0x (paired bench on the recorded vectors, guest calls replayed) |
 | `job_*`, `shadow_*` | `E0E5E0` dependency hash, `FED480` save_state, `DB63E0` traverse, `EFD240` setup, `E61010/E68390` sPrimitive vf11/12, `111E180` pair sort (7.9x) | 1.4-8x |
 | `mtframe` / `mtdraw` / `mtmath` | frame logic, cull, lights, set_render_target, math | see NATIVE_PIPELINE.md |
 
@@ -117,9 +117,8 @@ inclusive share x (1 - 1/speedup) at an assumed 2-3x on lifted bodies.
 
 | # | Function | Role | Incl. CPU-s | Size | Difficulty | Expected |
 |---|---|---|---:|---:|---|---|
-| 1 | `B89790` uPlayerBase::vf208 | player draw: float distance/LOD math, ~10 callees (`B89FE0`, `B8A770`, `7FFCC0` [ported], uModel::vf26), state-slot tail identical to `base_model_draw_unit` | 3.6 (base5), 9-11 (s2e) | 0x84A | medium-hard (floats, mins, loops) | 1-2 CPU-s |
-| 2 | `B8B430` (caller of ported `B8B800`), `B89FE0`, `B8A770` | player skeleton helpers | unknown | | medium | |
-| done L190 | `FA5860` (2.5x), `B8B800` (14.7x) ported; `B6A070` uPlayerBase::vf11 measured 0.91x (3 guest calls dominate), not shipped | | | | | |
+| done L190 | `B89790`, `B89FE0`, `B8A770`, `FA5860`, `B8B800` ported (section 3); `B6A070` uPlayerBase::vf11 measured 0.91x and `B8B430` skipped (below) | | | | | |
+| skip | `B8B430` | player model (re)build: allocates a 0xe50-byte object (`CFE630`/`FF9740`), runs ~20 virtuals, then `B8B800` and `7F4260`/`7F42D0` per part. A setup path, not per frame; dominated by guest calls, so a port would stay below 1.1x | | 0x3C6 | not worth it | |
 | 3 | `886880`/`886530`/`885DC0` uObjModel::vf09/vf11/vf08 and `0084C720` uCharacterBase::vf09 | per-model draw prep | 2.3-3.2 each | small | easy-medium | ~1-2 |
 | 4 | `01174730`, `0116B670`, `01165B40` | probe/sky tree search used by the ambient probe (chain with the ported `11787C0`) | 4.0 | ? | medium | 1-2 |
 | 5 | `EE5CE0` (cascade split math), `EEA950`, `EE2C90` | shadow chain top (floating point; per frame, not per unit) | 2.3-6.8 | | medium, overlaps the shadow owner | small: runs once per cascade |
@@ -146,3 +145,184 @@ through `call_from(..., guest(addr))`), registered in the
 `crates/mtcore/tests/semantic_*.rs` that runs recorded vectors
 (`research/native/record_*.py`, Unicorn on the original exe) and mutation
 checks, and a benchmark of port vs lifted body.
+
+## 6. Function roles (Ghidra, L190)
+
+| Address | Role |
+|---|---|
+| `B89790` | `uPlayerBase::vf208(context, record)`, ret 8: player per-unit draw, parts as records (`7FFCC0`) or ordinary parts (`B89FE0`) |
+| `B89FE0` | player part draw loop over the part's 0x30-byte pass records (`ret 0x20`, ESI = context) |
+| `B8A770` | per-part block preparation: applies `part[0x1c][k]` (or the alternate list) with `C85A00(sink, entry, context)`; EDI = part |
+| `B6A070` | `uPlayerBase::vf11(context)`: fade -> bit 30 of `[0x108]`, `FED480`, virtual +0x340, `FED5D0` |
+| `B8B430` / `B8B800` | player model rebuild; `B8B800` (ESI = model) rebuilds the skin joint remap tables and the pose buffer |
+| `FA5860` | `uSwingModel::vf11(context)`: base draw `EA3130` then retires pending state slots |
+| `EA3130` / `EA1EE0` / `EA1F40` / `EA1FD0` | `uBaseModel::vf11`; visibility mask; world position; shadow state selection |
+| `C52D70` / `886880` / `FA5860` / `B6A070` | the `vf11` (draw_unit) of their classes, called from `DB7620` units |
+| `7FFCC0` | submit pass records (ESI = context, EDI = part), ported (`semantic_s10`) |
+| `C85A00` | apply parameter block, ported (`semantic_s10`) |
+| `FED940` | the context's view matrix pointer; `FED480` / `FED5D0` save / restore recording state; `FED890` grow the constant pool |
+
+Implicit-register conventions matter for ports of these (the oracle tests check
+the registers each recorded guest call reads): `B89FE0` and `7FFCC0` take ESI =
+context, `B8A770` and `7FFCC0` take EDI = the part, `B8B800` takes ESI = model.
+
+## 7. The main/game thread (L190 follow-up)
+
+The frame waits on the main thread, so its time is what counts. Mean of 16
+`guest main thread` samples (profiles `C:/ddda-targets/L172/runs/profile_*.txt`,
+about 16 CPU-s of 30 s each; inclusive CPU-s, children not subtracted):
+
+| Incl. s | Function | What |
+|---:|---|---|
+| 14.8 | `0041DD60` | the frame |
+| 10.7 | `00DBE560` (9.3 of it in `DBD8D0`) | job batch: the main thread runs jobs itself and waits; most of it is the shadow job (`DB7620` 3.9 on this thread) |
+| 5.0 / 4.1 | `00DAF000` sRender::vf06 / `00DC4770` sCamera::vf09 | per-viewport pass replay; 3.5 of it inside the ported `set_pass` (draw-pass replay, whose callees are ported) |
+| 4.4 | `job_shadow::save_state` (`FED480`, ported) | inclusive of the guest call it wraps |
+| 2.6 | `004B97F0` / `00DB6740` | pass A: every unit's move (`sUnitExt::vf09`, a dispatch loop over virtuals) |
+| 2.0 / 1.7 / 1.5 | `restore_recording_state` / `layer_walk` / `node_dispatch` | ported, inclusive of their callees |
+| 0.3 each | `DB5690`, `4B99D0`, `B89790` | pass C, lines, player draw |
+
+Findings:
+
+- **There is no per-function self time for lifted code in these profiles.**
+  Every `-- self` line is a runtime helper (`fast_u32` 18%, `fast_set_u32` 6%,
+  flag helpers) and `-- nearest lifted function` is "(no lifted frame)" at
+  100%: the profile script that made them (`E:/ddda-rs-wt/L63/scripts/sample_profile.py`,
+  used by `autorun.sh`) looks for `::f_` in frame names, which the Rust v0
+  symbols of the shards do not contain. The repo's own `scripts/sample_profile.py`
+  decodes them (`pretty()`); pointing `autorun2.sh` at it gives the nearest
+  lifted caller of every helper sample, which is the missing self table.
+- **Older profiles with lifted self do exist but pre-date the ports** (`E:/ddda-re/notes/profile_fast1c.txt`,
+  100 s of loading): the main thread's top self was `FE9580` (procedural
+  geometry builder, 3.1 s; already a readable port behind `DDRUNTIME_GEOMETRY_PORT`)
+  and a string comparison helper (13%, the `find_identifier` family, ported).
+  Both are loading-time, not frame time.
+- **The remaining unported main-thread functions are thin dispatch loops**
+  (`4B97F0` over unit lines, `DB6740`, `DC4770` over eight viewport records:
+  a handful of reads and a virtual call per element, all the cost in the
+  callees). A port of them would stay under the 1.1x bar. `DB0DE0` shows up
+  in the inclusive list but is the display-mode enumeration of the renderer's
+  constructor (EnumAdapterModes, sprintf, a std::vector): the symbol that
+  carries that name in the shard is not that function's time; do not port it.
+- So on the main thread the lever is still the shadow job (the shadow agent's
+  scheduler work) and the memory-helper cost of lifted code (codegen, not
+  ports); a port only pays where a lifted body is heavy and runs per unit,
+  which is the worker-side player/model draw work ported in section 3.
+
+## 8. Profiling with self time per lifted function (L190)
+
+The L172 profiles named in section 7 have no lifted self time because their
+script (`L63/scripts/sample_profile.py` via `autorun.sh`) cannot read the Rust v0
+symbol names. The repo's `scripts/sample_profile.py` can: its "nearest lifted
+function (self + non-lifted callees)" section assigns every helper sample
+(`fast_u32`, flags, x87, ...) to the lifted function or port that called it.
+Validated offline on the saved capture `scratchpad/stacks_ab_o1b.json`
+(`--input CAPTURE --threads "guest main thread"`): it ranks `00DBE560`
+7.2%, `00DD42C0` 4.1%, `00E12A20` 2.9%, `00FEE320` 2.1% of main-thread busy samples.
+
+- Run: `bash C:/ddda-targets/L172/runs/autorun3.sh EXE TAG` (a copy of the
+  scratchpad `autorun2.sh` that calls the repo script; override with
+  `PROFILER=path`). It writes `profile_TAG.txt` and the raw `stacks_TAG.json`.
+- Re-report without the game: `python scripts/sample_profile.py --input
+  stacks_TAG.json --threads "guest main thread" --top 40 --callers 15`.
+- Rank what runs under the shadow unit callback: `python
+  scripts/profile_units.py stacks_TAG.json [--root 0x00db7620]` (inclusive share
+  per lifted function/port below `DB7620`, and its direct callee, the unit's
+  virtual method).
+
+## 9. Shadow units: what runs under `DB7620` (L190)
+
+`scripts/profile_units.py` over five saved captures (`stacks_ab_o1a/o1b/o2a/o2b`, `stacks_bis29`,
+3067 guest-thread stacks that contain `DB7620`; the captures pre-date most ports, so shares
+show where the work was, not what is left). Share of those stacks a function appears in
+(inclusive), direct callee of `DB7620` in brackets:
+
+| Incl. | Function | Status |
+|---:|---|---|
+| 41.9% | `EA3130` uBaseModel::vf11 (direct 18.6%) | ported (P2c) |
+| 23.0% | `EE2C90` uShadow::vf11 (direct 23%) | shadow chain top, shadow agent |
+| 23.5% | `EA5320` draw_mesh / `FEE320` / `FEEF20` / `E12A20` | ported (folded) |
+| 18.8% | `B6A070` uPlayerBase::vf11 (direct 14.2%) -> `B89790` | `B89790`, `B89FE0`, `B8A770` ported (L190); `B6A070` itself 0.91x, left lifted |
+| 17.7% | `F20640` uSimSoftBody::vf11 (direct 7.5%; via `87D260` 10.2%) | **mechanical port checked equal on 60,000 random states, but 1.0x: not shipped** (see below) |
+| 16.1% | `886880` uObjModel::vf11 | Haiku L191 (6.5x on a 21 ns body) |
+| 13.7% / 12.7% | `FFE5C0` uModel::vf11 / `C52D70` | thin wrappers (`FED480`, `EA3130`, `FED5D0`) |
+| 5.7% | `0080A8B0` | small (0x112 bytes) |
+| 3-4% each | `01144C10`, `0049B110` (0x6b bytes), `E75EA0`, `010CC240`, `5D8DC0` (effect wrapper) | not ported; small or guest-call bound |
+
+**`F20640` finding.** `scripts/semport.py` (now with `imul r,r,imm`, `sete/setne`, FLD/FSTP
+dword pairs and a `cover` feature that reports the blocks never run) translated all 2,098
+instructions mechanically; a differential test against the lifted body (random memory reading
+as finite floats, the same 26-callee stub for both, 60,000 states, 150 of 153 blocks reached,
+the other three being alignment padding) found the two bodies identical, and found a real
+bug in the shared `semantic_rt` (below). But the paired benchmark on cases that run the full
+path (about 35 guest calls each) gave 0.89x-1.07x: the body is dominated by its guest calls
+(every call syncs the 8 registers and 8 XMM registers to and from `Cpu`), so a register-level
+translation cannot beat the lifted code. The port, its test and the lifted copy were removed
+from the tree (commit history keeps the generator and the recipe: `semport.py 0xf20640
+0xf23256`). Lesson for the next candidates: **count guest calls first**; a body with more
+than ~10 guest calls per invocation will not speed up from a port, only from cheaper calls
+(`call_guest` direct dispatch, and syncing only the XMM registers a callee reads).
+
+**Fixed on the way.** `semantic_rt` (used by the mechanically translated ports: `shadow_primitive`
+and the s4 family) picked the second operand when both operands of an SSE arithmetic instruction
+were NaN and the second was signalling; the hardware returns the first operand. Test:
+`crates/mtcore/tests/rt_nan.rs` (hardware vs helper over NaN pairs).
+
+## 10. Per-call and per-instruction overhead (L190)
+
+Micro-benchmarks, release, best of repeated rounds, ns. "O3 caller" = the helper called from
+optimised code (`crates/mtcore/tests/helper_bench.rs`); "O0 caller" = the same call from code
+compiled at opt-level 0 like the play-profile shards (a standalone `rustc -C opt-level=0` harness
+against the optimised `ddnative-base`; its empty loop body costs 7.2 ns of each number).
+
+| Piece | O3 caller before | after (`lean-access`) | O0 caller before -> after |
+|---|---:|---:|---:|
+| `m.fast_u32` (hit) | 2.02 | 1.77 | 12.8 -> 12.8 |
+| `m.fast_set_u32` (hit) | 2.01 | 1.77 | 9.0 -> 9.0 |
+| `emit::push + pop` | 3.53 | 3.52 | 14.4 -> 13.5 |
+| `m.fast_u8` | 1.52 | 1.5-1.8 (code untouched; layout noise) | 12.6 |
+| `fl.alu_sub` / `alu_and` | 1.77 | 1.77 | 12.7 |
+| `fl.cond("le")` / `("ne")` | 7.0 / 2.0 | not changed (a packed-key version gave 5.3 / 2.5: no gain overall) | 15.1 / 14.3 |
+| `x86::call_local` (nop) | 0.25 | | |
+| `x86::call_ext` (trivial handler) | 2.9 | | 9.5 incl. loop |
+| `x87 real_memory` fld+fstp | 9.9 | | |
+
+How the numbers read:
+
+- **The helper bodies are at their floor.** A guest memory access is one out-of-line call, one
+  atomic load of the page entry, a permission test and the load: 1.8-2 ns. `lean-access`
+  (default feature of `ddnative-base`; `--no-default-features` restores L77) gives the aligned
+  dword load and store their own path (no page-end test, one alignment test) and makes `push`/`pop`
+  one optimised out-of-line copy with the store inlined: -12% on `fast_u32`/`fast_set_u32` from an
+  optimised caller and -0.9 ns on push+pop from an opt-level-0 caller. From an opt-level-0 caller
+  the access is not faster, because the caller's own spills and argument set-up (5-6 ns)
+  dominate. Expect about 1-2% of CPU, not more.
+- **Calls are cheap**: a not-overridden `call_local` is a bit test (0.25 ns); `call_ext` into the
+  dispatch cache is 3 ns; the runtime's cache (L74/L101/L171/L185) is already direct-mapped
+  with a lean path; a port reached from a port through `call_guest` is a bit test plus one probe of
+  the open-addressing table. No cheap change is left in dispatch.
+- **The large factor is the opt-level.** The skin-remap function (`B8B800`, loops and memory
+  helpers) runs in 30.6 us at opt-level 0, 12.1 us at opt-level 1, 11.5 us at opt-level 3
+  (2.5x). `-Zmir-opt-level=3 -Zinline-mir` at opt-level 0 gains 4%; nothing else short of
+  opt-level 1 helps. The play profiles build the 32 address shards at opt-level 0 (`play-fast`:
+  15 of them at 1, chosen for loading and the title) and only 83 functions in `lift_hot_00` at 1.
+- **Static helper sites in the generated code**: `fast_u32` 866k, `fast_set_u32` 674k, `emit::push`
+  573k, `emit::pop` 135k, `alu_sub` 101k, `alu_and` 69k, `call_ext` 137k, `call_lifted` 55k,
+  `call_local` 23k, `cond` 336.
+
+**Where the busy lifted time sits** (five saved gameplay captures, busy guest-thread samples
+attributed to the nearest lifted function without a port, `scripts/hot_list.py`): lift_hot_00
+13%, shards 28 11.6%, 02 10.4%, 27 9.6%, 31 4.8%, 01 4.7%, 30 4.6%, 00 4.4%, 06 3.4%, then
+`play-fast`'s opt-level-0 shards 14 2.9%, 08 2.9%, 03 2.7%, 11 2.5%, 29 2.4%, 24 2.4%, 09 2.3%,
+16 2.3% (19.4% together; the other opt-level-0 shards 3.4%).
+
+**What to build.** `play-hot` (new profile, `scripts/build_play.sh --profile play-hot TAG`,
+target `C:/ddda-targets/playhot`) is `play-fast` with those eight shards at opt-level 1 too:
+the 19% of lifted samples they hold should run about 2.5x faster (an estimated 8-11% of lifted
+CPU; unmeasured in game). `scripts/hot_list.py` picks the functions for a finer cut from a
+fresh `autorun3.sh` capture (it skips functions that have a port). Not done: moving the hot list
+inside the generated code. `lift.py gen` with the *committed* hot list rewrites 756 of the 1575
+generated files and takes 11.5 minutes, so the tracked shards no longer match the generator and
+its data; a deliberate regeneration plus gate by the lifter owner is needed before the hot
+package can grow (its capacity is 2000 functions; 83 now).
+

@@ -75,14 +75,14 @@ pub fn base_model_draw_unit(m: &mut dyn Mem, c: &mut Cpu) {
     slots.set_resource(m, 0x1d90, 0, 0x373, 0);
     if (pg.u32(m, this.wrapping_add(0x108)) >> 0x1e) & 1 != 0 {
         slots.set_value(m, 0x2eb0, 0x2cc8, 0x597, 0x950a_6599);
-        fresh_parameter_block(m, c, pg, frame, &slots);
+        fresh_parameter_block(m, c, pg, frame, &slots, 0x00ea_342f);
     }
     finish(c);
 }
 
 /// 0x00EA1EE0 folded: the model's visibility mask for a context, or a
 /// negative value for "not visible". `frame` is the caller's ESP.
-fn visibility_mask(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, context: u32) -> i32 {
+pub(crate) fn visibility_mask(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, context: u32) -> i32 {
     if pg.u8(m, this.wrapping_add(0x108)) & 0x3f == 0 {
         return 0x3f;
     }
@@ -102,7 +102,7 @@ fn visibility_mask(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u3
 }
 
 /// 0x00EA1F40 folded: write the model's 4-float position record to `out`.
-fn model_bounds(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, out: u32) {
+pub(crate) fn model_bounds(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, out: u32) {
     for (k, offset) in [0x160u32, 0x164, 0x168].into_iter().enumerate() {
         let bits = x87_copy_f32(pg.u32(m, this.wrapping_add(offset)));
         pg.set_u32(m, out.wrapping_add(4 * k as u32), bits);
@@ -138,14 +138,14 @@ fn model_bounds(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, this: u32, 
 
 /// The context's fresh parameter block (+0x1330): a copy of the layout's
 /// descriptor (+0x89c) block with its third float cleared.
-fn fresh_parameter_block(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, context: &StateSlots) {
+pub(crate) fn fresh_parameter_block(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, context: &StateSlots, back: u32) {
     let flags = context.field(m, 0x5c);
     context.set_field(m, 0x5c, flags | 2);
     context.log_old(m, 0x1330, 0x227);
     let descriptor = pg.u32(m, context.field(m, 0x18).wrapping_add(0x89c));
     let size = (u32::from(pg.u16(m, descriptor.wrapping_add(0x18))).wrapping_mul(4).wrapping_add(0xf)) & !0xf;
     if context.field(m, 0x24).wrapping_add(size) > context.field(m, 0x28) {
-        call_from(m, c, pg, frame, context.model, &[size], 0x00ea_342f, guest(0x00fe_d890));
+        call_from(m, c, pg, frame, context.model, &[size], back, guest(0x00fe_d890));
     }
     let block = context.field(m, 0x24);
     context.set_field(m, 0x24, block.wrapping_add(size));

@@ -86,23 +86,18 @@ pub fn cvttss2si(value: f32) -> u32 {
 }
 
 /// The NaN an SSE arithmetic instruction returns when an operand is a NaN:
-/// a signalling NaN wins over a quiet one, otherwise the first (destination)
-/// operand wins; the result is quieted. Plain Rust arithmetic may swap the
+/// the first (destination) operand if it is one, else the second; quieted. Plain Rust arithmetic may swap the
 /// operands of commutative operations, which would pick the other NaN.
 fn pick_nan(a: u32, b: u32) -> Option<u32> {
     let is_nan = |v: u32| v & 0x7fff_ffff > 0x7f80_0000;
-    let is_signalling = |v: u32| is_nan(v) && v & 0x0040_0000 == 0;
     let chosen = match (is_nan(a), is_nan(b)) {
         (false, false) => return None,
         (true, false) => a,
         (false, true) => b,
-        (true, true) => {
-            if is_signalling(a) || !is_signalling(b) {
-                a
-            } else {
-                b
-            }
-        }
+        // both NaN: the first source operand, whatever the other is (measured on
+        // the hardware; the x87 rule that a quiet NaN beats a signalling one does
+        // not apply to SSE)
+        (true, true) => a,
     };
     Some(chosen | 0x0040_0000)
 }
@@ -130,3 +125,29 @@ scalar_op!(mulss, *);
 scalar_op!(addss, +);
 scalar_op!(subss, -);
 scalar_op!(divss, /);
+
+/// FLD dword / FSTP dword of a float on the hardware: the same value, a
+/// signalling NaN quieted.
+#[inline]
+pub fn x87_copy(bits: u32) -> u32 {
+    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
+        bits | 0x0040_0000
+    } else {
+        bits
+    }
+}
+
+#[cfg(feature = "cover")]
+thread_local! {
+    static HITS: std::cell::RefCell<std::collections::BTreeSet<u32>> = Default::default();
+}
+/// A translated block was entered (feature `cover`).
+#[cfg(feature = "cover")]
+pub fn hit(pc: u32) {
+    HITS.with(|h| h.borrow_mut().insert(pc));
+}
+/// The blocks entered so far on this thread (feature `cover`).
+#[cfg(feature = "cover")]
+pub fn hits() -> Vec<u32> {
+    HITS.with(|h| h.borrow().iter().copied().collect())
+}

@@ -975,4 +975,43 @@ incremental = false
 
 [profile.play-o2.package.ddlift-hot-00]
 opt-level = 2
+# L190 `play-hot`: `play-fast` with the busiest opt-level-0 shards built at opt-level 1 as well.
+# An opt-level-1 shard runs its functions about 2.5x faster than opt-level 0 (HOT_PATHS.md
+# section 10); on five saved gameplay captures these eight held 19.4% of the busy samples that
+# fall in lifted functions without a port (the other opt-level-0 shards 3.4%). Cost: eight more
+# opt-level-1 shards on the first build (about 150-215 s each, BUILD.md), cached in a warm target.
+# Build: scripts/build_play.sh --profile play-hot TAG
+[profile.play-hot]
+inherits = "play-fast"
+
+[profile.play-hot.package.ddlift-03]
+opt-level = 1
+incremental = false
+
+[profile.play-hot.package.ddlift-08]
+opt-level = 1
+incremental = false
+
+[profile.play-hot.package.ddlift-09]
+opt-level = 1
+incremental = false
+
+[profile.play-hot.package.ddlift-11]
+opt-level = 1
+incremental = false
+
+[profile.play-hot.package.ddlift-14]
+opt-level = 1
+incremental = false
+
+[profile.play-hot.package.ddlift-16]
+opt-level = 1
+incremental = false
+
+[profile.play-hot.package.ddlift-24]
+opt-level = 1
+incremental = false
+
+[profile.play-hot.package.ddlift-29]
+opt-level = 1
 incremental = false
