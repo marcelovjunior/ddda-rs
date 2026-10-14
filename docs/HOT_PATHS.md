@@ -208,3 +208,24 @@ Findings:
   scheduler work) and the memory-helper cost of lifted code (codegen, not
   ports); a port only pays where a lifted body is heavy and runs per unit,
   which is the worker-side player/model draw work ported in section 3.
+
+## 8. Profiling with self time per lifted function (L190)
+
+The L172 profiles named in section 7 have no lifted self time because their
+script (`L63/scripts/sample_profile.py` via `autorun.sh`) cannot read the Rust v0
+symbol names. The repo's `scripts/sample_profile.py` can: its "nearest lifted
+function (self + non-lifted callees)" section assigns every helper sample
+(`fast_u32`, flags, x87, ...) to the lifted function or port that called it.
+Validated offline on the saved capture `scratchpad/stacks_ab_o1b.json`
+(`--input CAPTURE --threads "guest main thread"`): it ranks `00DBE560`
+7.2%, `00DD42C0` 4.1%, `00E12A20` 2.9%, `00FEE320` 2.1% of main-thread busy samples.
+
+- Run: `bash C:/ddda-targets/L172/runs/autorun3.sh EXE TAG` (a copy of the
+  scratchpad `autorun2.sh` that calls the repo script; override with
+  `PROFILER=path`). It writes `profile_TAG.txt` and the raw `stacks_TAG.json`.
+- Re-report without the game: `python scripts/sample_profile.py --input
+  stacks_TAG.json --threads "guest main thread" --top 40 --callers 15`.
+- Rank what runs under the shadow unit callback: `python
+  scripts/profile_units.py stacks_TAG.json [--root 0x00db7620]` (inclusive share
+  per lifted function/port below `DB7620`, and its direct callee, the unit's
+  virtual method).
