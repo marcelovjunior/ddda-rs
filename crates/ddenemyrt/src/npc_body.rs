@@ -128,6 +128,21 @@ impl NpcBody {
             attributes, saved_flags, blocking_goods)
     }
 
+    /// Clear common-action joint mAttr40 on exit, using this lifetime's
+    /// current attributes and installed bone map. Native exit passes mode1
+    /// unconditionally; saved entry flags and held goods do not participate.
+    /// This is only the joint write: bank7/9 restoration and the linked event
+    /// actor exit remain separate providers for a complete action exit.
+    // Translated from 0x00AC8A4B..0x00AC8A50 -> 0x00B86010
+    // (DDDA.exe 2017-12-13 Steam).
+    pub fn action_exit_joint_attributes(&self, attributes: &mut [u8]) -> Result<(), String> {
+        if attributes.len() != self.body.skeleton.joints.len() {
+            return Err("action exit needs this body's current model-joint attributes".into());
+        }
+        model_joint_attribute_write(self.bone_map.as_deref()
+            .ok_or("action exit needs the installed model bone map")?, attributes, true)
+    }
+
     /// Ordinary HumanEdit mode3 scenery capsule. The host supplies its
     /// actual installed shared adjustment table, not an estimated height.
     /// Missing HumanEdit leaves this adapter unsupported (`None`), preserving
@@ -345,18 +360,24 @@ impl NpcBody {
 // Translated from 0x0080D500 and 0x00B86010 (DDDA.exe 2017-12-13 Steam).
 fn damage_joint_attributes(bone_map: &[u8], attributes: &mut [u8], saved_flags: u32,
     blocking_goods: bool) -> Result<(), String> {
+    let clear = !blocking_goods && saved_flags & 0x200 != 0
+        && saved_flags & (0x10 | 0x6000) == 0;
+    model_joint_attribute_write(bone_map, attributes, clear)
+}
+
+// Translated from 0x00B86010 (DDDA.exe 2017-12-13 Steam).
+fn model_joint_attribute_write(bone_map: &[u8], attributes: &mut [u8], clear: bool)
+    -> Result<(), String> {
     let mut targets = [None; 4];
     for (target, bone_id) in targets.iter_mut().zip([0x96, 0x97, 0x99, 0x9b]) {
         let index = *bone_map.get(bone_id).ok_or("truncated installed model bone map")?;
         if index != 0xff {
             if usize::from(index) >= attributes.len() {
-                return Err("damage bone map points outside this body's model joints".into());
+                return Err("bone map points outside this body's model joints".into());
             }
             *target = Some(usize::from(index));
         }
     }
-    let clear = !blocking_goods && saved_flags & 0x200 != 0
-        && saved_flags & (0x10 | 0x6000) == 0;
     for index in targets.into_iter().flatten() {
         if clear { attributes[index] &= !0x40; }
         else { attributes[index] |= 0x40; }
@@ -366,7 +387,28 @@ fn damage_joint_attributes(bone_map: &[u8], attributes: &mut [u8], saved_flags: 
 
 #[cfg(test)]
 mod damage_joint_tests {
-    use super::damage_joint_attributes;
+    use super::{damage_joint_attributes, model_joint_attribute_write};
+
+    #[test]
+    fn demo_action_exit_clears_current_joint_bit_with_aliases_and_atomic_validation() {
+        let mut map = [0xff; 256];
+        map[0x96] = 2;
+        map[0x97] = 0;
+        map[0x99] = 2;
+        let mut attributes = [0xc5, 0x67, 0x59, 0xd3];
+        model_joint_attribute_write(&map, &mut attributes, true).unwrap();
+        assert_eq!(attributes, [0x85, 0x67, 0x19, 0xd3],
+            "exit clears only mapped mAttr40, leaving unrelated and unmapped bits current");
+        model_joint_attribute_write(&map, &mut attributes, true).unwrap();
+        assert_eq!(attributes, [0x85, 0x67, 0x19, 0xd3]);
+        attributes[0] |= 0x40;
+        map[0x9b] = 4;
+        let before = attributes;
+        assert!(model_joint_attribute_write(&map, &mut attributes, true).is_err());
+        assert_eq!(attributes, before, "invalid last joint cannot clear an earlier joint");
+        assert!(model_joint_attribute_write(&map[..0x9b], &mut attributes, true).is_err());
+        assert_eq!(attributes, before);
+    }
 
     #[test]
     fn demo_damage_entry_changes_mapped_joint_attributes_and_preserves_other_bits() {
