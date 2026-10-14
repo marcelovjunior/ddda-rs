@@ -195,6 +195,9 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             // L190: per-unit leaves of the shadow/model draw (ESI = model for 0x00B8B800)
             (0x00fa_5860, mtcore::semantic_l190::swing_model_draw_unit),
             (0x00b8_b800, mtcore::semantic_l190::rebuild_skin_remap),
+            (0x00b8_9790, mtcore::semantic_l190::player_draw_parts),
+            (0x00b8_9fe0, mtcore::semantic_l190::player_draw_part),
+            (0x00b8_a770, mtcore::semantic_l190::prepare_part_blocks),
         ] {
             if !semantic_selected(a) {
                 continue;

@@ -55,10 +55,12 @@ fn bench(path: &str, name: &str, bodies: &[(&str, LiftFn)]) {
         for case in cases.iter().step_by(3) {
             let initial = pairs(&case["initial"]);
             let before = regs(&case["before"]);
+            // the CRT memcpy / memset are native in both bodies: not replayed
             let events: Vec<(Vec<(u32, u8)>, u32, u32)> = case["events"]
                 .as_array()
                 .unwrap()
                 .iter()
+                .filter(|e| ![0x012e_fea0, 0x012e_fe20].contains(&n(&e["target"])))
                 .map(|e| (pairs(&e["after"]["memory"]), regs(&e["after"])[0], regs(&e["after"])[4]))
                 .collect();
             for (k, (_, body)) in bodies.iter().enumerate() {
@@ -66,7 +68,15 @@ fn bench(path: &str, name: &str, bodies: &[(&str, LiftFn)]) {
                 for _ in 0..20 {
                     let at = std::cell::Cell::new(0usize);
                     let ev = events.clone();
-                    x86::set_ext_calls(Some(Box::new(move |m, c, _| {
+                    x86::set_ext_calls(Some(Box::new(move |m, c, target| {
+                        // helpers that are ports in production: run them (their own
+                        // guest calls come from the recorded stream)
+                        match target {
+                            0x00ea_1ee0 => return mtcore::semantic_s3::classify_overlap(m, c),
+                            0x00ea_1f40 => return mtcore::semantic_s3::world_position(m, c),
+                            0x00ea_1fd0 => return mtcore::semantic_p2c::select_shadow_state_abi(m, c),
+                            _ => {}
+                        }
                         let (effects, eax, esp) = &ev[at.get()];
                         at.set(at.get() + 1);
                         for &(a, b) in effects {
@@ -113,4 +123,22 @@ fn bench_swing_model_draw_unit() {
 #[ignore]
 fn bench_skin_remap() {
     bench(&format!("{DIR}skin_remap.json"), "0x00B8B800", &[("lifted", lifted::f_00b8b800), ("port", mtcore::semantic_l190::rebuild_skin_remap)]);
+}
+
+#[test]
+#[ignore]
+fn bench_player_draw_parts() {
+    bench(&format!("{DIR}player_parts.json"), "0x00B89790", &[("lifted", lifted::f_00b89790), ("port", mtcore::semantic_l190::player_draw_parts)]);
+}
+
+#[test]
+#[ignore]
+fn bench_prepare_part_blocks() {
+    bench(&format!("{DIR}skin_prepare.json"), "0x00B8A770", &[("lifted", lifted::f_00b8a770), ("port", mtcore::semantic_l190::prepare_part_blocks)]);
+}
+
+#[test]
+#[ignore]
+fn bench_player_draw_part() {
+    bench(&format!("{DIR}player_part.json"), "0x00B89FE0", &[("lifted", lifted::f_00b89fe0), ("port", mtcore::semantic_l190::player_draw_part)]);
 }

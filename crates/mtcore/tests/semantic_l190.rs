@@ -188,3 +188,54 @@ fn semantic_skin_remap_matches_original() {
     let (cases, made) = run_cases(&vectors("skin_remap.json"), mtcore::semantic_l190::rebuild_skin_remap, true, &callees, &[0x012e_fea0, 0x012e_fe20]);
     eprintln!("{cases} ABI-level skin-remap cases passed; calls {made:x?}");
 }
+
+// verifies 0x00b89790 (ABI level; void, ret 8) with 0x00EA1EE0 / 0x00EA1F40 / 0x00EA1FD0 folded in
+#[test]
+fn semantic_player_draw_parts_matches_original() {
+    let c = |target, stack_args| Callee { target, reads: &[ECX], stack_args };
+    let callees = [
+        c(0x00ff_0780, 1),
+        c(0x00ff_0ad0, 2),
+        c(0x00fe_d480, 1),
+        c(0x3000_0003, 2),
+        c(0x00fe_d8d0, 0),
+        c(0x00fe_d5d0, 1),
+        c(0x3000_0030, 1),
+        c(0x00fe_d890, 1),
+        c(0x00fe_d940, 0),
+        c(0x3000_0064, 1),
+        c(0x3000_0198, 1),
+        c(0x3000_0024, 0),
+        c(0x00ff_c350, 6),
+        Callee { target: 0x007f_fcc0, reads: &[ESI, EDI], stack_args: 6 },
+        Callee { target: 0x00b8_9fe0, reads: &[ESI], stack_args: 8 },
+        Callee { target: 0x00b8_a770, reads: &[EDI], stack_args: 2 },
+    ];
+    let (cases, made) = run_cases(&vectors("player_parts.json"), mtcore::semantic_l190::player_draw_parts, false, &callees, &[0x012e_fea0]);
+    eprintln!("{cases} ABI-level player-parts cases passed; calls {made:x?}");
+}
+
+// verifies 0x00b8a770 (ABI level; stdcall, EDI = the part) with 0x00C85A00 as a recorded stub
+#[test]
+fn semantic_prepare_part_blocks_matches_original() {
+    let callees = [Callee { target: 0x00c8_5a00, reads: &[], stack_args: 3 }];
+    let (cases, made) = run_cases(&vectors("skin_prepare.json"), mtcore::semantic_l190::prepare_part_blocks, false, &callees, &[]);
+    eprintln!("{cases} ABI-level part-blocks cases passed; calls {made:x?}");
+}
+
+// verifies 0x00b89fe0 (ABI level; stdcall, ESI = the context) with its guest calls as recorded stubs
+#[test]
+fn semantic_player_draw_part_matches_original() {
+    let c = |target, reads: &'static [usize], stack_args| Callee { target, reads, stack_args };
+    let callees = [
+        c(0x00ff_14d0, &[ECX], 0),
+        c(0x00fe_d190, &[ECX], 2),
+        c(0x00fe_d890, &[ECX], 1),
+        c(0x00ea_23f0, &[ECX], 2),
+        c(0x00fe_d940, &[ECX], 0),
+        c(0x00fe_ef20, &[ECX], 0),
+        c(0x00ff_1920, &[ECX], 0),
+    ];
+    let (cases, made) = run_cases(&vectors("player_part.json"), mtcore::semantic_l190::player_draw_part, false, &callees, &[]);
+    eprintln!("{cases} ABI-level player-part cases passed; calls {made:x?}");
+}
