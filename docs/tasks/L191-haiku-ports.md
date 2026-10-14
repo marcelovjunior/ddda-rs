@@ -90,3 +90,19 @@ a path the caller never takes); the scribble rule covers the rest.
    Check that, and record the clobber (`after_atan2` hook in `record_l191_vf09.py`).
 7. Test on the registers the callee reads, not only on memory: a port can write the
    right memory and still crash the game through a register.
+
+## Not ported: 0x00DDBDC0 (checked, no port)
+
+- 0x00DDBDC0 is a dispatcher: for each entry of the table at `this+0x3B340` (stride 0x40) it
+  switches on the entry's type and calls one of five guest handlers (0x00DDB340,
+  0x00DD3EF0, 0x00DD4040, 0x00DD4180, or the already-ported 0x00DD42C0), then calls 0x00DCC300
+  and 0x00DBE560 (the join/wait machinery) once. Nearly all of its time is in those calls.
+- Its own lifted self time is about one of the 19 profile samples attributed to it
+  (`prof4`, "nearest lifted function (self + non-lifted callees)"). The rest is the ported
+  0x00DD42C0 (`mtcore::semantic::dispatch_event`, 18 self samples under the `call_ext`
+  dispatch closure). A port of 0x00DDBDC0 would be mostly guest calls: estimated < 1.1x.
+- The real self-time sink is 0x00DD42C0 itself: a linear scan of all listeners of
+  `this+0x4CD48` (stride 0x6E0) for each event and each parent level, reading about six fields
+  per listener through the page table. Cheaper options: read the first 0xD0 bytes of each
+  listener once (one slice instead of six page lookups); keep an owner/channel index
+  maintained by the add/remove paths (needs those paths ported too).
