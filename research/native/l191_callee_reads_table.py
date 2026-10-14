@@ -24,7 +24,7 @@ SAVED = {'ebx': 3, 'ebp': 5, 'esi': 6, 'edi': 7}
 # the tests' synthetic stub and heap addresses (not code of the image)
 SYNTHETIC = (0x2000_0000, 0x4000_0000)
 # the L173 recorders' BEGIN/END markers (record_l173.py): harness callbacks, reads nothing
-MARKERS = (0x0120_0000, 0x0120_0020)
+MARKERS = ((0x0120_0000, 0x0120_0020), (0x0DEA_0000, 0x0DEA_0030))  # + record_material.py VF_BOUNDS/SECOND/THIRD stubs (ret 4)
 # recorded targets whose callee is not known (no lifted body, not a recorder marker):
 # the reads are unknown, so the register check is not made. Open: see docs/tasks/L191-haiku-ports.md.
 OPEN = {0x0DEAD100: 'routine of the joints recording (L165 job_joints.json, case 480): no lifted body'}
@@ -117,7 +117,7 @@ def main():
         targets_in(data, found)
     rows = []
     for t in sorted(found):
-        if SYNTHETIC[0] <= t < SYNTHETIC[1] or MARKERS[0] <= t < MARKERS[1]:
+        if SYNTHETIC[0] <= t < SYNTHETIC[1] or any(lo <= t < hi for lo, hi in MARKERS):
             rows.append((t, [], 'synthetic'))
         elif t in OPEN:
             rows.append((t, [], 'open'))

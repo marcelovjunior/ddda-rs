@@ -342,9 +342,9 @@ pub fn saved_reads(target: u32) -> &'static [usize] {
         0x0d0006d0 => &[3, 5, 6, 7], // no lifted body: conservative
         0x0d0006f0 => &[3, 5, 6, 7], // no lifted body: conservative
         0x0d000710 => &[3, 5, 6, 7], // no lifted body: conservative
-        0x0dea0000 => &[3, 5, 6, 7], // no lifted body: conservative
-        0x0dea0010 => &[3, 5, 6, 7], // no lifted body: conservative
-        0x0dea0020 => &[3, 5, 6, 7], // no lifted body: conservative
+        0x0dea0000 => &[], // test stub, heap or recorder marker: reads nothing
+        0x0dea0010 => &[], // test stub, heap or recorder marker: reads nothing
+        0x0dea0020 => &[], // test stub, heap or recorder marker: reads nothing
         0x0dead100 => &[], // OPEN: unknown reads, not checked (see docs)
         0x0e038000 => &[3, 5, 6, 7], // no lifted body: conservative
         0x0e038030 => &[3, 5, 6, 7], // no lifted body: conservative

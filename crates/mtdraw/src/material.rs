@@ -137,6 +137,7 @@ pub fn apply_material_state(m: &mut dyn Mem, c: &mut Cpu) {
     let pg = Pages::of(m);
     let this = c.ecx;
     let entry_esp = c.esp;
+    let entry_edi = c.edi;
     let serial = pg.u32(m, SERIAL).wrapping_add(1);
     let value = pg.u32(m, entry_esp.wrapping_add(8));
     let shader = pg.u32(m, this.wrapping_add(0x10));
@@ -268,12 +269,16 @@ pub fn apply_material_state(m: &mut dyn Mem, c: &mut Cpu) {
     pg.set_u32(m, at(0x154), f | 3);
 
     // this->update(context): the original's frame (three saved registers)
-    // and its pushes, so the callee sees the same stack
+    // and its pushes, so the callee sees the same stack. The lifted tail
+    // sets ECX = EDI = this and pops the caller's EDI after the call; the
+    // callee reads EDI (0x01062F20's own lifted code).
     c.esp = entry_esp.wrapping_sub(12);
     push(m, pg, c, ctx);
     push(m, pg, c, 0x0106_589C);
     c.ecx = this;
+    c.edi = this;
     x86::call_ext(m, c, UPDATE);
+    c.edi = entry_edi;
     c.esp = entry_esp.wrapping_add(12);
 }
 
