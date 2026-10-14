@@ -42,6 +42,12 @@ R = os.path.join(os.path.dirname(__file__), "..", "..")
 LEAN = os.environ.get("LIFT_LEAN", "1") != "0"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lean_emission  # noqa: E402
+import stack_window  # noqa: E402
+
+# L190: dword accesses through ESP/EBP, push and pop use the CPU's stack window
+# (emit::stack_u32 etc.; ddnative-base feature stack-window makes them fast, otherwise they are
+# the page-table access as before). LIFT_STACK_WINDOW=0 emits the plain helpers.
+STACK_WINDOW = os.environ.get("LIFT_STACK_WINDOW", "1") != "0"
 
 GPR32 = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi"]
 SUB8 = {"al": ("eax", 0), "cl": ("ecx", 0), "dl": ("edx", 0), "bl": ("ebx", 0),
@@ -2849,7 +2855,8 @@ def cpu_arm(arm, start=None, fast=True):
                  lambda m: fields.get(m[0], m[0]), arm)
     # L73: whole functions get the lean passes (lean_emission.py); step
     # functions keep one literal template per instruction.
-    return lean_emission.lean(fast_memory(arm)) if fast and LEAN else fast_memory(arm) if fast else arm
+    lowered = lean_emission.lean(fast_memory(arm)) if fast and LEAN else fast_memory(arm) if fast else arm
+    return stack_window.transform(lowered)[0] if fast and STACK_WINDOW else lowered
 
 
 # The six Mem accessors the templates emit, lowered to the inline fast path

@@ -84,6 +84,24 @@ pub struct Cpu {
     pub mxcsr: Mxcsr,
     /// Full x87 state, including 80-bit stack values and control/status words.
     pub st: crate::x87::X87,
+    /// The guest stack window (L190, feature `stack-window`): guest addresses
+    /// `stack_lo .. stack_lo + stack_span + 3` are backed by one contiguous, readable and writable
+    /// host block at `stack_host` (`stack_span` 0: no window). Stack accesses inside it skip
+    /// the page table. Set with [`Cpu::set_stack_window`].
+    pub stack_lo: u32,
+    pub stack_span: u32,
+    pub stack_host: usize,
+}
+
+impl Cpu {
+    /// Declare the stack window: `len` bytes at guest `lo`, at `host` in the host's memory.
+    ///
+    /// # Safety
+    /// The block must stay readable and writable for as long as this CPU runs lifted code, and
+    /// be the very memory the page table serves for those guest addresses.
+    pub unsafe fn set_stack_window(&mut self, lo: u32, len: u32, host: *mut u8) {
+        (self.stack_lo, self.stack_span, self.stack_host) = (lo, len.saturating_sub(3), host as usize);
+    }
 }
 
 impl From<Entry> for Cpu {
@@ -93,7 +111,7 @@ impl From<Entry> for Cpu {
         Cpu { eax: r.eax, ecx: r.ecx, edx: r.edx, ebx: r.ebx, esp: r.esp, ebp: r.ebp, esi: r.esi, edi: r.edi,
               xmm, fl: Flags::default(), df: false, fs_base: 0, seg: Segments::default(), sys_flags: 0,
               mxcsr: Mxcsr::default(),
-              st: Default::default() }
+              st: Default::default(), stack_lo: 0, stack_span: 0, stack_host: 0 }
     }
 }
 
