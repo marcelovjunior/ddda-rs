@@ -146,6 +146,12 @@ struct SkyEnvParams {
 
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
+#ifdef DD_MATERIAL_FEATURE_FLAGS
+    // Pipeline key includes these current bits, including fade/sky changes.
+    let feature_flags: u32 = #{DD_MATERIAL_FEATURE_FLAGS};
+#else
+    let feature_flags = dd.flags;
+#endif
     var out: VertexOutput;
 #ifdef SKINNED
     // Characters (character.rs): skinned as Bevy's mesh shader does.
@@ -201,7 +207,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     let imported_t = (world_from_local * vec4<f32>(vertex.tangent.xyz, 0.0)).xyz;
     out.world_tangent = vec4<f32>(imported_t, vertex.tangent.w);
     out.world_bitangent = cross(imported_t, imported_n) * vertex.tangent.w;
-    if ((dd.flags & FLAG_NORMAL_MAP) != 0u) {
+    if ((feature_flags & FLAG_NORMAL_MAP) != 0u) {
         out.world_normal = normalize(imported_n);
     }
 #endif
@@ -240,7 +246,12 @@ fn fragment(
     in: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
-    if ((dd.flags & FLAG_SHADOW_ONLY) != 0u) {
+#ifdef DD_MATERIAL_FEATURE_FLAGS
+    let feature_flags: u32 = #{DD_MATERIAL_FEATURE_FLAGS};
+#else
+    let feature_flags = dd.flags;
+#endif
+    if ((feature_flags & FLAG_SHADOW_ONLY) != 0u) {
         discard;
     }
     var standard: forward_io::VertexOutput;
@@ -269,7 +280,7 @@ fn fragment(
     let geometric_n = pbr_input.N;
 #ifdef VERTEX_TANGENTS
 #ifdef VERTEX_UVS_A
-    if ((dd.flags & FLAG_NORMAL_MAP) != 0u) {
+    if ((feature_flags & FLAG_NORMAL_MAP) != 0u) {
         let source_uv = vec4<f32>(in.uv, 0.0, 1.0);
         let uv = vec2<f32>(dot(dd.normal_uv0, source_uv), dot(dd.normal_uv1, source_uv));
         let rgba = textureSample(normal_texture, normal_sampler, uv);
@@ -287,7 +298,7 @@ fn fragment(
 #endif
 #endif
 
-    if ((dd.flags & FLAG_MAP) != 0u) {
+    if ((feature_flags & FLAG_MAP) != 0u) {
 #ifdef VERTEX_UVS_B
         let uv = in.uv_b;
 #else
@@ -300,7 +311,7 @@ fn fragment(
     pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
     // rMaterial::vf09 0x0112e4d0 / draw 0x00fee320: alpha testing
     // remains enabled independently of blending and depth writes.
-    if ((dd.flags & FLAG_ALPHA_TEST) != 0u) {
+    if ((feature_flags & FLAG_ALPHA_TEST) != 0u) {
         let a = pbr_input.material.base_color.a;
         let r = f32(dd.alpha_reference) / 255.0;
         var alpha_passes = true;
@@ -318,7 +329,7 @@ fn fragment(
     }
 
     var out: FragmentOutput;
-    if ((dd.flags & FLAG_DD_LIGHTING) != 0u) {
+    if ((feature_flags & FLAG_DD_LIGHTING) != 0u) {
         let n = pbr_input.N;
         var shadow = 1.0;
         let view_z = dot(vec4<f32>(
@@ -347,15 +358,15 @@ fn fragment(
             let cone = pow(clamp((dot(-dd.spot_dir.xyz, l) - dd.spot_atten.z) * dd.spot_atten.w, 0.0, 1.0), dd.spot_pos.w);
             light += dd.spot_color.rgb * range * cone * max(dot(n, l), 0.0);
         }
-        if ((dd.flags & FLAG_NO_LIGHT_BUFFER) != 0u) {
+        if ((feature_flags & FLAG_NO_LIGHT_BUFFER) != 0u) {
             // Unlit: the vertex colour (in the base colour) is the light.
             light = vec3<f32>(1.0);
         }
-        if ((dd.flags & FLAG_CONST_LIGHT) != 0u) {
+        if ((feature_flags & FLAG_CONST_LIGHT) != 0u) {
             light = dd.const_light.rgb;
         }
         var albedo = pbr_input.material.base_color.rgb;
-        if ((dd.flags & FLAG_ALBEDO_ADD) != 0u) {
+        if ((feature_flags & FLAG_ALBEDO_ADD) != 0u) {
             // FAlbedoMapAdd / FUVViewNormal (character pixel shaders, file
             // offsets 0x31BEA8 and 0x40C494 of sc\dx9\root): the normal
             // through the 3x3 of fView, normalized; UV = (0.5 + 0.5 x,
@@ -369,7 +380,7 @@ fn fragment(
             albedo += b.rgb * b.a * dd.albedo_blend.rgb;
         }
         var color = albedo * light;
-        if ((dd.flags & FLAG_CHARACTER) != 0u) {
+        if ((feature_flags & FLAG_CHARACTER) != 0u) {
             // The character pixel shaders' specular (same shaders):
             //   spec = (DL0 colour x (N.H)^fShininess x fSpecularColor + env)
             //          x tSpecularMap.rgb x occlusion
@@ -388,14 +399,14 @@ fn fragment(
             let shine = dd.spec.w;
             let h = normalize(dd.sun_dir.xyz + v);
             var spec = dd.sun_color.rgb * shadow * pow(max(dot(n, h), 1e-5), shine) * dd.spec.rgb;
-            if ((dd.flags & FLAG_ENV_CUBE) != 0u) {
+            if ((feature_flags & FLAG_ENV_CUBE) != 0u) {
                 let r = reflect(-v, n);
                 let hs = normalize(vec3<f32>(0.0, 1.0, 0.0) + v);
                 let boost = 1.0 + 7.0 * pow(max(dot(n, hs), 1e-5), shine) - (1.0 - shadow);
                 spec += textureSample(env_cube, env_sampler, r).rgb * dd.env.rgb * dd.reflect.rgb * boost;
             }
             var mask = vec3<f32>(1.0);
-            if ((dd.flags & FLAG_SPEC_MAP) != 0u) {
+            if ((feature_flags & FLAG_SPEC_MAP) != 0u) {
 #ifdef VERTEX_UVS_A
                 mask = textureSample(spec_texture, spec_sampler, in.uv).rgb;
 #endif
@@ -404,7 +415,7 @@ fn fragment(
             let fres = mix(dd.reflect.w, 1.0, pow(max(1.0 - dot(n, v), 0.0), 5.0));
             color += spec * mask * fres;
         }
-        if ((dd.flags & FLAG_REFLECT) != 0u) {
+        if ((feature_flags & FLAG_REFLECT) != 0u) {
             // Environment reflection as in the stage shaders (e.g. file
             // offsets 0x88068C, 0x4A0980): env * fReflectiveColor *
             // specular map G * mean ambient * Schlick Fresnel lerp(F0, 1,
@@ -414,14 +425,14 @@ fn fragment(
             // geometry), the normal and detail normal maps; without a sky
             // the fog colour stands in.
             var mask = 1.0;
-            if ((dd.flags & FLAG_SPEC_MAP) != 0u) {
+            if ((feature_flags & FLAG_SPEC_MAP) != 0u) {
 #ifdef VERTEX_UVS_A
                 mask = textureSample(spec_texture, spec_sampler, in.uv).g;
 #endif
             }
             let sh = sh_irradiance(n);
             var ambient = (sh.r + sh.g + sh.b) / 3.0;
-            if ((dd.flags & FLAG_NO_LIGHT_BUFFER) != 0u) {
+            if ((feature_flags & FLAG_NO_LIGHT_BUFFER) != 0u) {
                 // mean(VertexColor.rgb) x Occlusion
                 ambient = 1.0;
 #ifdef VERTEX_COLORS
@@ -432,11 +443,11 @@ fn fragment(
             let fres = mix(dd.reflect.w, 1.0, pow(1.0 - nv, 5.0));
             var env = dd.fog_color.rgb;
             let r = reflect(-pbr_input.V, n);
-            if ((dd.flags & FLAG_ENV_CUBE) != 0u) {
+            if ((feature_flags & FLAG_ENV_CUBE) != 0u) {
                 // DDCube<i>_CM = DDBaseCube<i>_CM x the weather's colour
                 // (0x912060; its HDR encode is a no-op below 1).
                 env = textureSample(env_cube, env_sampler, r).rgb * dd.env.rgb;
-            } else if ((dd.flags & FLAG_SKY_ENV) != 0u) {
+            } else if ((feature_flags & FLAG_SKY_ENV) != 0u) {
                 // Planar water reflection (FReflectWaterMap): the sky
                 // stands in for the mirrored scene.
                 env = sky_color(sky_env.cb, sky_rayleigh, sky_mie, sky_env.eye.xyz, r);
@@ -448,7 +459,7 @@ fn fragment(
         let f = clamp((depth - dd.fog_range.x) * dd.fog_range.y, 0.0, 1.0) * dd.fog_color.w;
         color = mix(color, dd.fog_color.rgb, f);
         out.color = vec4<f32>(color, pbr_input.material.base_color.a);
-        if ((dd.flags & FLAG_BLENDED) == 0u) {
+        if ((feature_flags & FLAG_BLENDED) == 0u) {
             // The frame's alpha carries the view depth (m) for the depth of
             // field (dd_post.wgsl); blended surfaces keep their alpha.
             out.color.a = -view_z;

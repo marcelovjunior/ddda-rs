@@ -73,7 +73,13 @@ pub(crate) fn report() {
 }
 
 pub(crate) fn enabled() -> bool {
-    std::env::var("DDGPU_VK").as_deref() == Ok("1")
+    enabled_value(std::env::var("DDGPU_VK").ok().as_deref())
+}
+
+// L159: Vulkan is the default (user decision 2026-10-14); DDGPU_VK=0 (or any
+// value other than 1) forces the wgpu oracle path.
+fn enabled_value(value: Option<&str>) -> bool {
+    matches!(value, None | Some("1"))
 }
 
 /// Owned chunks accepted by L137's ordered encoder pool.
@@ -132,4 +138,16 @@ pub(crate) fn submit(queue: &wgpu::Queue, ready: Vec<Ready>) -> wgpu::Submission
         combined.checks.extend(r.checks);
     }
     combined.submit(queue)
+}
+
+#[cfg(test)]
+mod selection_tests {
+    #[test]
+    fn defaults_on_with_explicit_wgpu_escape_hatch() {
+        assert!(super::enabled_value(None));
+        assert!(super::enabled_value(Some("1")));
+        for value in ["0", "", "false", "invalid", "2"] {
+            assert!(!super::enabled_value(Some(value)));
+        }
+    }
 }

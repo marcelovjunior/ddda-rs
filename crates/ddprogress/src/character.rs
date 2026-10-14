@@ -122,8 +122,10 @@ impl Character {
     /// A new level-1 character. Stats from row 1 of the vocation's
     /// `rPlLevel` (0x00b5ccb0); every vocation at rank 1 with its threshold
     /// (0x00b5cb30; the live save shows rank 1 for unused vocations, board
-    /// #722); the skills and augments with cost 0 and rank 0 in
-    /// `rSkillList` already known. The vocation counts as paid.
+    /// #722). Free skills are learned and slotted only for the selected
+    /// vocation by 0x006749a0/0x00674a60; a zero price alone is not a grant.
+    /// The vocation counts as paid. Equipped weapons must subsequently
+    /// resolve the active slots through `learn::active_skills`.
     pub fn new(tables: &Tables, vocation: Vocation, is_pawn: bool) -> Self {
         let progress = Progress::at_level(1, tables.growth(vocation), &tables.exp);
         let mut discipline = Discipline::default();
@@ -134,21 +136,15 @@ impl Character {
         }
         discipline.rank[0] = 1;
         discipline.next[0] = growth::rank_next_exp(1, &tables.ranks[0]);
-        let mut learned = Learned::default();
-        for s in tables.skills.core.iter().filter(|s| s.cost == 0 && s.rank == 0) {
-            learned.level1.set(s.skill_id as usize, true);
-        }
-        for s in tables.skills.weapon.iter().filter(|s| s.cost == 0 && s.rank == 0) {
-            let bits = if s.level == 2 { &mut learned.level2 } else { &mut learned.level1 };
-            bits.set(s.skill_id as usize, true);
-        }
         let mut paid = [false; 10];
         paid[vocation as usize] = true;
-        Character {
+        // 0x0077fcd4..0x0077fcef clears both learned arrays; free skill
+        // selection is a later vocation-screen operation, not this reset.
+        let mut character = Character {
             vocation,
             progress,
             discipline,
-            learned,
+            learned: Learned::default(),
             augments: [None; 6],
             weapon_sets: [[None; 6]; 13],
             active: [None; 6],
@@ -157,7 +153,22 @@ impl Character {
             changes: 0,
             gear: DisciplineGear::default(),
             is_pawn,
-        }
+        };
+        tables.starting.grant(&mut character);
+        character
+    }
+
+    /// Before the first vocation menu has selected a class. The enum's
+    /// Fighter value is a project representation of the unresolved job;
+    /// no free skill, paid vocation or equipment is supplied from it.
+    /// Native learned/slot reset: 0x0077fa50..0x0077fcf3.
+    pub fn unselected(tables: &Tables, is_pawn: bool) -> Self {
+        let mut character = Self::new(tables, Vocation::Fighter, is_pawn);
+        character.learned = Learned::default();
+        character.weapon_sets = [[None; 6]; 13];
+        character.active = [None; 6];
+        character.paid = [false; 10];
+        character
     }
 
     /// Value of an augment for this character (0x00783340).

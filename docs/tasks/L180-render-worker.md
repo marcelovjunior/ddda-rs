@@ -97,3 +97,39 @@ single-binding bench does not exercise.
     the part's;
   - texture lists found by slots, textures and states, with a per-frame
     slot check.
+
+## The cost of exactness, cut again (after combo46/47/49 profiles)
+
+| Commit | Change | Profile item addressed |
+|---|---|---|
+| ca5a50d6 | copy-on-write banks; texture lists found by slots | — |
+| 41ceff36 | skipped uploads are not read from memory at all | — |
+| 4e71f8f6 | only written registers are cleared and compared | — |
+| 718cd35b | the dirty check uses a generation-tagged copy of d3d9dev's dirty index | c47: objects() 5.2% + reads 4.2% |
+| 0f15f755 | override_of uses an open-addressing table, not a binary search (every overridden call) | — |
+| 011ef84b | two generations of content/texture tables; the old one is dropped on a separate thread | c49: sweep 5.1%, part drops 7.6% |
+| e5f70e9c | an index of each float register's newest pending writer | c49: fill_uncovered 4.7% |
+| 463253d5 | a taken draw's sampler states are set in one device lookup | c49: commit 4.5% |
+
+2e2518a3 adds a report line: target parts and stream parts built, bindings
+decoded, and parts found by content, per frame.
+
+## Handoff (2026-10-13, stop order)
+
+- Branch `task/L180-render-worker` tip: this commit. Everything is
+  committed and tested (ddruntime lib 154, ndraw oracle, native_compare).
+- In train6 up to 011ef84b. Not yet in a train:
+  - e5f70e9c newest-writer index;
+  - 463253d5 batched sampler states;
+  - the docs.
+- Verified in game: combo46 verify, 0 mismatches (the upload-skipping
+  model). The speed commits after cb495a30 have no verify run yet.
+- Last per-draw cost measured in game: 4.2–4.8 µs per decided draw
+  (combo46, before the speed commits). Release bench: 0.23–0.30 µs for a
+  consecutive draw, ~0.73 µs for a draw that decodes its binding.
+- Next:
+  - a DDDRAW_NATIVE=verify run on the tip, and the 'built:' report line;
+  - then the remaining profile items: Mirror::textures (first use per
+    frame), the reads_dirty fallback when the dirty index has more than 16
+    entries, flush_reads, and the target/stream part rebuilds once the
+    counters size them.

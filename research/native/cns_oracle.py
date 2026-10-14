@@ -21,7 +21,7 @@ import unicorn.x86_const as x  # noqa: E402
 REGS = [getattr(x, 'UC_X86_REG_' + n) for n in ('EAX', 'ECX', 'EDX', 'EBX', 'ESP', 'EBP', 'ESI', 'EDI')]
 STACK, SP = 0x0F000000, 0x0F008000
 # constant pages the providers read (identity matrix, epsilons, 0.5/2.0, sign mask, zero, one) and sinf/cosf with their tables
-DATA_PAGES = (0x014F0000, 0x014F9000, 0x0150A000, 0x01521000, 0x01531000, 0x0161C000, 0x01629000, 0x012F0000, 0x0144B000)
+DATA_PAGES = (0x01406000, 0x01407000, 0x014F0000, 0x014F9000, 0x0150A000, 0x01521000, 0x01531000, 0x0161C000, 0x01629000, 0x012F0000, 0x0144B000)
 IDENTITY = [1.0 if i % 5 == 0 else 0.0 for i in range(16)]
 
 
@@ -57,6 +57,7 @@ class Oracle:
         for address, size in list(arenas) + [(STACK, 0x10000), (h.RET, 0x1000)]:
             map_range(address, size)
         self.arenas = arenas
+        self.speculative = []   # (address, size) the port may read although the original does not (fields of live objects)
         uc.hook_add(UC_HOOK_MEM_READ, self.read)
         uc.hook_add(UC_HOOK_MEM_WRITE, self.write)
         uc.hook_add(UC_HOOK_CODE, self.code)
@@ -143,10 +144,14 @@ class Oracle:
         self.remember(esp, 4 * (1 + len(words)))
         before = dict(regs=self.regs())
         self.uc.emu_start(entry, h.RET, count=300000)
+        for a, n in self.speculative:
+            self.remember(a, n)
         after = dict(regs=self.regs(), memory=[(a, self.uc.mem_read(a, 1)[0]) for a in sorted(self.written)])
         return dict(seed=seed, mode=0, before=before, initial=sorted(self.initial.items()), events=self.events, after=after)
 
     def record(self, name, entry, setup, out, n):
         cases = [self.run_case(seed, setup, entry) for seed in range(n)]
-        json.dump(dict(function=name, cases=cases), open(out, 'w'))
+        # constant tables of the CRT atan2/asinf that the ports read up front (exe read-only data, kept out of the cases)
+        rodata = {'0x0144C640': h.code(0x0144C640, 0x1820).hex()}
+        json.dump(dict(function=name, rodata=rodata, cases=cases), open(out, 'w'))
         print(f'{n} cases, {sum(len(c["events"]) for c in cases)} calls -> {out}', flush=True)

@@ -47,9 +47,25 @@ their normal concurrent test execution.
 
 - Light `cargo test -p ddruntime --no-default-features`: exit 0, all suites
   passed, one ignored microbenchmark. No shard build or game run.
-- GPU validation of the fix: pending the serialized machine slot.
+- Focused clear/copy regression: **1 passed in 0.81 s** (1.25 s process wall),
+  crossing the 1,024-command submission limit twice (2,048 commands), then
+  checking tracked-resource upload ordering and exact source/destination pixels.
+- Original concurrent cache suite: **acceptance incomplete**. One fixed run
+  was stopped at 92.12 s when the shared game pause began. The final queued
+  attempt exited with code 1 after 9.51 s, logging only `running 2 tests` and
+  no test-result/panic diagnostic. Its termination cause is not established;
+  it is not a pass and does not demonstrate the requested ~90 s bound.
+- Head board #10593 merged minimal fix `df6ae57c` into `task/fps-line` and
+  explicitly instructed this agent to wrap up with **no new runs**. No L96
+  build or GPU processes remain. The regression is delivered separately so
+  branches without L88/L95 may adopt the initialization fix alone.
 - Existing dead-field/unused test-helper compiler warnings remain.
 
 No game FPS or comparison against the original was performed by this agent.
-Head owns those measurements. Next: complete the GPU gate and deliver the
-minimal headless fix, preserving the L83 `WGPU_BACKEND` integration hunk.
+Head owns those measurements and the remaining cache gate. Next: head runs
+both unchanged cache tests with the merged helper in an uninterrupted GPU
+slot, then measures L88/L95 in-game. Preserve the L83 `WGPU_BACKEND` override.
+
+Private diagnostic logs are under `C:/ddda-targets/L96/scratch/`:
+`baseline-profile.txt`, `all-stacks.txt`, `baseline-both.log`,
+`fixed-both.log`, `gate-order.log`, and `gate-cache.log`. None are committed.

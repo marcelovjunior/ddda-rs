@@ -65,6 +65,15 @@ Combined native integration and head live A/B are pending. The combo31
 hash captures identify uSkyStableShadow as the dominant solo tail, but
 shared load and changed NPC counts prevent causal speedup attribution.
 See `docs/tasks/L158-critical-jobs.md` for windows, numbers and hashes.
+## L166 raw Vulkan TDR investigation
+
+No production change or default flip. Headless synthetic stress passed
+1.64 million raw passes; private cap1 gameplay pass stress passed 252,840
+raw draws and four mapped-ring wraps. Plain/shadow final image hashes agree;
+the omitted pre-slice rendering means this is not an original-frame oracle.
+No causal defect or hang reproduction yet. Head c32 device-loss diagnostics
+remain the next gate; Khronos validation layers are unavailable locally.
+Reproduction controls, hashes and limitations: [L166](tasks/L166-vk-tdr.md).
 
 ## L160 job CPU sizing and wake diagnostics
 
@@ -800,7 +809,7 @@ be reported as the R06/R07 fidelity gates. No stage grants a blanket
 “return zero” handler for unimplemented APIs. A successful failure-path
 fixture is useful evidence, not proof the success path works.
 
-## Implementation status (crates/ddruntime, 2026-10-11)
+## Implementation status (crates/ddruntime, updated 2026-10-12)
 
 Built by the head after the plan above was accepted. Each item cites its
 module; behaviour choices are labelled in the code.
@@ -815,7 +824,7 @@ module; behaviour choices are labelled in the code.
 | Guest MXCSR (L22): live in the host register while lifted code runs (SSE helpers execute the original instructions under it); `Cpu::mxcsr` holds it outside: services run under 0x1F80 (`Registry::call`), `call_guest` and `Session::call` load it on entry and restore the default | `dispatch.rs`, `services.rs`, `session.rs`, `ddnative-base` | written; replay and runtime tests pending (train 2) |
 | CPUID/RDTSC (L22): `platform::Machine` per thread; `machine::Recorded` answers with the recorded machine's leaves (processor 0, consistent with `registry.rs`'s name, vendor, identifier) and counts RDTSC at its `~MHz` | `machine.rs` | written, unit tests pending (train 2) |
 | Guest heap (16-byte blocks, exact-size reuse, requested sizes) | `services.rs` | done, tested |
-| CRT services: only `__onexit` remains (its original body awaits the SEH frame support of brief L15); the rest of the CRT is lifted (L14) | `services.rs` | done |
+| CRT: most routines are lifted (L14); runtime memory/string fast services are listed under L61/L67 below. The earlier L15 `__onexit` exception is historical | `services.rs`, `crtfast.rs` | see the individual differential-test results below |
 | Win32: errors, identity, time (QPC 10 MHz), TLS, heaps, VirtualAlloc, start-up info, module names, code pages (en-US), std handles (no console), interlocked, critical sections (one guest thread), LoadLibrary (presence only), MessageBoxA, ExitProcess | `win32.rs` | done (48+ APIs) |
 | Files: read-only install plus a sandbox overlay for every write; paths outside both refused | `files.rs` | done, tested (synchronous I/O only) |
 | Interface objects (C++ thiscall and COM stdcall): vtables of named method tokens, services per implemented method | `interfaces.rs` | done |
@@ -826,6 +835,10 @@ module; behaviour choices are labelled in the code.
 | D3D9 device: CreateDevice (completes windowed parameters as D3D9 does), implicit and additional swap chains (additional ones held by the application only), back buffers, auto depth-stencil (owned by the device), COM reference counts; device caps and texture memory from the profile; headless Present; Reset (D3DPOOL_DEFAULT resources block it, state unbound first, implicit surfaces rebuilt, D3DERR_DEVICENOTRESET after a failure); SetGammaRamp (shown on a full-screen chain, D3DCAPS2_FULLSCREENGAMMA); freed objects reported to the backend. Every device method the game calls is implemented; the slots it never calls stop with their name ([census](tasks/L20-d3d9-completeness.md#results)) | `d3d9dev.rs` | done, tested |
 | Per-session `Runtime` holding all runtime state, shared by the guest's host threads (`GuestCell`, accessed only by the guest-lock holder); guest memory as a shareable handle | `runtime.rs`, `memory.rs` | done |
 | Guest threads: one host thread each, one running at a time (the guest lock), handed over only in services (waits, contended critical sections, Sleep, API calls after a 2 ms slice); exact here because the game's atomics are all imported Interlocked* calls. Per-thread last error and TLS; CreateThread (suspended, own stacks), Resume/Suspend, exit codes; events, semaphores, mutexes, WaitForSingle/MultipleObjects | `threads.rs` | done, tested (stress-run 50x) |
+| Bulk CRT memory services (L61): memcpy/memset operate page-wise, retaining overlap, lazy-page and fault behavior; atomic mode retains byte stores | `fastmem.rs`, `services.rs` | done, tested against byte-wise models (`10ec1b20`); serial title movie about 1 -> 4 FPS in head's milestone, not an isolated gameplay benchmark |
+| Live x87 (L62/L62b): keep the guest FPU loaded between instructions; park at service/emulator boundaries, snapshot on reads, spill displaced states; Windows TEB TLS live-id check and page-table memory operands | `ddnative-base/src/x87.rs`, `ddnative-host/src/x87.rs`, `dispatch.rs`, `emu.rs` | done; interleaved/parked state, snapshots, FNSAVE/FRSTOR and cross-thread regressions (`8baec70a`, `d7fd4ef7`). Before L62b, title decoder consumed 42% of a core; live-state TLS calls accounted for 14% and trait memory operands 30% of its sampled work. No isolated FPS delta |
+| Bulk service transfers (L63): file reads, decoded movie samples (about 1.4 MB per 720p frame), audio source reads and surface copies use bulk guest-memory paths with the same fault order | `files.rs`, `movies.rs`, `audio.rs`, `d3d9copy.rs` | implemented (`d8da53ae`); no isolated test count or gameplay FPS measurement reported in that commit |
+| CRT string services (L67): strlen, wcslen, memchr, strncpy, strstr, ASCII stricmp/strnicmp and the second memcpy; locale/null/large-count cases retain lifted fallback, exact volatile registers and access order | `crtfast.rs`, `tests/crtfast.rs` | done; 22,000 differential cases against lifted originals, including 133 faults at matching addresses (`b13b1e6a`). Dev timings per call: strlen(200) 4,908 -> 916 ns; stricmp(200) 54,055 -> 17,670 ns; memchr(200) 7,701 -> 2,372 ns. Flags are call-clobbered based on call-site audit |
 | Parallel mode's guest lock (L64, L65; `DDRUNTIME_PARALLEL=1`): every service runs one way (`Registry::run_service`, also from the step executor, whose bypass caused the "RefCell already borrowed" thread stops); services touching only guest memory, host atomics or clocks are `Binding::LockFree` (memcpy/memset, Interlocked*, the timers, thread and process ids; `services::LOCK_FREE`); host-only work runs without the lock (`threads::unlocked`): the graphics backend's draws, clears and Present (behind its own lock, command order kept), ReadFile/ReadFileEx's host read, the audio pass (DestroyVoice waits for it, as in XAudio2). `DDRUNTIME_LOCK_STATS=1` prints per service the calls and the lock held and waited (ms) at exit | `dispatch.rs`, `threads.rs`, `d3d9draw.rs`, `files.rs`, `audio.rs` | done, tested; another thread's service call meanwhile, before -> after (mean / max): a 4 ms Present 4122 us / 12.6 ms -> 12 us / 0.25 ms; InterlockedIncrement while a service holds the lock 4 ms 4855 us / 17.1 ms -> 6 us / 10 us; a mixing pass with a 30 ms guest effect 5629 us / 29.3 ms -> 5.6 us / 14 us (`threads::tests`, `tests/input_audio.rs`); not yet measured in the game |
 | Kernel waits wake only for what they wait on (L69): a blocked thread registers its wait keys (the objects of WaitForSingle/MultipleObjects, a critical section, its APC queue, an audio engine or pass) and a condition variable of its own (`threads::block_on`, `signal_key`); SetEvent, ReleaseSemaphore, ReleaseMutex, LeaveCriticalSection, QueueUserAPC-style completions and the audio signals wake only those waiters, a thread's exit wakes all, and handing the guest lock over wakes none (before, every one of these and every lock release woke all ~20 of the game's idle worker threads, and each took the guest lock to recheck: the main thread's lock waits in `profile_fps2b`). `DDRUNTIME_LOCK_STATS_EVERY=<s>` also prints the lock statistics (cumulative, with the count of waits woken) every <s> seconds | `threads.rs`, `services.rs`, `audio.rs` | done, tested; EnterCriticalSection + a service + LeaveCriticalSection with 16 threads idle in WaitForSingleObject: 437.6 us -> 10.7 us per iteration (8.7 us with no other threads), the 16 waits woken 16 times, once each by its own SetEvent (`threads::tests::idle_waiters_do_not_slow_a_busy_thread`); not yet measured in the game |
 | Critical sections and events without the guest lock (L86): EnterCriticalSection/LeaveCriticalSection work on the section's own words with host atomics (OwningThread compare-and-swap; the fields keep the values they had), so an uncontended Enter or Leave takes no lock; contention spins ~20 us, then waits for the section's key. Events keep their state in host atomics (EventCell): SetEvent, ResetEvent and WaitForSingleObject on an event take no lock (any other object waits as before, under it); WaitForMultipleObjects counts itself a waiter of its events. Waiters count themselves before checking and `threads::wait_until` rechecks after registering, so no wakeup is lost. Lock-free bindings: the section services, SetEvent, ResetEvent, WaitForSingleObject | `threads.rs`, `services.rs` (bindings) | done, tested (`threads::tests`): 8 threads x 4,000 recursive Enter/increment/Leave on two sections exact, fields restored, 750-940 ms lock-free against 5.7-7.4 s under the guest lock; 4 pairs x 5,000 event round trips with 10 s timeouts, none lost; one auto-reset event to 6 waiters 3,000 times, one release per set; WaitForMultipleObjects woken by lock-free SetEvent 3,000 times, the right index; not yet measured in the game |
@@ -833,7 +846,7 @@ module; behaviour choices are labelled in the code.
 | Asynchronous file reads: ReadFileEx at the OVERLAPPED offset, completion routine queued to the issuing thread and run at its next alertable SleepEx (the MtFile reader 0x00D0D440) | `files.rs`, `threads.rs` | done, tested |
 | D3D9 shader bytecode (SM2/SM3) decoder and disassembler: all 29,198 distinct shaders of the 76 shader packages print exactly like Microsoft's D3DDisassemble (`DDDA_ALL_SHADERS=1 cargo test -p d3d9shader`); the base for translating the game's shaders to the GPU backend | `crates/d3d9shader` | done, tested |
 | D3D9 reference execution: any shader run on the host's real D3D9 driver with chosen constants, inputs and textures (pixel shaders on 1x1 float targets; vertex shaders by capturing every output through a point and pass-through pixel shaders) | `crates/d3d9ref` | done, tested |
-| Shader translation to WGSL: literal per-instruction translation of vs_3_0/ps_3_0 with the driver's arithmetic (D3D9's zero rule with denormals as zero; mad, dot products, matrix macros, dp2add, lrp and crs fused as the driver fuses them, crs per stage; frc/sincos/lit edge rules). Full sweep of all 29,198 distinct game shaders against the host driver, 4 random sets each: 28,488 bit-exact, 710 within tolerance (at most 332 ULP; compiler rewrites across instructions on either side, not translation rules), 0 differing; 60,524 translations (default and backend variants) validate in naga and all 29,198 build backend pipelines ([L23](tasks/L23-shader-sweep.md#results)) | `crates/d3d9wgsl` | done, tested, compared against the driver |
+| Shader translation to WGSL: literal per-instruction translation of vs_3_0/ps_3_0 with the driver's arithmetic (D3D9's zero rule with denormals as zero; mad, dot products, matrix macros, dp2add, lrp and crs fused as the driver fuses them, crs per stage; frc/sincos/lit edge rules). Full sweep of all 29,198 distinct game shaders against the host driver, 4 random sets each: 28,488 bit-exact, 710 within tolerance (at most 332 ULP; compiler rewrites across instructions on either side, not translation rules), 0 differing; 60,524 translations (default and backend variants) validate in naga and all 29,198 build backend pipelines ([L23](tasks/L23-shader-sweep.md#results)). L79 reconfirms all 60,524 variants and finds missing COLOR0 must read white (COLOR1/TEXCOORD zero); fix applied with installed regression; CPU pairing-map coverage added. Reported runtime v0 failure remains unreproduced ([L79](tasks/L79-wgsl-unlinked-input.md)) | `crates/d3d9wgsl` | done, tested, compared against the driver |
 | D3D9 device state machine: render/sampler/stage states with a fresh driver device's recorded defaults, textures per stage, viewport/scissor, transforms, shader and declaration objects, constants, streams, indices, scenes; Set* reference counting | `d3d9state.rs` | done, tested |
 | D3D9 resources: textures (2D/cube/volume, mip chains), surfaces, vertex/index buffers; Lock into guest-memory shadows with D3D9's pitches and block layouts, D3D9's lock rules, level surfaces sharing the texture's count | `d3d9res.rs` | done, tested |
 | D3D9 draws: DrawPrimitive/Indexed/UP, Clear, Present as backend commands (`crates/d3d9cmd`) with dirty uploads and a complete state snapshot; a recording backend by default | `d3d9draw.rs`, `crates/d3d9cmd` | done, tested |
@@ -841,13 +854,21 @@ module; behaviour choices are labelled in the code.
 | D3D9 copies and queries: StretchRect and ColorFill as backend commands (a blit pass; exact for same-size copies), UpdateSurface/UpdateTexture between guest-memory shadows, GetRenderTargetData through the backend's read-back; event and timestamp queries answered as a synchronous device; occlusion queries counted by the backend (one wgpu occlusion slot per draw, summed per query; GetData states as measured on the driver) | `d3d9copy.rs`, `crates/d3d9cmd`, `crates/ddgpu` | done, tested; occlusion counts equal the driver's |
 | The wgpu backend: textures (format conversions to D3D9's sampled values, DXT as BC; every format of the renderer's format table the driver accepts), buffers, targets, translated and linked shaders, half-pixel offset, alpha test (8-bit), render states as pipeline state (one- and two-sided stencil, blend ops and separate alpha, write masks, scissor, cull, point/solid fill, sRGB read and write), depth bias and LOD bias in the pixel shader, samplers (border colours, MIPFILTER NONE rules), vertex layouts, fans, D3D9 instancing, occlusion queries, gamma ramp, release of freed resources; every render-target format the renderer uses (A8R8G8B8, A16B16G16R16F, A2B10G10R10, R32F, G16R16, A32B32G32R32F) with blending, MRT, D24 depth and D3D9's Clear regions and values (L29: equal to the driver except fp16 blend overflow); multisampled targets (2x/4x/8x) with the driver's gamma-correct colour resolve and its depth-stencil StretchRect sample choice (L31: equal to the driver; MULTISAMPLEANTIALIAS off not modelled); render-target textures drawn into before they are sampled, with the channels a target format lacks sampled as 1 (L41: equal to the driver). State fuzz (`DDGPU_FUZZ`) equal to the driver in 982 of 982 cases; known differences in the [L20 results](tasks/L20-d3d9-completeness.md#results) | `crates/ddgpu` | done, tested against the driver |
 | Backend costs (L25): pipelines, layouts, texture bind groups and target views cached by their complete inputs; constants (dynamic offsets) and DrawPrimitiveUP data in ring buffers; draws batched into one encoder, submitted every 128 draws or before any other queue use; same-size buffer uploads in place. 475 -> 18 us per draw (`examples/draw_cost.rs`) | `crates/ddgpu` (`src/cache.rs`) | done, tested (`tests/cache.rs`: a long-lived backend equals a fresh one frame by frame; draw.rs gate and 1000-case state fuzz unchanged) |
-| Exact shader IR cache (L83): unchanged Naga frontend output cached by full WGSL hash; device validation retained. Default LOCALAPPDATA/ddda-rs/shader-modules; DDGPU_SHADER_CACHE_DIR override, DDGPU_SHADER_CACHE_DISABLE=1 for original WGSL path | `crates/ddgpu/src/shader_cache.rs`, `lib.rs`, `src/module_cost.rs` | implemented; 2 cache tests, 29,198 reflection shaders, 60,524 variants and 133 runtime tests pass; all 29,198 IR roundtrips exact. Preliminary 1,000-shader warm sample 4.31 -> 1.05 ms; complete paired timing and remaining GPU tests pending. [L83](tasks/L83-naga-direct.md). |
+| Exact shader IR cache (L83): unchanged Naga frontend output cached by full WGSL hash; device validation retained. Default LOCALAPPDATA/ddda-rs/shader-modules; DDGPU_SHADER_CACHE_DIR override, DDGPU_SHADER_CACHE_DISABLE=1 for original WGSL path | `crates/ddgpu/src/shader_cache.rs`, `lib.rs`, `src/module_cost.rs` | implemented; 2 cache tests, 29,198 reflection shaders, 60,524 variants and 133 runtime tests pass; all 29,198 IR roundtrips exact. Preliminary 1,000-shader warm sample 4.31 -> 1.05 ms; 32 executed GPU tests pass; target-format shards, warm repeat and complete paired timing deferred by head's CPU-quiet hold. Production commit 46583548. [L83](tasks/L83-naga-direct.md). |
 | Shader and pipeline creation (L71): counters (`ddgpu::pipeline_stats`: modules created and the time, of it translating, pipelines created and the time, draws reusing a pipeline; ddplay prints them every <s> seconds with `DDPLAY_PIPELINE_STATS=<s>` and at exit); a Vulkan pipeline cache kept on disk (`WgpuBackend::enable_pipeline_cache`; ddplay: `%LOCALAPPDATA%\ddda-rs\pipelines`, `DDPLAY_PIPELINE_CACHE=<dir>` or `0` for none), saved every 20 s while pipelines are created and when the window closes; ddplay requests ddgpu's optional features (its own copy had missed FLOAT32_BLENDABLE and TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES) | `crates/ddgpu` (`pipelines.rs`, `examples/pipeline_cost.rs`), `crates/ddplay` | done; measured with `pipeline_cost` (the game's pixel shaders, each drawn once through the backend; RTX 4060, driver 610.62): a pipeline the driver never compiled 99-171 ms, the same pipeline in a later run 1.3-1.7 ms (the NVIDIA driver's own disk cache already keeps them; with this cache loaded 1.29 ms), a shader module 6-10 ms of which translating 0.5 ms (the rest naga's WGSL front end), a draw reusing its pipeline 0.04-0.09 ms. So the loading stalls are the first compilation of the game's pipelines (not repeated creation); not yet measured in the game |
 | Draws share render passes (L72): a draw records into the open render pass while it draws into the same attachments (colour views, depth-stencil view, occlusion query set) and, after a scissored draw, keeps the scissor test on; anything else that records on the encoder or submits ends it first (a feedback snapshot copy, a clear, copy or fill, a read-back, Present, a full ring). Every attachment is loaded and stored and every draw sets the pass state it uses, so a shared pass draws what a pass per draw drew. Draws are submitted when the uniform ring fills (about 500 draws) or at Present (`DRAWS_PER_SUBMIT` 128 -> 1024) | `crates/ddgpu` (`try_draw`, `OpenPass`) | done, tested: 40 random frames of 16 draws equal with shared passes and with a pass per draw (`tests/cache.rs`); `examples/draw_cost` (1,000 draws a frame into one target): 19.2 -> 7.4 us per draw on the drawing thread, 22 -> 10.3 ms per frame with the GPU waited for, 1 -> 477 draws per pass; not yet measured in the game |
 | Presentation host: `ddplay` shares one wgpu device between the backend and the window surface; every Present draws the back buffer into the surface on the GPU (`ddgpu::PresentSink`, `present::Blitter`: aspect kept, exact at 1:1, gamma ramp as the read-back path); vsync (FIFO) or `--no-vsync`, resize, F11/Alt+Enter borderless fullscreen, FPS and frame times in the title. 720p Present: 2.9-3.5 ms read-back -> 0.4-0.6 ms (`examples/present_cost.rs`) | `crates/ddplay`, `crates/ddgpu` (`src/present.rs`) | done; GPU path tested against the read-back pixels (`tests/present.rs`); the game presents no frame yet (stops in `__mtinit`), so shown only with `--test-pattern` |
+| D3D9 draws: DrawPrimitive/Indexed/UP, Clear, Present as backend commands (`crates/d3d9cmd`) with dirty uploads and a complete state snapshot (DrawPrimitive nonindexed even with indices set, L21); a recording backend by default | `d3d9draw.rs`, `crates/d3d9cmd` | done, tested |
+| D3D9 copies and queries: StretchRect and ColorFill as backend commands (a blit pass; exact for same-size copies), UpdateSurface/UpdateTexture between guest-memory shadows, GetRenderTargetData through the backend's read-back; event and timestamp queries answered as a synchronous device; occlusion queries counted by the backend (one wgpu occlusion slot per draw, summed per query; GetData states as measured on the driver) | `d3d9copy.rs`, `crates/d3d9cmd`, `crates/ddgpu` | done, tested; occlusion counts equal the driver's |
+| The wgpu backend: textures (format conversions to D3D9's sampled values, DXT as BC; every format of the renderer's format table the driver accepts), buffers, targets, translated and linked shaders, half-pixel offset, alpha test (8-bit), render states as pipeline state (one- and two-sided stencil, blend ops and separate alpha, write masks, scissor, cull, point/solid fill, sRGB read and write), depth bias and LOD bias in the pixel shader, samplers (border colours, MIPFILTER NONE rules), vertex layouts, fans, D3D9 instancing, occlusion queries, gamma ramp, release of freed resources; every render-target format the renderer uses (A8R8G8B8, A16B16G16R16F, A2B10G10R10, R32F, G16R16, A32B32G32R32F) with blending, MRT, D24 depth and D3D9's Clear regions and values (L29: equal to the driver except fp16 blend overflow); multisampled targets (2x/4x/8x) with the driver's gamma-correct colour resolve and its depth-stencil StretchRect sample choice (L31: equal to the driver; MULTISAMPLEANTIALIAS off not modelled); render-target textures drawn into before they are sampled, with the channels a target format lacks sampled as 1 (L41: equal to the driver). State fuzz (`DDGPU_FUZZ`) equal to the driver in 982 of 982 cases; known differences in the [L20 results](tasks/L20-d3d9-completeness.md#results) | `crates/ddgpu` | done, tested against the driver |
+| Backend costs (L25): pipelines, layouts, texture bind groups and target views cached by their complete inputs; constants (dynamic offsets) and DrawPrimitiveUP data in ring buffers; draws batched into one encoder, submitted every 128 draws or before any other queue use; same-size buffer uploads in place. 475 -> 18 us per draw (`examples/draw_cost.rs`) | `crates/ddgpu` (`src/cache.rs`) | done, tested (`tests/cache.rs`: a long-lived backend equals a fresh one frame by frame; draw.rs gate and 1000-case state fuzz unchanged) |
+| Presentation host: `ddplay` shares one wgpu device between the backend and the window surface; every Present draws the back buffer into the surface on the GPU (`ddgpu::PresentSink`, `present::Blitter`: aspect kept, exact at 1:1, gamma ramp as the read-back path); vsync (FIFO) or `--no-vsync`, resize, F11/Alt+Enter borderless fullscreen, FPS and frame times in the title. 720p Present: 2.9-3.5 ms read-back -> 0.4-0.6 ms (`examples/present_cost.rs`) | `crates/ddplay`, `crates/ddgpu` (`src/present.rs`) | done; GPU path tested against the read-back pixels (`tests/present.rs`); shows the game: with the emulator fallback (L51) it shows the ESRB screen, the title movie and the title screen, and takes keyboard input up to the save check; 54 to 60 FPS in release until the title movie, then starved by the emulated Vorbis decoder ([L21 results](tasks/L21-boot-bring-up.md#results), entries 18 and 19) |
+| Device-state snapshot (L78): read draw state in place instead of cloning all maps/constants; ordered render states avoid a per-draw sort; address-keyed maps use Fx-style hashing | `d3d9draw.rs`, `d3d9dev.rs`, `fasthash.rs`, `tests/draw_path.rs` | done (`78e6edd6`); representative device with six mipmapped textures and a no-op backend: DrawIndexedPrimitive service cost 15.2 -> 5.1 us (service call alone 0.35 us). Does not measure GPU or total frame time |
+| Pass state reuse (L80): emit pipeline, bindings, viewport/scissor, stencil/blend and buffer commands only when changed within the open pass | `crates/ddgpu/src/lib.rs` | done (`afb8f8fc`); all 33 ddgpu tests pass, including driver equivalence, per commit. Targets the roughly 10% render-thread encode/finish cost; no isolated FPS result yet |
+| Presentation host: `ddplay` shares one wgpu device between the backend and the window surface; every Present draws the back buffer into the surface on the GPU (`ddgpu::PresentSink`, `present::Blitter`: aspect kept, exact at 1:1, gamma ramp as the read-back path); vsync (FIFO) or `--no-vsync`, resize, F11/Alt+Enter borderless fullscreen, FPS and frame times in the title. 720p Present: 2.9-3.5 ms read-back -> 0.4-0.6 ms (`examples/present_cost.rs`) | `crates/ddplay`, `crates/ddgpu` (`src/present.rs`) | done; GPU path tested against the read-back pixels (`tests/present.rs`); originally checked with `--test-pattern`; by 2026-10-12 the integrated build presents menus and gameplay (MILESTONES) |
 | Guest speed measurement: fixed workloads (the static initializers on a session; every recorded vector on `GuestMemory`, checked), access and `call_ext` counts | `crates/ddperf` | done ([L25 results](tasks/L25-presentation-performance.md#results)) |
 | Whole-draw reference: the same commands executed on the host's D3D9 driver and read back, for pixel comparisons with the wgpu backend; occlusion queries around draws, stream frequencies (instancing); every target read back as stored (float bits, MRT), several clears with their viewport, rectangles, scissor and sRGB | `crates/d3d9ref` (replay) | done, tested |
-| Frame oracle (L41): `DDDA_CAPTURE` records every backend command to a file (deduplicated blobs, flushed per Present); the capture replayed into the wgpu backend and the host's D3D9 driver (`d3d9ref::Driver`, device objects kept across commands), the back buffer and every colour target compared per frame with PNG diff images, and the first command that makes a target differ named ([FRAME_ORACLE.md](FRAME_ORACLE.md)) | `crates/d3d9frame`, `crates/d3d9ref`, `crates/ddgpu/examples/frame_oracle.rs` | done, tested: a synthetic two-frame multi-pass frame (G-buffer MRT, fp16 lighting, tone map into 4x MSAA, resolve) equals the driver in all 8 targets; bisection tested; no game frame yet (the boot presents none) |
+| Frame oracle (L41): `DDDA_CAPTURE` records every backend command to a file (deduplicated blobs, flushed per Present); the capture replayed into the wgpu backend and the host's D3D9 driver (`d3d9ref::Driver`, device objects kept across commands), the back buffer and every colour target compared per frame with PNG diff images, and the first command that makes a target differ named ([FRAME_ORACLE.md](FRAME_ORACLE.md)) | `crates/d3d9frame`, `crates/d3d9ref`, `crates/ddgpu/examples/frame_oracle.rs` | done, tested: a synthetic two-frame multi-pass frame (G-buffer MRT, fp16 lighting, tone map into 4x MSAA, resolve) equals the driver in all 8 targets; bisection tested; game captures exist since L21 (the boot's main loop, the title stage); not yet compared against the driver |
 | Headless input: USER32 keys/hooks/settings/raw-device queries, DirectInput 8A mouse/keyboard profile, XInput 1.3 four-port state/rumble and host event channel (`0x00DF43E0`, `0x00DFA0C0`, `0x00E05120`) | `input.rs`, `ddplay/src/input.rs` | implemented, contract tested; ddplay forwards the window's keyboard/mouse (to the guest's focused window, coordinates scaled to the back buffer) and the host's XInput pads with rumble; legacy joystick FF not implemented |
 | D3DX9_43 shader reflection: D3DXGetShaderConstantTableEx (flags 0x20000) with ID3DXConstantTable GetDesc/GetConstant/GetConstantDesc/Release, D3DXGetShaderOutputSemantics, from the CTAB block (`d3d9shader::ctab`); D3DXSaveTextureToFileInMemory (screenshots) not implemented | `d3dx.rs`, `crates/d3d9shader` | reflection equal to d3dx9_43.dll on all 29,198 game shaders (`crates/d3dxref`); runtime test in the integration build |
 | XAudio2 2.7 engine, source/submix/master voice ABI and AudioReverb identity (`0x00DCE0E0`, `0x00DCE600`); clocked graph, buffer completion/loop/stream callbacks on a guest audio thread, XAPO parameter callbacks and bounded output channel | `audio.rs` | implemented, contract tested; [census and limits](tasks/L16-input-audio-services.md#results) |
@@ -860,9 +881,22 @@ module; behaviour choices are labelled in the code.
 Drivers (`examples/`): `initializers` (census of all 5,662 static
 initializers in CRT order: 5,651 complete), `boot` (the CRT entry
 0x012EFA14: stops at `__tmainCRTStartup`, platform-classified, L14),
-`winmain` (initializers, then WinMain: runs through the Steam checks into
-`sApp` start-up and stops where the CRT's `__snprintf_s` is needed), `call`
-(one guest function), `imports` (the import list).
+`winmain` (the CRT start-up, then WinMain, headless: since main 3f3ca505
+it no longer stops; it runs the main loop and presents frames, 60 a
+second in release on the game's own MaxFPS limiter; `--frontier` runs each
+CRT step and initializer separately), `call` (one guest function),
+`imports` (the import list). `ddplay` is the windowed driver.
+
+Diagnosing a run that does not stop (L21): a guest thread's stop is
+printed when it happens (`threads.rs`). `DDRUNTIME_TRACE_SERVICES=<file>`
+writes every named service call with caller, arguments, the strings they
+point to and the result, and calls that can block also when they start
+(`dispatch.rs`). `research/runtime/stack_sampler.py` samples a running
+process's host stacks with the PDB; each lifted `f_XXXXXXXX` frame is a
+guest frame. `DDDA_CAPTURE` with `research/runtime/capture_stats.py`
+counts Presents and uploads per frame. `research/runtime/split_jumps.py`
+lists verified functions that jump into an entry their record does not
+cover. All diagnostics are off unless set.
 
 Graphics backend design (2026-10-11, head). The D3D9 object boundary
 above, concretely, in the order it will be built:
@@ -930,9 +964,39 @@ Findings for the next stages (2026-10-11, Ghidra):
   (0x00DF52B0, 0x00DF6DD0, 0x00DF9C90, 0x00DF9D50, 0x00DF9EE0). The host
   layer will feed keys through the window message queue and these APIs.
 
-Lesson: never reimplement C-runtime functions as services. They are
-ordinary code in the exe; lift them (L14) and implement only operating
-system and device imports.
+Historical L14 lesson: keep ordinary CRT code lifted instead of supplying
+approximate services. L61/L67 now provide narrowly scoped, differential-tested
+fast services with original access/register behavior; their evidence is in
+the status table. Other CRT code remains lifted.
+
+### Tonight's performance evidence (L61-L80, 2026-10-12)
+
+The table's timings are focused tests; the combined build has reached gameplay
+through Load Game. Earlier phase rates: logos ~58 FPS, title movie ~24 FPS,
+main menu ~12 FPS, loading 0.2-1 FPS (MILESTONES, ~19:50 run). Those are
+neither a steady gameplay rate nor a before/after result for each change.
+
+The private `profile_gameplay.txt` sampled 40 s with the main thread using
+29.4 s CPU (73%). With RenderingThread enabled, `profile_gameplay_render.txt`
+shows the render thread using 30.2 s (76%); `profile_gameplay_render2.txt`
+shows 34.1 s (85%) and the main thread 9.0 s (23%). The latter's render-thread
+inclusive samples put 85.4% under `Registry::run_service`, 34.9% under the
+backend draw, 22.2% under constants, 17.8% under snapshot, 9.5% under render
+pass encoding and 8.8% under guest-lock acquisition. These overlap and must
+not be summed. The evidence points to CPU render-service work and lock waits;
+it does not establish a GPU execution limit. Earlier profiles without line
+tables misattribute internal work to nearby public symbols. In particular,
+`Vec<u8>::extend_from_slice` named from ddaudio does not prove that audio
+mixing runs on the render thread (L81 board #10095).
+
+L66/L73-L77 concern build layout and helpers; see NATIVE_PIPELINE for profiles,
+hot packages, lean emission, the stable host/kernel split and gate timing.
+No independently identified L68 change exists in the supplied integration
+history; no result is credited to that number. L79's separate shader-input
+correctness work is not part of the `afb8f8fc` integration snapshot.
+A numerical steady-gameplay FPS receipt was not present in these profiles or
+the supplied commits; requested from head on board #10094/#10129. A matched
+head-run gameplay rate/visual comparison remains the next check.
 
 ## Reproduction and review checklist
 
@@ -1645,3 +1709,27 @@ boost. The background pool requests priority -1 and ideal CPUs 0..7 at
 Four Windows tests cover actual host state, suspended creation, current-thread
 handles, invalid/closed handles, aliases and ABI/error results. Gameplay
 performance and eighth-lane callback confirmation still require head captures.
+
+### L116 pipeline creation and startup warmup
+
+`DDGPU_PIPELINE_LOG=1` reports each ddgpu shader-module/pipeline creation,
+translation and exact-IR cache hit/miss, with backend Present number,
+operator-supplied phase and calling thread. `scripts/pipeline_summary.py`
+groups counts and milliseconds; phase boundaries are observed per run,
+not guessed from fixed thresholds. Driver per-pipeline hit status is not
+exposed by wgpu.
+
+The ddplay pipeline-cache startup hook also records complete pipeline recipes
+and precreates previous-run modules/pipelines on one background thread.
+The local manifest is versioned, checksummed and namespaced by executable
+BLAKE3, adapter/driver, device capabilities and translation/descriptor schema.
+Each adopted pipeline must match the current draw's generated shader digests.
+Draws poll ready objects without waiting; incomplete or invalid recipes use
+the normal validated worker path. `DDGPU_PIPELINE_WARMUP=0` records recipes
+without precompiling, enabling a driver-cache-warm baseline comparison.
+
+The synthetic Vulkan replay reused 12 pipelines/four modules with zero
+on-demand creations and byte-identical images; existing cache cases passed.
+The final source-variant guard replay also passes; ten CPU units and two
+parser regressions pass. The head's game-phase comparison remains pending. See [L116 results](tasks/L116-pipeline-warmup.md#results) for exact
+verification boundaries and the paired-run procedure.

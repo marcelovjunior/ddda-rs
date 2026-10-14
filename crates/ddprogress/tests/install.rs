@@ -187,6 +187,79 @@ fn first_choice_and_pawn_limits() {
     assert_eq!(change::check(&pawn, Vocation::Sorcerer, false), Ok(1000));
 }
 
+#[test]
+fn installed_first_vocation_grants_exact_original_slots_without_cross_class_unlocks() {
+    let Some(t) = tables() else { return };
+    use WeaponCategory::*;
+    // Expectations are source-table observations at 0x015827e8 and the
+    // 0x00674a60 writers; production reads the rows from the installation.
+    for (vocation, primary, secondary, slots, ids) in [
+        (Vocation::Fighter, Sword, Some(Shield), [Some(40), None, None, Some(272), None, None], vec![40, 272]),
+        (Vocation::Strider, Dagger, Some(Bow), [Some(152), None, None, Some(350), None, None], vec![152, 350]),
+        (Vocation::Mage, Staff, None, [Some(210), None, None, Some(220), None, None], vec![210, 220]),
+    ] {
+        let mut character = Character::unselected(t, false);
+        assert!(character.learned.level1.words().iter().all(|word| *word == 0));
+        assert!(character.weapon_sets.iter().flatten().all(Option::is_none));
+        change::change(t, &mut character, vocation, true, false).unwrap();
+        let learned: Vec<_> = (0..ddprogress::character::SKILL_IDS)
+            .filter(|id| character.learned.level1.get(*id)).map(|id| id as u16).collect();
+        assert_eq!(learned, ids, "{vocation:?}");
+        assert!(character.learned.level2.words().iter().all(|word| *word == 0));
+        assert!(character.learned.augments.words().iter().all(|word| *word == 0));
+        assert_eq!(learn::active_skills(&character, primary, secondary), slots);
+        assert_eq!(character.discipline.points, 0);
+        assert_eq!(character.changes, 0);
+        if vocation == Vocation::Fighter { assert_eq!(character.weapon_sets[Mace as usize][0], Some(40)); }
+        if vocation == Vocation::Mage { assert_eq!(character.weapon_sets[Archistaff as usize][0], Some(210)); }
+    }
+}
+
+#[test]
+fn installed_free_skill_grants_preserve_custom_empty_slots_and_independent_characters() {
+    let Some(t) = tables() else { return };
+    let mut fighter = Character::new(t, Vocation::Fighter, false);
+    let mut mage = Character::new(t, Vocation::Mage, false);
+    fighter.weapon_sets[WeaponCategory::Sword as usize][0] = None;
+    fighter.weapon_sets[WeaponCategory::Mace as usize][0] = None;
+    fighter.weapon_sets[WeaponCategory::Shield as usize][0] = None;
+    let before_mage = mage.clone();
+    t.starting.grant(&mut fighter);
+    assert_eq!(fighter.weapon_sets[WeaponCategory::Sword as usize][0], None);
+    assert_eq!(fighter.weapon_sets[WeaponCategory::Shield as usize][0], None);
+    assert_eq!(mage, before_mage);
+    fighter.progress.level = 10;
+    fighter.discipline.points = 5000;
+    change::change(t, &mut fighter, Vocation::MysticKnight, false, false).unwrap();
+    assert_eq!(fighter.learned.weapon_level(210), 1);
+    assert_eq!(fighter.learned.weapon_level(310), 1);
+    assert_eq!(fighter.learned.weapon_level(220), 0, "hybrid staff excludes Anodyne");
+    assert_eq!(fighter.weapon_sets[WeaponCategory::Sword as usize][0], None);
+    mage.progress.level = 10;
+    mage.discipline.points = 5000;
+    mage.weapon_sets[WeaponCategory::Staff as usize][0] = None;
+    mage.weapon_sets[WeaponCategory::Archistaff as usize][0] = None;
+    change::change(t, &mut mage, Vocation::Sorcerer, false, false).unwrap();
+    assert_eq!(mage.weapon_sets[WeaponCategory::Archistaff as usize][0], None);
+    assert_eq!(mage.weapon_sets[WeaponCategory::Archistaff as usize][3], Some(234));
+    assert_eq!(mage.learned.weapon_level(234), 1);
+    assert_eq!(fighter.learned.weapon_level(234), 0);
+}
+
+#[test]
+fn installed_active_skill_refresh_preserves_primary_tail_under_empty_secondary_slots() {
+    let Some(t) = tables() else { return };
+    let mut character = Character::unselected(t, false);
+    character.weapon_sets[WeaponCategory::Staff as usize] = [Some(210), Some(211), None, Some(220), Some(222), Some(223)];
+    character.weapon_sets[WeaponCategory::Shield as usize] = [Some(272), None, Some(271), None, None, None];
+    assert_eq!(learn::active_skills(&character, WeaponCategory::Staff, Some(WeaponCategory::Shield)),
+        [Some(210), Some(211), None, Some(272), Some(222), Some(271)]);
+    assert_eq!(learn::active_skills(&character, WeaponCategory::Unarmed, Some(WeaponCategory::Shield)),
+        [None, None, None, Some(272), None, Some(271)]);
+    assert_eq!(learn::active_skills(&character, WeaponCategory::Staff, Some(WeaponCategory::Unarmed)),
+        character.weapon_sets[WeaponCategory::Staff as usize]);
+}
+
 /// Two players, the shared main pawn and a hired pawn share one award.
 #[test]
 fn two_players_share_with_pawns() {

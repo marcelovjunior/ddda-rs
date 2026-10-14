@@ -212,13 +212,18 @@ port, **not a replacement of those two outer functions**. Runtime setup
 installs it unless `DDRUNTIME_ARCHIVE_INFLATE=0`, and preserves any explicit
 override already at its address.
 
-`research/native/vectors_inflate.py`, run through heavy.py, records **559
+`research/native/vectors_inflate.py`, run through heavy.py, records **632
 cases** from the original executable with Unicorn. Fixed-Huffman streams
 are generated from synthetic inputs; constructed tables exercise window
 wraps, all copy arms, lengths 3/4/5/8/17/258, history offsets, extra bits,
 nested lookups and errors. The Rust test checks **every scratch, stack and
 heap byte, all eight GPRs, all XMM lanes and defined arithmetic flags**.
-All 559 pass. Vectors stay private at
+All 632 pass. The initial 559 cases are supplemented by **73 actual
+fast-loop entry/return snapshots from 24 dynamic-Huffman streams**. For
+those, original 0x00cf02e0 builds its own tables and decodes the complete
+8 KiB synthetic plaintext, without mocked callees. The complete outer
+output also equals the plaintext. No readable-port changes were needed.
+Vectors stay private at
 `E:/ddda-re/notes/native-L109/vectors/inflate_fast.bin`; the test requires
 them with `DDNATIVE_REQUIRE_VECTORS=1`.
 

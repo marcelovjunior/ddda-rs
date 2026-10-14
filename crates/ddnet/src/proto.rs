@@ -21,7 +21,8 @@ use std::collections::BTreeMap;
 ///   pose/motion, gauge and health/death state with masked deltas.
 /// - 10: reliable host-selected pawn speech with persistent-profile audiences.
 /// - 11: grounded death bodies and transactional retry attempt epochs.
-pub const PROTOCOL: u16 = 11;
+/// - 12: the shield as a secondary weapon (S57 Shield Summons).
+pub const PROTOCOL: u16 = 12;
 
 /// Reliable messages from a client.
 #[derive(Debug, Clone, PartialEq)]

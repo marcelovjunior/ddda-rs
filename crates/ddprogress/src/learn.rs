@@ -199,21 +199,18 @@ pub fn equip_skill(
     Ok(())
 }
 
-/// The six active skills for the weapons in hand: slots 0..2 from the
-/// primary weapon's set, 3..5 from the secondary's; a staff or archistaff
-/// with no secondary weapon fills all six from the staff's set. This is the
-/// layout 0x00780590 enforces on `mMainSkill` / `mSubSkill`; the copy from
-/// the per-weapon sets when weapons change is **guessed** (not traced).
+/// Translated from 0x00780350 (DDDA.exe 2017-12-13 Steam): copy all six
+/// primary slots, then overwrite slots 3..5 only for nonempty secondary
+/// entries. Unarmed categories do not contribute. The separate
+/// 0x00780590 range filter is outside this copy operation.
 pub fn active_skills(c: &Character, primary: WeaponCategory, secondary: Option<WeaponCategory>) -> [Option<u16>; 6] {
     let mut out = [None; 6];
-    let p = &c.weapon_sets[primary as usize];
-    let staff = matches!(primary, WeaponCategory::Staff | WeaponCategory::Archistaff);
-    if staff && secondary.is_none() {
-        out = *p;
-    } else {
-        out[..3].copy_from_slice(&p[..3]);
-        if let Some(s) = secondary {
-            out[3..].copy_from_slice(&c.weapon_sets[s as usize][..3]);
+    if primary != WeaponCategory::Unarmed {
+        out = c.weapon_sets[primary as usize];
+    }
+    if let Some(secondary) = secondary.filter(|category| *category != WeaponCategory::Unarmed) {
+        for (slot, value) in c.weapon_sets[secondary as usize][..3].iter().enumerate() {
+            if value.is_some() { out[3 + slot] = *value; }
         }
     }
     out

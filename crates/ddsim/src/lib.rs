@@ -617,6 +617,7 @@ impl Player {
         self.skills.request = None;
         self.skills.active = None;
         self.skills.released.clear();
+        self.skills.entered.clear();
         self.shot = attack::ShotState::default();
         self.bow = None;
         self.bow_latched = false;
@@ -2503,6 +2504,12 @@ impl Sim {
     /// Movement on the ground (velocity or root motion), with step-up /
     /// step-down rules.
     fn ground_move(&mut self, i: usize, state: State, ground: &dyn Ground, dt: f32) {
+        self.ground_move_clock(i, state, ground, dt, dt);
+    }
+
+    /// Motion playback can have its own rate (Scarlet Kisses, 0x00B23F10).
+    /// Collision, floor probing and velocity retain the unit's physics step.
+    fn ground_move_clock(&mut self, i: usize, state: State, ground: &dyn Ground, dt: f32, motion_dt: f32) {
         let jn = self.jump_normal;
         let fall_max = self.move_param.fall_max;
         let speed = self.ground_speed(&self.players[i], state);
@@ -2528,27 +2535,38 @@ impl Sim {
             target[0] += step[0];
             target[2] += step[1];
             p.speed = v;
-            let f = p.frame + dt;
+            let f = p.frame + motion_dt;
             p.frame = if looping { f.rem_euclid(period) } else { f };
         } else if let Some(m) = p.skills.active.and_then(|a| self.skill_definitions.get(&a.id)?.motions.get(&a.motion))
             .or_else(|| lookup(&self.motions, &self.weapon_motions, weapon, state.motion_id())) {
             p.speed = 0.0;
-            let d = if looping {
-                m.delta(p.frame, dt)
+            let blink_loop = p.skills.active.and_then(|active| {
+                if active.phase != skills::Phase::Strike { return None; }
+                match self.skill_definitions.get(&active.id)?.kind {
+                    skills::Kind::Blink { loop_frame, .. } => Some(loop_frame),
+                    _ => None,
+                }
+            });
+            let advanced = blink_loop.map(|loop_frame|
+                skills::loop_delta(m, p.frame, motion_dt, loop_frame));
+            let d = if let Some((delta, _)) = advanced { delta }
+            else if looping {
+                m.delta(p.frame, motion_dt)
             } else {
-                m.delta_once(p.frame, dt)
+                m.delta_once(p.frame, motion_dt)
             };
             let (s, c) = p.yaw.sin_cos();
             target[0] += d[0] * c + d[2] * s;
             target[2] += -d[0] * s + d[2] * c;
-            p.frame = if looping {
-                (p.frame + dt).rem_euclid(m.period())
+            p.frame = if let Some((_, frame)) = advanced { frame }
+            else if looping {
+                (p.frame + motion_dt).rem_euclid(m.period())
             } else {
-                p.frame + dt
+                p.frame + motion_dt
             };
         } else {
             p.speed = 0.0;
-            p.frame += dt;
+            p.frame += motion_dt;
         }
         if ground.triangles_in(p.position, p.position, &mut Vec::new()) {
             // the capsule sweep (0x0079E200): the step plus the ground check's
@@ -2816,6 +2834,33 @@ mod tests {
         s.add_player(0, [0.0; 3], 0.0);
         s.add_player(1, [500.0, 0.0, 0.0], 0.0);
         s
+    }
+
+    #[test]
+    fn ground_motion_clock_one_preserves_default_and_rate_changes_only_motion() {
+        let mut ordinary = sim();
+        let mut separate = sim();
+        let state = State::Run { relaxed: false };
+        for _ in 0..4 {
+            ordinary.ground_move(0, state, &Flat(0.0), 0.25);
+            separate.ground_move_clock(0, state, &Flat(0.0), 0.25, 0.25);
+            let a = &ordinary.players[0];
+            let b = &separate.players[0];
+            assert_eq!(a.position.map(f32::to_bits), b.position.map(f32::to_bits));
+            assert_eq!(a.velocity.map(f32::to_bits), b.velocity.map(f32::to_bits));
+            assert_eq!(a.frame.to_bits(), b.frame.to_bits());
+            assert_eq!(a.speed.to_bits(), b.speed.to_bits());
+            assert_eq!(a.state, b.state);
+        }
+        // The Run gait's velocity must use physics time even though its
+        // animation uses a different playback step. No skill is required
+        // to verify the separation of those two clocks.
+        let before = separate.players[0].position;
+        separate.ground_move_clock(0, state, &Flat(0.0), 0.25, 0.5);
+        ordinary.ground_move(0, state, &Flat(0.0), 0.25);
+        assert_eq!(ordinary.players[0].position, separate.players[0].position);
+        assert_ne!(separate.players[0].position, before);
+        assert_eq!(separate.players[0].frame, ordinary.players[0].frame + 0.25);
     }
 
     #[test]

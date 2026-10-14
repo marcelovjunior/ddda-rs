@@ -65,6 +65,12 @@ def prepare(root):
     for a, ns, name, size in rows:
         if a in have or a in quarantine:
             continue
+        if lift.inlined_tail(a):
+            # L58: code of its jumpers (L45/L50 frame tails), decoded and
+            # recorded inside them; a standalone record would run on a
+            # frame its jumper built
+            rejected[a] = 'tail of its jumpers (frame_tail)'
+            continue
         try:
             arms = lift.lift(a, size, closed, ext=True)
             candidates.append(dict(addr=a,name=f'{ns}::{name}',size=size,arms=arms,

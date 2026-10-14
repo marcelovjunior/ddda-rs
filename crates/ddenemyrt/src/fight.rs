@@ -77,7 +77,7 @@ impl FightData {
         let bow = BowData::load(vfs)?;
         strider.body.banks.resize(10, None);
         strider.body.banks[9] = Some(bow.player_bank.clone());
-        let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage)?;
+        let skills = crate::skills::SkillSet::load(vfs, exe, &arisen, &mage, &strider)?;
         let player_adjust = adjust(ADJUST_PARAMS)?.0;
         Ok(FightData {
             arisen,
@@ -136,6 +136,8 @@ pub const ADJUST_PARAMS: &str = r"param\pl\other\m_pl000_00";
 /// An Arisen in the fight (the body moves and attacks in ddsim).
 #[derive(Debug, Clone)]
 pub struct ArisenFighter {
+    /// Port actor-lifetime token: a reused seat cannot inherit queued effects.
+    pub generation: u64,
     pub fighter: Fighter,
     pub kit: Kit,
     /// The character level whose stats the fighter carries
@@ -145,6 +147,8 @@ pub struct ArisenFighter {
     /// Save/curative retention is supported; damage wound-pool reduction
     /// remains untranslated and must not be claimed from this field alone.
     pub hp_max_white: f32,
+    /// Actor-local Msg10 accumulation, reset on lifetime replacement.
+    pub healing_receipt: crate::skills::healing::Receipt,
     /// ddsim's attack and volley counts last seen.
     pub attacks_seen: u32,
     pub volleys_seen: u32,
@@ -195,6 +199,16 @@ pub struct Fight {
     pub bow_errors: BTreeMap<u8, String>,
     /// Equipped spell projectiles and their impact children.
     pub spells: crate::skills::spells::SpellWorld,
+    /// B81600 queues at action entry; 887360 delivers in pass C.
+    /// (enemy owner, source seat, source generation, amount, decay flag).
+    provoke_messages: Vec<(u32, u8, u64, u32, u32)>,
+    /// Authored checking entries emitted by the previous pass C, by lifetime.
+    contact_checks: BTreeMap<u8, (u64, Vec<u32>)>,
+    /// Step33 vf60 acknowledgements consumed before the next player update.
+    skill_contacts: BTreeMap<u8, (u64, ddsim::skills::Contact)>,
+    next_arisen_generation: u64,
+    pub skill_errors: BTreeMap<u8, String>,
+    pub healing_errors: BTreeMap<u8, String>,
     /// The Arisen each shell owner id was fired by (kept after the shell).
     pub shooters: BTreeMap<u32, u32>,
     next_shell: u32,
@@ -238,6 +252,12 @@ impl Fight {
             bow_contexts: BTreeMap::new(),
             bow_errors: BTreeMap::new(),
             spells: Default::default(),
+            provoke_messages: Vec::new(),
+            contact_checks: BTreeMap::new(),
+            skill_contacts: BTreeMap::new(),
+            next_arisen_generation: 0,
+            skill_errors: BTreeMap::new(),
+            healing_errors: BTreeMap::new(),
             shooters: BTreeMap::new(),
             next_shell: SHELL_OWNER_BASE,
             pawns: BTreeMap::new(),
@@ -317,11 +337,22 @@ impl Fight {
 
     /// Adds seat `seat`'s Arisen with `kit`, at full HP.
     pub fn add_arisen_as(&mut self, seat: u8, kit: Kit) {
+        let generation = self.next_arisen_generation;
+        self.next_arisen_generation = self.next_arisen_generation.checked_add(1)
+            .expect("Arisen actor lifetime counter exhausted");
+        self.provoke_messages.retain(|(_, source, _, _, _)| *source != seat);
+        self.contact_checks.remove(&seat);
+        self.skill_contacts.remove(&seat);
+        self.skill_errors.remove(&seat);
+        self.healing_errors.remove(&seat);
+        for goblin in &mut self.goblins { goblin.distance_hate.retire(u32::from(seat)); }
         let a = self.kit(kit);
         self.arisen.insert(
             seat,
             ArisenFighter {
+                generation,
                 hp_max_white: a.hp_max,
+                healing_receipt: Default::default(),
                 fighter: Fighter {
                     owner: u32::from(seat),
                     attacker: Attacker::Player(a.attacker),
@@ -548,8 +579,41 @@ impl Fight {
         self.status_events = crate::combat::status_pass(&mut fighters, dt);
         // relation entries hold until their attacker starts its next
         // attack ([`Fight::release`])
-        self.events = crate::combat::hit_pass_with_npc_guards(
-            &mut fighters, &self.data.tables, dt, &mut roll, &|_| true, &guards, &owners, trace);
+        let mut raw_contacts = Vec::new();
+        let checks = &self.contact_checks;
+        let arisen = &self.arisen;
+        let goblins = &self.goblins;
+        let checking = |attack: &ddcombat::volumes::AttackVolume| {
+            u8::try_from(attack.side.owner).ok().and_then(|seat| checks.get(&seat))
+                .is_some_and(|(generation, keys)| arisen.get(&(attack.side.owner as u8))
+                    .is_some_and(|a| a.generation == *generation) && keys.contains(&attack.key))
+        };
+        let actor = |owner| goblins.iter().find(|g| g.fighter.owner == owner)
+            .map(|g| crate::combat::ContactActor {
+                character: true, enemy: true, vf117: g.driver.map.vf117,
+                // 8571D0's Intel/status faction provider is not yet represented
+                // for these bodies. Mask18 is independently known; do not
+                // fabricate faction40/80 from collision kind or owner number.
+                faction: None,
+            });
+        self.events = crate::combat::hit_pass_with_npc_guards_and_contacts(
+            &mut fighters, &self.data.tables, dt, &mut roll, &|_| true, &guards, &owners, trace,
+            Some(crate::combat::ContactObserver {
+                is_check: &checking, actor: &actor, output: &mut raw_contacts,
+            }));
+        self.skill_contacts.clear();
+        for contact in raw_contacts {
+            let Ok(seat) = u8::try_from(contact.attacker) else { continue };
+            let Some(a) = self.arisen.get(&seat) else { continue };
+            if contact.target.is_none() {
+                self.skill_errors.insert(seat, "unsupported skill contact actor facts".into());
+                continue;
+            }
+            let pending = self.skill_contacts.entry(seat)
+                .or_insert((a.generation, ddsim::skills::Contact::default()));
+            pending.1.valid = true;
+            pending.1.flags |= contact.known_flags();
+        }
         self.roll_seed = seed;
         let mut it = fighters.into_iter();
         for a in self.arisen.values_mut() {
@@ -604,6 +668,49 @@ impl Fight {
         &self.events
     }
 
+    /// Consume step33 acknowledgements BEFORE Sim::step, once per engine
+    /// frame. Native vf93 clears +3CB0/+3CB4 after that player's update
+    /// (0x00B64516/24); a replaced actor cannot inherit the old callback.
+    pub fn apply_skill_contacts(&mut self, sim: &mut ddsim::Sim) {
+        for (&seat, a) in &self.arisen {
+            if let Some(p) = sim.player_mut(seat) {
+                p.skills.contact = ddsim::skills::Contact::default();
+                if let Some((generation, contact)) = self.skill_contacts.remove(&seat) {
+                    if generation == a.generation { p.skills.contact = contact; }
+                }
+            }
+        }
+        self.skill_contacts.clear();
+    }
+
+    /// B5C3B0's player-update receipt, after this frame's fatal selector and
+    /// before simulation actions. Unknown actor facts block HP gain and keep
+    /// an observable error once per lifetime; they never infer alive from HP.
+    pub fn apply_player_healing(&mut self, sim: &mut ddsim::Sim, markers: crate::skills::healing::Markers) {
+        use crate::skills::healing::Marker;
+        for (&seat, a) in &mut self.arisen {
+            if sim.player(seat).is_none() || !a.healing_receipt.pending { continue; }
+            match markers.actors.get(&seat).copied().unwrap_or(Marker::Unknown) {
+                Marker::Unknown => {
+                    self.healing_errors.entry(seat)
+                        .or_insert_with(|| "unsupported healing recipient dead marker".into());
+                    // B5C637 clears the pending flag in every native branch.
+                    // The unresolved scalar is not cleared or applied by guess.
+                    a.healing_receipt.pending = false;
+                }
+                Marker::Known(dead) => {
+                    if !markers.global_delta.is_finite() || markers.global_delta < 0.0 {
+                        self.healing_errors.entry(seat)
+                            .or_insert_with(|| "unsupported healing global delta".into());
+                        continue;
+                    }
+                    let Victim::Player { hp, hp_max, .. } = &mut a.fighter.victim else { continue; };
+                    a.healing_receipt.apply(dead, markers.global_delta, hp, a.hp_max_white, *hp_max);
+                }
+            }
+        }
+    }
+
     /// After the players moved (line 10): each Arisen's weapon is put in
     /// the sim if it is not there yet; a new attack frees its hit history;
     /// the target heading for the next attack is set (*placeholder* for the
@@ -640,6 +747,7 @@ impl Fight {
             let (started, volleys) = (p.attacks_started, p.volleys_fired);
             let (feet, yaw) = (p.position, p.yaw);
             let released = std::mem::take(&mut p.skills.released);
+            let entered = std::mem::take(&mut p.skills.entered);
             let a = self.arisen.get_mut(&seat).expect("seat listed");
             let new_attack = started != a.attacks_seen;
             let fired = volleys.saturating_sub(a.volleys_seen);
@@ -647,6 +755,28 @@ impl Fight {
             a.volleys_seen = volleys;
             if new_attack {
                 self.release(u32::from(seat));
+            }
+            for id in entered {
+                let Some(skill) = self.data.skills.0.get(&id) else { continue };
+                let ddsim::skills::Kind::ShieldProvoke { radius, amount, .. } = skill.definition.kind
+                    else { continue };
+                // Translated from B81600 -> AAC5A0/AACA80 (Steam 2017-12-13).
+                // A zero-vector Summons message has no amount normalization
+                // under these installed positive thresholds. Other parameter
+                // branches are observable, rather than substituted silently.
+                if !self.data.tables.game.0.get(0x14).is_some_and(|v| *v > 0.0)
+                    || !self.data.tables.game.0.get(0x16).is_some_and(|v| *v > 0.0)
+                {
+                    self.skill_errors.insert(seat, "unsupported provoke game thresholds".into());
+                    continue;
+                }
+                let generation = self.arisen[&seat].generation;
+                for goblin in &self.goblins {
+                    let distance = (0..3).map(|i| (goblin.pos[i] - feet[i]).powi(2)).sum::<f32>().sqrt();
+                    if distance < radius {
+                        self.provoke_messages.push((goblin.fighter.owner, seat, generation, amount, 1));
+                    }
+                }
             }
             for _ in 0..fired {
                 let owner = self.next_shell;
@@ -918,6 +1048,14 @@ impl Fight {
 
     /// Pass C: everyone's pose and the volumes for the next frame's hits.
     pub fn volumes(&mut self, sim: &ddsim::Sim) {
+        // Translated from 0x00887360's pass-C vf98 delivery. A message
+        // changes evaluation, not HP or the enemy's current action target.
+        for (victim, source, generation, amount, decay) in std::mem::take(&mut self.provoke_messages) {
+            if !self.arisen.get(&source).is_some_and(|actor| actor.generation == generation) { continue; }
+            if let Some(goblin) = self.goblins.iter_mut().find(|g| g.fighter.owner == victim) {
+                goblin.receive_provoke(u32::from(source), amount, decay);
+            }
+        }
         for (&seat, a) in &mut self.arisen {
             let Some(p) = sim.player(seat) else { continue };
             let body = &self.data.kit(a.kit).body;
@@ -927,6 +1065,13 @@ impl Fight {
             let pose = body.pose(motion, frame, p.position, p.yaw);
             let acts = body.activations(motion, frame);
             (a.fighter.attacks, a.fighter.hurts) = body.volumes(&acts, &pose, u32::from(seat));
+            let keys = a.fighter.attacks.iter().filter(|attack| {
+                body.collision.iter().any(|set| set.body.seq_index.iter().any(|seq| {
+                    set.body.groups.get(seq.group_no as usize).is_some_and(|group|
+                        group.is_check && ((seq.no << 8 | group.no) << 16) == attack.key)
+                }))
+            }).map(|attack| attack.key).collect();
+            self.contact_checks.insert(seat, (a.generation, keys));
             // Fatal replacement owns the action slot. Never let a previous
             // skill/weapon activation continue emitting attacks at zero HP.
             if a.fighter.victim.dead() || p.incapacitated() {

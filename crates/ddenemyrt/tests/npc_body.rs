@@ -40,6 +40,33 @@ fn installed_beach_damage_entry_uses_model_bone_map_and_current_joint_attributes
 }
 
 #[test]
+fn installed_beach_action_exit_restores_current_joint_attributes_after_blocking_entry() {
+    let Some((vfs, file)) = installed() else { return };
+    let exe = file.image().unwrap();
+    for npc in 704..=710 {
+        let body = NpcBody::load(&vfs, &exe, npc, npc, 0, 0, 0).unwrap();
+        let bytes = vfs.read(&body.look.base, mtarc::type_hash("rModel")).unwrap();
+        let model = mtmod::parse(&bytes).unwrap();
+        let map = model.bone_map.expect("ordinary beach body has its native bone map");
+        let mut attributes = vec![0x27; model.bones.len()];
+        body.damage_joint_attributes(&mut attributes, 0x210, true).unwrap();
+        // Another runtime writer can change unrelated bits between entry and
+        // exit. The exit must clear the current byte, not restore a snapshot.
+        attributes.iter_mut().for_each(|attribute| *attribute |= 0x80);
+        let mut expected = attributes.clone();
+        for id in [0x96, 0x97, 0x99, 0x9b] {
+            if map[id] != 0xff { expected[usize::from(map[id])] &= !0x40; }
+        }
+        body.action_exit_joint_attributes(&mut attributes).unwrap();
+        assert_eq!(attributes, expected, "NPC{npc}: exit ignores entry's goods/flag branch");
+        attributes.pop();
+        let before = attributes.clone();
+        assert!(body.action_exit_joint_attributes(&mut attributes).is_err());
+        assert_eq!(attributes, before, "NPC{npc}: wrong lifetime shape is atomic");
+    }
+}
+
+#[test]
 fn ordinary_mode3_capsule_shortens_real_height_and_collapses_short_spans() {
     use ddenemyrt::npc_body::{ordinary_mode3_capsule, ORDINARY_NPC_SCENERY_RADIUS};
     let radius = ORDINARY_NPC_SCENERY_RADIUS;

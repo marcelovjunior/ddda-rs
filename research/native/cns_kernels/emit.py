@@ -1,7 +1,7 @@
 import re,sys,struct
 sys.path.insert(0,'..')
 import harness as h
-BOOL={'gt','ge','eq','not'}
+BOOL={'gt','ge','eq','ne','not'}
 def const_bits(name):
     a=int(name[1:],16); return struct.unpack('<I',h.code(a,4))[0]
 def emit_kernel(fname, dag, outputs, doc, role_names, trig=True):
@@ -29,6 +29,7 @@ def emit_kernel(fname, dag, outputs, doc, role_names, trig=True):
             l=nd[1]
             if l=='0.0': name[n]='0.0_f32'
             elif l=='C15319b8': name[n]='1.0_f32'
+            elif re.match(r'^I\d+$',l): name[n]='%d.0_f32'%int(l[1:])
             elif l.startswith('C') and re.match(r'^C[0-9a-f]+$',l):
                 consts[l]=const_bits(l); name[n]='K_%s'%l[1:].upper()
             else:
@@ -50,6 +51,7 @@ def emit_kernel(fname, dag, outputs, doc, role_names, trig=True):
         if o=='gt': return '(%s > %s)'%(a[0],a[1])
         if o=='ge': return '(%s >= %s)'%(a[0],a[1])
         if o=='eq': return '(%s == %s)'%(a[0],a[1])
+        if o=='ne': return '(%s != %s)'%(a[0],a[1])
         if o=='not': return '(!%s)'%a[0]
         if o=='sel': return '(if %s { %s } else { %s })'%(e(nd[1]),e(nd[2]),e(nd[3]))
         raise ValueError(o)
@@ -69,6 +71,9 @@ def emit_kernel(fname, dag, outputs, doc, role_names, trig=True):
 def emit_loader(fname, leaves, doc, roles):
     items=[]
     for l in leaves:
+        if l.startswith('Y'):   # a byte of a record, as a float
+            field={'J':'b.joint','Z':'b.this','T':'b.this'}[l[1]]
+            items.append('pg.u8(m, %s + 0x%s) as f32'%(field,l[3:])); continue
         r,k=l[0],int(l[1:])
         items.append(roles[r].format(k=k, off=4*k))
     return '%s\npub(super) fn %s(m: &dyn Mem, pg: Pages, b: &Bases, s: &Matrix) -> [f32; %d] {\n    let _ = (m, pg, b, s);\n    [\n%s    ]\n}\n'%(doc,fname,len(leaves),''.join('        %s,\n'%i for i in items))

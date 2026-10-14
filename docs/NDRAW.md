@@ -5,6 +5,8 @@ L108 research map, 2026-10-13. All addresses refer to the 32-bit
 L108 evidence is static disassembly/decompilation and the private DTI registry.
 Section 9 adds L117's original-instruction differential tests and semantic
 decoder. Neither task claims a game run, image comparison or FPS result.
+Evidence is static disassembly/decompilation and the private DTI registry;
+no game run, renderer implementation, image comparison or timing is claimed.
 Descriptive function names below are research labels, not original symbols.
 
 ## Findings available for downstream work
@@ -182,6 +184,7 @@ Descriptor dword0 low8 selects a filter combination; bits8:10,11:13,
 14:16 address modes; bits17:21 anisotropy. Dword1 is LOD bias, dword2
 truncated toward zero to max mip level (L117 assembly/vector correction),
 dwords4..7 are RGBA float border color.
+rounded to max mip level, dwords4..7 are RGBA float border color.
 Dword3 is preserved but not used in the packed D3D9 state here.
 In the *non-null previous-state* branch only, min filter 3 is adjusted
 using `[global 0x018D1D20]+0x34`: option1 forces filters to 2;
@@ -262,6 +265,7 @@ one allocation: `+0x18` copied source array, `+0x1C` source count,
 `+0x10` generated element array, `+0x14` generated count, `+0x20` rounded
 byte extent; byte+0x24 retains source bit31 at the first byte of the final
 four-byte scan group (L117 vectors). These
+byte extent; byte+0x24 is stored but its meaning is unresolved. These
 are **not** a COM declaration at +0x18: `0x00E0FCC0` combines up to four
 InputLayouts from the sShader2 table, rewrites stream/semantic fields,
 adds the declaration terminator and calls CreateVertexDeclaration.
@@ -589,6 +593,8 @@ executor must maintain guest cache fields and stack-visible side effects.
   interprocedural device aliases are not exhaustively excluded.
 - Resource padding/unused flags, input descriptor fields not consumed by
   declaration construction and named-texture eviction remain unresolved.
+- Resource padding/unused flags, InputLayout byte+0x24, complete input
+  descriptor semantics and named-texture eviction remain unresolved.
 - State payloads appear creation-only on reviewed paths, but there is no
   global immutability proof or demonstrated descriptor interning.
 - Conditional filter order is mapped above; a single total Plug order

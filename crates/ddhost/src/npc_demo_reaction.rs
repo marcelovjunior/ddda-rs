@@ -95,6 +95,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn demo_scenery_radius95_distinguishes_native_double_from_sqrt2() {
+        let cap = CapsuleSegment { start: [0.0, 95.0, 0.0], end: [0.0, 105.0, 0.0], radius: 95.0 };
+        let input = SceneryInputs { update_flags: 4, ready: true, target: [0.0; 3],
+            ground_check: true, axis_type: 2, axis_radius: 15.0 };
+        let axis = axis_query(&cap, [0.0; 3], &input).unwrap().unwrap();
+        // Original f64 at0x0161C9F0 and native widen/multiply/narrow ordering
+        // at0x0079E5AA..B8. This synthetic radius exposes the one-ULP difference.
+        assert_eq!((-axis.motion[1]).to_bits(), 0x4306_59ac);
+        assert_ne!((-axis.motion[1]).to_bits(),
+            ((95.0_f64 * std::f64::consts::SQRT_2) as f32).to_bits());
+    }
+
+    #[test]
     fn demo_scenery_axis_uses_current_radius_native_double_and_airborne_target() {
         let cap = CapsuleSegment { start: [2.0, 80.0, 4.0], end: [3.0, 35.0, 5.0], radius: 35.0 };
         let mut input = SceneryInputs { update_flags: 4, ready: true, target: [100.0, 150.0, 300.0],

@@ -1,5 +1,27 @@
 # Inventory: how much of DDDA.exe is rebuilt (Phase 0 findings)
 
+## Current count (2026-10-12, L84)
+
+`python scripts/inventory.py summary`, read-only against the shared inventory:
+**59,450 / 59,469 non-thunks verified (99.968%)**; **19 remain**.
+Verified bytes: **15,657,151 / 15,690,444 (99.788%)**. The printed 100.0%
+function coverage is rounded; it does not mean every function is verified.
+
+| Status | Functions | Bytes |
+|---|---:|---:|
+| Verified | 59,450 | 15,657,151 |
+| Documented | 14 | 9,525 |
+| Translated, not verified | 5 | 23,768 |
+
+This agrees with the train-18/main `0cd11f67` milestone. Historical
+platform-rule counts: CRT/library **5,581/5,588**, DTI allocators
+**2,863/2,863**, MT allocators **5/5**, base destructors **23/23**,
+construct-if-memory **352/352**, deleting destructors **3,926/3,926**.
+These overlap the status totals. The L66 replay's **59,734 lifted entries /
+178,130 cases** is a different population, including thunks; do not use it
+as the inventory denominator. No inventory rebuild or replay was run for L84.
+Earlier censuses below retain their original dates and denominators.
+
 ## Exhaustive residual census (L13)
 
 `research/native/residual_census.py --require-evidence` writes one private

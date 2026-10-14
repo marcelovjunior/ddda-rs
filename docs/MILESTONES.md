@@ -29,7 +29,13 @@
 - Release NDRAW_BENCH: `draw_call` from the caches 0.34-0.41 -> 0.20-0.30
   us; a new frame's first draw 2.5-2.7 -> 1.31-1.43 us. In-game effect
   pending train 6.
-- Next: the train 6 profile, then per-draw guest reads. Details:
+- Verified in game: combo46 verify, 0 mismatches with the original's
+  upload skipping modelled (cb495a30); combo42's mismatches came from a
+  per-frame binding cache and from skipped uploads. Since then, tested
+  and cut (copy-on-write banks, skipped uploads unread, a lock-free dirty
+  check, O(1) override lookup, generation tables dropped off-thread, a
+  newest-writer index, batched sampler states).
+- Next: the train 18 verify and profile. Details:
   docs/tasks/L180-render-worker.md.
 
 ### L177 semantic state commit and model mesh (2026-10-13)
@@ -308,6 +314,21 @@
 - Verified trace compression recovers **3.12 GB**. Evidence and hashes:
   `docs/tasks/L158-critical-jobs.md`. Combined native gate and live lookup
   benefit remain pending; next: head integration gate and controlled A/B.
+### L166 Vulkan TDR investigation checkpoint (2026-10-13)
+
+- No hang reproduced or causal defect established; production unchanged.
+  Synthetic 1,792-frame gate: 1,639,670 raw passes, one mapped-ring wrap,
+  1,697 shadow aspects matched, no skips/errors/mismatches/pending.
+- Private cap1 gameplay stress: 21 frames + 32 repeats, 252,840 raw draws,
+  four mapped-ring wraps, 53 query fallbacks. Plain/shadow final hashes
+  identical; all 60 sampled shadow aspects match. Earlier frame load state
+  omitted: this is not original-game image acceptance.
+- Four focused synchronization/lifetime gates pass. CPU 30 pass / inherited
+  strip failure; light 241 reported passes / one timing failure / seven
+  ignored, timing retry passes. Khronos validation layer unavailable.
+- Next: inspect head c32 shadow+diagnostics receipt (not yet available),
+  correlate device loss with Windows GPU events; keep default flip held.
+  Hashes, timeout limits and audit: `docs/tasks/L166-vk-tdr.md`.
 
 ### L159 Vulkan default image gate (2026-10-13)
 
@@ -481,6 +502,21 @@
   both failures pass isolated retries. Details: `docs/tasks/L161-codegen.md`.
 - Next: head combined generation/gate with the switch enabled, then
   matched image/FPS acceptance.
+### L157 guest frame wait chain (2026-10-13)
+
+- Source confirms early render kick / double-buffered update overlap / late
+  completion join then main-thread Present. Concrete request/completion
+  handles matched by L153: `0xF0005C/0xF00060`; no new runtime behavior.
+- Late-game c26s0/s1: **69.254/69.322 job joins per frame**, residual
+  **18.644/17.813 ms/frame**; main render join **0.262/0.795 ms/frame**.
+  Profile-on non-VK figures, not FPS acceptance. c26vk main **512/669**
+  join samples; render **323/669** awaiting main, backend **397/669**
+  awaiting commands. Sample shares are not additive stage timings.
+- Analysis verified against lifted code, private dumps, runtime queue and
+  independent wait ranking; no game/GPU/shard runs. Worker job census
+  currently misses worker dispatch sites. Next: corrected lightweight
+  worker census to separate job imbalance from wake delay. Details:
+  `docs/tasks/L157-waitchain.md`.
 
 ### L153 game-thread synchronization (2026-10-13)
 
@@ -602,6 +638,24 @@
 - Next: head adopts corrected census alongside L158's correlated batch trace,
   identifies long-join worker jobs, and performs profile-off matched image/FPS
   acceptance. Event cache/futex remain opt-in; no part 2 game gain claimed.
+### L154 render-worker allocation census (2026-10-13)
+
+- c26 offline wait attribution: render request event 323 samples at DAC0B4;
+  main residual join 512 at DBE66D; Present retirement 7, command send 2.
+  Wake notifications now classified separately; **25 Python tests pass**.
+- CPU deltas (main 54.4%, render 55.3%) differ from sampled busy shares;
+  22.28 Hz sequential sampling cannot establish the causal frame timeline.
+  L153 measured durations and L157 source map provide the complementary evidence.
+
+- Timed exact-thread Rust allocation/free census avoids startup contamination;
+  all bounded-table rows and overflow are reported, ranked by calls or bytes.
+- Standalone allocator/parser **3 tests pass**, command **14**, ddgpu CPU **26**;
+  GPU **26 pass / 2 ignored / 2 bounded timeouts**. Runtime baseline **208 pass /
+  3 fail / 5 ignored**; two timing failures pass isolated, inherited gamma remains.
+- No shard build or game run. c24/c25 heap time shares cannot rank counts/bytes.
+- Isolated four-hunk ndraw candidate: **11 tests pass / 1 ignored**; repository
+  file awaits owner agreement. Next: head hunk decision and gameplay census.
+  Protocol and limitations: `docs/tasks/L154-worker-alloc.md`.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)
@@ -768,6 +822,25 @@
 - Blocker: original-game image/FPS acceptance requires head's run. Next:
   integrate with L143's wrapped pipeline key and A/B `DDGPU_VK=0/1` on
   default `DDDRAW_NATIVE=drawcall`. Hashes/details: `docs/tasks/L138-vk-encoder.md`.
+### L137 ordered parallel command encoding (2026-10-13)
+
+- Opt-in `DDGPU_ENCODE_THREADS=2..4` finishes consecutive wgpu-recorded
+  encoder chunks on persistent workers, collects them in original order,
+  and submits once per batch. Default **1**, pass boundaries/load/store
+  and staged-write ordering retained. Generic chunk callback for L138.
+- `DDGPU_ENCODE_PROFILE=1` reports per-Present recording-stage histograms,
+  finish CPU sum/wall and queue submit; wgpu's deferred internal HAL
+  sub-stages are not separately measurable through the public API.
+- **20 CPU tests pass**; new 1/2/4-worker multi-pass byte oracle passes
+  debug and optimized. Draw/cache/targets **27 pass / 2 existing ignored**
+  with both 1 and 4 workers. Runtime light **200 pass / 1 inherited
+  fullscreen-gamma failure / 4 ignored**. No game or shard runs.
+- Generated 5,294-draw/950-target-run fixture: profiled finish wall
+  **13.080 / 12.411 / 8.634 ms** for 1/2/4 workers; CPU sum rises.
+  Off-profile paired frame medians **15.670–19.968 / 14.627–14.795 /
+  11.596–12.095 ms**. Shared-host variability is large; no FPS claim.
+- Next: head same-scene image/FPS A/B at 1 and 4 workers before changing
+  default. Details and test/build limitations: `docs/tasks/L137-parallel-encode.md`.
 
 ### L109d memory ownership diagnostics (2026-10-13)
 
@@ -805,8 +878,8 @@
   tests pass**; runtime light **187 pass / one inherited gamma failure /
   three ignored**. Query, channel-fill and depth-bias cases keep FIFO fallback.
 - Raw Vulkan drawing with wgpu-owned targets/VB/IB, tracked barriers and
-  wgpu queue submission: **eight image cases pass**. Preliminary median
-  **0.354 us/draw** vs ash **0.326** / wgpu **1.129**, prefilled uniforms;
+  wgpu queue submission: **eight image cases pass twice**. Confirmed median
+  **0.333 us/draw** vs ash **0.315** / wgpu **0.966**, prefilled uniforms;
   shared-load timing limits and migration risks in the L133 brief.
 - Next: head's fresh Compare/Native run with the strip fix to measure wider
   uptake and FPS. No valid combo17 native image/FPS acceptance claim.
@@ -946,6 +1019,14 @@
   `DDRUNTIME_GEOMETRY_PORT=1`, off pending head A/B.
   Next: head integration regeneration/gate and geometry A/B; UI timings
   need head marks. No measured geometry or first-Present speedup yet.
+### L109 dynamic-Huffman oracle extension (2026-10-13)
+
+- **632 original fast-inflate cases pass**, up from 559: 73 entry/return
+  snapshots from 24 complete 8 KiB dynamic-Huffman streams. Original
+  outer inflate and table builder run unmocked; full plaintext matches.
+- The existing readable port needed no changes. All memory windows,
+  GPR/XMM registers and arithmetic flags still match byte-for-byte.
+- Next: head's matched game run; decoder benchmarks are not loading times.
 
 ### L109 loading baseline, cache experiment and original waits (2026-10-13)
 
@@ -1049,6 +1130,37 @@
   1 ignored (initial parallel lock-timing failure passes serially).
 - Next: L112/L110 integration and head-run frame comparison. No GPU/game
   run or image/FPS claim. Details: `docs/tasks/L117-state-semantics.md`.
+### L116 pipeline warmup (2026-10-13; game timings pending)
+
+- Opt-in per-creation frame/phase telemetry and run summarizer, checkpoint
+  **2c12eab2**. Persisted complete pipeline recipes plus local generated
+  shader sources are keyed by exe hash, driver and compiler/device schema.
+  One background worker precreates objects; current source digests guard
+  adoption, with ordinary validated creation on a miss.
+- Checks: **10 ddgpu CPU units, 2 parser tests, 3 Vulkan cache cases**
+  pass. Synthetic 12-draw replay restores **12 pipelines / 4 modules**,
+  makes **zero on-demand creations**, and matches both target images.
+  Final source-variant guard replay passes; source **aeb8e5df**.
+- Runtime **156 pass across invocations / 1 ignored** (29 unit, 127
+  integration). Full-suite attempts hit existing Present timing/host gamma
+  failures; recorded-display integration binaries all pass.
+- Head instr1 baseline: 552 pipelines / 1,526.307 ms total; late one-second
+  buckets include 9 / 386.270 ms and 2 / 163.885 ms. No phase/FPS gain claim.
+  **Next:** head's driver-cache-warm off/on run with observed phase boundaries.
+  Details: `docs/tasks/L116-pipeline-warmup.md`.
+### L107 frame command statistics (2026-10-13)
+
+- CPU-only `d3d9frame` `frame_stats` example reports target-defined passes,
+  per-draw state/constant deltas, static shader reads, batching run histograms,
+  clear/copy/fill sizes, and aggregate text/streamed JSON. No game/GPU run.
+- **5 crate + 7 example tests pass**; release CLI synthetic capture:
+  **2 frames / 3 passes / 6 draws / 12 primitives**, VS delta **1 float4 / 16 B**.
+  Runtime light suite **151 passed / 1 ignored**. No gameplay comparison yet.
+- Analyzer retains current-frame statistics and previous draw; existing
+  Reader still retains its global blob dictionary. Relative shader reads
+  remain static-base counts, not runtime extents; batching is candidate-only.
+- Next: head's gameplay capture and release report to guide pass takeover.
+  Definitions and limits: `docs/FRAME_ORACLE.md`; Results: `docs/tasks/L107-frame-stats.md`.
 
 ### L90 shared draw payloads (2026-10-13)
 
@@ -1110,9 +1222,25 @@
   light serial tests 133 pass. All 29,198 IR roundtrips are exact.
 - Preliminary 1,000-shader Vulkan sample: 4.31 -> 1.05 ms including translation
   and cache I/O. Filesystem residency matters; whole-corpus paired timing pending.
-- Initial GPU pass: 29 executed cases pass before yielding to L90's gate.
-- Next: remaining targets, warm GPU repeat and full paired timing after GPU
-  release. Details: `docs/tasks/L83-naga-direct.md`.
+- Initial GPU pass: 32 executed cases pass. Production commit `46583548`;
+  head ran combined L90+L83 (4.9 vs 4.7 FPS; not isolated L83 evidence).
+- Next: target-format shards, warm GPU repeat and full paired timing after
+  head's CPU-quiet window ends. No L83 jobs running. Details:
+  `docs/tasks/L83-naga-direct.md`.
+### L79 unlinked pixel-input investigation (2026-10-12)
+
+- Baseline: **60,524 shader variants validate, zero failures** across all
+  29,198 installed shaders. No undeclared inputs in 27,070 pixel shaders.
+- Driver measurements found a real mismatch: missing COLOR0 reads white,
+  while COLOR1/TEXCOORD read zero. Installed root shader
+  `2681fe2cf6b72f46` reproduces the color error; the candidate fix passes all
+  14 d3d9wgsl tests and 60,524 shader variants.
+- COLOR0 fix applied after head approval. CPU pairing sweep validates
+  153,742 linkage maps across 21,744 v0/COLOR0 shaders and 10 VS signatures
+  lacking COLOR0. No runtime pairing capture was available. The
+  separate runtime `v0 undefined` report remains unreproduced. See
+  `docs/tasks/L79-wgsl-unlinked-input.md` for tests and GPU-suite caveats.
+- Next: head reruns the failing draw; use its capture for exact-pair checks.
 
 ### L66 hot/cold build (2026-10-12)
 
@@ -3000,12 +3128,12 @@ opening (codex-31), route perf (codex-29).
 - Build: a full `play-fast` build takes ~6 min cold; a runtime-only relink
   takes ~20 s; the optimised `play` build takes ~25 min.
 
-### L89 deferred backend (2026-10-13, final measurements pending)
+### L89 deferred backend (2026-10-13)
 
 - Implemented one owned, bounded FIFO and one backend worker, two outstanding
   Presents, read-result fences, shutdown drain and per-frame presentation TLS.
   `DDRUNTIME_SYNC_BACKEND=1` retains immediate execution.
-- Runtime **134**, queue **5**, capture **5**, GPU **33** pass; **3** existing
+- Runtime **134**, queue **5**, capture **5**, GPU **34** pass; **3** existing
   GPU tests ignored. Queued/synchronous frame pixels and worker sink match.
 - Target-format matrix exceeded the 60-second bound; standalone **0a1776ab**
   shards its unchanged 200 cases. Final four shards and isolated timings wait
@@ -3175,3 +3303,84 @@ opening (codex-31), route perf (codex-29).
   and the old profiler discards symbol displacement. Next: finish paused
   checks; head integrates and measures gameplay plus raw-PC attribution.
   Details: `docs/tasks/L143-backend-thread.md`.
+## Milestone 2026-10-12 (tonight): FPS and build iteration, L61-L80
+
+- Integration reviewed through `task/opt-int` **afb8f8fc**; gameplay has
+  been reached through Load Game. Earlier measured phases remain: logos
+  **~58 FPS**, title movie **~24 FPS**, menu **~12 FPS**, loading **0.2-1 FPS**.
+  These are phase observations, not a matched gameplay before/after test.
+- **L61-L63:** page-wise memcpy/memset (serial title movie about **1 -> 4
+  FPS**), live x87 state and bulk file/movie/audio/surface transfers.
+  **L62b:** TEB live-id and page-table operands remove the hot TLS/trait
+  paths (before: **14% / 30%** of sampled decoder work respectively).
+- **L64/L65:** route step services through the guest lock, release it for
+  host graphics/file/audio work, skip it for explicit lock-free services.
+  In contention tests, another service's mean delay under a 4 ms Present
+  falls **4,122 -> 12 us**; under a 30 ms audio effect **5,629 -> 5.6 us**.
+- **L67:** string services match **22,000** original lifted cases, including
+  **133** matching faults. Dev strlen(200) **4,908 -> 916 ns**. **L69:** keyed
+  waits reduce the 16-idle-worker lock test **437.6 -> 10.7 us/iteration**.
+  **L70:** combined binding/step lookup reduces dispatch **111 -> 10.4 ns**
+  in release (model benchmark). No separate L68 result found in the history.
+- **L71:** first driver pipeline compilation **99-171 ms**, later-run
+  **1.3-1.7 ms**, shader module **6-10 ms** (translation about **0.5 ms**).
+  Persistent Vulkan cache and counters implemented; loading compilation
+  stalls remain distinct from steady gameplay draw cost.
+- **L72:** shared passes reduce the 1,000-draw benchmark **19.2 -> 7.4 us/draw**,
+  GPU-waited frame **22 -> 10.3 ms**; 40 random 16-draw frames compare equal.
+  **L78:** device snapshot/hash work **15.2 -> 5.1 us** per indexed draw with
+  no-op backend. **L80:** suppress unchanged pass commands; **33 ddgpu tests
+  pass**, driver equivalence included. These are not additive FPS gains.
+- **Gameplay bound:** the 40 s `profile_gameplay_render2.txt` sample has
+  render thread **85% of a core**, main thread **23%**. Render inclusive
+  samples: service dispatch **85.4%**, backend draw **34.9%**, constants
+  **22.2%**, snapshot **17.8%**, pass encoding **9.5%**, guest-lock acquisition
+  **8.8%** (overlapping). CPU rendering/services and lock waits dominate;
+  the profile does not measure gameplay FPS or prove a GPU execution bound.
+  Earlier render profile: **76%** of a core. Keep symbol-attribution limits
+  in RUNTIME; the generic byte-copy symbol alone does not identify audio.
+- **L66/L73-L75:** function-level hot/cold layout, lean emission, large
+  function splitting and stable `ddnative-host` policy reduce rebuild work.
+  L66 fixed shard **254.89 -> 21.49 s** (opt1/default front end -> opt0/eight
+  threads); full split play+emu **636.08 s**, some dependencies cached,
+  versus head's approximate **25 min**. **83 hot functions**, provisional
+  loading/movie list. Gate passes **178,130 cases / 59,734 lifted entries**.
+  L73 shard05 splitting **110 -> 84 s**; L75 module-size experiment
+  **216 -> 72 s** at opt1, not yet integrated into this snapshot.
+- `play-fast` used whole hot shards (later adding loader shards 15/19);
+  `play-o0` supplies the all-address-shard opt0 comparison. Current `play`
+  uses L66 hot packages. **L77:** one opt3 copy of the base helpers instead
+  of opt0 copies in every shard: CRT stricmp **38.3 -> 17.2-17.6 us**;
+  two-shard build **41 -> 31-37 s**. See NATIVE_PIPELINE for exact profiles.
+- **Toolchain:** Cranelift rejected per head's L84 brief; LLVM retained.
+  No rejection/timing receipt in the reviewed sources; reason requested
+  on board #10098. `RUSTC_BOOTSTRAP=1` enables `-Zthreads=8` on stable.
+- **L75/L76 pending integration:** build helper **57b73344** keeps per-run
+  exe/PDB copies with stable bootstrap/thread flags; gate **225574c7**
+  parallelizes unchanged comparisons: lift **158 -> 33 s**, mtmath
+  **102 -> 12 s**, mtcore **86 -> 10 s**, mtframe **80 -> 18 s**.
+- **Inventory checked, no build:** **59,450 / 59,469 verified (99.968%)**,
+  **19 residuals**, **99.788% of counted code bytes**. L79 is a separate
+  shader-correctness lane, not an FPS result in this integration snapshot.
+- **Evidence gap:** numerical steady-gameplay FPS is absent from the
+  supplied sampling profiles/commits; requested from head (#10094/#10129).
+- **Next action:** head records matched gameplay rates and visuals for the
+  integrated renderer changes; finish constant-upload and guest-lock work.
+  L84 ran only read-only evidence checks and `inventory.py summary`.
+- Standalone **0a1776ab** shards the unchanged target-format matrix: all
+  **200/200** cases match, four processes under 14 seconds each.
+- Serialized `play` medians: 1700 draws **14.35 -> 4.41 us/draw** producer,
+  total **28.72 -> 29.77 ms/frame**; 5200 draws **14.38 -> 9.72 us/draw**,
+  total **79.18 -> 85.98 ms/frame**. Work is offloaded, not eliminated.
+- Core **e7a069f3**, compatible fixtures **ffc2b759**. Head's five-branch combo
+  reports **7.2 vs 4.9 FPS**; the subsequent L102+L103+L99 combo reports **8.9**.
+  Neither isolates L89. Next: head integrates L90 snapshot groups and L98 dirty
+  flushes after addressing the newly exposed query/D3D-lock wait in L102.
+  No game or lifted-shard build by this lane. Details: `tasks/L89-backend-worker.md`.
+- Minimal fix `df6ae57c` merged by head. Light runtime suite and focused
+  batching/order regression pass (0.81 s; 2,048 commands across two limits).
+  Full cache acceptance remains unverified: one run interrupted at 92.12 s;
+  final process exit 1 at 9.51 s without a test-result diagnostic.
+- Head #10593 ordered wrap-up/no new runs. No game/FPS comparison by this
+  agent. Evidence and limits: `docs/tasks/L96-encoder-hang.md`.
+- Next: head's uninterrupted cache gate, then L88/L95 gameplay/FPS comparison.

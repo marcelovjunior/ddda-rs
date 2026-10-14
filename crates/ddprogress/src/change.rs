@@ -61,7 +61,10 @@ pub fn check(c: &Character, to: Vocation, first_choice: bool) -> Result<i32, Ref
 /// 0x00780840 empties skill-set entries the new vocation cannot use and
 /// staff slots 3..5 outside Mage and Sorcerer). Level, experience, stats,
 /// discipline, every vocation's rank, learned skills and augments carry
-/// over. `b8844_40000` is the sGameSys+0xb8844 bit 0x40000, which skips
+/// over. 0x00673740 then calls 0x006749a0 to grant and slot unknown free
+/// skills for the selected vocation. The host refreshes active slots from
+/// its equipped weapons (0x00780350), which this record does not own.
+/// `b8844_40000` is the sGameSys+0xb8844 bit 0x40000, which skips
 /// the change counter (0x0044b7a0) and, in 0x00780840, the clearing of
 /// active slots (cleared here anyway by 0x00673740); its meaning is
 /// unresolved and it is normally false.
@@ -102,5 +105,6 @@ pub fn change(
         }
     }
     let items = if first_choice { starting_items(to) } else { vec![] };
+    tables.starting.grant(c);
     Ok(Changed { from, to, cost, items })
 }

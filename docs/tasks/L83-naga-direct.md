@@ -42,11 +42,17 @@ Target `C:/ddda-targets/L83`, release, incremental disabled, jobs=4:
 - `cargo test -p ddruntime --no-default-features --release -- --test-threads=1`:
   **133 pass, zero failures**. This resolves the prior two timing assertion
   failures from the concurrent test run; no runtime test was weakened.
-- Production GPU checks: initial cache-populating pass has **29 executed tests
-  passing**, two existing exploratory tests ignored, before yielding the GPU
-  to L90's head-prioritized gate. Remaining targets and the full warm repeat
-  are pending. Each test runs in a fresh process with a hard 60-second timeout,
-  after `pause.py status` reports not paused. The interrupted case will rerun.
+- Production GPU checks: initial cache-populating pass has **32 executed tests
+  passing**, three existing exploratory tests ignored. Target-format coverage
+  was interrupted by the head's game-run hold; that case and the full warm
+  repeat remain pending. No assertion failed. Tests use fresh processes and
+  pause checks, with a hard 60-second timeout (the two cache tests may use
+  300 seconds under head instruction 10360). Whole suites now use
+  `HEAVY_BIG=1 heavy.py` to serialize GPU work.
+- Imported head-approved test-only target sharding from codex-6 as `68852314`
+  (original `0a1776a`). `TARGETS_SHARD=0/4` through `3/4` cover all 200 original
+  cases after identical RNG generation; defaults and assertions are unchanged.
+  The L83 target test must be rebuilt before these shards run.
 
 ## Measurement
 
@@ -82,5 +88,14 @@ are not interchangeable: warm performance depends on filesystem cache state.
 The first launch still parses WGSL and pays serialization/write overhead.
 
 Private logs/cache: `C:/ddda-targets/L83/`. No shader data is committed.
-Next: finish production GPU checks and the full paired timing pass after
-L90 releases the GPU, then post final evidence to head.
+Production integration: **`46583548`** (prior cache/helper commits
+`3a956d94`, `d733bd18`). The head merged and ran L90+L83: board 10403 reports
+**4.9 FPS versus 4.7 FPS** for the combined changes, not an isolated L83 result.
+Only the head ran the game.
+
+Final verification is deferred by head instruction 10403: after the game run,
+all CPU/GPU builds, tests and benchmarks must stay stopped until claude-9 posts
+"build B done". L83 has no running jobs. Next: rebuild the target test, run all
+four target-format shards and the warm GPU repeat in the heavy slot, then the
+full paired 29,198-shader timing pass. Do not infer full-corpus module timing
+or a completed warm GPU gate from the preliminary sample.

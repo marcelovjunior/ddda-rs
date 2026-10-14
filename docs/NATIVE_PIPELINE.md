@@ -64,6 +64,95 @@ python scripts/inventory.py attribute    # optional: classes for unlabelled code
 `PY` = the pyenv Python above. `scripts/inventory.py` uses the system
 Python (stdlib only).
 
+## Play builds and iteration (2026-10-12, L66/L73-L77)
+
+The integrated snapshot is `task/opt-int` at `afb8f8fc`. Only the head
+runs `ddplay` or `winmain`; agents request runs on the board. Shard builds
+use `heavy.py` with `HEAVY_BIG=1`; runtime-only tests use
+`cargo test -p ddruntime --no-default-features`, four jobs, no incremental
+cache, and a private `C:/ddda-targets/<task>` target. Never share one target
+between worktrees: L60 observed stale artifacts reused across source trees.
+
+| Profile | Lifted code | Runtime and base |
+|---|---|---|
+| `play` | Current L66 layout: 32 address shards at opt0, one sampled hot package at opt1 | opt3, no LTO, 64 CGUs; runtime incremental, shards not |
+| `play-fast` | Earlier whole-shard compromise: 15 hot address shards at opt1, the other 17 at opt0 | Inherits `play` |
+| `play-o0` | All 32 address shards at opt0; a generated hot package still inherits `play` opt1 | Inherits `play`; diagnostic comparison |
+
+The original `play` layout used opt1 for every address shard. `gen` without
+`--hot-functions` restores that layout; with a private sampled-address list
+it emits dedicated hot packages and cold opt0 packages together. The current
+83-function list is provisional (loading/movie samples, not complete gameplay
+coverage): 59,734 functions, 167 modules, 33 packages. Cross-package calls
+keep the resolver and shared instruction-owner precedence. L60 preserves
+address overrides; L74 moves runtime policy into `ddnative-host`, leaving
+the shard dependency `ddnative-base` stable. L77 compiles frequent memory,
+flag, SSE and call helpers once at base opt3, out of line, including for opt0
+callers. Runtime-side crates have line-table debug info for named profiles.
+
+L75's `scripts/build_play.sh` is committed as `57b73344` on
+`task/L75-build-pipeline`, **not yet in this opt-int snapshot**. Once merged,
+from Git Bash, with a target unique to this worktree:
+
+```sh
+CARGO_BUILD_JOBS=4 scripts/build_play.sh --who YOUR_BOARD_NAME \
+  --profile play --target-dir C:/ddda-targets/YOUR_TASK nightly --timings
+```
+
+It builds `ddplay --features emu` inside the heavy slot, sets
+`RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zthreads=8"`, retries memory-guard kills
+(up to three attempts; real compiler errors stop), and keeps the executable
+and matching PDB in `<target>/runs/nightly/`, with logs in `runs/logs`.
+It unsets `CARGO_INCREMENTAL` so the profile controls caching. Changing
+RUSTFLAGS changes fingerprints and rebuilds the target. Its optional
+`--gate` uses the RAM-limited rustc wrapper with 16 job tokens; this is a
+separate build experiment, not the native correctness gate. Ordinary agent
+builds retain the shared-machine limits. Before L75 is merged, use the same
+flags with `cargo build --profile play -p ddplay --features emu` through
+the heavy scheduler; set a private target and four jobs explicitly.
+
+Head-only run, from the repository root after that build:
+
+```sh
+DDRUNTIME_PARALLEL=1 DDRUNTIME_EMU_FALLBACK=1 DDPLAY_RATE_LOG=1 \
+  C:/ddda-targets/YOUR_TASK/runs/nightly/ddplay.exe
+```
+
+The emulator is diagnostic; emulated execution never earns verification
+credit. `DDPLAY_PIPELINE_STATS=<seconds>` reports pipeline creation;
+`DDRUNTIME_LOCK_STATS_EVERY=<seconds>` reports cumulative guest-lock stats.
+In rate-logged runs, O marks a phase. Pause builds for comparisons and retain
+the exact executable/PDB pair. Sampling rounds per second are not game FPS.
+
+**Build evidence.** L66 fixed shard: 254.89 s opt1/default front end ->
+21.49 s opt0/eight-thread front end; opt1 with eight threads alone 162.86 s.
+First full split play+emu: 636.08 s, some dependencies cached, versus head's
+approximate 25 min; not an empty-cache paired comparison. L73 reduced shard
+05/12 source from 10.99/11.33 MB to 8.64/8.84 MB; splitting large functions
+into 16 KiB parts reduced shard05 opt1 wall time 110 -> 84 s. L75's separate
+module-size experiment: 216 -> 72 s (57 modules around 170 KB, opt1), peak
+RAM 1.9 -> 2.9 GB, CPU +10%; assigned for integration, not yet generated
+here. Merely requesting 64 CGUs does not split a large Rust source module.
+L77's two-shard benchmark build: 41 -> 31-37 s. These timings have different
+workloads; they are not additive full-build savings.
+
+Cranelift was rejected for this build route (head's L84 assignment); LLVM
+remains the documented backend. The supplied integration commits and profile
+reports contain no Cranelift failure/timing receipt, so no rejection reason
+or comparative speed is claimed here. Evidence requested on board #10098.
+
+**Native gate (L76).** Commit `225574c7` on `task/L76-gate-speed` is also
+pending integration here. Independent cases replay in parallel (`LIFT_THREADS=1`
+retains serial execution), with unchanged comparisons. Lift replay 158 ->
+33 s; mtmath 102 -> 12 s; mtcore 86 -> 10 s; mtframe 80 -> 18 s. The lift
+runner also replaces a linear lookup with hashing and avoids cloning the
+400 MB parsed vector array. Its script defaults to eight jobs and
+`-Zthreads=8` under `RUSTC_BOOTSTRAP=1`; shared-machine scheduling still
+applies. Current L66 `NATIVE_PROFILE=play scripts/native_gate.sh` selects the
+exact play artifacts (106.88 s measured with required vectors); preserve
+that profile selection when merging L76. These are different gate runs,
+not a measured combined L66+L76 total.
+
 ## Tools
 
 ### scripts/inventory.py (system Python)
@@ -311,10 +400,11 @@ Patterns store instruction starts in `body`, merged byte `body_ranges` and
 for external calls and own-return checks. Nested calls track return PC and
 stack depth so a shared callee epilogue is not mistaken for the root return.
 
-**Generated code.** `crates/ddlift/lift_00` through `lift_15` hold the
-lifted bodies in `src/generated/lifted_NNN.rs` (400 functions per module).
-The fixed shard is `(address >> 20) % 16`: 1 MiB address bands, independent
-of lifting rounds or the selected function set. `ddnative-base` holds
+**Generated code.** `crates/ddlift/lift_00` through `lift_31` hold the
+lifted bodies in `src/generated/lifted_NNN.rs` (400 functions per module
+before the pending L75 byte-chunk change). The fixed shard is
+`(address >> 19) % 32`: 512 KiB address bands, independent of lifting rounds.
+L66 can move sampled functions into separate hot packages (see play builds). `ddnative-base` holds
 `Mem`, `Cpu`, `Flags`, x87 and platform models; every shard depends only on
 that base. `ddnative` keeps the hand ports and re-exports the base modules,
 preserving existing imports. Its generated `lifted.rs` is a small facade
@@ -1213,6 +1303,13 @@ the slow paths (acquiring and parking a state) are indirect calls.
 
 ## Exact x87 arithmetic (L05)
 
+The original L05 model below describes the exact state representation. L62
+now keeps the active guest state live in the host FPU between instructions;
+services and the emulator park it, and snapshots materialize the image. L62b
+uses a TEB TLS slot for the live check and page-table memory fast paths.
+Interleaving, parking, snapshots, FNSAVE/FRSTOR and cross-thread use have
+regressions (`8baec70a`, `d7fd4ef7`).
+
 `Cpu.st` holds an x87 FSAVE image: eight 80-bit values, tags, TOP,
 control word and status. On x86-64, each supported instruction swaps in
 that state with `FNSAVE`/`FRSTOR`, executes the original opcode with its
@@ -1692,11 +1789,12 @@ counts emulated code, and shipped builds have the feature off.
 ## What to do next
 
 Current state: docs/MILESTONES.md (the latest batch), docs/INVENTORY.md
-(the numbers). As of train 4 (2026-10-12): 59,229 of 59,440 verified. What
+(the numbers). As of the L84 inventory check (2026-10-12): 59,450 of 59,469 verified. What
 remains:
 1. Recorder failures (no fixture) and lift rejections on the boot's
    route first (docs/tasks/L21-boot-bring-up.md, the look-ahead tables).
-2. The 44 verification gaps (`patterns/verification_gaps.json`, mostly
-   input-indexed switches that need a table proof or a case per slot).
-3. The boot itself (L21): WinMain to the title, one stop at a time.
+2. Reconcile the remaining 19 inventory rows with current recorder and
+   verification-gap evidence; historical train-4 counts above are superseded.
+3. Gameplay now runs; profile the render-thread services and loading pipeline
+   compilation, retaining driver-equivalence and required-vector gates.
 4. Keep INVENTORY.md and the numbers in this file current with each train.

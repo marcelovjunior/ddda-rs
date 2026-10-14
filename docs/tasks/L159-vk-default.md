@@ -136,3 +136,22 @@ No in-game acceptance claimed. Oracle commit leaves `DDGPU_VK` opt-in;
 separate default-on commit is for head to adopt only after image acceptance.
 Next: head runs the oracle on combo27 route; default commit stays staged until
 that gate passes.
+
+
+## Staged default selection
+
+The separate default commit changes only selection policy plus this receipt:
+unset `DDGPU_VK` enables Vulkan; `DDGPU_VK=1` enables it;
+`DDGPU_VK=0` disables it. Other explicit values remain disabled, matching the
+previous strict opt-in parsing. A non-Vulkan device still reports the existing
+context-creation fallback and stays on wgpu. All pass-level fallbacks stay.
+**Do not merge this second commit before the head's gameplay image acceptance.**
+Oracle commit: `bb8c779d`. No image acceptance is inferred from synthetic tests.
+
+Default selection validation: ddgpu CPU suite **31 passed, one GPU-only test
+ignored**, including unset/on/off/invalid-value policy. This is configuration
+validation only; no new game run or image acceptance.
+
+Integration onto L152/cf74: preserve its `Ready::submit`/`vk::submit` returning
+`SubmissionIndex`, and add `checks: vec![]` to its new `Chunk::Buffer` Ready
+constructor. Those newer additions are absent from this task's combo27 base.

@@ -634,7 +634,6 @@ Caveats: a timestamp between runs is a pipeline bubble (bottom-of-pipe to top), 
 
 Verdict for 240 fps (4.2 ms/frame): at the current workload the GPU alone needs ~6.5 ms/frame at 1080p (~150 fps ceiling), so 240 fps does NOT fit if every frame renders the full scene. Idle is ~4 ms (CPU-bound as known), so GPU is not today's limit, but it becomes the limit above ~150 fps. What would fit: with decoupling, the shadow maps (0.4), the 64x16 pass (0.9) and the small intermediate targets (~0.6) can be reused per sim tick and drop to <= 1/4 of their cost per presented frame, leaving ~4.7 ms: borderline. A fit needs additionally ~15% off the 1080p main passes (2.9 + 0.8 ms; e.g. cheaper draw state, fewer redundant draws, depth pre-pass reuse) or 1440p/1080p DLSS-style internal scaling. Roughly: 240 fps at 1080p is a stretch on the 4060 and should not be promised; 120-165 fps is comfortably within the GPU budget. Not measured: GPU time at 720p/540p (would split pixel-bound vs per-draw-bound main passes; one more run with the 720p config).
 
-
 ## 11. Implementation log (decouple2 agent, 2026-10-14, branch task/L193-decouple off task/L172-replay)
 
 Code: `crates/ddruntime/src/decouple.rs` (one wrapper port on `sMain::vf06` 0x00DBFA90, installed from `dispatch.rs` next to

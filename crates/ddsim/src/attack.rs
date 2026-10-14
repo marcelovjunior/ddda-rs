@@ -49,6 +49,9 @@ pub enum Weapon {
     Dagger,
     /// Secondary shortbow (category 10), bank 9 `m0006_at`.
     Bow,
+    /// Secondary shield (category 8). Its equipped skills use bank 9;
+    /// primary light/heavy attack transitions do not use this category.
+    Shield,
 }
 
 /// Runtime projection of `nPlayer::nWpnBow::cBowActParam`; the host reads
@@ -651,7 +654,7 @@ pub fn next(
         };
     }
     match weapon {
-        Weapon::None | Weapon::Bow => None,
+        Weapon::None | Weapon::Bow | Weapon::Shield => None,
         Weapon::Sword => {
             if light {
                 Some(Request::Attack(match current {

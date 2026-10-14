@@ -109,6 +109,59 @@ pub struct HitEvent {
     pub killed: bool,
 }
 
+/// Actor facts consumed by uPlayerBase::vf60, independent of damage pools.
+/// `faction` is the result of 0x008571D0 (status/Intel/character flags),
+/// not a collision group kind. None retains an unresolved provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContactActor {
+    pub character: bool,
+    pub enemy: bool,
+    pub vf117: bool,
+    pub faction: Option<bool>,
+}
+
+/// An authored checking contact, before history, invincibility and damage
+/// callbacks. This is deliberately separate from the merged [`HitEvent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AcceptedContact {
+    pub attacker: u32,
+    pub victim: u32,
+    pub key: u32,
+    pub region: u32,
+    pub attack_kind: u32,
+    pub target: Option<ContactActor>,
+    pub attacker_faction: Option<bool>,
+}
+
+impl AcceptedContact {
+    /// Known vf60 bits. Missing faction facts leave bits40/80 unresolved;
+    /// callers must not infer them from team IDs, damage or an HP change.
+    // Translated from 0x00B7CF69..0x00B7D01D (DDDA.exe 2017-12-13 Steam).
+    pub fn known_flags(self) -> u32 {
+        let mut flags = match self.attack_kind { 0 => 1, 1 => 2, 2 => 4, _ => 0 };
+        if let Some(target) = self.target.filter(|target| target.character) {
+            if target.enemy { flags |= 8; }
+            flags |= if target.vf117 { 0x20 } else { 0x10 };
+            if let (Some(attacker), Some(victim)) = (self.attacker_faction, target.faction) {
+                if attacker != victim {
+                    flags |= 0x40;
+                    if !target.vf117 { flags |= 0x80; }
+                }
+            }
+        }
+        flags
+    }
+}
+
+/// Explicit providers for native Group.mIsCheck and actor callback facts.
+/// Ordinary actor contacts currently lack the optional native LOS/ignore-zone
+/// gates (0x00779270/0x00779B10); this observer does not invent those gates.
+pub struct ContactObserver<'a> {
+    pub is_check: &'a dyn Fn(&AttackVolume) -> bool,
+    pub actor: &'a dyn Fn(u32) -> Option<ContactActor>,
+    pub output: &'a mut Vec<AcceptedContact>,
+}
+
 /// Optional headless evidence for an accepted NPC contact. No IO or RNG
 /// lives in this observer; the caller chooses where to retain its output.
 #[derive(Debug, Clone)]
@@ -383,6 +436,41 @@ pub fn hit_pass_with_npc_guards(
     owners: &[(u32, crate::npc_combat::DamageOwnerClass, bool)],
     trace: Option<&mut Vec<NpcHitTrace>>,
 ) -> Vec<HitEvent> {
+    hit_pass_with_npc_guards_and_contacts(fighters, tables, dt, roll, holds,
+        guards, owners, trace, None)
+}
+
+/// Same damage pass with native attacker-vf60 observation. 0x0076BCA9
+/// dispatches this after same-frame pair dedup, BEFORE persistent-history
+/// 0x0076BD27, invincibility 0x0076BD76 and victim vf59/vf66 acceptance.
+/// Consequently a guarded, repeated or zero-damage contact still notifies
+/// its attacker. Authored Group.mIsCheck gates the callback (0x0076BC6A;
+/// 0x0076FAB0 -> entry+1C0 -> 0x00773EE0 pair+1D8).
+// Translated from 0x0076B7E0 (DDDA.exe 2017-12-13 Steam).
+pub fn hit_pass_with_npc_guards_and_contacts(
+    fighters: &mut [Fighter], tables: &Tables, dt: f32,
+    roll: &mut dyn FnMut() -> f32, holds: &dyn Fn(u32) -> bool,
+    guards: &[(u32, crate::npc_combat::GaugeHitGuard)],
+    owners: &[(u32, crate::npc_combat::DamageOwnerClass, bool)],
+    trace: Option<&mut Vec<NpcHitTrace>>,
+    observer: Option<ContactObserver<'_>>,
+) -> Vec<HitEvent> {
+    if let Some(observer) = observer {
+        let attacks: Vec<_> = fighters.iter().flat_map(|f| f.attacks.iter().cloned()).collect();
+        for victim in fighters.iter() {
+            for contact in contacts(&attacks, &victim.hurts) {
+                let attack = &attacks[contact.attack];
+                if !(observer.is_check)(attack) { continue; }
+                observer.output.push(AcceptedContact {
+                    attacker: attack.side.owner, victim: victim.owner,
+                    key: attack.key, region: victim.hurts[contact.hurt].region_id,
+                    attack_kind: attack.side.kind,
+                    target: (observer.actor)(victim.owner),
+                    attacker_faction: (observer.actor)(attack.side.owner).and_then(|a| a.faction),
+                });
+            }
+        }
+    }
     struct Guards<'a> {
         guards: &'a [(u32, crate::npc_combat::GaugeHitGuard)],
         owners: &'a [(u32, crate::npc_combat::DamageOwnerClass, bool)],

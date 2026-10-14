@@ -68,10 +68,21 @@ Validation:
   stopped the private viewer. Logs are private at
   `E:/ddda-re/notes/steps/s13/route-60s.{out,err}.txt`.
 
+Head answered board **3386** in **3481**, allowing a 600-second route
+watchdog. The same ordinary two-seat route was rerun with that timeout.
+It completed the room exit, Quina talk and walk out, then played ev15
+(row23, 1090 frames). Afterwards it remained at **Sce1400**, position
+`(-825.07,-66.05,236.33)`, in the Q0002Event demo step until the watchdog
+stopped it. It never reached the Cassardis gate or stage100. The log
+reports NPC37's unsupported schedule `Attack (flag)` after ev15, and
+earlier NPC34 `Set Invincible` and NPC movement gaps. These observations
+do not establish which unmet quest condition causes the stall.
+Private logs: `E:/ddda-re/notes/steps/s13/route-600s.{out,err}.txt`.
+
 The original Done route gate is **open**. The admission test supplies
 fixture story state and establishes ownership behavior, not completed
-opening progression or physical NPC model readiness. Board question
-**3386** requests a route timeout override/checkpoint from head. No game
-install/process writes or captures were committed. Next: authorize enough
-time for the existing ordinary route to cross the gate, then check its
-logged completed-cell admission list and unload behavior.
+opening progression or physical NPC model readiness. No flags, Guard/Goto
+responses or quest completion were forced to bypass the route stall. No
+game install/process writes or captures were committed. Next: diagnose
+the actual unmet Sce1400 condition, then rerun the ordinary route and check
+its logged completed-cell admission list beyond the gate.

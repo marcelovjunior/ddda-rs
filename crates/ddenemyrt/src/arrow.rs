@@ -16,6 +16,24 @@ pub const PARAM_PATH: &str = r"param\shl_param_06";
 /// Source record selected by 0x00B16DC0; the basic action is row zero.
 pub const BOW_PARAM_PATH: &str = r"param\bow_act_param_06";
 
+/// Shortbow action selector. Basic skill -1 selects record0; custom skills
+/// join skill ID/learned level against the executable's runtime triples.
+/// Unknown entries remain unsupported rather than guessing a row index.
+// Translated from 0x00B16DC0 (DDDA.exe 2017-12-13 Steam), category10.
+pub fn shortbow_record(exe: &ddexe::Exe<'_>, skill: Option<u32>, learned_level: u8) -> Result<usize, String> {
+    let Some(skill) = skill else { return Ok(0) };
+    let level = match learned_level { 1..=3 => u32::from(learned_level), _ => 0 };
+    for row in 1..30 {
+        // 0x014F1910, thirty 12-byte triples; loaded from the player's exe.
+        let address = 0x014f_1910 + row * 12;
+        if exe.u32(address + 4).map_err(|e| e.to_string())? == skill
+            && exe.u32(address + 8).map_err(|e| e.to_string())? == level {
+            return Ok(exe.u32(address).map_err(|e| e.to_string())? as usize);
+        }
+    }
+    Err(format!("unsupported shortbow skill {skill} learned level {learned_level}"))
+}
+
 /// Runtime stationary bow controller and fresh level-one secondary stats.
 /// Motion bank 9 and starting secondary item follow 0x00B16FE0 / 0x00673740.
 #[derive(Debug, Clone)]
@@ -32,6 +50,12 @@ pub struct BowData {
 }
 impl BowData {
     pub fn load(vfs: &ddvfs::Vfs) -> Result<Self, String> {
+        Self::load_record(vfs, 0)
+    }
+
+    /// Selected native rBowActParamList record, immutable across owners.
+    /// The action's record index comes from 0x00B16DC0, not the skill ID.
+    pub fn load_record(vfs: &ddvfs::Vfs, record: usize) -> Result<Self, String> {
         use mtxfs::Value;
         let bytes = load::read(vfs, BOW_PARAM_PATH, "rBowActParamList")?;
         let x = mtxfs::parse(&bytes).map_err(|e| e.to_string())?;
@@ -40,7 +64,10 @@ impl BowData {
             _ => Err(format!("bow has no {name}")),
         };
         let list = object(&x.root, "mParamList")?;
-        let basic = object(&list, "mpArray")?;
+        let basic = match x.get(&list, "mpArray").and_then(|v| v.get(record)) {
+            Some(Value::Object(Some(o))) => (**o).clone(),
+            _ => return Err(format!("bow has no action record {record}")),
+        };
         let byte = |name| match x.get(&basic, name).and_then(|v| v.first()) {
             Some(Value::U(v)) => u8::try_from(*v).map_err(|_| format!("bad {name}")),
             _ => Err(format!("bow has no {name}")),
@@ -110,7 +137,7 @@ impl BowData {
         };
         Ok(Self {
             param,
-            shot: load_shot_param(vfs)?,
+            shot: load_shot_param_record(vfs, record)?,
             motions,
             player_bank: bank,
             weapon_body,
@@ -187,6 +214,11 @@ impl BowData {
 /// Runtime ordered basic shoot-controller projection. Charging and authored
 /// angle/spread paths are rejected until their separate source translation.
 pub fn load_shot_param(vfs: &ddvfs::Vfs) -> Result<ddsim::BowShotParam, String> {
+    load_shot_param_record(vfs, 0)
+}
+
+/// Actual selected action's own shots, accuracy, motions and stamina.
+pub fn load_shot_param_record(vfs: &ddvfs::Vfs, record: usize) -> Result<ddsim::BowShotParam, String> {
     use mtxfs::Value;
     let bytes = load::read(vfs, BOW_PARAM_PATH, "rBowActParamList")?;
     let x = mtxfs::parse(&bytes).map_err(|e| e.to_string())?;
@@ -195,7 +227,10 @@ pub fn load_shot_param(vfs: &ddvfs::Vfs) -> Result<ddsim::BowShotParam, String> 
         _ => Err(format!("bow has no {name}")),
     };
     let rows = object(&x.root, "mParamList")?;
-    let basic = object(&rows, "mpArray")?;
+    let basic = match x.get(&rows, "mpArray").and_then(|v| v.get(record)) {
+        Some(Value::Object(Some(o))) => (**o).clone(),
+        _ => return Err(format!("bow has no shot record {record}")),
+    };
     let f = |o: &mtxfs::Object, name: &str| match x.get(o, name).and_then(|v| v.first()) {
         Some(Value::F(v)) if v.first().is_some_and(|v| v.is_finite()) => Ok(v[0] as f32),
         _ => Err(format!("bow has no finite {name}")),
@@ -380,6 +415,8 @@ impl ArrowRange {
 
 #[derive(Debug, Clone)]
 pub struct ArrowData {
+    pub group: u32,
+    pub index: u32,
     pub param: ArrowParam,
     pub collision: CollisionSet,
     pub range: ArrowRange,
@@ -392,7 +429,14 @@ impl ArrowData {
     /// resource selection follows mCollisionPath; the paired `_00` attack
     /// list is the ordinary shortbow list attached by the actor.
     pub fn load(vfs: &ddvfs::Vfs) -> Result<Self, String> {
+        Self::load_parameter(vfs, 0, 0)
+    }
+
+    /// Read the actual shoot-row shell group/index. Its sequence IDs select
+    /// distinct attack rows; Threefold's group1 is never rewritten to group0.
+    pub fn load_parameter(vfs: &ddvfs::Vfs, group: u32, index: u32) -> Result<Self, String> {
         let bytes = load::read(vfs, PARAM_PATH, "rShlParamList")?;
+        let param = ArrowParam::from_list(&bytes, group as usize, index as usize)?;
         let x = mtxfs::parse(&bytes).map_err(|e| e.to_string())?;
         let path = match x.get(&x.root, "mCollisionPath").and_then(|v| v.first()) {
             Some(mtxfs::Value::Str(p)) => std::str::from_utf8(p).map_err(|e| e.to_string())?,
@@ -404,12 +448,15 @@ impl ArrowData {
             .as_ref()
             .ok_or("missing arrow attack table")?
             .attacks;
-        let supplemental = [0, 1, 2].map(|phase| {
+        // uShlArrow::vf111 0x00BCF1E0 adds the normal-arrow supplement
+        // offset (0x015F76B8) to the CURRENT sequence from vf112 C13290.
+        // Group1's sequences are distinct from the basic group's 0/1/2.
+        let supplemental = param.sequences.map(|sequence| {
             table
-                .get(NORMAL_ARROW_ROW + phase)
+                .get(NORMAL_ARROW_ROW + sequence as usize)
                 .and_then(Option::as_ref)
                 .map(AttackRow::from_attack)
-                .ok_or_else(|| format!("missing normal arrow row {}", NORMAL_ARROW_ROW + phase))
+                .ok_or_else(|| format!("missing normal arrow row {}", NORMAL_ARROW_ROW + sequence as usize))
         });
         let [a, b, c] = supplemental;
         let abilities = ddparam::Ability::from_bytes(&load::read(
@@ -423,7 +470,9 @@ impl ArrowData {
             .get(0x46)
             .ok_or("missing arrow range ability 0x46")?;
         Ok(Self {
-            param: ArrowParam::from_list(&bytes, 0, 0)?,
+            group,
+            index,
+            param,
             collision,
             range: ArrowRange {
                 equipped: range.float_0,
