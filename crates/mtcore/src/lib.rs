@@ -71,3 +71,4 @@ pub mod semantic_s7_stream;
 pub mod semantic_rt;
 pub mod shadow_primitive;
 pub mod tree;
+pub mod semantic_s3b;
