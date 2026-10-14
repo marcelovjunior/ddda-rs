@@ -314,6 +314,21 @@
 - Verified trace compression recovers **3.12 GB**. Evidence and hashes:
   `docs/tasks/L158-critical-jobs.md`. Combined native gate and live lookup
   benefit remain pending; next: head integration gate and controlled A/B.
+### L166 Vulkan TDR investigation checkpoint (2026-10-13)
+
+- No hang reproduced or causal defect established; production unchanged.
+  Synthetic 1,792-frame gate: 1,639,670 raw passes, one mapped-ring wrap,
+  1,697 shadow aspects matched, no skips/errors/mismatches/pending.
+- Private cap1 gameplay stress: 21 frames + 32 repeats, 252,840 raw draws,
+  four mapped-ring wraps, 53 query fallbacks. Plain/shadow final hashes
+  identical; all 60 sampled shadow aspects match. Earlier frame load state
+  omitted: this is not original-game image acceptance.
+- Four focused synchronization/lifetime gates pass. CPU 30 pass / inherited
+  strip failure; light 241 reported passes / one timing failure / seven
+  ignored, timing retry passes. Khronos validation layer unavailable.
+- Next: inspect head c32 shadow+diagnostics receipt (not yet available),
+  correlate device loss with Windows GPU events; keep default flip held.
+  Hashes, timeout limits and audit: `docs/tasks/L166-vk-tdr.md`.
 
 ### L159 Vulkan default image gate (2026-10-13)
 

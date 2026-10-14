@@ -65,6 +65,15 @@ Combined native integration and head live A/B are pending. The combo31
 hash captures identify uSkyStableShadow as the dominant solo tail, but
 shared load and changed NPC counts prevent causal speedup attribution.
 See `docs/tasks/L158-critical-jobs.md` for windows, numbers and hashes.
+## L166 raw Vulkan TDR investigation
+
+No production change or default flip. Headless synthetic stress passed
+1.64 million raw passes; private cap1 gameplay pass stress passed 252,840
+raw draws and four mapped-ring wraps. Plain/shadow final image hashes agree;
+the omitted pre-slice rendering means this is not an original-frame oracle.
+No causal defect or hang reproduction yet. Head c32 device-loss diagnostics
+remain the next gate; Khronos validation layers are unavailable locally.
+Reproduction controls, hashes and limitations: [L166](tasks/L166-vk-tdr.md).
 
 ## L160 job CPU sizing and wake diagnostics
 
