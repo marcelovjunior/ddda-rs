@@ -2528,6 +2528,9 @@ impl CommandSink for Native {
         if crate::measure::enabled() {
             crate::measure::frame_boundary();
         }
+        if crate::census::enabled() {
+            crate::census::frame_boundary();
+        }
         g.handled = false;
         g.spans.clear();
         if self.mode != Mode::Off {
@@ -2645,6 +2648,9 @@ impl Native {
         if crate::measure::enabled() {
             crate::measure::note_total(size);
         }
+        if crate::census::enabled() {
+            crate::census::note_total(size);
+        }
         if self.mode == Mode::Census {
             f.targets.insert(m.u32(record.wrapping_add(4)));
             f.states.insert(m.u32(record.wrapping_add(8)));
@@ -2716,6 +2722,9 @@ impl Native {
                 if crate::measure::enabled() {
                     crate::measure::note_draw(size, &d);
                 }
+                if crate::census::enabled() {
+                    crate::census::note_draw(size, &d);
+                }
                 g.batch.push(d);
                 crate::d3d9draw::count_draws(1);
                 t.taken += 1;
@@ -2752,6 +2761,9 @@ impl Native {
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
                     if crate::measure::enabled() {
                         crate::measure::note_draw(size, &d);
+                    }
+                    if crate::census::enabled() {
+                        crate::census::note_draw(size, &d);
                     }
                     g.pending.push(native, d);
                     t.taken += 1;

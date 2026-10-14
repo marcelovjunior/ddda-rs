@@ -28,6 +28,7 @@ pub mod d3dx;
 pub mod dispatch;
 mod critical_jobs;
 mod job_order;
+mod census;
 mod decouple;
 mod measure;
 mod shadow_fee320;
