@@ -133,6 +133,8 @@ pub fn obj_model_vf08(m: &mut dyn Mem, c: &mut Cpu) {
         let target = pg.u32(m, vtable.wrapping_add(0x174));
         c.eax = vtable;
         c.edx = target;
+        // `mov ecx, esi` before the jump (0x00885E1D): the callee's this
+        c.ecx = this;
         c.esi = pg.u32(m, entry.wrapping_sub(4));
         c.esp = entry;
         call_guest(m, c, target);
