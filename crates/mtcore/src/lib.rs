@@ -80,3 +80,4 @@ pub mod semantic_rt;
 pub mod shadow_primitive;
 pub mod tree;
 pub mod tree_query;
+pub mod semantic_s3b;
