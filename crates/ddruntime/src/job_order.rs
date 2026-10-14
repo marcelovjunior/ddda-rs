@@ -13,7 +13,16 @@ static BODY: OnceLock<LiftFn> = OnceLock::new();
 const SHADOW_VTABLE: u32 = 0x0160_df98;
 
 pub(crate) fn enabled() -> bool {
-    std::env::var("DDRUNTIME_JOB_SHADOW_FIRST").as_deref() == Ok("1") || stats()
+    std::env::var("DDRUNTIME_JOB_SHADOW_FIRST").as_deref() == Ok("1") || stats() || inline_max() > 0
+}
+
+/// `DDRUNTIME_JOB_INLINE=N`: a top-level batch of 2..=N jobs runs on the calling
+/// thread alone (the participants word set to 1 for its duration, which is the
+/// path DBE560 itself takes for a one-job batch): no SetEvent/ResetEvent for
+/// every enabled worker and no WaitForMultipleObjects on their done events.
+fn inline_max() -> u32 {
+    static N: OnceLock<u32> = OnceLock::new();
+    *N.get_or_init(|| std::env::var("DDRUNTIME_JOB_INLINE").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
 }
 
 /// `DDRUNTIME_JOB_STATS=1`: time every DBE560 batch by queue size (count/total us).
@@ -35,6 +44,27 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
 }
 
 fn batch(m: &mut dyn Mem, cpu: &mut Cpu) {
+    let limit = inline_max();
+    if limit > 0 && m.u8(0x018d0bb0) == 0 {
+        let scheduler = cpu.ecx;
+        let count = m.u32(scheduler + 0x8c);
+        let participants = m.u32(scheduler + 0x98);
+        if (2..=limit).contains(&count) && participants > 1 && m.u8(scheduler + 0x6d) != 0 {
+            m.set_u32(scheduler + 0x98, 1);
+            let stats_on = stats();
+            let _ = stats_on;
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| batch_body(m, cpu)));
+            m.set_u32(scheduler + 0x98, participants);
+            if let Err(p) = r {
+                std::panic::resume_unwind(p);
+            }
+            return;
+        }
+    }
+    batch_body(m, cpu)
+}
+
+fn batch_body(m: &mut dyn Mem, cpu: &mut Cpu) {
     if m.u32(cpu.esp + 4) == 1 {
         let scheduler = cpu.ecx;
         let count = m.u32(scheduler + 0x8c).min(8192);
