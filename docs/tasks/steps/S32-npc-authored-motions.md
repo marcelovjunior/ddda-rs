@@ -22,7 +22,7 @@ The real q2 NPC graph continues past its motion waits on the route, tests
 cover loop/non-loop/stale completion, and the Result says where Reynard's
 script stops next.
 
-## Result (checkpoint; ordinary rescue replay pending)
+## Result (merged source checkpoint; ordinary motion-chain gate open)
 
 Code `b4277ae`, then main integration `f7ab591`. The NPC request now retains
 all reflected generic motion fields and NPC wrapper fields from
@@ -149,6 +149,35 @@ field step; no HP, enemy death, quest bit or motion completion was forced.
 The motion-chain route acceptance gate remains unmet pending that driver
 correction and another ordinary replay.
 
+Head merged the sourced motion/retention checkpoint as `4d50970`, after
+adding ordinary field combat and below-40%-HP curative inputs in
+`5c61f23`. The newly source-compiled release viewer passed **62 tests,
+2 existing ignored**, in 9.93 s; the release build actually exited zero
+in 39.54 s. Codex-1 independently passed all six installed motion/retention
+regressions and the full **28 NPC** suite (board #4601). These checks verify
+the source checkpoint, not the ordinary route acceptance gate.
+
+The third ordinary replay pinned `ddview-4d50970.exe` and used two seats.
+It admitted the actual NPC304 owner and started looping 3226 at
+04:16:40 UTC. Ordinary item43 uses were logged at 04:16:55.989 and
+04:17:00.993. Nevertheless, at Rescue entry (04:17:13.810), the actual
+Arisen HP was zero, no goblins remained alive, and the first q2 flag word
+was still zero: neither rescue success nor Reynard death was observed.
+The demo then selected `Done` without an outcome. No 3089, 3073 or 3074
+launch occurred. After rechecking its exact private executable path, only
+the owned GUI PID19884 was intentionally stopped: the retained process
+handle reported numeric OS exit **-1** after **288.633754 s**. The GPU
+lease was released after that actual exit. Private evidence is
+`route-4d50970.err.txt`, `.exit.txt`, `.terminated.txt`,
+`viewer-driver-tests.txt` and `viewer-driver-build.txt`.
+
+The ordinary combat driver still blocks S32's motion-chain gate. Head owns
+that driver; no HP, enemy death, quest flag or motion completion was
+manufactured. The source checkpoint is merged, and its installed isolated
+tests pass, but all three ordinary attempts leave the full motion-chain
+gate **open**. Retry after a meaningful driver correction; quest talk can
+be implemented independently against this merged checkpoint.
+
 A final audit also retires the cached motion when a real Goto/Wait or
 unsupported ActionEx interface replaces it, and before a new motion launch
 that may fail resource resolution. Interface replacement destroys the old
@@ -158,9 +187,9 @@ no longer overrides the following Goto and its old completion is rejected.
 All five motion regressions actually passed (6.78 s compile, 5.87 s tests).
 
 This checkpoint is implemented/tested against installed data and static
-exe logic. The first replay reached rescue success and 3089; the retention
-replay encountered a dead Arisen earlier. Neither satisfies the complete
-motion-chain route gate or compares with the original game.
+exe logic. The first replay reached rescue success and 3089; the two
+retention replays encountered a dead Arisen earlier. None satisfies the
+complete motion-chain route gate or compares with the original game.
 
 The installed next departure gate is also identified: NPC control resource
 `etc\\questCtrl\\n304QuestCtrl`, table `q0002`, first row, requires q2:20
