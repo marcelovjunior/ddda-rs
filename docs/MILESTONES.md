@@ -774,6 +774,25 @@
 - Blocker: original-game image/FPS acceptance requires head's run. Next:
   integrate with L143's wrapped pipeline key and A/B `DDGPU_VK=0/1` on
   default `DDDRAW_NATIVE=drawcall`. Hashes/details: `docs/tasks/L138-vk-encoder.md`.
+### L137 ordered parallel command encoding (2026-10-13)
+
+- Opt-in `DDGPU_ENCODE_THREADS=2..4` finishes consecutive wgpu-recorded
+  encoder chunks on persistent workers, collects them in original order,
+  and submits once per batch. Default **1**, pass boundaries/load/store
+  and staged-write ordering retained. Generic chunk callback for L138.
+- `DDGPU_ENCODE_PROFILE=1` reports per-Present recording-stage histograms,
+  finish CPU sum/wall and queue submit; wgpu's deferred internal HAL
+  sub-stages are not separately measurable through the public API.
+- **20 CPU tests pass**; new 1/2/4-worker multi-pass byte oracle passes
+  debug and optimized. Draw/cache/targets **27 pass / 2 existing ignored**
+  with both 1 and 4 workers. Runtime light **200 pass / 1 inherited
+  fullscreen-gamma failure / 4 ignored**. No game or shard runs.
+- Generated 5,294-draw/950-target-run fixture: profiled finish wall
+  **13.080 / 12.411 / 8.634 ms** for 1/2/4 workers; CPU sum rises.
+  Off-profile paired frame medians **15.670–19.968 / 14.627–14.795 /
+  11.596–12.095 ms**. Shared-host variability is large; no FPS claim.
+- Next: head same-scene image/FPS A/B at 1 and 4 workers before changing
+  default. Details and test/build limitations: `docs/tasks/L137-parallel-encode.md`.
 
 ### L109d memory ownership diagnostics (2026-10-13)
 
