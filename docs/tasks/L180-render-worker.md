@@ -113,3 +113,23 @@ single-binding bench does not exercise.
 
 2e2518a3 adds a report line: target parts and stream parts built, bindings
 decoded, and parts found by content, per frame.
+
+## Handoff (2026-10-13, stop order)
+
+- Branch `task/L180-render-worker` tip: this commit. Everything is
+  committed and tested (ddruntime lib 154, ndraw oracle, native_compare).
+- In train6 up to 011ef84b. Not yet in a train:
+  - e5f70e9c newest-writer index;
+  - 463253d5 batched sampler states;
+  - the docs.
+- Verified in game: combo46 verify, 0 mismatches (the upload-skipping
+  model). The speed commits after cb495a30 have no verify run yet.
+- Last per-draw cost measured in game: 4.2–4.8 µs per decided draw
+  (combo46, before the speed commits). Release bench: 0.23–0.30 µs for a
+  consecutive draw, ~0.73 µs for a draw that decodes its binding.
+- Next:
+  - a DDDRAW_NATIVE=verify run on the tip, and the 'built:' report line;
+  - then the remaining profile items: Mirror::textures (first use per
+    frame), the reads_dirty fallback when the dirty index has more than 16
+    entries, flush_reads, and the target/stream part rebuilds once the
+    counters size them.
