@@ -1582,12 +1582,16 @@ pub(crate) mod waits {
             // the gate: a guarded wait stays registered until the window closes
             if let Some(handles) = mine {
                 loop {
+                    // the list first, then the owner: an open in progress
+                    // (owner set, list being written) is seen whole
+                    let guard = GUARDED.lock().unwrap_or_else(|e| e.into_inner());
                     let owner = OWNER.load(SeqCst);
                     if owner == 0 || owner == tid {
                         break;
                     }
-                    let guarded = GUARDED.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    if !handles.iter().any(|h| guarded.contains(h)) {
+                    let held = handles.iter().any(|h| guard.contains(h));
+                    drop(guard);
+                    if !held {
                         break;
                     }
                     list = CLOSED.wait(list).unwrap_or_else(|e| e.into_inner());
@@ -1608,8 +1612,15 @@ pub(crate) mod waits {
     /// Open the window guarding `handles` (false: another window is open).
     pub(crate) fn open(handles: &[u32]) -> bool {
         let me = super::current_tid();
-        *GUARDED.lock().unwrap_or_else(|e| e.into_inner()) = handles.to_vec();
-        OWNER.compare_exchange(0, me, SeqCst, SeqCst).is_ok()
+        // the guard list is only written by the window's owner, under the
+        // lock the gate reads it with: a refused open leaves the open
+        // window's list alone (L172 P3, tests: a_refused_second_open_...)
+        let mut guarded = GUARDED.lock().unwrap_or_else(|e| e.into_inner());
+        if OWNER.compare_exchange(0, me, SeqCst, SeqCst).is_err() {
+            return false;
+        }
+        *guarded = handles.to_vec();
+        true
     }
 
     /// Close the window and let the gated threads continue.
@@ -2079,6 +2090,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     include!("sync_followup.rs");
     include!("sync_bench.rs");
+    include!("window_stress.rs");
 
     #[test]
     fn event_cache_invalidates_closed_handles_and_runtime_identity() {
