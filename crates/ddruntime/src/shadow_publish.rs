@@ -106,6 +106,9 @@ pub(super) fn decide(context: u32) -> Decision {
     let call = CALLS.fetch_add(1, Relaxed);
     if call % 512 == 511 {
         report();
+        if stats_mode() {
+            report_stats();
+        }
     }
     if !checking() {
         Decision::Parallel
@@ -235,6 +238,57 @@ fn view_mode() -> bool {
 fn exclusive_view() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE").as_deref() == Ok("view"))
+}
+
+/// `DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE=stats`: run every traversal serially
+/// and record how many workers were parked at its start and how long it took
+/// (the potential of lanes on idle participants).
+fn stats_mode() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE").as_deref() == Ok("stats"))
+}
+
+/// [parked workers 0..=8][nested?]: (traversals, total us, traversals over 1 ms, us over 1 ms)
+static STATS: [[[AtomicU64; 4]; 2]; 9] = [const { [const { [const { AtomicU64::new(0) }; 4] }; 2] }; 9];
+
+fn run_stats(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) {
+    let scheduler = m.u32(SCHEDULER_GLOBAL);
+    let (starts, dones) = participant_events(m, scheduler);
+    let others = crate::threads::waits::others();
+    let parked = starts.iter().filter(|s| others.iter().any(|(_, h)| h.contains(s))).count().min(8);
+    let main_parked = others.iter().any(|(_, h)| !h.is_empty() && h.iter().all(|x| dones.contains(x)));
+    let nested = (m.u8(NESTING) != 0) as usize;
+    let context = m.u32(cpu.esp + 4);
+    static LOGGED: AtomicU64 = AtomicU64::new(0);
+    if LOGGED.fetch_add(1, Relaxed) < 24 {
+        eprintln!(
+            "parallel-shadow stats begin tid={:#x} participants={} parked={parked} main_parked={main_parked} nested={nested} ctx={context:#x} lane={} sp.lanes={}",
+            crate::threads::current_tid(), m.u32(scheduler + 0x98), m.u32(context + 0x58), m.u32(m.u32(0x018d1848) + 0xd0)
+        );
+    }
+    let start = std::time::Instant::now();
+    original(m, cpu);
+    let us = start.elapsed().as_micros() as u64;
+    let cell = &STATS[parked][nested];
+    cell[0].fetch_add(1, Relaxed);
+    cell[1].fetch_add(us, Relaxed);
+    if us > 1000 {
+        cell[2].fetch_add(1, Relaxed);
+        cell[3].fetch_add(us, Relaxed);
+    }
+}
+
+fn report_stats() {
+    let mut line = String::from("parallel-shadow stats [parked/nested: n us | >1ms n us]");
+    for (parked, row) in STATS.iter().enumerate() {
+        for (nested, c) in row.iter().enumerate() {
+            let n = c[0].load(Relaxed);
+            if n > 0 {
+                line += &format!(" | {parked}/{nested}: {n} {} | {} {}", c[1].load(Relaxed), c[2].load(Relaxed), c[3].load(Relaxed));
+            }
+        }
+    }
+    eprintln!("{line}");
 }
 
 /// Windows that ran their lanes without helpers (another window was open).
@@ -377,6 +431,10 @@ fn participant_events(m: &dyn Mem, scheduler: u32) -> (Vec<u32>, Vec<u32>) {
 /// Run the traversal's parallel branch in a window. False: not exclusive
 /// (nothing was changed; the caller runs it serially).
 pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
+    if stats_mode() {
+        run_stats(m, cpu, original);
+        return true;
+    }
     if view_mode() {
         return run_view(m, cpu, original);
     }
