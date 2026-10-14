@@ -32,7 +32,7 @@ Already merged before this triage: task/train6, task/L172-parallel-shadow, task/
 | task/L154-worker-alloc | 6 | merged | merged cleanly into task/merge-clean |
 | task/L157-waitchain | 1 | merged | merged cleanly into task/merge-clean |
 | task/L166-vk-tdr | 1 | merged | merged cleanly into task/merge-clean |
-| task/L178-semantic-jobs | 1 | merged | merged cleanly into task/merge-clean |
+| task/L178-semantic-jobs | 1 | needs owner | WIP collision port: merged, then reverted - fails the strict callee-read harness (mtcore semantic_jobs original_sweep_support_shape, call d8e400 register 3) |
 | task/L183-job-ports | 2 | merged | merged cleanly into task/merge-clean |
 | task/L184-s10 | 1 | merged | merged cleanly into task/merge-clean |
 | task/L184-s2 | 1 | merged | merged cleanly into task/merge-clean |
