@@ -1668,6 +1668,17 @@ fn remaining_ms(deadline: Option<Instant>) -> u32 {
 
 /// Wake the waiters of `handle` without changing it (a published task,
 /// L172): events and semaphores recheck their conditions.
+/// Debug (L172): a handle's state: "e1"/"e0" event set/unset, "s<n>" semaphore count, "?" other.
+pub(crate) fn handle_state(handle: u32) -> String {
+    if let Some((_, e)) = event_of(handle) {
+        format!("e{}", e.is_set() as u8)
+    } else if let Some((_, s)) = semaphore_of(handle) {
+        format!("s{}", s.count.load(SeqCst))
+    } else {
+        "?".into()
+    }
+}
+
 pub(crate) fn poke_handle(handle: u32) {
     if let Some((o, e)) = event_of(handle) {
         e.poke(o);
