@@ -552,6 +552,9 @@ pub struct MetaPart {
     uploads: [Vec<Upload>; 2],
     /// the frame it was last checked against the runtime's objects
     checked: std::sync::atomic::AtomicU64,
+    /// (content lookups, hits) of its bindings: a metadata whose bindings never repeat their content (per-object
+    /// constants) stops looking and inserting (L193)
+    content_stats: [std::sync::atomic::AtomicU32; 2],
 }
 
 /// The runtime's shader bytecode and float count, and declaration, of
@@ -593,6 +596,7 @@ fn meta_part(g: &G, metadata: u32, reads_cache: &mut FxMap<usize, (Arc<[u32]>, R
     Ok(MetaPart {
         handles, vs, ps, declaration, floats: [vs_floats, ps_floats], reads: shader_reads, samplers, uploads,
         checked: frame.into(),
+        content_stats: Default::default(),
     })
 }
 
@@ -843,12 +847,29 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
     let part = match previous {
         Some(p) if same_part(p, &meta, alpha, &written, &banks) => p.clone(),
         _ => {
-            let key = content_key(&meta, alpha, &written, &banks);
-            let kept = find_kept(&mut c.by_content, &mut c.by_content_old, key, c.frame, |p| same_part(p, &meta, alpha, &written, &banks));
+            // a metadata whose bindings seldom repeat their content (per-object constants) skips the content
+            // table: no hash, lookup or insert, and its parts leave with the binding table instead of staying 8-16 frames
+            let probe = {
+                use std::sync::atomic::Ordering::Relaxed;
+                let looks = meta.content_stats[0].fetch_add(1, Relaxed);
+                let hits = meta.content_stats[1].load(Relaxed);
+                if looks >= 1 << 16 {
+                    meta.content_stats[0].store(looks / 2, Relaxed);
+                    meta.content_stats[1].store(hits / 2, Relaxed);
+                }
+                looks < 512 || hits as u64 * 20 >= looks as u64 || looks % 64 == 0
+            };
+            let key = if probe { content_key(&meta, alpha, &written, &banks) } else { 0 };
+            let kept = if probe {
+                find_kept(&mut c.by_content, &mut c.by_content_old, key, c.frame, |p| same_part(p, &meta, alpha, &written, &banks))
+            } else {
+                None
+            };
             phase_lap(&mut bl, c, 12);
             match kept {
                 Some(p) => {
                     c.built[3] += 1;
+                    meta.content_stats[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     p
                 }
                 None => {
@@ -868,7 +889,9 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                         uncovered,
                     });
                     phase_lap(&mut bl, c, 13);
-                    c.by_content.insert(key, (c.frame, part.clone()));
+                    if probe {
+                        c.by_content.insert(key, (c.frame, part.clone()));
+                    }
                     part
                 }
             }
@@ -1572,7 +1595,6 @@ impl Caches {
         if self.frame % 8 == 0 {
             let frame = self.frame;
             self.bindings.retain(|_, (seen, _)| *seen + 3 > frame);
-            // L193: the stream and target parts leave the same way (a table-wide clear past 16384 entries cost the worker 1.5% in one frame)
             self.streams.retain(|_, (seen, _)| *seen + 3 > frame);
             self.target_bindings.retain(|_, (seen, _)| *seen + 3 > frame);
             let capacity = self.by_content.len();
@@ -3288,7 +3310,7 @@ mod tests {
             let (slots, uploads) = descriptors(&g, meta).unwrap();
             let part = MetaPart {
                 handles: [0; 3], vs: Arc::from(vec![]), ps: Arc::from(vec![]), declaration: Arc::from(vec![]),
-                floats: [0; 2], reads: Default::default(), samplers: slots, uploads, checked: 0.into(),
+                floats: [0; 2], reads: Default::default(), samplers: slots, uploads, checked: 0.into(), content_stats: Default::default(),
             };
             let mut sh = Shadow::default();
             shadow_samplers(&g, ctx, binding, &part, &info, &mut sh);
@@ -3577,6 +3599,7 @@ mod tests {
                 handles: [0; 3], vs: Arc::from(vec![]), ps: Arc::from(vec![]), declaration: Arc::from(vec![]),
                 floats: [256, 224], reads: Default::default(), samplers: Default::default(), uploads: Default::default(),
                 checked: 0.into(),
+                content_stats: Default::default(),
             }),
             alpha: None,
             constants: [Arc::new(bank(vs, 256)), Arc::new(bank(ps, 224))],
