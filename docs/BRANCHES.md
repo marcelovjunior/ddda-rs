@@ -60,7 +60,7 @@ Already merged before this triage: task/train6, task/L172-parallel-shadow, task/
 | task/L148-vk-frontend | 4 | needs owner | real code conflict in: crates/d3d9cmd/src/deferred.rs crates/ddgpu/src/lib.rs crates/ddgpu/src/vk/mod.rs crates/ddgpu/src/vk/objects.rs crates/ddgpu/tests/vk_encoder.rs docs/tasks/L148-vk-frontend.md |
 | task/L150-upload-belt | 7 | needs owner | real code conflict in: crates/d3d9cmd/src/deferred.rs crates/ddgpu/examples/backend_cost.rs crates/ddgpu/src/backend_data.rs crates/ddgpu/src/cache.rs crates/ddgpu/src/lib.rs crates/ddgpu/src/native_job.rs crates/ddgpu/src/vk/mod.rs crates/ddgpu/src/vk/objects.rs crates/ddgpu/tests/vk_encoder.rs |
 | task/L153-sync | 1 | needs owner | real code conflict in: crates/ddruntime/src/sync_followup.rs crates/ddruntime/src/threads.rs docs/tasks/L153-sync.md |
-| task/L159-vk-default | 1 | needs owner | changes the default GPU backend to Vulkan; play bats already set DDGPU_VK=1 explicitly, so a default flip is a user decision |
+| task/L159-vk-default | 1 | merged | Vulkan is now the default (user decision 2026-10-14); DDGPU_VK=0 forces the wgpu path. Smoke with DDGPU_VK unset on the pinned bench config: 48.8 fps t46-84 (26 probes), vk passes counted, no stopped/panic |
 | task/L165-load-next | 9 | needs owner | real code conflict in: crates/ddplay/src/input.rs |
 | task/L184-s1 | 2 | needs owner | real code conflict in: crates/mtdraw/src/material.rs |
 | task/L184-s4 | 1 | needs owner | real code conflict in: crates/mtcore/src/semantic_s4_joint.rs |

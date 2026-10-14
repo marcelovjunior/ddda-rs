@@ -76,8 +76,8 @@ pub(crate) fn enabled() -> bool {
     enabled_value(std::env::var("DDGPU_VK").ok().as_deref())
 }
 
-// L159 staged adoption: merge this default change only after the head's
-// same-run gameplay image gate. Explicit 0 keeps the wgpu oracle available.
+// L159: Vulkan is the default (user decision 2026-10-14); DDGPU_VK=0 (or any
+// value other than 1) forces the wgpu oracle path.
 fn enabled_value(value: Option<&str>) -> bool {
     matches!(value, None | Some("1"))
 }

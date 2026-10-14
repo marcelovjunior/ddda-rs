@@ -112,6 +112,11 @@ impl ResourceUses {
         } else { self.epoch += 1; }
     }
 
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.directories.iter().flatten().all(|d| d.iter().flatten().all(|p| p.iter().all(|w| w.epoch != self.epoch || w.bits == 0)))
+    }
+
     pub fn contains(&self, resource: &u32) -> bool {
         let Some(directory) = &self.directories[(resource >> 24) as usize] else { return false };
         let Some(page) = &directory[((resource >> 16) & 255) as usize] else { return false };
