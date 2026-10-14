@@ -115,7 +115,7 @@ pub fn f_0059f440(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x59F440 => { emit::push(cpu.ecx, m, pt, cpu); cpu.xmm[0] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x1C)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x18)), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); emit::push(cpu.ebx, m, pt, cpu); emit::push(cpu.edi, m, pt, cpu); pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x59F467 } else { 0x59F452 }; continue; }
-            0x59F452 => { cpu.eax = m.fast_u32(pt, 0x18D0B28u32); cpu.xmm[1] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; cpu.xmm[1][0] = x86::addss(cpu.xmm[1][0], cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x1C), cpu.xmm[1][0]); pc = 0x59F477; continue; }
+            0x59F452 => { cpu.eax = emit::scheduler_global(m, pt); cpu.xmm[1] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; cpu.xmm[1][0] = x86::addss(cpu.xmm[1][0], cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x1C), cpu.xmm[1][0]); pc = 0x59F477; continue; }
             0x59F467 => { { cpu.xmm[0] = emit::xorps(cpu.xmm[0], cpu.xmm[0]); } cpu.eax = m.fast_u32(pt, cpu.esi.wrapping_add(0x38)); m.fast_set_u32(pt, cpu.esi.wrapping_add(0x1C), cpu.xmm[0][0]); emit::push(0x59F477, m, pt, cpu); x86::call_ext(m, cpu, 0x5AFFB0u32); pc = 0x59F477; continue; }
             0x59F477 => { cpu.ebx = cpu.ebx ^ cpu.ebx; cpu.fl.alu_sub((m.fast_u8(pt, cpu.esi.wrapping_add(0x48)) as u32), ((cpu.ebx >> 0) & 0xFF), 8); pc = if (cpu.fl.a == cpu.fl.b) { 0x59F53C } else { 0x59F482 }; continue; }
             0x59F482 => { cpu.fl.alu_sub((m.fast_u8(pt, cpu.esi.wrapping_add(0x49)) as u32), ((cpu.ebx >> 0) & 0xFF), 8); pc = if (cpu.fl.a != cpu.fl.b) { 0x59F4F3 } else { 0x59F487 }; continue; }

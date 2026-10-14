@@ -83,3 +83,10 @@ pub fn andnps(d: [u32; 4], s: [u32; 4]) -> [u32; 4] {
 pub fn store64(x: [u32; 4], m: &mut dyn Mem, pt: Option<NonNull<PageTable>>, a: u32) {
     m.fast_set_u64_words(pt, a, [x[0], x[1]]);
 }
+
+/// A 32-bit load of the scheduler global `[0x018D0B28]`: this thread's view
+/// if set, else the memory word (crate::sched, L172).
+#[inline]
+pub fn scheduler_global(m: &dyn Mem, pt: Option<NonNull<PageTable>>) -> u32 {
+    crate::sched::scheduler_global(m, pt)
+}

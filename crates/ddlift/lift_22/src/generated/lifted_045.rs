@@ -340,12 +340,12 @@ fn f_00b72db0_p0(m: &mut dyn Mem, cpu: &mut Cpu, pt: Option<std::ptr::NonNull<cr
             0xB730BC => { cpu.xmm[0] = [m.fast_u32(pt, cpu.esi.wrapping_add(0x3FD0)), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[0][0], m.fast_u32(pt, 0x1519268u32)); pc = if (!cpu.fl.cf()) { 0xB72DF3 } else { 0xB730D1 }; continue; }
             0xB730D1 => { cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); pc = if cpu.fl.cf() { 0xB730FB } else { 0xB730D6 }; continue; }
             0xB730D6 => { let l129_condition = (cpu.eax) != (0x1u32); pc = if l129_condition { 0xB730F1 } else { 0xB730DB }; continue; }
-            0xB730DB => { cpu.eax = m.fast_u32(pt, 0x18D0B28u32); cpu.xmm[1] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; pc = 0xB730E5; continue; }
+            0xB730DB => { cpu.eax = emit::scheduler_global(m, pt); cpu.xmm[1] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; pc = 0xB730E5; continue; }
             0xB730E5 => { cpu.xmm[1][0] = x86::addss(cpu.xmm[1][0], cpu.xmm[0][0]); pc = 0xB730E9; continue; }
             0xB730E9 => { m.fast_set_u32(pt, cpu.esi.wrapping_add(0x3FD0), cpu.xmm[1][0]); pc = 0xB730F1; continue; }
             0xB730F1 => { { let r = cpu.fl.alu_xor(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); cpu.eax = (cpu.eax & !(0xFF << 0)) | (((r) & 0xFF) << 0); } cpu.edi = emit::pop(m, pt, cpu); cpu.esi = emit::pop(m, pt, cpu); cpu.esp = cpu.ebp; cpu.ebp = emit::pop(m, pt, cpu); cpu.esp = cpu.esp.wrapping_add(4 + 4);  return None; }
             0xB730FB => { let l129_condition = (((m.fast_u32(pt, cpu.esi.wrapping_add(0x32E4))) & (cpu.ecx)) as i32) == 0; pc = if l129_condition { 0xB730E9 } else { 0xB73103 }; continue; }
-            0xB73103 => { cpu.ecx = m.fast_u32(pt, 0x18D0B28u32); cpu.xmm[1] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x70)), 0, 0, 0]; pc = 0xB730E5; continue; }
+            0xB73103 => { cpu.ecx = emit::scheduler_global(m, pt); cpu.xmm[1] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x70)), 0, 0, 0]; pc = 0xB730E5; continue; }
             0xB73110 => { cpu.eax = cpu.esi; emit::push(0xB73117, m, pt, cpu);  (|m: &mut dyn Mem, cpu: &mut Cpu| x86::call_local(m, cpu, 0x00B66890, super::lifted::f_00b66890))(m, cpu);  let l129_condition = ((((((cpu.eax >> 0) & 0xFF)) & 0xFF) & ((((cpu.eax >> 0) & 0xFF)) & 0xFF)) as i8) == 0; pc = if l129_condition { 0xB730F1 } else { 0xB7311B }; continue; }
             _ if !(0xB72DB0..=0xB73110).contains(&pc) => return Some(pc),
             _ => unreachable!(),

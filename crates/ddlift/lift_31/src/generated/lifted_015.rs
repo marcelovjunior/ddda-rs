@@ -54,8 +54,8 @@ pub fn f_00fb3790(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0xFB3790;
     loop {
         match pc {
-            0xFB3790 => { cpu.ecx = m.fast_u32(pt, 0x18D0B28u32); emit::push(0xFB379B, m, pt, cpu); x86::call_ext(m, cpu, 0xDBD690u32); cpu.fl.alu_sub(cpu.eax, 0xFFFFFFFFu32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0xFB37E8 } else { 0xFB37A0 }; continue; }
-            0xFB37A0 => { cpu.ecx = m.fast_u32(pt, 0x18D0B28u32); emit::push(0xFB37AB, m, pt, cpu); x86::call_ext(m, cpu, 0xDBD650u32); cpu.fl.alu_sub(cpu.eax, 0xFFFFFFFFu32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0xFB37E5 } else { 0xFB37B0 }; continue; }
+            0xFB3790 => { cpu.ecx = emit::scheduler_global(m, pt); emit::push(0xFB379B, m, pt, cpu); x86::call_ext(m, cpu, 0xDBD690u32); cpu.fl.alu_sub(cpu.eax, 0xFFFFFFFFu32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0xFB37E8 } else { 0xFB37A0 }; continue; }
+            0xFB37A0 => { cpu.ecx = emit::scheduler_global(m, pt); emit::push(0xFB37AB, m, pt, cpu); x86::call_ext(m, cpu, 0xDBD650u32); cpu.fl.alu_sub(cpu.eax, 0xFFFFFFFFu32, 32); pc = if (cpu.fl.a != cpu.fl.b) { 0xFB37E5 } else { 0xFB37B0 }; continue; }
             0xFB37B0 => { { let t = m.fast_u32(pt, 0x139D09Cu32); emit::push(0xFB37B6, m, pt, cpu);  x86::call_ext(m, cpu, t);  } cpu.edx = m.fast_u32(pt, 0x18D6B48u32); cpu.ecx = cpu.ecx ^ cpu.ecx; cpu.fl.alu_and(cpu.edx, cpu.edx, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0xFB37DB } else { 0xFB37C2 }; continue; }
             0xFB37C2 => { let l129_condition = (cpu.eax) == (m.fast_u32(pt, cpu.ecx.wrapping_mul(4).wrapping_add(0x1635CE8))); pc = if l129_condition { 0xFB37D6 } else { 0xFB37CB }; continue; }
             0xFB37CB => { cpu.ecx = cpu.ecx.wrapping_add(1); cpu.fl.alu_sub(cpu.ecx, cpu.edx, 32); pc = if (cpu.fl.a < cpu.fl.b) { 0xFB37C2 } else { 0xFB37D0 }; continue; }

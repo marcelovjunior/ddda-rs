@@ -7,3 +7,4 @@ pub mod platform;
 pub mod x86;
 pub mod x87;
 pub mod emit;
+pub mod sched;

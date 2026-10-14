@@ -186,7 +186,7 @@ pub fn f_00605210(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x605218 => { { cpu.xmm[2] = emit::xorps(cpu.xmm[2], cpu.xmm[2]); } pc = 0x60521B; continue; }
             0x60521B => { cpu.fl = x86::comiss_hw::<true>(cpu.xmm[0][0], cpu.xmm[2][0]); pc = 0x60521E; continue; }
             0x60521E => { pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x6052AD } else { 0x605224 }; continue; }
-            0x605224 => { cpu.eax = m.fast_u32(pt, 0x18D0B28u32); pc = 0x605229; continue; }
+            0x605224 => { cpu.eax = emit::scheduler_global(m, pt); pc = 0x605229; continue; }
             0x605229 => { cpu.xmm[1] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; pc = 0x60522E; continue; }
             0x60522E => { cpu.xmm[0] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x1E0)), 0, 0, 0]; pc = 0x605236; continue; }
             0x605236 => { cpu.xmm[0][0] = x86::mulss(cpu.xmm[0][0], cpu.xmm[1][0]); pc = 0x60523A; continue; }

@@ -767,7 +767,7 @@ pub fn apply_effect_toggle(m: &mut dyn Mem, c: &mut Cpu) {
     }
     if enabled {
         if pg.u8(m, at(0x34)) != 0 && pg.u8(m, at(0x35)) == 0 {
-            let clock = pg.u32(m, 0x018d_0b28);
+            let clock = ddnative_base::sched::scheduler_global_pages(m, &pg);
             let timer = subss(f32::from_bits(pg.u32(m, at(0x38))), f32::from_bits(pg.u32(m, clock.wrapping_add(0x70))));
             pg.set_u32(m, at(0x38), timer.to_bits());
             // comiss 0, timer; jc: not taken only when 0 >= timer (ordered)

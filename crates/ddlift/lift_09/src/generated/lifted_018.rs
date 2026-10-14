@@ -261,7 +261,7 @@ pub fn f_004ab6e0(m: &mut dyn Mem, cpu: &mut Cpu) {
             0x4AB7AB => { cpu.fl = x86::comiss_hw::<true>(cpu.xmm[0][0], cpu.xmm[2][0]); pc = 0x4AB7AE; continue; }
             0x4AB7AE => { pc = if (cpu.fl.cf() || cpu.fl.zf()) { 0x4AB7D8 } else { 0x4AB7B0 }; continue; }
             0x4AB7B0 => { cpu.eax = m.fast_u32(pt, 0x18FA524u32); pc = 0x4AB7B5; continue; }
-            0x4AB7B5 => { cpu.edx = m.fast_u32(pt, 0x18D0B28u32); pc = 0x4AB7BB; continue; }
+            0x4AB7B5 => { cpu.edx = emit::scheduler_global(m, pt); pc = 0x4AB7BB; continue; }
             0x4AB7BB => { cpu.xmm[1] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x24)), 0, 0, 0]; pc = 0x4AB7C0; continue; }
             0x4AB7C0 => { cpu.xmm[1][0] = x86::mulss(cpu.xmm[1][0], m.fast_u32(pt, cpu.edx.wrapping_add(0x70))); pc = 0x4AB7C5; continue; }
             0x4AB7C5 => { cpu.xmm[0][0] = x86::subss(cpu.xmm[0][0], cpu.xmm[1][0]); pc = 0x4AB7C9; continue; }

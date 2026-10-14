@@ -33,7 +33,7 @@ pub fn f_01007e90(m: &mut dyn Mem, cpu: &mut Cpu) {
     loop {
         match pc {
             0x1007E90 => { cpu.fl.alu_sub(m.fast_u32(pt, cpu.ecx.wrapping_add(0x5C4)), 0x0u32, 32); pc = if (cpu.fl.a == cpu.fl.b) { 0x1007EB9 } else { 0x1007E99 }; continue; }
-            0x1007E99 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x5C8)), 0, 0, 0]; cpu.eax = m.fast_u32(pt, 0x18D0B28u32); cpu.xmm[0][0] = x86::mulss(cpu.xmm[0][0], m.fast_u32(pt, cpu.eax.wrapping_add(0x70))); emit::push(cpu.ecx, m, pt, cpu); cpu.ecx = cpu.fl.alu_add(cpu.ecx, 0x34u32, 32); m.fast_set_u32(pt, cpu.esp, cpu.xmm[0][0]); emit::push(0x1007EB9, m, pt, cpu); x86::call_ext(m, cpu, 0x11F2BB0u32); pc = 0x1007EB9; continue; }
+            0x1007E99 => { cpu.xmm[0] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x5C8)), 0, 0, 0]; cpu.eax = emit::scheduler_global(m, pt); cpu.xmm[0][0] = x86::mulss(cpu.xmm[0][0], m.fast_u32(pt, cpu.eax.wrapping_add(0x70))); emit::push(cpu.ecx, m, pt, cpu); cpu.ecx = cpu.fl.alu_add(cpu.ecx, 0x34u32, 32); m.fast_set_u32(pt, cpu.esp, cpu.xmm[0][0]); emit::push(0x1007EB9, m, pt, cpu); x86::call_ext(m, cpu, 0x11F2BB0u32); pc = 0x1007EB9; continue; }
             0x1007EB9 => { cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
         }

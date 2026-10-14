@@ -166,10 +166,10 @@ pub(super) fn proof_result(context: u32, result: &Result<usize, String>) {
 
 fn report() {
     eprintln!(
-        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, contexts proven {}) units {} lanes helped {} task errors {} window errors {} woke {} woke inside {} fallback {}",
+        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, contexts proven {}) units {} lanes helped {} task errors {} window errors {} no helpers {} woke {} woke inside {} fallback {}",
         CALLS.load(Relaxed), WINDOWS.load(Relaxed), WAITED.load(Relaxed), WAITED_US.load(Relaxed),
         NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed), INCONCLUSIVE.load(Relaxed), PROVEN.lock().unwrap_or_else(|e| e.into_inner()).len(),
-        UNITS.load(Relaxed), HELPED.load(Relaxed), TASK_ERRORS.load(Relaxed), WINDOW_ERRORS.load(Relaxed), WOKE.load(Relaxed),
+        UNITS.load(Relaxed), HELPED.load(Relaxed), TASK_ERRORS.load(Relaxed), WINDOW_ERRORS.load(Relaxed), NO_HELPERS.load(Relaxed), WOKE.load(Relaxed),
         WOKE_INSIDE.load(Relaxed), FALLBACK.load(Relaxed)
     );
 }
@@ -208,6 +208,79 @@ pub(super) struct Storage {
     pub(super) prefilled: bool,
 }
 static STORAGE: Mutex<Option<Storage>> = Mutex::new(None);
+thread_local! {
+    /// View mode: each thread's own private copies (windows may overlap).
+    static THREAD_STORAGE: std::cell::RefCell<Option<Storage>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The publication design (head, after #14620): by default a per-thread
+/// view of the scheduler global (ddnative-base sched.rs; the lifter routes
+/// every load of [0x018D0B28] through it), no exclusivity: the traversal
+/// publishes while the outer batch is in flight, the outer threads keep
+/// the real global and the batch flags. `DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE=1`:
+/// the earlier exclusive window with the globals redirected in memory.
+fn view_mode() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE").as_deref() != Ok("1"))
+}
+
+/// Windows that ran their lanes without helpers (another window was open).
+static NO_HELPERS: AtomicU64 = AtomicU64::new(0);
+
+/// View mode's traversal: no wait, no exclusivity check; the window is
+/// opened only so that participants parked in their waits take the lane
+/// tasks (s8's help()); if another thread's window is open, this one runs
+/// its lanes itself.
+fn run_view(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
+    if ddnative_base::sched::view() != 0 {
+        // already inside a private traversal's lanes: serial, as with the
+        // batch flag set
+        return false;
+    }
+    let scheduler = m.u32(SCHEDULER_GLOBAL);
+    let (starts, dones) = participant_events(m, scheduler);
+    let guarded: Vec<u32> = starts.iter().chain(&dones).copied().collect();
+    let window = crate::threads::waits::open(&guarded);
+    if window.is_none() {
+        NO_HELPERS.fetch_add(1, Relaxed);
+    }
+    WINDOWS.fetch_add(1, Relaxed);
+    let context = m.u32(cpu.esp + 4);
+    let capacity = m.u32(context + 0x4c).saturating_mul(8);
+    let storage = THREAD_STORAGE.with(|s| {
+        let mut s = s.borrow_mut();
+        let st = s.get_or_insert_with(|| Storage {
+            scheduler: allocate(SCHEDULER_BYTES),
+            manager: allocate(MANAGER_BYTES),
+            secondary: (0, 0),
+            prefilled: false,
+        });
+        if st.secondary.1 < capacity {
+            st.secondary = (allocate(capacity.max(1)), capacity);
+        }
+        Storage { scheduler: st.scheduler, manager: st.manager, secondary: st.secondary, prefilled: false }
+    });
+    LIVE_WINDOW.with(|w| w.set(window.is_some() && helpers_enabled()));
+    let result = run_window_with(m, cpu, original, &storage, true);
+    LIVE_WINDOW.with(|w| w.set(false));
+    drop(window);
+    window_result(result);
+    true
+}
+
+fn window_result(result: Result<usize, String>) {
+    if let Err(reason) = result {
+        // the published state is the original parallel branch's, but not
+        // the proven shape: with guard proofs on, stop publishing; without
+        // them (the default) count it and go on
+        if WINDOW_ERRORS.fetch_add(1, Relaxed) < 8 {
+            eprintln!("parallel-shadow publish: window error: {reason}");
+        }
+        if checking() && !FALLBACK.swap(true, Relaxed) {
+            eprintln!("parallel-shadow publish: publication OFF");
+        }
+    }
+}
 
 fn allocate(size: u32) -> u32 {
     // the heap is guest state: under the service lock (translated code runs
@@ -250,6 +323,9 @@ fn participant_events(m: &dyn Mem, scheduler: u32) -> (Vec<u32>, Vec<u32>) {
 /// Run the traversal's parallel branch in a window. False: not exclusive
 /// (nothing was changed; the caller runs it serially).
 pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
+    if view_mode() {
+        return run_view(m, cpu, original);
+    }
     let scheduler = m.u32(SCHEDULER_GLOBAL);
     let (starts, dones) = participant_events(m, scheduler);
     // the others are usually still running units of the outer batch: wait
@@ -310,17 +386,7 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
         WOKE_INSIDE.fetch_add(1, Relaxed);
     }
     drop(window);
-    if let Err(reason) = result {
-        // the published state is the original parallel branch's, but not
-        // the proven shape: with guard proofs on, stop publishing; without
-        // them (the default) count it and go on
-        if WINDOW_ERRORS.fetch_add(1, Relaxed) < 8 {
-            eprintln!("parallel-shadow publish: window error: {reason}");
-        }
-        if checking() && !FALLBACK.swap(true, Relaxed) {
-            eprintln!("parallel-shadow publish: publication OFF");
-        }
-    }
+    window_result(result);
     true
 }
 
@@ -392,6 +458,13 @@ impl Lane {
 /// the private copies, the original traversal, the rebase, the restore.
 /// Err: the run completed but is not the proven shape.
 pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, storage: &Storage) -> Result<usize, String> {
+    run_window_with(m, cpu, original, storage, false)
+}
+
+/// [`run_window`]; `view`: this thread's scheduler view and top-level flag
+/// instead of the globals in memory (which stay as the other threads use
+/// them).
+fn run_window_with(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, storage: &Storage, view: bool) -> Result<usize, String> {
     let scheduler = m.u32(SCHEDULER_GLOBAL);
     let context = m.u32(cpu.esp + 4);
     let (private_scheduler, private_manager, secondary) = (storage.scheduler, storage.manager, storage.secondary.0);
@@ -410,9 +483,24 @@ pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, stora
     if use_secondary {
         m.set_u32(context + 0x54, secondary);
     }
-    m.set_u8(NESTING, 0);
-    m.set_u8(NESTING_OTHER, 0);
-    m.set_u32(SCHEDULER_GLOBAL, private_scheduler);
+    let (previous_view, previous_top) = if view {
+        (ddnative_base::sched::set_view(private_scheduler), ddnative_base::sched::set_top_level(true))
+    } else {
+        m.set_u8(NESTING, 0);
+        m.set_u8(NESTING_OTHER, 0);
+        m.set_u32(SCHEDULER_GLOBAL, private_scheduler);
+        (0, false)
+    };
+    let restore = move |m: &mut dyn Mem| {
+        if view {
+            ddnative_base::sched::set_view(previous_view);
+            ddnative_base::sched::set_top_level(previous_top);
+        } else {
+            m.set_u32(SCHEDULER_GLOBAL, scheduler);
+            m.set_u8(NESTING, nesting[0]);
+            m.set_u8(NESTING_OTHER, nesting[1]);
+        }
+    };
     m.set_u32(private_scheduler + 0x98, 2);
     m.set_u32(private_scheduler + 0x8c, 0);
     m.set_u32(private_scheduler + 0x1c14c, 0);
@@ -427,19 +515,19 @@ pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, stora
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| original(m, cpu)));
     WINDOW_SCHEDULER.with(|w| w.set(0));
     if let Err(payload) = ran {
-        m.set_u32(SCHEDULER_GLOBAL, scheduler);
-        m.set_u8(NESTING, nesting[0]);
-        m.set_u8(NESTING_OTHER, nesting[1]);
+        restore(m);
         if use_secondary {
             m.set_u32(context + 0x54, 0);
         }
         cpu.ecx = manager;
         std::panic::resume_unwind(payload);
     }
-    let balanced = [m.u8(NESTING), m.u8(NESTING_OTHER)] == [0, 0] && m.u32(SCHEDULER_GLOBAL) == private_scheduler;
-    m.set_u32(SCHEDULER_GLOBAL, scheduler);
-    m.set_u8(NESTING, nesting[0]);
-    m.set_u8(NESTING_OTHER, nesting[1]);
+    let balanced = if view {
+        ddnative_base::sched::view() == private_scheduler && ddnative_base::sched::top_level()
+    } else {
+        [m.u8(NESTING), m.u8(NESTING_OTHER)] == [0, 0] && m.u32(SCHEDULER_GLOBAL) == private_scheduler
+    };
+    restore(m);
     if use_secondary {
         m.set_u32(context + 0x54, 0);
     }
@@ -473,9 +561,15 @@ pub(super) fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) {
         m.set_u32(scheduler + 0x98, 1);
     }
     let nesting = [m.u8(NESTING), m.u8(NESTING_OTHER)];
+    // view mode: the batch flags are the outer batch's (set) and stay; the
+    // units are not DB63E0's top level
+    let view = ddnative_base::sched::view() != 0;
+    let top = ddnative_base::sched::set_top_level(false);
     if multiple {
-        m.set_u8(NESTING, 1);
-        m.set_u8(NESTING_OTHER, 1);
+        if !view {
+            m.set_u8(NESTING, 1);
+            m.set_u8(NESTING_OTHER, 1);
+        }
         m.set_u8(scheduler + 0xb8, 1);
     }
     m.set_u32(scheduler + 0x90, 0);
@@ -510,7 +604,12 @@ pub(super) fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) {
                     let mut base = registers;
                     base.esp = task.esp;
                     base.fs_base = task.fs_base;
+                    // the lane's units see the private scheduler
+                    let previous = ddnative_base::sched::set_view(lane.scheduler);
+                    let top = ddnative_base::sched::set_top_level(false);
                     lane.run(m, &base);
+                    ddnative_base::sched::set_top_level(top);
+                    ddnative_base::sched::set_view(previous);
                     *task = base;
                     Ok(())
                 }) as crate::threads::waits::Task
@@ -526,9 +625,12 @@ pub(super) fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) {
             lane.run(m, &incoming);
         }
     }
+    ddnative_base::sched::set_top_level(top);
     if multiple {
-        m.set_u8(NESTING, nesting[0]);
-        m.set_u8(NESTING_OTHER, nesting[1]);
+        if !view {
+            m.set_u8(NESTING, nesting[0]);
+            m.set_u8(NESTING_OTHER, nesting[1]);
+        }
         m.set_u8(scheduler + 0xb8, 0);
     } else {
         m.set_u32(scheduler + 0x98, participants);

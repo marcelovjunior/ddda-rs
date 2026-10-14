@@ -16,7 +16,7 @@ use ddnative_base::x86::{call_ext, Cpu};
 /// Every scheduler access of the translated methods goes through here.
 #[inline(always)]
 fn scheduler(m: &dyn Mem, pg: Pages) -> u32 {
-    pg.u32(m, 0x018d_0b28)
+    ddnative_base::sched::scheduler_global_pages(m, &pg)
 }
 
 /// The CRT memcpy (memmove semantics, overlap-safe).

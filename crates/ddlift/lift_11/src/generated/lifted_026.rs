@@ -75,7 +75,7 @@ pub fn f_005bac30(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x5BAC30;
     loop {
         match pc {
-            0x5BAC30 => { cpu.eax = m.fast_u32(pt, 0x18D0B28u32); cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, 0x152CF28u32), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); pc = if cpu.fl.cf() { 0x5BAC4A } else { 0x5BAC47 }; continue; }
+            0x5BAC30 => { cpu.eax = emit::scheduler_global(m, pt); cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, 0x152CF28u32), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); pc = if cpu.fl.cf() { 0x5BAC4A } else { 0x5BAC47 }; continue; }
             0x5BAC47 => { cpu.xmm[0] = cpu.xmm[1]; pc = 0x5BAC4A; continue; }
             0x5BAC4A => { cpu.xmm[0][0] = x86::divss(cpu.xmm[0][0], m.fast_u32(pt, cpu.eax.wrapping_add(0x38))); cpu.xmm[1] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x178)), 0, 0, 0]; cpu.eax = (cpu.eax & !(0xFF << 0)) | ((((m.fast_u8(pt, cpu.ecx.wrapping_add(0x184)) as u32)) & 0xFF) << 0); cpu.xmm[1][0] = x86::addss(cpu.xmm[1][0], cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x178), cpu.xmm[1][0]); cpu.xmm[1] = [m.fast_u32(pt, cpu.ecx.wrapping_add(0x17C)), 0, 0, 0]; cpu.xmm[1][0] = x86::addss(cpu.xmm[1][0], cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.ecx.wrapping_add(0x17C), cpu.xmm[1][0]); cpu.fl.alu_and(((cpu.eax >> 0) & 0xFF), ((cpu.eax >> 0) & 0xFF), 8); pc = if (((cpu.fl.a & cpu.fl.b) as i8) < 0) { 0x5BAC9C } else { 0x5BAC81 }; continue; }
             0x5BAC81 => { cpu.eax = ((((cpu.eax >> 0) & 0xFF)) as i8 as i32 as u32); cpu.xmm[1] = [m.fast_u32(pt, cpu.ecx.wrapping_add(cpu.eax.wrapping_mul(4)).wrapping_add(0xF4)), 0, 0, 0]; cpu.eax = cpu.ecx.wrapping_add(cpu.eax.wrapping_mul(4)).wrapping_add(0xF4); cpu.xmm[1][0] = x86::addss(cpu.xmm[1][0], cpu.xmm[0][0]); m.fast_set_u32(pt, cpu.eax, cpu.xmm[1][0]); pc = 0x5BAC9C; continue; }
@@ -91,7 +91,7 @@ pub fn f_005bacb0(m: &mut dyn Mem, cpu: &mut Cpu) {
     let mut pc: u32 = 0x5BACB0;
     loop {
         match pc {
-            0x5BACB0 => { cpu.eax = m.fast_u32(pt, 0x18D0B28u32); cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, 0x152CF28u32), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); pc = if cpu.fl.cf() { 0x5BACCA } else { 0x5BACC7 }; continue; }
+            0x5BACB0 => { cpu.eax = emit::scheduler_global(m, pt); cpu.xmm[0] = [m.fast_u32(pt, cpu.eax.wrapping_add(0x70)), 0, 0, 0]; cpu.xmm[1] = [m.fast_u32(pt, 0x152CF28u32), 0, 0, 0]; cpu.fl = x86::comiss_hw::<true>(cpu.xmm[1][0], cpu.xmm[0][0]); pc = if cpu.fl.cf() { 0x5BACCA } else { 0x5BACC7 }; continue; }
             0x5BACC7 => { cpu.xmm[0] = cpu.xmm[1]; pc = 0x5BACCA; continue; }
             0x5BACCA => { cpu.xmm[0][0] = x86::divss(cpu.xmm[0][0], m.fast_u32(pt, cpu.eax.wrapping_add(0x38))); cpu.esp = cpu.esp.wrapping_add(4 + 0);  return; }
             _ => unreachable!(),
