@@ -730,7 +730,8 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
     // constants: the binding's registers over zeros (in reused banks)
     // (L180: only the registers the last binding wrote are cleared, not the
     // whole banks)
-    let mut banks = std::mem::take(&mut c.banks);
+    // (a boxed pair taken by pointer: a by-value take/default moved ~1.4 KB twice a draw)
+    let mut banks = c.banks.take().unwrap_or_default();
     for (stage, bank) in banks.iter_mut().enumerate() {
         let (floats, ints, bools) = c.banks_written[stage];
         for word in 0..4 {
@@ -830,7 +831,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             None
         };
         if let Some(refusal) = refusal {
-            c.banks = banks;
+            c.banks = Some(banks);
             c.banks_written = written;
             return Err(refusal);
         }
@@ -871,7 +872,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             }
         }
     };
-    c.banks = banks;
+    c.banks = Some(banks);
     c.banks_written = written;
     Ok(part)
 }
@@ -1496,7 +1497,7 @@ pub struct Caches {
     bindings: FxMap<u32, (u64, Result<Arc<BindingPart>, Refusal>)>,
     /// the banks a binding's constants are read into, and the registers
     /// written in them (all others are zero)
-    banks: [Constants; 2],
+    banks: Option<Box<[Constants; 2]>>,
     banks_written: [([u64; 4], u16, u16); 2],
     /// binding parts by content (`content_key`), with the frame they were
     /// last used in: a binding at a new address with content seen lately
@@ -3452,12 +3453,13 @@ mod tests {
             }
             let mut c = Caches::default();
             c.metas.insert(0x2000, b.meta.clone());
-            c.banks[0].f.reserve(256);
-            c.banks[1].f.reserve(224);
-            let storage = c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity()));
+            let pair = c.banks.get_or_insert_with(Default::default);
+            pair[0].f.reserve(256);
+            pair[1].f.reserve(224);
+            let storage = c.banks.as_ref().unwrap().each_ref().map(|b| (b.f.as_ptr(), b.f.capacity()));
             for _ in 0..3 {
                 assert!(matches!(binding_part(&G::new(&m), &mut c, 0x1000, None, None), Err(e) if e == expected));
-                assert_eq!(c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity())), storage);
+                assert_eq!(c.banks.as_ref().unwrap().each_ref().map(|b| (b.f.as_ptr(), b.f.capacity())), storage);
             }
         }
     }
