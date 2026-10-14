@@ -338,6 +338,26 @@ pub(crate) fn allowed(pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, width
     Some(unsafe { ((entry & POINTER_MASK) as *mut u8).add(off) })
 }
 
+/// The bytes of an aligned dword access the table allows (L190, feature
+/// `lean-access`): an aligned dword never crosses a page, so the page-end and
+/// alignment tests of [`allowed`] and [`load_at`] fall away. None sends the
+/// access through the general path.
+#[cfg(feature = "lean-access")]
+#[inline(always)]
+pub(crate) fn allowed_dword(pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, perm: u8) -> Option<*mut u8> {
+    let t = pt?;
+    if addr & 3 != 0 {
+        return None;
+    }
+    // SAFETY: page_table()'s contract: the table is alive and does not move.
+    let entry = unsafe { t.as_ref() }.entries[(addr >> 12) as usize].load(Ordering::Acquire);
+    if entry & ((perm as usize) << FAST_SHIFT) == 0 {
+        return None;
+    }
+    // SAFETY: the pointer bits name a backed PAGE-byte allocation; the dword is aligned.
+    Some(unsafe { ((entry & POINTER_MASK) as *mut u8).add((addr & (PAGE - 1)) as usize) })
+}
+
 /// The lifted code's memory accesses (lift.py lowers `m.u32(a)` to
 /// `m.fast_u32(pt, a)` with `pt = m.page_table()` read at function
 /// entry): the table's bytes when it allows the access, else the trait
@@ -381,6 +401,16 @@ impl dyn Mem + '_ {
     }
     #[inline(never)]
     pub fn fast_u32(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
+        self.fast_u32_inner(pt, addr)
+    }
+    /// [`Self::fast_u32`] for callers in this crate that inline it.
+    #[inline(always)]
+    pub(crate) fn fast_u32_inner(&self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32) -> u32 {
+        #[cfg(feature = "lean-access")]
+        if let Some(p) = allowed_dword(pt, addr, READ) {
+            // SAFETY: an aligned dword inside a backed page.
+            return u32::from_le(unsafe { (*(p as *const AtomicU32)).load(Ordering::Acquire) });
+        }
         let Some(p) = allowed(pt, addr, 4, READ) else { return self.slow_u32(addr); };
         // SAFETY: allowed returns 4 bytes inside a backed page.
         unsafe { load_at(p, 4) }
@@ -455,6 +485,11 @@ impl dyn Mem + '_ {
     // Keep the public boundary out of line for opt-level-0 generated callers.
     #[inline]
     pub(crate) fn fast_set_u32_inner(&mut self, pt: Option<std::ptr::NonNull<PageTable>>, addr: u32, v: u32) {
+        #[cfg(feature = "lean-access")]
+        if let Some(p) = allowed_dword(pt, addr, WRITE) {
+            // SAFETY: an aligned dword inside a backed, writable page.
+            return unsafe { (*(p as *const AtomicU32)).store(v.to_le(), Ordering::Release) };
+        }
         let Some(p) = allowed(pt, addr, 4, WRITE) else { return self.slow_set_u32(addr, v); };
         // SAFETY: allowed returns 4 bytes inside a backed page.
         unsafe { store_at(p, 4, v) }
