@@ -51,8 +51,21 @@ fn cases(path: &str, body: x86::LiftFn, input_registers: fn(u32) -> &'static [us
     };
     let data: Value = serde_json::from_str(&text).unwrap();
     let cases = data["cases"].as_array().unwrap();
+    // read-only exe data the ports read (kept once per file)
+    let mut rodata = BTreeMap::new();
+    if let Some(tables) = data["rodata"].as_object() {
+        for (base, hex) in tables {
+            let base = u32::from_str_radix(base.trim_start_matches("0x"), 16).unwrap();
+            let hex = hex.as_str().unwrap();
+            for i in 0..hex.len() / 2 {
+                rodata.insert(base + i as u32, u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap());
+            }
+        }
+    }
     for (i, case) in cases.iter().enumerate() {
-        let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
+        let mut bytes = rodata.clone();
+        bytes.extend(pairs(&case["initial"]));
+        let mut m = Memory { bytes, writes: BTreeMap::new() };
         let before = regs(&case["before"]);
         let after = regs(&case["after"]);
         let mut c = Cpu::default();
@@ -122,6 +135,9 @@ fn cases(path: &str, body: x86::LiftFn, input_registers: fn(u32) -> &'static [us
 /// The registers each recorded callee takes inputs in.
 fn input_registers(target: u32) -> &'static [usize] {
     match target {
+        0x00fe_d890 => &[0, 1, 5, 6, 7],   // frame allocator: EAX = description, ECX = state, EBP = byte, ESI = state, EDI = size
+        0x0113_4a90 | 0x0113_4ca0 | 0x0113_4bd0 | 0x0113_4e40 | 0x00fb_4bf0 | 0x0113_1290 => &[1], // release functions: ECX (EBX, EBP, ESI, EDI are the original's loop state)
+        0x3000_0010 => &[0, 1, 2],         // the controller's virtual +0x10: EAX = vtable, ECX = controller, EDX = method
         0x00cf_dc80 => &[0, 1],            // blend: EAX = &identity, ECX = &matrix
         0x0086_4660..=0x0086_d180 => &[0, 1, 6, 7], // matrix providers: EAX, ECX, ESI, EDI
         _ => &[0, 1],                       // the parent accessor (ECX = model)
@@ -214,4 +230,88 @@ fn semantic_euler_twist_provider_matches_original() {
     let path = std::env::var("S5_EULER_VECTORS").unwrap_or_else(|_| "E:/ddda-re/notes/native-L184/cns_euler.json".into());
     let count = cases(&path, mtcore::semantic_s5::euler_twist_provider, input_registers, true);
     eprintln!("{count} ABI-level 0x00865990 cases passed");
+}
+
+// verifies 0x00867b70 (modes 9, 10), 0x0086d180 (mode 11), 0x0086aff0 (mode 15): ABI level, EAX = the output buffer
+#[test]
+fn semantic_scale_providers_match_original() {
+    ddnative_host::install();
+    for (name, body, label) in [
+        ("m9", mtcore::semantic_s5::euler_row_scaled_provider as x86::LiftFn, "0x00867b70"),
+        ("m11", mtcore::semantic_s5::euler_weighted_scaled_provider, "0x0086d180"),
+        ("m15", mtcore::semantic_s5::euler_or_ratio_provider, "0x0086aff0"),
+    ] {
+        let path = format!("E:/ddda-re/notes/native-L184/cns_{name}.json");
+        let count = cases(&path, body, input_registers, true);
+        eprintln!("{count} ABI-level {label} cases passed");
+    }
+}
+
+// verifies 0x00867420 (mode 8): ABI level, EAX = the output buffer
+#[test]
+fn semantic_euler_parent_translation_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/cns_m8.json", mtcore::semantic_s5::euler_parent_translation_provider, input_registers, true);
+    eprintln!("{count} ABI-level 0x00867420 cases passed");
+}
+
+// verifies 0x00868000 (mode 12): ABI level, EAX = the output buffer
+#[test]
+fn semantic_rebase_joint_provider_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/cns_m12.json", mtcore::semantic_s5::rebase_joint_provider, input_registers, true);
+    eprintln!("{count} ABI-level 0x00868000 cases passed");
+}
+
+// verifies 0x00869260 (mode 13) and 0x0086a100 (mode 14): ABI level, EAX = the output buffer
+#[test]
+fn semantic_reference_providers_match_original() {
+    ddnative_host::install();
+    for (name, body, label) in [
+        ("m13", mtcore::semantic_s5::euler_reference_provider_13 as x86::LiftFn, "0x00869260"),
+        ("m14", mtcore::semantic_s5::euler_reference_provider_14, "0x0086a100"),
+    ] {
+        let count = cases(&format!("E:/ddda-re/notes/native-L184/cns_{name}.json"), body, input_registers, true);
+        eprintln!("{count} ABI-level {label} cases passed");
+    }
+}
+
+// verifies 0x00cfdc80 (the blend toward a matrix): ABI level (void)
+#[test]
+fn semantic_blend_toward_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/cns_blend.json", mtcore::semantic_s5::blend_toward_provider, input_registers, false);
+    eprintln!("{count} ABI-level 0x00cfdc80 cases passed");
+}
+
+// verifies 0x00fe4f30 (ABI level; void)
+#[test]
+fn semantic_set_byte_constant_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/state_byte.json", mtcore::semantic_s5_render::set_byte_constant, input_registers, false);
+    eprintln!("{count} ABI-level 0x00fe4f30 cases passed");
+}
+
+// verifies 0x00defa60 (ABI level; void)
+#[test]
+fn semantic_release_pending_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/release_pending.json", mtcore::semantic_s5_render::release_pending, input_registers, false);
+    eprintln!("{count} ABI-level 0x00defa60 cases passed");
+}
+
+// verifies 0x0076f570 (ABI level; void)
+#[test]
+fn semantic_copy_input_bindings_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/input_bindings.json", mtcore::semantic_s5_render::copy_input_bindings, input_registers, false);
+    eprintln!("{count} ABI-level 0x0076f570 cases passed");
+}
+
+// verifies 0x00deb960 (ABI level; EAX = out)
+#[test]
+fn semantic_joint_euler_angles_matches_original() {
+    ddnative_host::install();
+    let count = cases("E:/ddda-re/notes/native-L184/joint_euler.json", mtcore::semantic_s5::joint_euler_angles, input_registers, true);
+    eprintln!("{count} ABI-level 0x00deb960 cases passed");
 }
