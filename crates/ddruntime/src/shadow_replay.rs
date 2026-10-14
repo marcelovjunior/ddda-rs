@@ -1367,13 +1367,15 @@ fn compare_replays(
             .stack_size(64 << 20)
             .spawn(move || -> Result<mtcore::shadow_lanes::StreamSnapshot, String> {
                 let capacity = input.u32(context + 0x4c).saturating_mul(8).max(1);
-                let (input, scheduler_range) = input.private_arena(0x1c150).map_err(|e| format!("{e:?}"))?;
-                let (input, manager_range) = input.private_arena(0xd40 + 8 * LANE_BYTES).map_err(|e| format!("{e:?}"))?;
+                let live_scheduler = input.u32(SCHEDULER_GLOBAL);
+                let (input, scheduler_range) = input.private_copy(live_scheduler, 0x1c150).map_err(|e| format!("{e:?}"))?;
+                let (input, manager_range) = input.private_copy(cpu.ecx, 0xd40 + 8 * LANE_BYTES).map_err(|e| format!("{e:?}"))?;
                 let (input, secondary_range) = input.private_arena(capacity).map_err(|e| format!("{e:?}"))?;
                 let storage = publish::Storage {
                     scheduler: scheduler_range.start,
                     manager: manager_range.start,
                     secondary: (secondary_range.start, capacity),
+                    prefilled: true,
                 };
                 let private = vec![scheduler_range, manager_range, secondary_range];
                 let memory = PrivateMemory(Rc::new(RefCell::new(LaneMemory::new(Arc::new(input), ACCESS_LIMIT))));
@@ -1391,7 +1393,12 @@ fn compare_replays(
                 )
             })
             .map_err(|e| format!("start publish test: {e}"))?;
-        Some(handle.join().map_err(|_| "publish test panic".to_string())?)
+        Some(handle.join().map_err(|p| {
+            p.downcast_ref::<Reject>()
+                .map(|r| format!("publish test rejected: {r:?}"))
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "publish test panic".into())
+        })?)
     } else {
         None
     };
@@ -1724,7 +1731,9 @@ fn compare_replays(
     let first = results[0].1.first_difference_allowing(&results[1].1, &mut allow);
     if let Some(test) = &publish_test {
         match test {
-            Ok(stream) => match results[1].1.first_difference(stream) {
+            Ok(stream) => match results[1].1.first_difference_allowing(stream, &mut |path, a, _b, offset| {
+                poisoned_results.len() == 4 && undefined_in(&poisoned_results[2..4], &results[1].1, path, a, offset)
+            }) {
                 None => eprintln!("parallel-shadow publish test: stream equals the proof's parallel stream ({} entries)", stream.entries.len()),
                 Some(d) => eprintln!("parallel-shadow publish test: stream differs from the proof's parallel stream: {d:?}"),
             },
