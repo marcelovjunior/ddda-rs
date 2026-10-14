@@ -28,6 +28,7 @@ pub mod d3dx;
 pub mod dispatch;
 mod critical_jobs;
 mod job_order;
+mod measure;
 mod shadow_fee320;
 mod parallel_shadow;
 pub mod shadow_replay;

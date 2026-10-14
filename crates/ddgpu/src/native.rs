@@ -1916,14 +1916,17 @@ impl<'a> Recorder<'a> {
     pub fn submit(&mut self) -> Option<wgpu::SubmissionIndex> {
         if self.raw.is_some() {
             let (upload, chunks) = self.finish_chunks();
-            if let Some(upload) = upload { self.device.queue.submit([upload.finish()]); }
+            if let Some(upload) = upload { self.device.queue.submit([upload.finish()]); crate::gpu_busy::submitted(&self.device.queue, false); }
             return (!chunks.is_empty()).then(|| crate::vk::submit(&self.device.queue, chunks.into_iter().flat_map(crate::vk::finish).collect()));
         }
         let (upload, encoder) = self.finish_parts();
         encoder.map(|encoder| {
-            self.device
+            let index = self
+                .device
                 .queue
-                .submit(upload.into_iter().map(wgpu::CommandEncoder::finish).chain([encoder.finish()]))
+                .submit(upload.into_iter().map(wgpu::CommandEncoder::finish).chain([encoder.finish()]));
+            crate::gpu_busy::submitted(&self.device.queue, false);
+            index
         })
     }
 }

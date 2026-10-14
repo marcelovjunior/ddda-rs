@@ -60,6 +60,7 @@ pub(crate) struct Ready {
 impl Ready {
     pub fn submit(self, queue: &wgpu::Queue) -> wgpu::SubmissionIndex {
         let submitted = queue.submit(self.commands);
+        crate::gpu_busy::submitted(queue, false);
         for check in self.checks { check.map(); }
         // Publish initialization only after ordered submission, never from an
         // encoding worker: a later chunk may finish before an earlier chunk.

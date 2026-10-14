@@ -236,6 +236,9 @@ impl Registry {
             if crate::critical_jobs::enabled() {
                 crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
             }
+            if crate::measure::enabled() {
+                crate::measure::install(ports, &ddnative::generated::lifted::bodies());
+            }
             if crate::job_order::enabled() && !crate::critical_jobs::enabled() {
                 crate::job_order::install(ports, &ddnative::generated::lifted::bodies());
             }
