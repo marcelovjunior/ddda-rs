@@ -115,6 +115,12 @@ fn abi_cases_with_calls_ret(path: &str, body: LiftFn, returns: bool) -> usize {
 /// CRT memcpy, say): their events are dropped and the final memory check
 /// covers their effects.
 fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32]) -> usize {
+    abi_cases_impl(path, body, returns, native_callees, false)
+}
+
+/// `strict`: also EBX/EBP/ESI/EDI at every recorded call (for ports whose
+/// internal register use is modelled, as the L191 audit checked).
+fn abi_cases_impl(path: &str, body: LiftFn, returns: bool, native_callees: &[u32], strict: bool) -> usize {
     use ddnative_base::x86;
     use std::{cell::RefCell, rc::Rc};
     let text = match std::fs::read_to_string(path) {
@@ -155,6 +161,14 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             assert_eq!(target, target_recorded, "case {i}: call target");
             assert_eq!(c.ecx, regs(call)[1], "case {i}: call ECX");
             assert_eq!(c.esp, regs(call)[4], "case {i}: call ESP");
+            if strict {
+                // the callee-saved registers are the caller's at every call
+                assert_eq!(
+                    [c.ebx, c.ebp, c.esi, c.edi],
+                    [regs(call)[3], regs(call)[5], regs(call)[6], regs(call)[7]],
+                    "case {i}: call EBX/EBP/ESI/EDI"
+                );
+            }
             // What the callee reads: its return address, its three
             // arguments and the buffer the first two describe. The rest of
             // the recorded window is the caller's own frame (saved
@@ -307,7 +321,7 @@ fn semantic_find_identifier_matches_port() {
 #[test]
 fn semantic_dispatch_event_matches_original() {
     ddnative_host::install();
-    let n = abi_cases_with_calls_ret("E:/ddda-re/notes/native-L179/dispatch.json", mtcore::semantic::dispatch_event, false);
+    let n = abi_cases_impl("E:/ddda-re/notes/native-L179/dispatch.json", mtcore::semantic::dispatch_event, false, &[], true);
     eprintln!("{n} ABI-level dispatch cases passed");
 }
 
@@ -317,4 +331,202 @@ fn semantic_find_sorted_matches_original() {
     ddnative_host::install();
     let n = abi_cases_with_calls("E:/ddda-re/notes/native-L179/find_sorted.json", mtcore::semantic::find_sorted);
     eprintln!("{n} ABI-level find_sorted cases passed");
+}
+
+/// Page-table backed memory, as in semantic_s9.rs: the span read of
+/// 0x00DD42C0 takes its page fast path here, and a listener head that
+/// crosses a page takes the per-field fallback.
+#[derive(Default)]
+struct Paged {
+    table: ddnative_base::mem::PageTable,
+}
+impl Mem for Paged {
+    fn page_table(&self) -> Option<std::ptr::NonNull<ddnative_base::mem::PageTable>> {
+        Some(std::ptr::NonNull::from(&self.table))
+    }
+    fn u8(&self, a: u32) -> u8 {
+        let p = self.table.page((a >> 12) as usize);
+        assert!(!p.is_null(), "unbacked read {a:x}");
+        // SAFETY: the table owns the backed page.
+        unsafe { ddnative_base::mem::load_at(p.add((a & 4095) as usize), 1) as u8 }
+    }
+    fn set_u8(&mut self, a: u32, v: u8) {
+        let page = (a >> 12) as usize;
+        let p = self.table.backed_page(page);
+        self.table.set_perm(page, 3);
+        // SAFETY: the table owns the backed page.
+        unsafe { ddnative_base::mem::store_at(p.add((a & 4095) as usize), 1, v as u32) }
+    }
+}
+
+/// One random scene for `dispatch_event`: the writes that build it and its
+/// initial registers. The same scene is run four ways below.
+struct Scene {
+    writes: Vec<(u32, u8)>,
+    regs: [u32; 8],
+    this: u32,
+    event: u32,
+}
+
+fn dispatch_scene(seed: &mut u32) -> Scene {
+    const THIS: u32 = 0x2000_0000;
+    const EVENT: u32 = 0x2100_0000;
+    const FOUND: u32 = 0x2300_0000;
+    const FLOOR: u32 = 0x0156_1738;
+    let mut next = || {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 17;
+        *seed ^= *seed << 5;
+        *seed
+    };
+    let this = THIS + (next() % 0x800) * 4;
+    let event = EVENT + (next() % 0x400) * 4;
+    let entry = 0x2200_0fe0 + (next() % 8) * 4;
+    let mut writes = Vec::new();
+    let put = |w: &mut Vec<(u32, u8)>, at: u32, v: u32| {
+        for (j, b) in v.to_le_bytes().into_iter().enumerate() {
+            w.push((at + j as u32, b));
+        }
+    };
+    for a in 0..0x40u32 {
+        writes.push((event + a, next() as u8));
+    }
+    // the object's bytes, then the fields the port reads set to small values
+    for a in 0..0x1d00u32 {
+        writes.push((this + a, next() as u8));
+    }
+    put(&mut writes, this + 0x4cd48, next() % 4);
+    put(&mut writes, this + 0x4cd50, next() % 3);
+    put(&mut writes, event + 4, if next() % 4 == 0 { u32::MAX } else { next() % 5 });
+    put(&mut writes, event + 8, if next() % 4 == 0 { u32::MAX } else { next() % 4 });
+    put(&mut writes, event + 0x30, next() % 3);
+    writes.push((event + 0x2c, (next() % 2) as u8));
+    put(&mut writes, entry + 4, event);
+    for i in 0..4u32 {
+        let l = this + 0x30 + i * 0x6e0;
+        put(&mut writes, l + 4, next() % 2);
+        put(&mut writes, l + 8, next() % 7);
+        put(&mut writes, l + 0xc, next() % 3);
+        put(&mut writes, l + 0x14, if next() % 4 == 0 { u32::MAX } else { next() % 4 });
+        put(&mut writes, l + 0x18, if next() % 4 == 0 { u32::MAX } else { next() % 4 });
+        put(&mut writes, l + 0xc8, ((next() % 1500) as f32 / 1000.0 - 0.5).to_bits());
+    }
+    put(&mut writes, FLOOR, ((next() % 1000) as f32 / 1000.0 - 0.2).to_bits());
+    // the found object: its parent id at +0x1c, and the bytes around it
+    for a in 0..0x40u32 {
+        writes.push((FOUND + a, next() as u8));
+    }
+    put(&mut writes, FOUND + 0x1c, next() % 4);
+    // EAX, EBX, ECX (this), EDX, ESP (entry), EBP, ESI, EDI
+    let regs = [0x1234_5678, 0x0bad_0001, this, 0x0bad_0005, entry, 0x0bad_0002, 0x0bad_0003, 0x0bad_0004];
+    Scene { writes, regs, this, event }
+}
+
+/// Runs `dispatch_event` (span reads) and `dispatch_event_per_field` on the
+/// same random scenes in plain and page-table memory: the registers, the
+/// guest calls made and every byte the scene touches must all match.
+#[test]
+fn dispatch_event_span_reads_match_per_field() {
+    use ddnative_base::x86;
+    use std::{cell::RefCell, rc::Rc};
+    const FOUND: u32 = 0x2300_0000;
+    let mut seed = 0x2545_f491u32;
+    let mut cases = 0;
+    for case in 0..400 {
+        let scene = dispatch_scene(&mut seed);
+        let mut results = Vec::new();
+        for paged in [false, true] {
+            for per_field in [false, true] {
+                let mut plain = Memory::default();
+                let mut table = Paged::default();
+                let m: &mut dyn Mem = if paged { &mut table } else { &mut plain };
+                for &(a, v) in &scene.writes {
+                    m.set_u8(a, v);
+                }
+                let mut c = Cpu::default();
+                [c.eax, c.ebx, c.ecx, c.edx, c.esp, c.ebp, c.esi, c.edi] = scene.regs;
+                let log = Rc::new(RefCell::new(Vec::new()));
+                let l = log.clone();
+                x86::set_ext_calls(Some(Box::new(move |_m, c, target| {
+                    l.borrow_mut().push((target, c.ecx, c.esp, c.ebx, c.ebp, c.esi, c.edi));
+                    c.eax = if target == 0x00f7_3b90 { FOUND } else { 0 };
+                })));
+                if per_field {
+                    mtcore::semantic::dispatch_event_per_field(m, &mut c);
+                } else {
+                    mtcore::semantic::dispatch_event(m, &mut c);
+                }
+                x86::set_ext_calls(None);
+                let regs = [c.eax, c.ebx, c.ecx, c.edx, c.esp, c.ebp, c.esi, c.edi];
+                let bytes: Vec<u8> = (0..0x1d00u32)
+                    .map(|a| m.u8(scene.this + a))
+                    .chain((0..0x40u32).map(|a| m.u8(scene.event + a)))
+                    .chain((0..0x40u32).map(|a| m.u8(FOUND + a)))
+                    .collect();
+                let calls = log.take();
+                results.push((regs, calls, bytes));
+            }
+        }
+        cases += 1;
+        for r in &results[1..] {
+            assert_eq!(r.0, results[0].0, "case {case}: registers");
+            assert_eq!(r.1, results[0].1, "case {case}: guest calls");
+            assert_eq!(r.2, results[0].2, "case {case}: memory");
+        }
+    }
+    eprintln!("{cases} span/per-field scenes agree (plain and paged)");
+}
+
+/// Before (per-field reads, the pre-change path) and after (one span read
+/// per listener) on the same paged scene. Run with --release --ignored.
+#[test]
+#[ignore]
+fn dispatch_event_span_bench() {
+    use ddnative_base::x86;
+    let mut seed = 0x2545_f491u32;
+    let scene = dispatch_scene(&mut seed);
+    x86::set_ext_calls(Some(Box::new(|_m, c, target| {
+        c.eax = if target == 0x00f7_3b90 { 0x2300_0000 } else { 0 };
+    })));
+    let iters = 300_000;
+    for all_live in [false, true] {
+    let mut table = Paged::default();
+    for &(a, v) in &scene.writes {
+        table.set_u8(a, v);
+    }
+    if all_live {
+        // four listeners, each live and matching the event: a call per listener
+        let set = |m: &mut Paged, a: u32, v: u32| {
+            for (j, b) in v.to_le_bytes().into_iter().enumerate() {
+                m.set_u8(a + j as u32, b);
+            }
+        };
+        set(&mut table, scene.this + 0x4cd48, 4);
+        for i in 0..4u32 {
+            set(&mut table, scene.this + 0x30 + i * 0x6e0 + 8, 1);
+        }
+        set(&mut table, scene.event + 4, u32::MAX);
+        set(&mut table, scene.event + 8, u32::MAX);
+        set(&mut table, scene.event + 0x30, 0);
+    }
+    let mut time = |per_field: bool| {
+        let t = std::time::Instant::now();
+        for _ in 0..iters {
+            let mut c = Cpu::default();
+            [c.eax, c.ebx, c.ecx, c.edx, c.esp, c.ebp, c.esi, c.edi] = scene.regs;
+            if per_field {
+                mtcore::semantic::dispatch_event_per_field(&mut table, &mut c);
+            } else {
+                mtcore::semantic::dispatch_event(&mut table, &mut c);
+            }
+        }
+        t.elapsed().as_nanos() as f64 / iters as f64
+    };
+    let (mut before, mut after) = (f64::MAX, f64::MAX);
+    for _ in 0..3 {
+        before = before.min(time(true));
+        after = after.min(time(false));
+    }
+    eprintln!("dispatch_event (all_live {all_live}): before {before:.1} ns/call, after {after:.1} ns/call, {:.2}x", before / after);
+    }
 }

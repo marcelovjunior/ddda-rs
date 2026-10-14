@@ -770,6 +770,30 @@ pub fn find_identifier(m: &mut dyn Mem, c: &mut Cpu) {
 /// change the listeners, so the count is read again after every one. The
 /// parent of an id comes from 0x00F73B90 on the event's owner.
 pub fn dispatch_event(m: &mut dyn Mem, c: &mut Cpu) {
+    dispatch_event_with(m, c, true);
+}
+
+/// The same function with one page lookup per field read (no listener head
+/// read): identical behaviour, kept for the before/after benchmark.
+#[doc(hidden)]
+pub fn dispatch_event_per_field(m: &mut dyn Mem, c: &mut Cpu) {
+    dispatch_event_with(m, c, false);
+}
+
+/// Bytes of a listener that `dispatch_event` reads: the fields at +4 .. +0xcc.
+const LISTENER_HEAD: usize = 0xd0;
+
+/// The first `LISTENER_HEAD` bytes of a listener in one read, when they lie in
+/// one readable page; `None` otherwise (the fields are then read one by one).
+fn listener_head(pg: Pages, listener: u32) -> Option<[u8; LISTENER_HEAD]> {
+    let p = pg.bytes(listener, LISTENER_HEAD, ddnative_base::mem::READ)?;
+    let mut head = [0u8; LISTENER_HEAD];
+    // SAFETY: `bytes` returned LISTENER_HEAD readable bytes inside one backed page.
+    unsafe { std::ptr::copy_nonoverlapping(p, head.as_mut_ptr(), LISTENER_HEAD) };
+    Some(head)
+}
+
+fn dispatch_event_with(m: &mut dyn Mem, c: &mut Cpu, span_reads: bool) {
     let pg = Pages::of(m);
     let (this, entry) = (c.ecx, c.esp);
     let event = pg.u32(m, entry.wrapping_add(4));
@@ -779,21 +803,35 @@ pub fn dispatch_event(m: &mut dyn Mem, c: &mut Cpu) {
     let weight_floor = f32::from_bits(pg.u32(m, 0x0156_1738));
     let mut id = pg.u32(m, event.wrapping_add(4));
     let mut level = 0u32;
+    // the original's ESI between calls: the listener pointer while a
+    // listener call is made, after the loop this+0x38+count*0x6E0, and the
+    // entry value when the loop does not run (its ESI is set only in the loop)
+    let mut esi = c.esi;
     loop {
         let mut i = 0u32;
         while i < pg.u32(m, this.wrapping_add(0x4cd48)) {
             let listener = this.wrapping_add(0x30).wrapping_add(i.wrapping_mul(0x6e0));
-            let state = pg.u32(m, listener.wrapping_add(8));
-            let live = (pg.u32(m, listener.wrapping_add(4)) != 0 && state != 2)
+            // every field of the listener this iteration reads is in its first
+            // LISTENER_HEAD bytes: one page lookup for all of them when possible
+            let head = if span_reads { listener_head(pg, listener) } else { None };
+            let field = |m: &dyn Mem, off: u32| match head {
+                Some(h) => {
+                    let o = off as usize;
+                    u32::from_le_bytes([h[o], h[o + 1], h[o + 2], h[o + 3]])
+                }
+                None => pg.u32(m, listener.wrapping_add(off)),
+            };
+            let state = field(&*m, 8);
+            let live = (field(&*m, 4) != 0 && state != 2)
                 || state == 1
                 || state == 5
-                || f32::from_bits(pg.u32(m, listener.wrapping_add(0xc8))) > weight_floor;
+                || f32::from_bits(field(&*m, 0xc8)) > weight_floor;
             if live {
                 let owner = pg.u32(m, event.wrapping_add(0x30));
                 let channel = pg.u32(m, event.wrapping_add(8));
-                let matches = (owner == pg.u32(m, listener.wrapping_add(0xc)) || owner == 0)
-                    && (id == pg.u32(m, listener.wrapping_add(0x14)) || id == u32::MAX)
-                    && (channel == pg.u32(m, listener.wrapping_add(0x18)) || channel == u32::MAX);
+                let matches = (owner == field(&*m, 0xc) || owner == 0)
+                    && (id == field(&*m, 0x14) || id == u32::MAX)
+                    && (channel == field(&*m, 0x18) || channel == u32::MAX);
                 if matches {
                     (c.ebx, c.ebp, c.esi, c.edi) = (i, id, listener.wrapping_add(8), event);
                     call_from(m, c, pg, frame, this, &[listener, event], 0x00dd_4377, |m, c| {
@@ -803,10 +841,13 @@ pub fn dispatch_event(m: &mut dyn Mem, c: &mut Cpu) {
             }
             i += 1;
         }
+        if i > 0 {
+            esi = this.wrapping_add(0x38).wrapping_add(i.wrapping_mul(0x6e0));
+        }
         let owner = pg.u32(m, event.wrapping_add(0x30));
         let mut parent = u32::MAX;
         if owner != 0 {
-            (c.ebx, c.ebp, c.esi, c.edi) = (i, id, this.wrapping_add(0x38).wrapping_add(i.wrapping_mul(0x6e0)), event);
+            (c.ebx, c.ebp, c.esi, c.edi) = (i, id, esi, event);
             let found = call_from(m, c, pg, frame, owner, &[id], 0x00dd_439b, |m, c| {
                 crate::semantic::call_guest(m, c, 0x00f7_3b90)
             });
