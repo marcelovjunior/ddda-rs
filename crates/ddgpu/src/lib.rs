@@ -694,6 +694,8 @@ impl WgpuBackend {
             | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
             // a pipeline cache kept between runs (Vulkan; L71)
             | wgpu::Features::PIPELINE_CACHE
+            // DDGPU_TIMESTAMPS=1 only (gpu_ts)
+            | crate::gpu_ts::features()
     }
 
     /// A backend on the default adapter without a window.
