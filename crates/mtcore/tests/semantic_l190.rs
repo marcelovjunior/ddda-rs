@@ -1,0 +1,190 @@
+//! L190: semantic ports against the original's recorded behaviour
+//! (research/native/record_s10_*.py, vectors in E:/ddda-re/notes/native-L190),
+//! at the ABI level: EAX (when the function returns), EBX/EBP/ESI/EDI, ESP
+//! and every memory byte at or above the returned ESP, and no write the
+//! original does not make. Each recorded guest call must be made with the
+//! recorded target, stack, return address and the registers its convention
+//! reads; its recorded effects are then replayed.
+use ddnative_base::{
+    mem::Mem,
+    x86::{self, Cpu},
+};
+use serde_json::Value;
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+
+#[derive(Default)]
+struct Memory {
+    bytes: BTreeMap<u32, u8>,
+    writes: BTreeMap<u32, u8>,
+}
+impl Mem for Memory {
+    fn u8(&self, a: u32) -> u8 {
+        *self.bytes.get(&a).unwrap_or_else(|| panic!("unrecorded read {a:x}"))
+    }
+    fn set_u8(&mut self, a: u32, v: u8) {
+        self.bytes.insert(a, v);
+        self.writes.insert(a, v);
+    }
+}
+
+fn n(v: &Value) -> u32 {
+    v.as_u64().unwrap() as u32
+}
+fn pairs(v: &Value) -> BTreeMap<u32, u8> {
+    v.as_array().unwrap().iter().map(|p| (n(&p[0]), n(&p[1]) as u8)).collect()
+}
+fn regs(v: &Value) -> [u32; 8] {
+    let r: Vec<u32> = v["regs"].as_array().unwrap().iter().map(n).collect();
+    r.try_into().unwrap()
+}
+
+/// Register order of the recorded files.
+const EAX: usize = 0;
+const ECX: usize = 1;
+const EBX: usize = 3;
+const ESP: usize = 4;
+const EBP: usize = 5;
+const ESI: usize = 6;
+const EDI: usize = 7;
+
+/// A recorded callee: the registers it reads (checked at the call) and its
+/// stack argument count.
+struct Callee {
+    target: u32,
+    reads: &'static [usize],
+    stack_args: u32,
+}
+
+type Body = fn(&mut dyn Mem, &mut Cpu);
+
+/// Run `body` on every case of `path`; `returns`: EAX is part of the ABI.
+/// Returns (cases, calls made per target).
+fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: &[u32]) -> (usize, BTreeMap<u32, usize>) {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return (0, BTreeMap::new()),
+    };
+    ddnative_host::install();
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let cases = data["cases"].as_array().unwrap();
+    let mut made: BTreeMap<u32, usize> = BTreeMap::new();
+    for (i, case) in cases.iter().enumerate() {
+        if std::env::var_os("S10_TRACE").is_some() {
+            eprintln!("case {i}");
+        }
+        let mut m = Memory { bytes: pairs(&case["initial"]), writes: BTreeMap::new() };
+        let before = regs(&case["before"]);
+        let after = regs(&case["after"]);
+        let mut c = Cpu::default();
+        [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] = before;
+        // recorded calls the port does natively (a CRT memcpy): their effects
+        // are covered by the final memory comparison
+        let events: Vec<Value> = case["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| !native.contains(&n(&e["target"])))
+            .cloned()
+            .collect();
+        let events = Rc::new(events);
+        let cursor = Rc::new(RefCell::new(0usize));
+        let (trace, position) = (events.clone(), cursor.clone());
+        let log = Rc::new(RefCell::new(Vec::<u32>::new()));
+        let log2 = log.clone();
+        let table: Vec<(u32, &'static [usize], u32)> = callees.iter().map(|c| (c.target, c.reads, c.stack_args)).collect();
+        x86::set_ext_calls(Some(Box::new(move |m, c, target| {
+            let k = *position.borrow();
+            assert!(k < trace.len(), "case {i}: unexpected call to {target:x}");
+            let (call, back) = (&trace[k]["before"], &trace[k]["after"]);
+            assert_eq!(target, n(&trace[k]["target"]), "case {i}: call {k} target");
+            let &(_, reads, stack_args) = table
+                .iter()
+                .find(|t| t.0 == target)
+                .unwrap_or_else(|| panic!("case {i}: no convention for {target:x}"));
+            let at_call = regs(call);
+            let now = [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi];
+            for &r in reads.iter().chain(&[ESP]) {
+                assert_eq!(now[r], at_call[r], "case {i}: call {k} ({target:x}) register {r}");
+            }
+            let recorded = pairs(&call["memory"]);
+            let esp = at_call[ESP];
+            let words = 1 + stack_args;
+            for (&a, &b) in &recorded {
+                if a >= esp && a < esp + 4 * words {
+                    assert_eq!(m.u8(a), b, "case {i}: call {target:x} memory {a:x}");
+                }
+            }
+            // memory the callee reads from the caller's frame (beyond its arguments)
+            if let Some(checks) = call.get("checks") {
+                for (a, b) in pairs(checks) {
+                    assert_eq!(m.u8(a), b, "case {i}: call {target:x} reads {a:x}");
+                }
+            }
+            for (a, b) in pairs(&back["memory"]) {
+                m.set_u8(a, b);
+            }
+            c.eax = regs(back)[EAX];
+            c.esp = regs(back)[ESP];
+            // a callee that returns a float in ST0
+            if let Some(bits) = trace[k].get("st0") {
+                c.st.push(n(bits));
+            }
+            log2.borrow_mut().push(target);
+            *position.borrow_mut() += 1;
+        })));
+        body(&mut m, &mut c);
+        x86::set_ext_calls(None);
+        // leave no x87 state behind (the host would keep it parked)
+        ddnative_base::x87::park();
+        assert_eq!(*cursor.borrow(), events.len(), "case {i}: calls made");
+        for t in log.borrow().iter() {
+            *made.entry(*t).or_default() += 1;
+        }
+        let eax = if returns { [c.eax, after[EAX]] } else { [0, 0] };
+        let got = [eax[0], c.ebx, c.esp, c.ebp, c.esi, c.edi];
+        let want = [eax[1], after[EBX], after[ESP], after[EBP], after[ESI], after[EDI]];
+        assert_eq!(got, want, "case {i}: eax/ebx/esp/ebp/esi/edi");
+        let esp = after[ESP];
+        let expected = pairs(&case["after"]["memory"]);
+        if std::env::var_os("S10_DIFF").is_some() {
+            let bad: Vec<String> = expected.iter().filter(|(&a, &b)| a >= esp && m.bytes.get(&a).copied() != Some(b)).map(|(&a, &b)| format!("{a:x}:{:?}/{b}", m.bytes.get(&a))).collect();
+            eprintln!("case {i} diffs {}: {:?}", bad.len(), bad);
+        }
+        for (&a, &b) in &expected {
+            if a >= esp {
+                assert_eq!(m.bytes.get(&a).copied(), Some(b), "case {i}: memory {a:x}");
+            }
+        }
+        for (&a, &b) in &m.writes {
+            if a >= esp {
+                assert_eq!(expected.get(&a).copied(), Some(b), "case {i}: extra write {a:x}");
+            }
+        }
+    }
+    (cases.len(), made)
+}
+
+fn vectors(name: &str) -> String {
+    std::env::var("L190_VECTORS_DIR").unwrap_or_else(|_| "E:/ddda-re/notes/native-L190".into()) + "/" + name
+}
+
+
+// verifies 0x00fa5860 (ABI level; void) with the base draw 0x00EA3130 as a recorded stub
+#[test]
+fn semantic_swing_model_draw_unit_matches_original() {
+    let callees = [Callee { target: 0x00ea_3130, reads: &[ECX], stack_args: 1 }];
+    let (cases, made) = run_cases(&vectors("swing.json"), mtcore::semantic_l190::swing_model_draw_unit, false, &callees, &[]);
+    eprintln!("{cases} ABI-level swing cases passed; calls {made:x?}");
+}
+
+// verifies 0x00b8b800 (ABI level; EAX returned; ESI = model) with the CRT memcpy/memset done natively
+#[test]
+fn semantic_skin_remap_matches_original() {
+    let callees = [
+        Callee { target: 0x3000_0024, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x3000_0020, reads: &[ECX], stack_args: 2 },
+    ];
+    let (cases, made) = run_cases(&vectors("skin_remap.json"), mtcore::semantic_l190::rebuild_skin_remap, true, &callees, &[0x012e_fea0, 0x012e_fe20]);
+    eprintln!("{cases} ABI-level skin-remap cases passed; calls {made:x?}");
+}

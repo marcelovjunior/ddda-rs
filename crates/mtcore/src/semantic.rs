@@ -337,10 +337,27 @@ pub static E12A20_ORIGINAL: std::sync::OnceLock<ddnative_base::x86::LiftFn> = st
 #[inline(always)]
 pub(crate) fn call_guest(m: &mut dyn Mem, c: &mut Cpu, target: u32) {
     // one bit test per 16 bytes of code: no override, no further cost
-    if ddnative_base::x86::may_be_overridden(target) {
+    if ddnative_base::x86::may_be_overridden(target) && guest_direct() {
         return call_overridden(m, c, target);
     }
     ddnative_base::x86::call_ext(m, c, target) // raw
+}
+
+/// Whether [`call_guest`] enters registered ports directly (default) or
+/// always goes through `call_ext` (`DDRUNTIME_GUEST_DIRECT=0`, an A/B switch).
+#[inline(always)]
+fn guest_direct() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static STATE: AtomicU8 = AtomicU8::new(0); // 0 unknown, 1 direct, 2 call_ext
+    match STATE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let direct = std::env::var("DDRUNTIME_GUEST_DIRECT").as_deref() != Ok("0");
+            STATE.store(if direct { 1 } else { 2 }, Ordering::Relaxed);
+            direct
+        }
+    }
 }
 
 /// The rare half of [`call_guest`], kept out of line so that recursive ports
