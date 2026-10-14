@@ -5,6 +5,8 @@
 //! the recorded ESP, ECX, return address, arguments and buffers; its effects
 //! are then replayed. The memcpy (0x012EFEA0) is native and not recorded.
 #![allow(dead_code)]
+#[path = "support/callee_reads.rs"]
+mod callee_reads;
 use ddnative_base::{
     mem::Mem,
     x86::{Cpu, LiftFn},
@@ -104,6 +106,9 @@ fn abi_cases(path: &str, body: LiftFn, native_callees: &[u32]) -> usize {
             assert_eq!(target, n(&trace[k]["target"]), "case {i}: call target");
             assert_eq!(c.ecx, regs(call)[1], "case {i}: call ECX");
             assert_eq!(c.esp, regs(call)[4], "case {i}: call ESP");
+            for &r in callee_reads::saved_reads(target) {
+                assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi][r], regs(call)[r], "call {target:x} register {r} (callee reads it)");
+            }
             // What the callee reads: its return address and its stack
             // arguments (the recorded window beyond those is the caller's).
             let recorded = pairs(&call["memory"]);
@@ -124,6 +129,8 @@ fn abi_cases(path: &str, body: LiftFn, native_callees: &[u32]) -> usize {
                 m.set_u8(a, b);
             }
             c.eax = regs(back)[0];
+            c.ecx = regs(back)[1];
+            c.edx = regs(back)[2];
             c.esp = regs(back)[4];
             *position.borrow_mut() += if paired { 2 } else { 1 };
         })));

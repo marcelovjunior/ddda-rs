@@ -4,6 +4,8 @@
 //! the original leaves at or above its returned stack pointer. ECX, EDX,
 //! the flags and the popped stack scratch below the returned ESP are not
 //! compared (MSVC callers never read them after a call).
+#[path = "support/callee_reads.rs"]
+mod callee_reads;
 use ddnative_base::{
     mem::Mem,
     x86::{Cpu, LiftFn},
@@ -107,6 +109,9 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             assert_eq!(target, target_recorded, "case {i}: call target");
             assert_eq!(c.ecx, regs(call)[1], "case {i}: call ECX");
             assert_eq!(c.esp, regs(call)[4], "case {i}: call ESP");
+            for &r in callee_reads::saved_reads(target) {
+                assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi][r], regs(call)[r], "call {target:x} register {r} (callee reads it)");
+            }
             // What the callee reads: its return address, its three
             // arguments and the buffer the first two describe. The rest of
             // the recorded window is the caller's own frame (saved
@@ -133,6 +138,8 @@ fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
                 m.set_u8(a, b);
             }
             c.eax = regs(back)[0];
+            c.ecx = regs(back)[1];
+            c.edx = regs(back)[2];
             c.esp = regs(back)[4];
             *position.borrow_mut() += if paired { 2 } else { 1 };
         })));

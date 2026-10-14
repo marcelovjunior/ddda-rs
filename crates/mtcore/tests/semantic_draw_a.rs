@@ -1,4 +1,6 @@
 //! Original instruction oracle; exclude only discarded STACK bytes, never heap.
+#[path = "support/callee_reads.rs"]
+mod callee_reads;
 use ddnative_base::{
     mem::Mem,
     x86::{self, Cpu, LiftFn},
@@ -81,6 +83,9 @@ fn install_calls(case: &Value) -> Rc<RefCell<usize>> {
             assert_eq!(c.ecx, regs(call)[1], "call {target:x} ECX");
         }
         assert_eq!(c.esp, regs(call)[4], "call {target:x} ESP");
+        for &r in callee_reads::saved_reads(target) {
+            assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi][r], regs(call)[r], "call {target:x} register {r} (callee reads it)");
+        }
         let count = call["args"].as_array().unwrap().len();
         let recorded = pairs(&call["memory"]);
         for (&a, &b) in &recorded {
