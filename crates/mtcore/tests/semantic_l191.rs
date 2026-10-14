@@ -214,3 +214,22 @@ fn obj_model_vf09_matches_original() {
     assert!(cases >= 1000, "{cases} cases");
     eprintln!("{cases} ABI-level vf09 cases passed; calls {made:x?}");
 }
+
+// verifies 0x01165b40 (ABI level; ret 0x10; the callees as recorded stubs)
+#[test]
+fn probe_search_step_matches_original() {
+    let callees = [
+        Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x00de_5b80, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x00de_52a0, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x00de_5c10, reads: &[ECX], stack_args: 4 },
+        Callee { target: 0x00de_5bd0, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x010a_88a0, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x010a_8bb0, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x3000_0500, reads: &[ECX], stack_args: 3 },
+        Callee { target: 0x3000_0600, reads: &[ECX], stack_args: 3 },
+    ];
+    let (cases, made) = run_cases(&vectors("probe_1165b40.json"), mtcore::semantic_l191::probe_search_step, true, &callees, &[]);
+    assert!(cases >= 1000, "{cases} cases");
+    eprintln!("{cases} ABI-level probe cases passed; calls {made:x?}");
+}
