@@ -760,3 +760,52 @@ pass index `k` (stored in `ctx[0x180]` only for the duration of one callee)
 is 0 in all recorded cases, so only a callee could observe it. `setup_pass`
 vs the instruction-level port on the same vectors: about 720 -> 480..730 ns
 per call (the replayed callees dominate).
+
+## Live publication: S1/S2 (claude-9, 2026-10-13)
+
+State for a new head: branch `task/L172-parallel-shadow` (worktree
+`E:/ddda-rs-wt/L172`), build with `bash E:/ddda-re/tools/l172_replay_build.sh
+--ddplay` (merges the branch into `E:/ddda-rs-wt/R172`; check that it prints
+`built ...`; a merge conflict there exits silently), live runs with
+`C:/ddda-targets/L172/runs/s1.sh TAG [env...]` inside
+`HEAVY_BIG=1 python E:/ddda-re/tools/heavy.py claude-9 -- bash ...`
+(baseline C+X env of `E:/ddda-re/tools/headruns/README.txt`, heavy-window
+fps and the publish counters land in `runs/measure_TAG.out`).
+
+Env: `DDRUNTIME_PARALLEL_SHADOW=publish`, `_CHECK=N` (proof every Nth
+traversal and the first, default 1000), `_AFTER_MS`, `_WAIT_US` (default
+2000), `_HELPERS=0` (S1: every lane on the window's owner), `_DUMP=dir`
+(every proof's capture, for offline replay).
+
+Code: `crates/ddruntime/src/shadow_publish.rs` (window, private copies,
+DBE560 dispatch, lanes as tasks), `waits.rs` (s6: parked registry, RAII
+window, violation; s8: `help()` running tasks on the parked participants),
+`shadow_replay.rs` (`traverse` routes publish decisions; the proof).
+
+Mechanics: the traversal waits (bounded) until every other job participant
+is parked (workers on start events, main on the outer join's done events),
+opens the window (a participant that wakes is held at the gate and counted),
+sets the top-level globals (0x018D0BB0/0x018D0404 = 0, 0x018D0B28 = private
+scheduler copy, private manager copy), runs the original DB63E0; its DBE560
+on the private scheduler partitions the batch into 2 lanes (same partition
+as the proof) and runs each lane as a `help()` task: the parked workers take
+them on their own TEB/stack with the owner's registers and x87 image. Then
+the counters are rebased into serial order and everything is restored.
+
+Guard: nothing publishes before a proof passes. A proof is refuted (serial
+!= parallel stream, ABI, x87, final memory outside the classes) -> serial
+for the rest of the run. Inconclusive (the capture or the serial replay
+cannot reproduce the live traversal: `replay rejected`, `incomplete
+capture`, `original serial replay ... differs from live serial`, ...) ->
+counted, next proof 16 traversals later.
+
+Proof fix: the replay runs the raw lifted bodies, the live run the ports, so
+the capture can lack pages only the lifted bodies read (FUN_00ea23f0's
+switch table in .text at 0xEA3110.., the IAT page 0x139D000). The proof adds
+read-only exe image pages from the live image on demand and repeats.
+
+| run | binary | result |
+|---|---|---|
+| s1a/s1b | S1 | first proof `MissingPage(0xEA3120)` -> off (s1b ran a stale binary: R172 merge conflict) |
+| s1c | S1 + image pages | proofs 0..1200 pass (7x `audit=Ok(6)`), 20 windows / 418 units, woke 0, no crash; 1373 of ~1400 not exclusive; proof 1400 `original serial replay stream differs from live serial` -> off; heavy-window 29.67 fps |
+| s2a | S2 + wait + inconclusive class | running |

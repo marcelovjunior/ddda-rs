@@ -297,9 +297,14 @@ impl Lane {
     /// after each).
     fn run(&self, m: &mut dyn Mem, base: &Cpu) {
         let (scheduler, mode, context) = (self.scheduler, self.mode, self.context);
+        // one x87 state for the lane, carried from unit to unit as on a
+        // DBD8D0 worker (a fresh one per unit would be acquired by every
+        // unit and left in the host's spill table), released at the end
+        let mut x87 = base.st.clone();
         for job in self.jobs.clone() {
             let entry = scheduler + 0xc0 + job as u32 * if mode < 2 { 8 } else { 12 };
             let mut c = base.clone();
+            std::mem::swap(&mut c.st, &mut x87);
             c.ecx = m.u32(entry);
             let target = m.u32(entry + 4);
             c.esi = entry;
@@ -328,8 +333,12 @@ impl Lane {
                 _ => 0xdbdabc,
             });
             x86::call_ext(m, &mut c, target);
+            std::mem::swap(&mut c.st, &mut x87);
             assert_eq!(c.esp, base.esp, "parallel-shadow publish: job callback stack ABI");
             UNITS.fetch_add(1, Relaxed);
+        }
+        if x87.home != 0 {
+            (ddnative_base::hooks::get().x87_release)(&mut x87);
         }
     }
 }
