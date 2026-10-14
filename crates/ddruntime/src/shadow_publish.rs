@@ -422,8 +422,20 @@ pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, stora
     let initial_roots = m.u32(context + 0x48);
     let initial_lanes: Vec<u32> = (0..2).map(|lane| m.u32(lane_base + lane * LANE_BYTES + 0x74)).collect();
     WINDOW_SCHEDULER.with(|w| w.set(private_scheduler));
-    original(m, cpu);
+    // a panic in the traversal must not leave the redirect behind (the
+    // window itself is released by the caller's drop while unwinding)
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| original(m, cpu)));
     WINDOW_SCHEDULER.with(|w| w.set(0));
+    if let Err(payload) = ran {
+        m.set_u32(SCHEDULER_GLOBAL, scheduler);
+        m.set_u8(NESTING, nesting[0]);
+        m.set_u8(NESTING_OTHER, nesting[1]);
+        if use_secondary {
+            m.set_u32(context + 0x54, 0);
+        }
+        cpu.ecx = manager;
+        std::panic::resume_unwind(payload);
+    }
     let balanced = [m.u8(NESTING), m.u8(NESTING_OTHER)] == [0, 0] && m.u32(SCHEDULER_GLOBAL) == private_scheduler;
     m.set_u32(SCHEDULER_GLOBAL, scheduler);
     m.set_u8(NESTING, nesting[0]);
@@ -526,4 +538,48 @@ pub(super) fn dispatch(m: &mut dyn Mem, cpu: &mut Cpu) {
         m.set_u32(scheduler + offset, 0);
     }
     cpu.esp = cpu.esp.wrapping_add(8);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::{GuestMemory, READ, WRITE};
+
+    /// L172 P3: a panic inside the traversal restores the globals, and the
+    /// window the caller holds is released while unwinding (the gated threads
+    /// of the outer batch must never stay held).
+    #[test]
+    fn a_panic_in_the_traversal_restores_the_redirect_and_releases_the_window() {
+        let mut m = GuestMemory::new();
+        for (base, size) in [(0x018d_0000u32, 0x1000u32), (0x0200_0000, 0x1c150), (0x0300_0000, 0xd40 + 8 * LANE_BYTES), (0x0600_0000, 0x1c150),
+                             (0x0700_0000, 0xd40 + 8 * LANE_BYTES), (0x0400_0000, 0x1000), (0x0500_0000, 0x1000)] {
+            m.map(base, (size + 0xfff) & !0xfff, READ | WRITE).unwrap();
+        }
+        let (scheduler, manager, context, stack) = (0x0200_0000u32, 0x0300_0000u32, 0x0400_0000u32, 0x0500_0800u32);
+        m.set_u32(SCHEDULER_GLOBAL, scheduler);
+        m.set_u8(NESTING, 3);
+        m.set_u8(NESTING_OTHER, 5);
+        m.set_u32(context + 0x54, 0);
+        m.set_u32(stack + 4, context);
+        let storage = Storage { scheduler: 0x0600_0000, manager: 0x0700_0000, secondary: (0x0500_0000, 0x100), prefilled: false };
+        let mut cpu = Cpu { esp: stack, ecx: manager, ..Cpu::default() };
+        fn failing(_: &mut dyn Mem, _: &mut Cpu) {
+            panic!("traversal fails");
+        }
+        crate::threads::waits::ENABLED.store(true, Relaxed);
+        let window = crate::threads::waits::open(&[0x7777]).expect("window");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = window;
+            let _ = run_window(&mut m, &mut cpu, failing, &storage);
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(m.u32(SCHEDULER_GLOBAL), scheduler, "the scheduler global was left redirected");
+        assert_eq!((m.u8(NESTING), m.u8(NESTING_OTHER)), (3, 5), "the nesting bytes were left reset");
+        assert_eq!(m.u32(context + 0x54), 0);
+        assert_eq!(cpu.ecx, manager);
+        assert_eq!(window_scheduler(), 0);
+        // released: a new window can be opened
+        assert!(crate::threads::waits::open(&[0x7777]).is_some(), "the window was not released by the unwind");
+        crate::threads::waits::ENABLED.store(false, Relaxed);
+    }
 }

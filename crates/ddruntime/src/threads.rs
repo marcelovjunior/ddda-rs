@@ -2176,6 +2176,8 @@ mod tests {
     include!("sync_followup.rs");
     include!("sync_bench.rs");
     include!("waits_help_tests.rs");
+    include!("window_stress.rs");
+    include!("window_stress_help.rs");
 
     #[test]
     fn event_cache_invalidates_closed_handles_and_runtime_identity() {
