@@ -243,7 +243,7 @@ fn exclusive_view() -> bool {
 /// `DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE=stats`: run every traversal serially
 /// and record how many workers were parked at its start and how long it took
 /// (the potential of lanes on idle participants).
-fn stats_mode() -> bool {
+pub(super) fn stats_mode() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE").as_deref() == Ok("stats"))
 }
@@ -278,7 +278,17 @@ fn run_stats(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) {
     }
 }
 
+static SHADOW_N: AtomicU64 = AtomicU64::new(0);
+static SHADOW_US: AtomicU64 = AtomicU64::new(0);
+static SHADOW_MAX: AtomicU64 = AtomicU64::new(0);
+pub(super) fn note_shadow(us: u64) {
+    SHADOW_N.fetch_add(1, Relaxed);
+    SHADOW_US.fetch_add(us, Relaxed);
+    SHADOW_MAX.fetch_max(us, Relaxed);
+}
+
 fn report_stats() {
+    eprintln!("parallel-shadow stats shadow job (EE2C90): n {} us {} max {}", SHADOW_N.load(Relaxed), SHADOW_US.load(Relaxed), SHADOW_MAX.load(Relaxed));
     let mut line = String::from("parallel-shadow stats [parked/nested: n us | >1ms n us]");
     for (parked, row) in STATS.iter().enumerate() {
         for (nested, c) in row.iter().enumerate() {
