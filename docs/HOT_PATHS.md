@@ -229,3 +229,41 @@ Validated offline on the saved capture `scratchpad/stacks_ab_o1b.json`
   scripts/profile_units.py stacks_TAG.json [--root 0x00db7620]` (inclusive share
   per lifted function/port below `DB7620`, and its direct callee, the unit's
   virtual method).
+
+## 9. Shadow units: what runs under `DB7620` (L190)
+
+`scripts/profile_units.py` over five saved captures (`stacks_ab_o1a/o1b/o2a/o2b`, `stacks_bis29`,
+3067 guest-thread stacks that contain `DB7620`; the captures pre-date most ports, so shares
+show where the work was, not what is left). Share of those stacks a function appears in
+(inclusive), direct callee of `DB7620` in brackets:
+
+| Incl. | Function | Status |
+|---:|---|---|
+| 41.9% | `EA3130` uBaseModel::vf11 (direct 18.6%) | ported (P2c) |
+| 23.0% | `EE2C90` uShadow::vf11 (direct 23%) | shadow chain top, shadow agent |
+| 23.5% | `EA5320` draw_mesh / `FEE320` / `FEEF20` / `E12A20` | ported (folded) |
+| 18.8% | `B6A070` uPlayerBase::vf11 (direct 14.2%) -> `B89790` | `B89790`, `B89FE0`, `B8A770` ported (L190); `B6A070` itself 0.91x, left lifted |
+| 17.7% | `F20640` uSimSoftBody::vf11 (direct 7.5%; via `87D260` 10.2%) | **mechanical port checked equal on 60,000 random states, but 1.0x: not shipped** (see below) |
+| 16.1% | `886880` uObjModel::vf11 | Haiku L191 (6.5x on a 21 ns body) |
+| 13.7% / 12.7% | `FFE5C0` uModel::vf11 / `C52D70` | thin wrappers (`FED480`, `EA3130`, `FED5D0`) |
+| 5.7% | `0080A8B0` | small (0x112 bytes) |
+| 3-4% each | `01144C10`, `0049B110` (0x6b bytes), `E75EA0`, `010CC240`, `5D8DC0` (effect wrapper) | not ported; small or guest-call bound |
+
+**`F20640` finding.** `scripts/semport.py` (now with `imul r,r,imm`, `sete/setne`, FLD/FSTP
+dword pairs and a `cover` feature that reports the blocks never run) translated all 2,098
+instructions mechanically; a differential test against the lifted body (random memory reading
+as finite floats, the same 26-callee stub for both, 60,000 states, 150 of 153 blocks reached,
+the other three being alignment padding) found the two bodies identical, and found a real
+bug in the shared `semantic_rt` (below). But the paired benchmark on cases that run the full
+path (about 35 guest calls each) gave 0.89x-1.07x: the body is dominated by its guest calls
+(every call syncs the 8 registers and 8 XMM registers to and from `Cpu`), so a register-level
+translation cannot beat the lifted code. The port, its test and the lifted copy were removed
+from the tree (commit history keeps the generator and the recipe: `semport.py 0xf20640
+0xf23256`). Lesson for the next candidates: **count guest calls first**; a body with more
+than ~10 guest calls per invocation will not speed up from a port, only from cheaper calls
+(`call_guest` direct dispatch, and syncing only the XMM registers a callee reads).
+
+**Fixed on the way.** `semantic_rt` (used by the mechanically translated ports: `shadow_primitive`
+and the s4 family) picked the second operand when both operands of an SSE arithmetic instruction
+were NaN and the second was signalling; the hardware returns the first operand. Test:
+`crates/mtcore/tests/rt_nan.rs` (hardware vs helper over NaN pairs).
