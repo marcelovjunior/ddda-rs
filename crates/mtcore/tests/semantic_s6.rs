@@ -132,6 +132,8 @@ fn motion_filter_cases(path: &str, body: fn(&mut dyn Mem, &mut Cpu), matrix_at: 
                 m.set_u8(a, b);
             }
             c.eax = regs(back)[EAX];
+            c.ecx = regs(back)[1];
+            c.edx = regs(back)[2];
             c.esp = regs(back)[ESP];
             let r = back.get("xmm0q").map_or(n(&back["xmm0"]) as u64, |v| v.as_u64().unwrap());
             (c.xmm[0][0], c.xmm[0][1]) = (r as u32, (r >> 32) as u32);

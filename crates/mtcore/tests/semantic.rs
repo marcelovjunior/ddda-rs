@@ -3,6 +3,8 @@
 //! the original leaves at or above its returned stack pointer. ECX, EDX,
 //! the flags and the popped stack scratch below the returned ESP are not
 //! compared (MSVC callers never read them after a call).
+#[path = "support/callee_reads.rs"]
+mod callee_reads;
 use ddnative_base::{
     mem::Mem,
     x86::{Cpu, LiftFn},
@@ -115,12 +117,10 @@ fn abi_cases_with_calls_ret(path: &str, body: LiftFn, returns: bool) -> usize {
 /// CRT memcpy, say): their events are dropped and the final memory check
 /// covers their effects.
 fn abi_cases_full(path: &str, body: LiftFn, returns: bool, native_callees: &[u32]) -> usize {
-    abi_cases_impl(path, body, returns, native_callees, false)
+    abi_cases_impl(path, body, returns, native_callees)
 }
 
-/// `strict`: also EBX/EBP/ESI/EDI at every recorded call (for ports whose
-/// internal register use is modelled, as the L191 audit checked).
-fn abi_cases_impl(path: &str, body: LiftFn, returns: bool, native_callees: &[u32], strict: bool) -> usize {
+fn abi_cases_impl(path: &str, body: LiftFn, returns: bool, native_callees: &[u32]) -> usize {
     use ddnative_base::x86;
     use std::{cell::RefCell, rc::Rc};
     let text = match std::fs::read_to_string(path) {
@@ -161,13 +161,9 @@ fn abi_cases_impl(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
             assert_eq!(target, target_recorded, "case {i}: call target");
             assert_eq!(c.ecx, regs(call)[1], "case {i}: call ECX");
             assert_eq!(c.esp, regs(call)[4], "case {i}: call ESP");
-            if strict {
-                // the callee-saved registers are the caller's at every call
-                assert_eq!(
-                    [c.ebx, c.ebp, c.esi, c.edi],
-                    [regs(call)[3], regs(call)[5], regs(call)[6], regs(call)[7]],
-                    "case {i}: call EBX/EBP/ESI/EDI"
-                );
+            // the callee-saved registers the callee reads (from its lifted code)
+            for &r in callee_reads::saved_reads(target) {
+                assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi][r], regs(call)[r], "case {i}: call {target:x} register {r} (callee reads it)");
             }
             // What the callee reads: its return address, its three
             // arguments and the buffer the first two describe. The rest of
@@ -195,6 +191,8 @@ fn abi_cases_impl(path: &str, body: LiftFn, returns: bool, native_callees: &[u32
                 m.set_u8(a, b);
             }
             c.eax = regs(back)[0];
+            c.ecx = regs(back)[1];
+            c.edx = regs(back)[2];
             c.esp = regs(back)[4];
             *position.borrow_mut() += if paired { 2 } else { 1 };
         })));
@@ -321,7 +319,7 @@ fn semantic_find_identifier_matches_port() {
 #[test]
 fn semantic_dispatch_event_matches_original() {
     ddnative_host::install();
-    let n = abi_cases_impl("E:/ddda-re/notes/native-L179/dispatch.json", mtcore::semantic::dispatch_event, false, &[], true);
+    let n = abi_cases_impl("E:/ddda-re/notes/native-L179/dispatch.json", mtcore::semantic::dispatch_event, false, &[]);
     eprintln!("{n} ABI-level dispatch cases passed");
 }
 

@@ -1,3 +1,5 @@
+#[path = "support/callee_reads.rs"]
+mod callee_reads;
 use ddnative_base::{
     mem::Mem,
     x86::{self, Cpu, LiftFn},
@@ -98,6 +100,9 @@ fn verify(path: &str, entry: u32, body: LiftFn) -> usize {
                 assert_eq!(c.ecx, n(&call["regs"][1]));
             }
             assert_eq!(c.esp, n(&call["regs"][4]));
+            for &r in callee_reads::saved_reads(target) {
+                assert_eq!([c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi][r], n(&call["regs"][r]), "call {target:x} register {r} (callee reads it)");
+            }
             for (i, v) in call["args"].as_array().unwrap().iter().enumerate() {
                 assert_eq!(m.u32(c.esp + i as u32 * 4), n(v));
             }
