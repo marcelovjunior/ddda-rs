@@ -39,6 +39,10 @@ fn batch(m: &mut dyn Mem, cpu: &mut Cpu) {
                 }
                 m.set_u32(base, moved.0);
                 m.set_u32(base + 4, moved.1);
+                static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 3 {
+                    eprintln!("job-order: shadow job moved from {i} of {count}");
+                }
                 break;
             }
         }
