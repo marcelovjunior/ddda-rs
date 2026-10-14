@@ -1181,8 +1181,8 @@ fn compare_replays(
         }
         compare_control_state(&outgoing, result_mxcsr, &result.0, result.3)
             .map_err(|field| format!("live/original serial replay {field} mismatch"))?;
-        if observed.first_difference(&result.1).is_some() {
-            return Err("original serial replay stream differs from live serial".into());
+        if let Some(d) = observed.first_difference(&result.1) {
+            return Err(format!("original serial replay stream differs from live serial: {d:?}"));
         }
         for address in observed_writes.keys().chain(result.2.keys()) {
             if scratch.contains(address) {
