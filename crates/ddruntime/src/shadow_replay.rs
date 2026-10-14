@@ -94,6 +94,12 @@ fn shadow(memory: &mut dyn Mem, cpu: &mut Cpu) {
     static ENTERED: std::sync::Once = std::sync::Once::new();
     ENTERED.call_once(|| eprintln!("parallel-shadow entered shadow={SHADOW:#x}"));
     let _scope = ShadowScope(IN_SHADOW.with(|v| v.replace(true)));
+    if publish::stats_mode() {
+        let start = std::time::Instant::now();
+        ORIGINAL.get().unwrap()[0](memory, cpu);
+        publish::note_shadow(start.elapsed().as_micros() as u64);
+        return;
+    }
     ORIGINAL.get().unwrap()[0](memory, cpu);
 }
 fn schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
