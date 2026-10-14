@@ -173,3 +173,17 @@ fn obj_model_vf08_matches_original() {
     assert!(cases >= 1000, "{cases} cases");
     eprintln!("{cases} ABI-level vf08 cases passed; calls {made:x?}");
 }
+
+// verifies 0x0084c720 (ABI level; void; the callees as recorded stubs)
+#[test]
+fn character_vf09_matches_original() {
+    let callees = [
+        Callee { target: 0x0085_86e0, reads: &[EAX], stack_args: 0 },
+        Callee { target: 0x0088_6530, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x00ca_5930, reads: &[ECX], stack_args: 6 },
+    ];
+    let (cases, made) = run_cases(&vectors("char_vf09.json"), mtcore::semantic_l191::character_vf09, false, &callees, &[]);
+    assert!(cases >= 1000, "{cases} cases");
+    eprintln!("{cases} ABI-level char_vf09 cases passed; calls {made:x?}");
+}

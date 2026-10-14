@@ -114,3 +114,9 @@ fn bench_obj_model_vf11() {
 fn bench_obj_model_vf08() {
     bench(&format!("{DIR}vf08.json"), "0x00885DC0", &[("lifted", lifted::f_00885dc0), ("port", mtcore::semantic_l191::obj_model_vf08)]);
 }
+
+#[test]
+#[ignore]
+fn bench_character_vf09() {
+    bench(&format!("{DIR}char_vf09.json"), "0x0084C720", &[("lifted", lifted::f_0084c720), ("port", mtcore::semantic_l191::character_vf09)]);
+}
