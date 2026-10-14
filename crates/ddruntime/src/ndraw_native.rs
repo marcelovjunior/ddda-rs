@@ -2650,7 +2650,9 @@ impl Native {
             *t.refused.entry(Refusal::Query).or_default() += 1;
             return Taken::Default;
         }
-        let started = Instant::now();
+        // two clock reads a draw (~3% of the worker) only for the diagnostic report
+        static TIMING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let started = (*TIMING.get_or_init(|| std::env::var_os("DDRUNTIME_NDRAW_STATS").is_some())).then(Instant::now);
         let lock = crate::d3d9dev::device_lock();
         let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind).and_then(|mut d| {
             if !d.filled {
@@ -2726,7 +2728,7 @@ impl Native {
                         crate::d3d9draw::backend_unlocked(|b| g.comparison.draw(b, native, &d));
                         t.taken += 1;
                         drop(lock);
-                        t.decode += started.elapsed();
+                        if let Some(started) = started { t.decode += started.elapsed(); }
                         return Taken::Handled;
                     }
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
@@ -2737,7 +2739,7 @@ impl Native {
             },
         };
         drop(lock);
-        t.decode += started.elapsed();
+        if let Some(started) = started { t.decode += started.elapsed(); }
         taken
     }
 }
