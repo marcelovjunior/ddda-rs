@@ -93,6 +93,9 @@ use std::time::{Duration, Instant};
 
 #[path = "ndraw_compare.rs"]
 pub mod comparison;
+#[path = "ndraw_ops.rs"]
+mod ops;
+pub(crate) use ops::{observe_op, Op};
 
 /// What `DDDRAW_NATIVE` asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +111,16 @@ pub enum Mode {
     Compare,
     /// take nothing; compare the D3D9 path's DrawCalls with the decoded ones
     Verify,
+}
+
+/// `DDDRAW_NATIVE_TARGETS=all` (L179): offer the decoder the draws into every
+/// colour target, not only the scene's (the shadow maps, the soft-body and
+/// half-resolution passes: ~1,900 draws a frame that otherwise take the
+/// D3D9 path at ~3x the per-draw cost); the draws it refuses still take the
+/// D3D9 path. Check with `DDDRAW_NATIVE=verify` before relying on it.
+fn all_targets() -> bool {
+    static ALL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALL.get_or_init(|| std::env::var("DDDRAW_NATIVE_TARGETS").as_deref() == Ok("all"))
 }
 
 pub fn mode() -> Mode {
@@ -198,14 +211,17 @@ pub enum Refusal {
     /// inside a span of type-7 commands (a query begun and not ended): the
     /// D3D9 path draws it, so the backend counts its samples
     Query,
+    /// a Clear's colour check under an x87 rounding mode other than to
+    /// nearest (ops::clear_args)
+    Precision,
 }
 
 impl Refusal {
-    const ALL: [Refusal; 18] = [
+    const ALL: [Refusal; 19] = [
         Refusal::Instanced, Refusal::NotScene, Refusal::NullBinding, Refusal::Decode, Refusal::ViewportGlobals,
         Refusal::BlendFactor, Refusal::NoColourTarget, Refusal::NoIndices, Refusal::ZeroStride, Refusal::Missing,
         Refusal::Shader, Refusal::FloatsUncovered, Refusal::IntsUncovered, Refusal::BoolsUncovered,
-        Refusal::SamplersUncovered, Refusal::Device, Refusal::Primitive, Refusal::Query,
+        Refusal::SamplersUncovered, Refusal::Device, Refusal::Primitive, Refusal::Query, Refusal::Precision,
     ];
 }
 
@@ -425,21 +441,50 @@ pub fn reads(tokens: &[u32]) -> Result<Reads, Refusal> {
 #[derive(Clone, Copy)]
 struct G<'a> {
     m: &'a dyn Mem,
-    pt: Option<std::ptr::NonNull<ddnative_base::mem::PageTable>>,
+    /// the page table taken once; each read inline (L144: `fast_u32` is an
+    /// out-of-line call per word, 7.6% of the render worker in c26vk)
+    pages: ddnative_base::mem::Pages,
 }
 
 impl<'a> G<'a> {
     fn new(m: &'a dyn Mem) -> Self {
-        G { m, pt: m.page_table() }
+        G { m, pages: ddnative_base::mem::Pages::of(m) }
     }
+    #[inline]
     fn u32(&self, a: u32) -> u32 {
-        self.m.fast_u32(self.pt, a)
+        self.pages.u32(self.m, a)
     }
+    #[inline]
     fn u16(&self, a: u32) -> u32 {
-        self.m.fast_u16(self.pt, a) as u32
+        self.pages.u16(self.m, a) as u32
     }
+    #[inline]
     fn u8(&self, a: u32) -> u32 {
-        self.m.fast_u8(self.pt, a) as u32
+        self.pages.u8(self.m, a) as u32
+    }
+    /// `out.len()` consecutive words from `at` (L180): one page-table check
+    /// per page, not per word; the same values as `u32` each.
+    fn words(&self, at: u32, out: &mut [u32]) {
+        use ddnative_base::mem::{load_at, PAGE, READ};
+        let mut k = 0;
+        while k < out.len() {
+            let a = at.wrapping_add(4 * k as u32);
+            let room = ((PAGE - a % PAGE) / 4) as usize;
+            let n = room.min(out.len() - k);
+            match (a % 4 == 0 && n > 0).then(|| self.pages.bytes(a, n * 4, READ)).flatten() {
+                Some(p) => {
+                    for (j, w) in out[k..k + n].iter_mut().enumerate() {
+                        // SAFETY: bytes() vouches for n * 4 bytes at p
+                        *w = unsafe { load_at(p.add(4 * j), 4) };
+                    }
+                    k += n;
+                }
+                None => {
+                    out[k] = self.u32(a);
+                    k += 1;
+                }
+            }
+        }
     }
 }
 
@@ -599,11 +644,66 @@ pub struct BindingPart {
     constants: [Arc<Constants>; 2],
     /// per stage: float, int and bool registers written
     written: [([u64; 4], u16, u16); 2],
+    /// the banks as native register arrays, made by the first native draw
+    /// (shared by every draw of the part, across frames while unchanged)
+    native: std::sync::OnceLock<[Arc<NativeConstants>; 2]>,
+    /// per stage: float registers the shaders read and the binding does not
+    /// write (the device's values at the draw: `fill_uncovered`)
+    uncovered: [[u64; 4]; 2],
 }
 
 /// A shader binding's state as the full apply sets it (0x00DAA8B0 with
 /// nothing applied: every sampler, texture and upload).
-fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<BindingPart>>) -> Result<Arc<BindingPart>, Refusal> {
+/// The uploads the original's apply skips after binding `previous` (L180,
+/// 0x00DAA8B0): for the stages with the same shaders, those whose value
+/// slot holds the same pointer as the previous binding's take their
+/// registers from `source`, what the device holds, not from memory.
+struct Held<'a> {
+    previous: u32,
+    stages: [bool; 2],
+    source: [&'a Constants; 2],
+}
+
+/// Upload `u` (value `v`) held: its registers from `source`, marked written.
+fn hold_upload(bank: &mut Constants, w: &mut ([u64; 4], u16, u16), u: &Upload, v: u32, source: &Constants) {
+    let float = |bank: &mut Constants, w: &mut ([u64; 4], u16, u16), n: u32| {
+        let r = source.f.get(n as usize).copied().unwrap_or([0; 4]);
+        set_float(bank, w, n, r);
+    };
+    match u.section {
+        3 => {
+            if u.count != 0 {
+                float(bank, w, u.register);
+            }
+        }
+        0 => {
+            let count = if v & 15 != 0 { u.count.min((v & 15) * 16) } else { u.count };
+            for i in 0..count {
+                float(bank, w, u.register + i);
+            }
+        }
+        1 => {
+            for i in 0..u.count {
+                let n = u.register + i;
+                if n < 16 {
+                    bank.i[n as usize] = source.i[n as usize];
+                    w.1 |= 1 << n;
+                }
+            }
+        }
+        _ => {
+            for i in 0..u.count {
+                let n = u.register + i;
+                if n < 16 {
+                    bank.b[n as usize] = source.b[n as usize];
+                    w.2 |= 1 << n;
+                }
+            }
+        }
+    }
+}
+
+fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<BindingPart>>, held: Option<&Held>) -> Result<Arc<BindingPart>, Refusal> {
     let flags = g.u32(binding);
     let alpha = if flags & 0x18_0000 == 0x18_0000 {
         let comparison = flags >> 3 & 255;
@@ -628,19 +728,44 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         }
     }
     // constants: the binding's registers over zeros (in reused banks)
+    // (L180: only the registers the last binding wrote are cleared, not the
+    // whole banks)
     let mut banks = std::mem::take(&mut c.banks);
     for (stage, bank) in banks.iter_mut().enumerate() {
-        bank.f.clear();
+        let (floats, ints, bools) = c.banks_written[stage];
+        for word in 0..4 {
+            let mut m = floats[word];
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                if let Some(r) = bank.f.get_mut(n) {
+                    *r = [0; 4];
+                }
+            }
+        }
+        for n in 0..16 {
+            if ints >> n & 1 != 0 {
+                bank.i[n] = [0; 4];
+            }
+            if bools >> n & 1 != 0 {
+                bank.b[n] = 0;
+            }
+        }
         bank.f.resize(meta.floats[stage].min(FLOATS[stage]), [0; 4]);
-        bank.i = [[0; 4]; 16];
-        bank.b = [0; 16];
     }
     let mut written = [([0u64; 4], 0u16, 0u16); 2];
+    let mut uncovered = [[0u64; 4]; 2];
     for stage in 0..2 {
         let bank = &mut banks[stage];
         let w = &mut written[stage];
         for u in &meta.uploads[stage] {
             let v = value(u.value);
+            if let Some(h) = held.filter(|h| h.stages[stage]) {
+                if g.u32(h.previous.wrapping_add(12 + 4 * u.value)) == v {
+                    hold_upload(bank, w, u, v, h.source[stage]);
+                    continue;
+                }
+            }
             match u.section {
                 3 => {
                     if u.count == 0 {
@@ -656,10 +781,18 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                 0 => {
                     let at = (v & !15).wrapping_add(u.offset * 4);
                     let count = if v & 15 != 0 { u.count.min((v & 15) * 16) } else { u.count };
-                    for i in 0..count {
-                        let r: [u32; 4] = std::array::from_fn(|j| g.u32(at.wrapping_add(i * 16 + j as u32 * 4)));
-                        let r = if u.convert { r.map(|x| (x as i32 as f32).to_bits()) } else { r };
-                        set_float(bank, w, u.register + i, r);
+                    // the registers read 16 at a time (one check a page)
+                    let mut words = [0u32; 64];
+                    let mut i = 0;
+                    while i < count {
+                        let n = (count - i).min(16);
+                        g.words(at.wrapping_add(i * 16), &mut words[..n as usize * 4]);
+                        for k in 0..n {
+                            let r: [u32; 4] = std::array::from_fn(|j| words[(k * 4) as usize + j]);
+                            let r = if u.convert { r.map(|x| (x as i32 as f32).to_bits()) } else { r };
+                            set_float(bank, w, u.register + i + k, r);
+                        }
+                        i += n;
                     }
                 }
                 1 => {
@@ -684,26 +817,247 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                 }
             }
         }
-        // every register the shaders read comes from here
+        // every register the shaders read comes from here, but floats the
+        // device holds already (a refusal gives the banks back, so the next
+        // binding reuses their storage)
         let r = &meta.reads[stage];
-        if (0..4).any(|k| r.floats[k] & !w.0[k] != 0) {
-            return Err(Refusal::FloatsUncovered);
-        }
-        if r.ints & !w.1 != 0 {
-            return Err(Refusal::IntsUncovered);
-        }
-        if r.bools & !w.2 != 0 {
-            return Err(Refusal::BoolsUncovered);
+        uncovered[stage] = std::array::from_fn(|k| r.floats[k] & !w.0[k]);
+        let refusal = if r.ints & !w.1 != 0 {
+            Some(Refusal::IntsUncovered)
+        } else if r.bools & !w.2 != 0 {
+            Some(Refusal::BoolsUncovered)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            c.banks = banks;
+            c.banks_written = written;
+            return Err(refusal);
         }
     }
-    // the same as the binding's part of an earlier frame: that part
+    // the same as the binding's part of an earlier frame: that part; else
+    // a part of the same content seen lately (L180: the game's bindings
+    // move between frames, their content mostly does not), else a new part,
+    // keeping an unchanged stage's bank
     let part = match previous {
-        Some(p) if Arc::ptr_eq(&p.meta, &meta) && p.alpha == alpha && p.written == written
-            && *p.constants[0] == banks[0] && *p.constants[1] == banks[1] => p.clone(),
-        _ => Arc::new(BindingPart { meta, alpha, constants: [Arc::new(banks[0].clone()), Arc::new(banks[1].clone())], written }),
+        Some(p) if same_part(p, &meta, alpha, &written, &banks) => p.clone(),
+        _ => {
+            let key = content_key(&meta, alpha, &written, &banks);
+            match c.by_content.get_mut(&key) {
+                Some((seen, p)) if same_part(p, &meta, alpha, &written, &banks) => {
+                    *seen = c.frame;
+                    c.built[3] += 1;
+                    p.clone()
+                }
+                _ => {
+                    let part = Arc::new(BindingPart {
+                        meta,
+                        alpha,
+                        // a changed bank moves into the part (the scratch bank
+                        // starts over: an allocation, not a copy of the bank)
+                        constants: std::array::from_fn(|stage| match previous {
+                            Some(p) if p.written[stage] == written[stage] && same_registers(&p.constants[stage], &banks[stage], &written[stage]) => {
+                                p.constants[stage].clone()
+                            }
+                            _ => Arc::new(std::mem::take(&mut banks[stage])),
+                        }),
+                        written,
+                        native: Default::default(),
+                        uncovered,
+                    });
+                    c.by_content.insert(key, (c.frame, part.clone()));
+                    part
+                }
+            }
+        }
     };
     c.banks = banks;
+    c.banks_written = written;
     Ok(part)
+}
+
+/// Whether part `p` is what these decoded values make.
+fn same_part(p: &BindingPart, meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64; 4], u16, u16); 2], banks: &[Constants; 2]) -> bool {
+    Arc::ptr_eq(&p.meta, meta)
+        && p.alpha == alpha
+        && p.written == *written
+        && (0..2).all(|stage| same_registers(&p.constants[stage], &banks[stage], &written[stage]))
+}
+
+/// Two banks over zeros (a part's, the scratch) with the same `written`
+/// registers are equal when those registers are (L180: not the whole
+/// banks).
+fn same_registers(a: &Constants, b: &Constants, written: &([u64; 4], u16, u16)) -> bool {
+    let (floats, ints, bools) = *written;
+    if a.f.len() != b.f.len() {
+        return false;
+    }
+    for word in 0..4 {
+        let mut m = floats[word];
+        while m != 0 {
+            let n = word * 64 + m.trailing_zeros() as usize;
+            m &= m - 1;
+            if a.f.get(n) != b.f.get(n) {
+                return false;
+            }
+        }
+    }
+    (0..16).all(|n| (ints >> n & 1 == 0 || a.i[n] == b.i[n]) && (bools >> n & 1 == 0 || a.b[n] == b.b[n]))
+}
+
+/// A binding's content key (L180): its metadata, alpha test and the
+/// registers it writes, with their values (a hash; `same_part` decides).
+fn content_key(meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64; 4], u16, u16); 2], banks: &[Constants; 2]) -> u64 {
+    use std::hash::Hasher;
+    let mut h = crate::fasthash::FxHasher::default();
+    h.write_usize(Arc::as_ptr(meta) as usize);
+    h.write_u64(alpha.map_or(u64::MAX, |(f, r)| (f as u64) << 32 | r as u64));
+    for (stage, (floats, ints, bools)) in written.iter().enumerate() {
+        let bank = &banks[stage];
+        for (word, &mask) in floats.iter().enumerate() {
+            h.write_u64(mask);
+            let mut m = mask;
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                if let Some(r) = bank.f.get(n) {
+                    h.write_u64(r[0] as u64 | (r[1] as u64) << 32);
+                    h.write_u64(r[2] as u64 | (r[3] as u64) << 32);
+                }
+            }
+        }
+        h.write_u32(*ints as u32 | (*bools as u32) << 16);
+        for n in 0..16 {
+            if ints >> n & 1 != 0 {
+                let r = bank.i[n];
+                h.write_u64(r[0] as u32 as u64 | (r[1] as u32 as u64) << 32);
+                h.write_u64(r[2] as u32 as u64 | (r[3] as u32 as u64) << 32);
+            }
+            if bools >> n & 1 != 0 {
+                h.write_u32(bank.b[n]);
+            }
+        }
+    }
+    h.finish()
+}
+
+/// A draw whose binding leaves float registers its shaders read unwritten:
+/// the D3D9 path draws with what the device holds in them (the binding's
+/// own apply does not touch them, so their value now is their value at the
+/// draw). That is the last pending upload of the draws taken since the
+/// last flush (`flush_uploads`'s rule: the newest binding writing the
+/// register decides), else the device's. The call gets banks of its own.
+pub fn fill_uncovered(call: &mut DrawCall, b: &BindingPart, uploads: &Uploads, device: u32) -> Result<(), Refusal> {
+    if b.uncovered == [[0; 4]; 2] {
+        return Ok(());
+    }
+    let mut banks = CowBanks::new([call.vs_constants.clone(), call.ps_constants.clone()]);
+    let missing = fill_from_uploads(&mut banks, b.uncovered, uploads)?;
+    if missing != [[0; 4]; 2] {
+        objects(|o| {
+            let Some(Kind::Device(d)) = o.live.get(&device).map(|x| &x.kind) else {
+                return Err(Refusal::Device);
+            };
+            fill_registers(&mut banks, missing, |stage, n| {
+                let c = if stage == 0 { &d.state.vs } else { &d.state.ps };
+                c.f.get(n).copied()
+            })
+        })?;
+    }
+    if let Some([vs, ps]) = banks.finish() {
+        call.vs_constants = Arc::new(vs);
+        call.ps_constants = Arc::new(ps);
+    }
+    Ok(())
+}
+
+/// A draw's constant banks, copied (L180) only at the first register whose
+/// value changes: an unchanged draw keeps the shared banks.
+struct CowBanks {
+    base: [Arc<Constants>; 2],
+    own: Option<[Constants; 2]>,
+}
+
+impl CowBanks {
+    fn new(base: [Arc<Constants>; 2]) -> Self {
+        CowBanks { base, own: None }
+    }
+    fn bank(&self, stage: usize) -> &Constants {
+        match &self.own {
+            Some(own) => &own[stage],
+            None => &self.base[stage],
+        }
+    }
+    fn own(&mut self) -> &mut [Constants; 2] {
+        let base = &self.base;
+        self.own.get_or_insert_with(|| [(*base[0]).clone(), (*base[1]).clone()])
+    }
+    /// Float register `n` of `stage` set to `v`; a register outside the
+    /// bank refuses the draw.
+    fn set_float(&mut self, stage: usize, n: usize, v: [u32; 4]) -> Result<(), Refusal> {
+        if *self.bank(stage).f.get(n).ok_or(Refusal::FloatsUncovered)? != v {
+            self.own()[stage].f[n] = v;
+        }
+        Ok(())
+    }
+    fn set_int(&mut self, stage: usize, n: usize, v: [i32; 4]) {
+        if self.bank(stage).i[n] != v {
+            self.own()[stage].i[n] = v;
+        }
+    }
+    fn set_bool(&mut self, stage: usize, n: usize, v: u32) {
+        if self.bank(stage).b[n] != v {
+            self.own()[stage].b[n] = v;
+        }
+    }
+    /// The changed banks (None: unchanged).
+    fn finish(self) -> Option<[Constants; 2]> {
+        self.own
+    }
+}
+
+/// Fill the `missing` float registers from the pending uploads (the newest
+/// binding writing a register decides, as at the flush; its bank lacking
+/// it, the device keeps its own); what is left for the device.
+fn fill_from_uploads(banks: &mut CowBanks, mut missing: [[u64; 4]; 2], uploads: &Uploads) -> Result<[[u64; 4]; 2], Refusal> {
+    let mut device = [[0u64; 4]; 2];
+    for u in uploads.bindings.iter().rev() {
+        for stage in 0..2 {
+            for word in 0..4 {
+                let mut take = missing[stage][word] & u.written[stage].0[word];
+                missing[stage][word] &= !take;
+                while take != 0 {
+                    let n = word * 64 + take.trailing_zeros() as usize;
+                    take &= take - 1;
+                    match u.constants[stage].f.get(n) {
+                        Some(&v) => banks.set_float(stage, n, v)?,
+                        None => device[stage][word] |= 1 << (n % 64),
+                    }
+                }
+            }
+        }
+    }
+    Ok(std::array::from_fn(|stage| std::array::from_fn(|word| missing[stage][word] | device[stage][word])))
+}
+
+/// Fill the `missing` float registers with `value(stage, register)`; a
+/// register outside the bank or without a value refuses the draw.
+fn fill_registers(
+    banks: &mut CowBanks,
+    missing: [[u64; 4]; 2],
+    value: impl Fn(usize, usize) -> Option<[u32; 4]>,
+) -> Result<(), Refusal> {
+    for stage in 0..2 {
+        for word in 0..4 {
+            let mut m = missing[stage][word];
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                banks.set_float(stage, n, value(stage, n).ok_or(Refusal::FloatsUncovered)?)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn set_float(bank: &mut Constants, written: &mut ([u64; 4], u16, u16), n: u32, r: [u32; 4]) {
@@ -836,17 +1190,81 @@ impl Mirror {
     fn textures(&self, sh: &Shadow, c: &mut Caches) -> Arc<[TextureBinding]> {
         let mut m = self.clone();
         m.apply(sh);
-        let mut out = Vec::with_capacity(8);
-        for i in 0..21 {
+        // the lists by the bound slots, their textures and sampler states
+        // (L180: the draws' texture sets repeat)
+        let key = {
+            use std::hash::Hasher;
+            let mut h = crate::fasthash::FxHasher::default();
+            for i in 0..21 {
+                let t = m.textures[i];
+                if t != 0 {
+                    h.write_u32(i as u32);
+                    h.write_u32(t);
+                    for &s in &m.rows[i] {
+                        h.write_u32(s);
+                    }
+                }
+            }
+            h.finish()
+        };
+        // this frame's list of the same slots: the same list (a texture's
+        // information is fixed within a frame), once the slots confirm it
+        if let Some((seen, list)) = c.texture_lists.get(&key) {
+            if *seen == c.frame && same_slots(&m, list, &c.textures) {
+                return list.clone();
+            }
+        }
+        let found: [Option<TextureBinding>; 21] = std::array::from_fn(|i| {
             let h = m.textures[i];
-            if h != 0 {
-                if let Some(info) = c.texture(h) {
-                    out.push(TextureBinding { sampler: stage_of(i), resource: h, states: m.rows[i], ..info });
+            (h != 0)
+                .then(|| c.texture(h))
+                .flatten()
+                .map(|info| TextureBinding { sampler: stage_of(i), resource: h, states: m.rows[i], ..info })
+        });
+        // an earlier frame's list of the same content: kept (no allocation,
+        // and no drop later)
+        if let Some((seen, list)) = c.texture_lists.get_mut(&key) {
+            if list.iter().eq(found.iter().flatten()) {
+                *seen = c.frame;
+                return list.clone();
+            }
+        }
+        // the slots bound, in order: an exact-length iterator, so the slice
+        // is allocated once (no Vec first)
+        let mut at = [0u8; 21];
+        let mut n = 0;
+        for (i, t) in found.iter().enumerate() {
+            if t.is_some() {
+                at[n] = i as u8;
+                n += 1;
+            }
+        }
+        let list: Arc<[TextureBinding]> = at[..n].iter().map(|&i| found[i as usize].clone().unwrap()).collect();
+        c.texture_lists.insert(key, (c.frame, list.clone()));
+        list
+    }
+}
+
+/// Whether `list` is what the slots of `m` make this frame: each bound
+/// slot in it, in order, with its texture and states, or its texture known
+/// this frame not to be a live one (`textures`).
+fn same_slots(m: &Mirror, list: &[TextureBinding], textures: &FxMap<u32, Option<TextureBinding>>) -> bool {
+    let mut k = 0;
+    for i in 0..21 {
+        let h = m.textures[i];
+        if h == 0 {
+            continue;
+        }
+        match list.get(k) {
+            Some(t) if t.sampler == stage_of(i) && t.resource == h && t.states == m.rows[i] => k += 1,
+            _ => {
+                if !matches!(textures.get(&h), Some(None)) {
+                    return false;
                 }
             }
         }
-        out.into()
     }
+    k == list.len()
 }
 
 // Translated from 0x00DAA8B0 (DDDA.exe 2017-12-13 Steam): its sampler and
@@ -863,12 +1281,15 @@ fn shadow_samplers(g: &G, ctx: u32, binding: u32, meta: &MetaPart, info: &FrameI
             let old = sh.read(g, cache);
             if sampler != old {
                 if old == 0 || g.u32(old.wrapping_add(12)) != g.u32(sampler.wrapping_add(12)) {
-                    let words = |o: u32| -> Vec<u32> { (0..3).map(|k| g.u32(o.wrapping_add(0x30 + 4 * k))).collect() };
+                    // the sampler objects' three packed words (no Vec each)
+                    let words = |o: u32| -> [u32; 3] { std::array::from_fn(|k| g.u32(o.wrapping_add(0x30 + 4 * k as u32))) };
                     let new = words(sampler);
                     let old_words = (old != 0).then(|| words(old));
-                    for c in mtstate::packed(mtstate::SAMPLER, &new, old_words.as_deref(), Some(slot.stage), info.filtering) {
-                        sh.sampler_states.push((c.args[0], c.args[1], c.args[2]));
-                    }
+                    // (no Vec of calls: L180)
+                    let stage = slot.stage;
+                    mtstate::packed_each(mtstate::SAMPLER, &new, old_words.as_ref().map(|w| &w[..]), Some(stage), info.filtering, |state, value| {
+                        sh.sampler_states.push((stage, state, value))
+                    });
                 }
                 sh.write(cache, sampler);
             }
@@ -900,6 +1321,7 @@ fn shadow_samplers(g: &G, ctx: u32, binding: u32, meta: &MetaPart, info: &FrameI
 }
 
 /// A stream binding of this frame (0x00DAA7C0 with nothing applied).
+#[derive(PartialEq)]
 pub struct StreamPart {
     streams: Arc<[(u32, u32, u32, u32, u32)]>,
     indices: u32,
@@ -907,7 +1329,8 @@ pub struct StreamPart {
 }
 
 fn stream_part(g: &G, binding: u32) -> Result<StreamPart, Refusal> {
-    let mut streams = Vec::with_capacity(4);
+    let mut streams = [(0, 0, 0, 0, 0); 4];
+    let mut count = 0;
     let mut extent = 0u32;
     for k in 0..4u32 {
         let vb = g.u32(binding.wrapping_add(4 * k));
@@ -923,14 +1346,54 @@ fn stream_part(g: &G, binding: u32) -> Result<StreamPart, Refusal> {
         let handle = g.u32(vb.wrapping_add(0x20));
         if handle != 0 {
             // non-instanced: frequency 1
-            streams.push((k, handle, offset, stride, 1));
+            streams[count] = (k, handle, offset, stride, 1);
+            count += 1;
         }
     }
     let ib = g.u32(binding.wrapping_add(0x28));
-    Ok(StreamPart { streams: streams.into(), indices: if ib == 0 { 0 } else { g.u32(ib.wrapping_add(0x20)) }, extent })
+    Ok(StreamPart { streams: streams[..count].into(), indices: if ib == 0 { 0 } else { g.u32(ib.wrapping_add(0x20)) }, extent })
+}
+
+// Translated from 0x00DAB480's types 2 and 3 (DDDA.exe 2017-12-13 Steam):
+// their stream loops before the draw, whose SetStreamSourceFreq and
+// SetStreamSource calls return to 0x00DAB891/0x00DAB8C5 and
+// 0x00DAB9F7/0x00DABA29 (crates/mtdraw executor set_frequencies): an
+// instanced draw's streams on the device. Each stream with an object gets a
+// frequency: instance data (binding +0x24 + k set) 0x80000001, and its
+// source again at offset step * stride + its own offset (step: record +0x20
+// for type 2, +0x24 for type 3); geometry 0x40000000 | the instances (record
+// +0x1C for type 2, +0x20 for type 3). Streams without a backend handle are
+// not on the device, as stream_part. (The executor sets every frequency
+// back to 1 and the sources back to their own offsets after the draw: what
+// the stream apply leaves, so a taken draw needs no device change.)
+fn instanced_streams(g: &G, record: u32, binding: u32, kind: u32) -> Arc<[(u32, u32, u32, u32, u32)]> {
+    let (count, step) = if kind == 3 { (0x20, 0x24) } else { (0x1C, 0x20) };
+    let instances = g.u32(record.wrapping_add(count));
+    let mut streams = [(0, 0, 0, 0, 0); 4];
+    let mut n = 0;
+    for k in 0..4u32 {
+        let vb = g.u32(binding.wrapping_add(4 * k));
+        if vb == 0 {
+            continue;
+        }
+        let handle = g.u32(vb.wrapping_add(0x20));
+        if handle == 0 {
+            continue;
+        }
+        let stride = g.u8(binding.wrapping_add(0x10 + k));
+        let offset = g.u32(binding.wrapping_add(0x14 + 4 * k));
+        streams[n] = if g.u8(binding.wrapping_add(0x24 + k)) != 0 {
+            (k, handle, g.u32(record.wrapping_add(step)).wrapping_mul(stride).wrapping_add(offset), stride, 0x8000_0001)
+        } else {
+            (k, handle, offset, stride, instances | 0x4000_0000)
+        };
+        n += 1;
+    }
+    streams[..n].into()
 }
 
 /// A target binding of this frame (0x00DA6FE0 with nothing applied).
+#[derive(PartialEq)]
 pub struct TargetPart {
     targets: [Option<Target>; 4],
     depth: Option<Target>,
@@ -1028,17 +1491,33 @@ pub struct Caches {
     /// native fixed state by identity and render-state list (its address:
     /// the list is held in `states`)
     native_fixed: FxMap<(NativeStateIdentity, u64), Arc<NativeFixedState>>,
-    /// native register arrays by constant bank (held)
-    native_constants: FxMap<usize, (Arc<Constants>, NativeConstants)>,
     // this frame's
     /// shader bindings by address, with the frame they were last built
     /// or checked in (kept across frames: an unchanged binding keeps its
     /// part, no allocation)
     bindings: FxMap<u32, (u64, Result<Arc<BindingPart>, Refusal>)>,
-    /// the banks a binding's constants are read into
+    /// the banks a binding's constants are read into, and the registers
+    /// written in them (all others are zero)
     banks: [Constants; 2],
-    streams: FxMap<u32, Result<Arc<StreamPart>, Refusal>>,
-    target_bindings: FxMap<u32, Result<Arc<TargetPart>, Refusal>>,
+    banks_written: [([u64; 4], u16, u16); 2],
+    /// binding parts by content (`content_key`), with the frame they were
+    /// last used in: a binding at a new address with content seen lately
+    /// takes that part (no allocation, and no drop later)
+    by_content: FxMap<u64, (u64, Arc<BindingPart>)>,
+    /// texture lists by content, with the frame they were last used in
+    texture_lists: FxMap<u64, (u64, Arc<[TextureBinding]>)>,
+    /// the previous decided draw (none: a frame's start, or a command the
+    /// default path applied came between)
+    last: Option<LastDraw>,
+    /// a copy of the D3D dirty index and its generation (`reads_dirty`)
+    dirty: (u64, Vec<u32>),
+    /// since the last report: target parts and stream parts built, bindings
+    /// decoded, parts found by content (`report`)
+    built: [u64; 4],
+    /// stream and target bindings by address, with the frame they were last
+    /// built in (kept across frames: `kept_part`)
+    streams: FxMap<u32, (u64, Result<Arc<StreamPart>, Refusal>)>,
+    target_bindings: FxMap<u32, (u64, Result<Arc<TargetPart>, Refusal>)>,
     targets: FxMap<u32, Option<Target>>,
     textures: FxMap<u32, Option<TextureBinding>>,
     index_formats: FxMap<u32, Option<u32>>,
@@ -1055,11 +1534,21 @@ impl Caches {
     /// (with the D3D lock held).
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
-        if self.bindings.len() > 16384 {
-            self.bindings.clear();
+        self.last = None;
+        // bindings and contents unused for three frames go (every eighth
+        // frame; L180: clearing the whole table dropped every part at once)
+        if self.frame % 8 == 0 {
+            let frame = self.frame;
+            self.bindings.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.by_content.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.texture_lists.retain(|_, (seen, _)| *seen + 3 > frame);
         }
-        self.streams.clear();
-        self.target_bindings.clear();
+        if self.streams.len() > 16384 {
+            self.streams.clear();
+        }
+        if self.target_bindings.len() > 16384 {
+            self.target_bindings.clear();
+        }
         self.targets.clear();
         self.textures.clear();
         self.index_formats.clear();
@@ -1143,13 +1632,34 @@ impl FrameInfo {
 }
 
 /// Look up `key` in a per-frame map, building it on a miss.
-fn part<T>(map: &mut FxMap<u32, Result<Arc<T>, Refusal>>, key: u32, build: impl FnOnce() -> Result<T, Refusal>) -> Result<Arc<T>, Refusal> {
-    if let Some(r) = map.get(&key) {
-        return r.clone();
+/// A part kept across frames (L180): built again the first time
+/// a frame uses them, and the earlier part kept if it is the same (no
+/// allocation, and no drop at the frame's start, for an unchanged binding).
+fn kept_part<T: PartialEq>(
+    map: &mut FxMap<u32, (u64, Result<Arc<T>, Refusal>)>,
+    frame: u64,
+    key: u32,
+    build: impl FnOnce() -> Result<T, Refusal>,
+    builds: &mut u64,
+) -> Result<Arc<T>, Refusal> {
+    match map.get_mut(&key) {
+        Some((built, r)) if *built == frame => r.clone(),
+        Some((built, r)) => {
+            *builds += 1;
+            *built = frame;
+            match (build(), &*r) {
+                (Ok(new), Ok(old)) if **old == new => {}
+                (new, _) => *r = new.map(Arc::new),
+            }
+            r.clone()
+        }
+        None => {
+            *builds += 1;
+            let r = build().map(Arc::new);
+            map.insert(key, (frame, r.clone()));
+            r
+        }
     }
-    let r = build().map(Arc::new);
-    map.insert(key, r.clone());
-    r
 }
 
 /// The DrawCall the D3D9 path makes for draw record `record` (type 0 or
@@ -1168,23 +1678,88 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     }
     let t = {
         let mut map = std::mem::take(&mut c.target_bindings);
-        let r = part(&mut map, targets, || target_part(&g, c, info, targets));
+        let mut builds = 0;
+        let r = kept_part(&mut map, c.frame, targets, || target_part(&g, c, info, targets), &mut builds);
+        c.built[0] += builds;
         c.target_bindings = map;
         r?
     };
-    let s = part(&mut c.streams, streams, || stream_part(&g, streams))?;
-    let b = match c.bindings.get(&shader) {
-        Some((frame, r)) if *frame == c.frame => r.clone()?,
-        other => {
-            let previous = match other {
-                Some((_, Ok(p))) => Some(p.clone()),
-                _ => None,
+    let s = kept_part(&mut c.streams, c.frame, streams, || stream_part(&g, streams), &mut c.built[1])?;
+    // The constants as the original's apply (0x00DAA8B0) leaves them (L180):
+    // it uploads nothing when the context already holds this binding, and
+    // skips an upload whose value slot holds the same pointer as the
+    // previous binding's (same vertex shader, and pixel shader for the
+    // pixel stage): those registers keep what the device holds. The
+    // previous apply: the previous decided draw's (the sink's model of the
+    // context), else the context's own (the default path made it).
+    let last = c.last.take();
+    let (previous, shaders) = match &last {
+        Some(l) => (l.binding, l.shaders),
+        None => (g.u32(context.wrapping_add(0x10)), [g.u32(context.wrapping_add(0x24)), g.u32(context.wrapping_add(0x28))]),
+    };
+    let held_constants = last.as_ref().and_then(|l| l.constants.clone());
+    let (b, constants, filled, rebuilt) = match (&last, &held_constants) {
+        (Some(l), Some(held)) if previous == shader => (l.part.clone(), held.clone(), true, false),
+        _ => {
+            // the uploads the apply skips read what the device holds: the
+            // previous draw's constants when they have every such register,
+            // else the device's (L180)
+            let mut skipped = [([0u64; 4], 0u16, 0u16); 2];
+            let mut stages = [false; 2];
+            if previous != 0 && previous != shader {
+                if let Ok(meta) = c.meta(&g, g.u32(shader.wrapping_add(8))) {
+                    let same_vs = shaders[0] == meta.handles[0];
+                    stages = [same_vs, same_vs && shaders[1] == meta.handles[1]];
+                    skipped = skipped_registers(&g, &meta, shader, previous, shaders);
+                }
+            }
+            let any = skipped.iter().any(|s| *s != ([0; 4], 0, 0));
+            let covered = held_constants.as_ref().is_some_and(|h| {
+                (0..2).all(|stage| (0..256).all(|n| skipped[stage].0[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len()))
+            });
+            let device_banks = if any && !covered {
+                Some(
+                    objects(|o| match o.live.get(&info.device).map(|x| &x.kind) {
+                        Some(Kind::Device(d)) => Some([(*d.state.vs).clone(), (*d.state.ps).clone()]),
+                        _ => None,
+                    })
+                    .ok_or(Refusal::Device)?,
+                )
+            } else {
+                None
             };
-            let r = binding_part(&g, c, shader, previous.as_ref());
-            c.bindings.insert(shader, (c.frame, r.clone()));
-            r?
+            let held = match (any, &device_banks, &held_constants) {
+                (false, _, _) => None,
+                (true, Some(d), _) => Some(Held { previous, stages, source: [&d[0], &d[1]] }),
+                (true, None, Some(h)) => Some(Held { previous, stages, source: [&*h[0], &*h[1]] }),
+                (true, None, None) => None,
+            };
+            let b = match c.bindings.get(&shader) {
+                Some((frame, r)) if *frame == c.frame && r.is_err() => r.clone()?,
+                other => {
+                    let earlier = match other {
+                        Some((_, Ok(p))) => Some(p.clone()),
+                        _ => None,
+                    };
+                    let r = binding_part(&g, c, shader, earlier.as_ref(), held.as_ref());
+                    c.bindings.insert(shader, (c.frame, r.clone()));
+                    r?
+                }
+            };
+            // the context holds it and the sink has no constants of it:
+            // everything it writes is what the device holds
+            let skipped = if previous == shader { b.written } else { [([0; 4], 0, 0); 2] };
+            let (b, constants) = held_registers(b, skipped, held_constants.as_ref(), info.device)?;
+            c.built[2] += 1;
+            (b, constants, false, true)
         }
     };
+    c.last = Some(LastDraw {
+        binding: shader,
+        shaders: [b.meta.handles[0], b.meta.handles[1]],
+        part: b.clone(),
+        constants: Some(constants.clone()),
+    });
     // the fixed state: the objects by identity, the dynamic values
     let id = identity_of(&g, fixed);
     if id.blend.address == 0 || id.depth.address == 0 || id.raster.address == 0 {
@@ -1263,12 +1838,14 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         }
     };
     c.mirror = Some(mirror);
-    // the draw
-    if kind == 1 && s.indices == 0 {
+    // the draw (types 2 and 3: types 0 and 1 drawn instanced)
+    let indexed = kind & 1 == 1;
+    if indexed && s.indices == 0 {
         return Err(Refusal::NoIndices);
     }
-    let (primitive, primitives, start, base_vertex, vertex_count) = draw_params_of(&g, record, kind, s.extent)?;
-    let indices = if kind == 1 {
+    let (primitive, primitives, start, base_vertex, vertex_count) = draw_params_of(&g, record, kind & 1, s.extent)?;
+    let vertices = if kind >= 2 { instanced_streams(&g, record, streams, kind) } else { s.streams.clone() };
+    let indices = if indexed {
         let ib = s.indices;
         let format = *c.index_formats.entry(ib).or_insert_with(|| objects(|o| match o.live.get(&ib).map(|x| &x.kind) {
             Some(Kind::Buffer { data, .. }) => Some(data.format),
@@ -1280,13 +1857,13 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     };
     let call = DrawCall {
         primitive, primitives, start, base_vertex, min_index: 0, vertex_count,
-        vertices: Vertices::Streams(s.streams.clone()),
+        vertices: Vertices::Streams(vertices),
         indices,
         vertex_shader: Some(b.meta.vs.clone()), pixel_shader: Some(b.meta.ps.clone()),
         declaration: b.meta.declaration.clone(),
         // the runtime's FVF stays 0 once declarations are used
         fvf: 0,
-        vs_constants: b.constants[0].clone(), ps_constants: b.constants[1].clone(),
+        vs_constants: constants[0].clone(), ps_constants: constants[1].clone(),
         textures,
         render_states,
         viewport: t.viewport,
@@ -1294,7 +1871,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         targets: t.targets.clone(),
         depth: t.depth.clone(),
     };
-    Ok(Decoded { call, shadow: sh, binding: b })
+    Ok(Decoded { call, shadow: sh, binding: b, rebuilt, filled })
 }
 
 /// A decoded draw: its DrawCall, the sampler section's effects and the
@@ -1303,6 +1880,153 @@ pub struct Decoded {
     pub call: DrawCall,
     pub shadow: Shadow,
     pub binding: Arc<BindingPart>,
+    /// the binding was decoded for this draw (not the previous draw's)
+    pub rebuilt: bool,
+    /// the constants are the previous draw's, uncovered registers filled
+    pub filled: bool,
+}
+
+/// The previous decided draw (the sink's model of the executor context's
+/// shader binding and of the device's constants after it).
+#[derive(Clone)]
+pub(crate) struct LastDraw {
+    binding: u32,
+    /// its vertex and pixel shader handles (the context's +0x24, +0x28)
+    shaders: [u32; 2],
+    /// the part its uploads came from (per draw, when registers were held)
+    part: Arc<BindingPart>,
+    /// its constants as drawn (after `fill_uncovered`)
+    constants: Option<[Arc<Constants>; 2]>,
+}
+
+// Translated from 0x00DAA8B0 (DDDA.exe 2017-12-13 Steam; mtstate::shader's
+// constant section): the registers the apply of `binding` after `previous`
+// does not upload. With the same vertex shader (and pixel shader, for the
+// pixel stage) an upload whose value slot holds the same pointer as the
+// previous binding's is skipped.
+fn skipped_registers(g: &G, meta: &MetaPart, binding: u32, previous: u32, shaders: [u32; 2]) -> [([u64; 4], u16, u16); 2] {
+    let mut out = [([0u64; 4], 0u16, 0u16); 2];
+    if previous == 0 {
+        return out;
+    }
+    let same_vs = shaders[0] == meta.handles[0];
+    let same = [same_vs, same_vs && shaders[1] == meta.handles[1]];
+    let float = |o: &mut ([u64; 4], u16, u16), n: u32| {
+        if n < 256 {
+            o.0[n as usize / 64] |= 1 << (n % 64);
+        }
+    };
+    for stage in 0..2 {
+        if !same[stage] {
+            continue;
+        }
+        let o = &mut out[stage];
+        for u in &meta.uploads[stage] {
+            let value = g.u32(binding.wrapping_add(12 + 4 * u.value));
+            if g.u32(previous.wrapping_add(12 + 4 * u.value)) != value {
+                continue;
+            }
+            match u.section {
+                3 => {
+                    if u.count != 0 {
+                        float(o, u.register);
+                    }
+                }
+                0 => {
+                    let count = if value & 15 != 0 { u.count.min((value & 15) * 16) } else { u.count };
+                    for i in 0..count {
+                        float(o, u.register + i);
+                    }
+                }
+                1 => {
+                    for i in 0..u.count {
+                        if u.register + i < 16 {
+                            o.1 |= 1 << (u.register + i);
+                        }
+                    }
+                }
+                _ => {
+                    for i in 0..u.count {
+                        if u.register + i < 16 {
+                            o.2 |= 1 << (u.register + i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Copy the `skipped` registers of each stage from `source` into `banks`.
+fn copy_registers(banks: &mut CowBanks, skipped: &[([u64; 4], u16, u16); 2], source: [&Constants; 2]) -> Result<(), Refusal> {
+    for stage in 0..2 {
+        let (floats, ints, bools) = skipped[stage];
+        let src = source[stage];
+        for word in 0..4 {
+            let mut m = floats[word];
+            while m != 0 {
+                let n = word * 64 + m.trailing_zeros() as usize;
+                m &= m - 1;
+                if n < banks.bank(stage).f.len() {
+                    banks.set_float(stage, n, *src.f.get(n).ok_or(Refusal::FloatsUncovered)?)?;
+                }
+            }
+        }
+        for n in 0..16 {
+            if ints >> n & 1 != 0 {
+                banks.set_int(stage, n, src.i[n]);
+            }
+            if bools >> n & 1 != 0 {
+                banks.set_bool(stage, n, src.b[n]);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Part `b`'s constants with the `skipped` registers as the device holds
+/// them: the previous decided draw's constants (`held`) when they have
+/// every skipped register, else the device's. A part of its own (for this
+/// draw's uploads too) only when that changes them.
+fn held_registers(
+    b: Arc<BindingPart>,
+    skipped: [([u64; 4], u16, u16); 2],
+    held: Option<&[Arc<Constants>; 2]>,
+    device: u32,
+) -> Result<(Arc<BindingPart>, [Arc<Constants>; 2]), Refusal> {
+    if skipped.iter().all(|s| *s == ([0; 4], 0, 0)) {
+        let constants = b.constants.clone();
+        return Ok((b, constants));
+    }
+    let mut banks = CowBanks::new(b.constants.clone());
+    let covered = held.is_some_and(|h| {
+        (0..2).all(|stage| {
+            let floats = skipped[stage].0;
+            (0..256).all(|n| floats[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len())
+        })
+    });
+    match held {
+        Some(h) if covered => copy_registers(&mut banks, &skipped, [&h[0], &h[1]])?,
+        _ => objects(|o| match o.live.get(&device).map(|x| &x.kind) {
+            Some(Kind::Device(d)) => copy_registers(&mut banks, &skipped, [&d.state.vs, &d.state.ps]),
+            _ => Err(Refusal::Device),
+        })?,
+    }
+    let Some([vs, ps]) = banks.finish() else {
+        let constants = b.constants.clone();
+        return Ok((b, constants));
+    };
+    let constants = [Arc::new(vs), Arc::new(ps)];
+    let part = Arc::new(BindingPart {
+        meta: b.meta.clone(),
+        alpha: b.alpha,
+        constants: constants.clone(),
+        written: b.written,
+        native: Default::default(),
+        uncovered: b.uncovered,
+    });
+    Ok((part, constants))
 }
 
 /// Make a taken draw's sampler section effects: the context words and the
@@ -1414,7 +2138,8 @@ pub fn flush_uploads(device: u32, uploads: &mut Uploads) {
     if uploads.is_empty() {
         return;
     }
-    let u = std::mem::take(uploads);
+    // (the list keeps its capacity for the next taken draws)
+    let u = &*uploads;
     objects(|o| {
         if let Some(Kind::Device(d)) = o.live.get_mut(&device).map(|x| &mut x.kind) {
             let s = &mut d.state;
@@ -1435,6 +2160,7 @@ pub fn flush_uploads(device: u32, uploads: &mut Uploads) {
             s.constant_snapshots[1].dirty = true;
         }
     });
+    uploads.bindings.clear();
 }
 
 /// Flush what `d` reads (the D3D9 path's flush_reads; the benchmark).
@@ -1509,11 +2235,17 @@ pub fn identity(m: &dyn Mem, record: u32) -> NativeStateIdentity {
 /// A taken draw as a native draw: the DrawCall's state; the constants as
 /// one write of each bank the DrawCall carries (every register the shaders
 /// read, see draw_call).
-pub fn native_draw(d: &DrawCall, identity: NativeStateIdentity, caches: &mut Caches) -> Result<NativeDraw, Refusal> {
+pub fn native_draw(
+    d: &DrawCall,
+    binding: &BindingPart,
+    identity: NativeStateIdentity,
+    caches: &mut Caches,
+) -> Result<NativeDraw, Refusal> {
     let Vertices::Streams(streams) = &d.vertices else { return Err(Refusal::Device) };
-    // non-instanced: every stream steps once per vertex
+    // non-instanced: every stream steps once per vertex (the native worker
+    // draws one instance)
     if streams.iter().any(|s| s.4 != 1) {
-        return Err(Refusal::Device);
+        return Err(Refusal::Instanced);
     }
     let (Some(vertex_shader), Some(pixel_shader)) = (d.vertex_shader.clone(), d.pixel_shader.clone()) else {
         return Err(Refusal::Missing);
@@ -1521,26 +2253,25 @@ pub fn native_draw(d: &DrawCall, identity: NativeStateIdentity, caches: &mut Cac
     let state = caches.native_fixed.entry((identity, d.render_states.address())).or_insert_with(|| {
         Arc::new(NativeFixedState { identity, render_states: d.render_states.iter().copied().collect::<Vec<_>>().into() })
     }).clone();
-    // one set of register arrays per constant bank (banks are shared by the
-    // draws of a binding, across frames while unchanged), so the worker can
-    // tell an unchanged bank by its pointer
-    let mut constants = |c: &Arc<Constants>| {
-        let key = Arc::as_ptr(c) as usize;
-        if let Some((_, n)) = caches.native_constants.get(&key) {
-            return n.clone();
-        }
-        if caches.native_constants.len() > 8192 {
-            caches.native_constants.clear();
-        }
-        let n = NativeConstants {
+    // one set of register arrays per constant bank, made once and held by
+    // the binding's part (banks are shared by the draws of a binding, across
+    // frames while unchanged), so the worker can tell an unchanged bank by
+    // its pointer
+    // (a draw filling registers from the device has banks of its own: its
+    // arrays are its own too)
+    let arrays = |c: &Constants| {
+        Arc::new(NativeConstants {
             floats: vec![NativeFloatWrite { first: 0, registers: c.f.as_slice().into() }],
             ints: vec![NativeIntWrite { first: 0, registers: c.i.as_slice().into() }],
             bools: vec![NativeBoolWrite { first: 0, registers: c.b.as_slice().into() }],
-        };
-        // the bank is held, so its address is not reused while cached
-        caches.native_constants.insert(key, (c.clone(), n.clone()));
-        n
+        })
     };
+    let [vs_constants, ps_constants] =
+        if Arc::ptr_eq(&d.vs_constants, &binding.constants[0]) && Arc::ptr_eq(&d.ps_constants, &binding.constants[1]) {
+            binding.native.get_or_init(|| binding.constants.each_ref().map(|c| arrays(c))).clone()
+        } else {
+            [arrays(&d.vs_constants), arrays(&d.ps_constants)]
+        };
     let scissor = d.render_states.iter().any(|&(s, v)| s == 174 && v != 0);
     Ok(NativeDraw {
         state,
@@ -1548,13 +2279,14 @@ pub fn native_draw(d: &DrawCall, identity: NativeStateIdentity, caches: &mut Cac
         pixel_shader,
         declaration: d.declaration.clone(),
         textures: d.textures.clone(),
-        streams: streams.iter().map(|s| NativeStream { stream: s.0, resource: s.1, offset: s.2, stride: s.3 }).collect::<Vec<_>>().into(),
+        // an exact-length iterator: the slice allocated once
+        streams: streams.iter().map(|s| NativeStream { stream: s.0, resource: s.1, offset: s.2, stride: s.3 }).collect(),
         indices: match d.indices {
             Indices::Buffer(resource, format) => Some(NativeIndices { resource, format }),
             _ => None,
         },
-        vs_constants: constants(&d.vs_constants),
-        ps_constants: constants(&d.ps_constants),
+        vs_constants,
+        ps_constants,
         viewport: d.viewport,
         scissor: scissor.then_some(d.scissor),
         primitive: d.primitive,
@@ -1625,6 +2357,8 @@ struct Frame {
 #[derive(Default)]
 struct Totals {
     frames: u64,
+    /// Caches::built
+    built: [u64; 4],
     kinds: [u64; 16],
     scene_draws: u64,
     other_draws: u64,
@@ -1642,6 +2376,8 @@ struct Totals {
     /// native jobs sent, and their draws
     jobs: u64,
     native: u64,
+    /// clears and copies (types 4 and 5)
+    ops: ops::Stats,
 }
 
 struct Inner {
@@ -1763,6 +2499,22 @@ impl Inner {
     }
 }
 
+/// Whether a resource `d` reads is dirty (L180): against a copy of the
+/// (small) dirty index taken at its current generation, without the D3D
+/// objects' lookup per draw; the index itself when it is large. With the
+/// D3D lock held (decide), so the generation and the copy are exact.
+fn reads_dirty(copy: &mut (u64, Vec<u32>), d: &DrawCall) -> bool {
+    let generation = crate::d3d9dev::dirty_generation();
+    if copy.0 != generation {
+        objects(|o| o.dirty.snapshot(&mut copy.1));
+        copy.0 = generation;
+    }
+    if copy.1.len() > 16 {
+        return objects(|o| reads_of(d).any(|r| o.dirty.contains(&r)));
+    }
+    !copy.1.is_empty() && reads_of(d).any(|r| copy.1.contains(&r))
+}
+
 /// Send the taken draws not sent yet, as one backend command.
 fn send_batch(batch: &mut Vec<DrawCall>) {
     if !batch.is_empty() {
@@ -1787,9 +2539,23 @@ impl Native {
                 }
             }
         }
-        if kind > 3 {
-            return Taken::Default;
+        // clears (their fallback draws), copies and nested lists apply on
+        // the default path: the next draw's binding is read again
+        if matches!(kind, 4..=6) {
+            g.caches.last = None;
         }
+        match kind {
+            0..=3 => {}
+            4 if ops::enabled() => return self.clear(g, m, context, record),
+            5 if ops::enabled() => return self.copy(g, m, record),
+            _ => return Taken::Default,
+        }
+        self.draw(g, m, context, record, kind)
+    }
+
+    /// A draw record (types 0..3, and a Clear's fallback draw as type 0).
+    fn draw(&self, g: &mut Inner, m: &mut dyn Mem, context: u32, record: u32, kind: u32) -> Taken {
+        let f = &mut g.frame;
         let size = target_size(m, record);
         *f.draws_by_size.entry(size).or_default() += 1;
         if self.mode == Mode::Census {
@@ -1798,7 +2564,7 @@ impl Native {
             f.shaders.insert(m.u32(record.wrapping_add(0xC)));
             f.streams.insert(m.u32(record.wrapping_add(0x10)));
         }
-        if size != g.scene || size == (0, 0) {
+        if size == (0, 0) || (size != g.scene && !all_targets()) {
             return Taken::Default;
         }
         let t = &mut g.totals;
@@ -1807,24 +2573,38 @@ impl Native {
             *t.refused.entry(Refusal::Query).or_default() += 1;
             return Taken::Default;
         }
-        if kind >= 2 {
-            *t.refused.entry(Refusal::Instanced).or_default() += 1;
-            return Taken::Default;
-        }
         let started = Instant::now();
         let lock = crate::d3d9dev::device_lock();
-        let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind);
+        let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind).and_then(|mut d| {
+            if !d.filled {
+                fill_uncovered(&mut d.call, &d.binding, &g.uploads, g.info.device)?;
+            }
+            Ok(d)
+        });
+        // the device's constants after this draw: as drawn (L180)
+        match (&decoded, g.caches.last.as_mut()) {
+            (Ok(d), Some(l)) => l.constants = Some([d.call.vs_constants.clone(), d.call.ps_constants.clone()]),
+            _ => g.caches.last = None,
+        }
         let taken = match decoded {
             Err(r) => {
                 *t.refused.entry(r).or_default() += 1;
                 Taken::Default
             }
-            Ok(Decoded { call: d, .. }) if self.mode == Mode::Verify => {
+            Ok(Decoded { call: d, binding, rebuilt, .. }) if self.mode == Mode::Verify => {
                 let reads = [&d.vertex_shader, &d.pixel_shader].map(|t| {
                     let key = t.as_ref().map_or(0, |t| Arc::as_ptr(t) as *const u32 as usize);
                     g.caches.reads.get(&key).map(|r| r.1).unwrap_or_default()
                 });
-                expect(Expected { call: d, reads });
+                // what a mismatch report says about the draw's binding
+                let context = VerifyContext {
+                    record,
+                    binding: m.u32(record.wrapping_add(0xC)),
+                    rebuilt,
+                    written: [binding.written[0].0, binding.written[1].0],
+                    uncovered: binding.uncovered,
+                };
+                expect(Expected { call: d, reads, context });
                 t.taken += 1;
                 Taken::Default
             }
@@ -1832,21 +2612,24 @@ impl Native {
                 t.taken += 1;
                 Taken::Default
             }
-            Ok(Decoded { call: d, shadow, binding }) if self.mode == Mode::DrawCall || !g.native => {
+            Ok(Decoded { call: d, shadow, binding, .. }) if self.mode == Mode::DrawCall || !g.native => {
                 commit(m, &g.info, &mut g.caches, shadow, &d.textures);
                 g.uploads.add(&binding);
                 g.handled = true;
-                // an upload goes after the draws taken before it
-                if objects(|o| !o.dirty.is_empty() && reads_of(&d).any(|r| o.dirty.contains(&r))) {
+                // an upload goes after the draws taken before it; nothing
+                // the draw reads is dirty: nothing to flush (the D3D lock
+                // keeps the dirty set as it is meanwhile; a count of 0, read
+                // without it, skips the lookup)
+                if crate::d3d9dev::dirty_count() != 0 && reads_dirty(&mut g.caches.dirty, &d) {
                     send_batch(&mut g.batch);
+                    crate::d3d9draw::flush_reads(m, reads_of(&d));
                 }
-                crate::d3d9draw::flush_reads(m, reads_of(&d));
                 g.batch.push(d);
                 crate::d3d9draw::count_draws(1);
                 t.taken += 1;
                 Taken::Handled
             }
-            Ok(Decoded { call: d, shadow, binding }) => match native_draw(&d, identity(m, record), &mut g.caches) {
+            Ok(Decoded { call: d, shadow, binding, .. }) => match native_draw(&d, &binding, identity(m, record), &mut g.caches) {
                 Err(r) => {
                     *t.refused.entry(r).or_default() += 1;
                     Taken::Default
@@ -1858,7 +2641,7 @@ impl Native {
                     if self.mode == Mode::Compare {
                         // Finish before any upload can replace resources used
                         // by an earlier draw in the pending shadow pass.
-                        let dirty = objects(|o| reads_of(&d).any(|r| o.dirty.contains(&r)));
+                        let dirty = crate::d3d9dev::dirty_count() != 0 && objects(|o| reads_of(&d).any(|r| o.dirty.contains(&r)));
                         if dirty {
                             crate::d3d9draw::backend_unlocked(|b| g.comparison.finish(b));
                         }
@@ -1907,6 +2690,9 @@ impl Inner {
         t.shaders += f.shaders.len() as u64;
         t.streams += f.streams.len() as u64;
         t.targets += f.targets.len() as u64;
+        for (total, n) in t.built.iter_mut().zip(std::mem::take(&mut g.caches.built)) {
+            *total += n;
+        }
         if g.since.elapsed() >= every {
             report(mode, t);
             if mode == Mode::Compare {
@@ -1933,6 +2719,10 @@ fn report(mode: Mode, t: &Totals) {
     let other: u64 = t.kinds[8..].iter().sum();
     out += &format!("  {:>18}: {:8.1}\n", "types 8-15", per(other));
     out += &format!("  draws into the largest colour target {:.1}, into others {:.1}\n", per(t.scene_draws), per(t.other_draws));
+    out += &format!(
+        "  built: target parts {:.1}, stream parts {:.1}, bindings decoded {:.1} (parts found by content {:.1})\n",
+        per(t.built[0]), per(t.built[1]), per(t.built[2]), per(t.built[3])
+    );
     out += &format!("  distinct objects: states {:.1}, shader bindings {:.1}, stream bindings {:.1}, target bindings {:.1}\n",
                     per(t.states), per(t.shaders), per(t.streams), per(t.targets));
     let decided = t.taken + t.refused.values().sum::<u64>();
@@ -1943,8 +2733,10 @@ fn report(mode: Mode, t: &Totals) {
         out += &format!("  native jobs {:.1}, draws in them {:.1} (a job the backend rejects goes as its DrawCalls)\n",
                         per(t.jobs), per(t.native));
     }
+    out += &t.ops.report(t.frames);
     if mode == Mode::Verify {
         out += &verify_report();
+        out += &ops::verify_report();
     }
     out += "  refused:";
     for r in Refusal::ALL {
@@ -2020,6 +2812,53 @@ mod tests {
             assert_eq!(sink.decide(&mut sink.inner.lock().unwrap(), &mut m, 0, scene, 1), Taken::Default);
             assert_eq!(refused(&sink, Refusal::Query), inside.is_some() as u64);
         }
+    }
+
+    /// L180: bindings at other addresses with the same content take the
+    /// same part (the game's bindings move between frames); other content
+    /// (here the alpha test) a part of its own.
+    #[test]
+    fn bindings_at_new_addresses_with_the_same_content_share_a_part() {
+        let mut m = TestMem::default();
+        for binding in [0x1000, 0x3000, 0x5000] {
+            m.set_u32(binding + 8, 0x2000);
+        }
+        m.set_u32(0x5000, 0x18_0000 | 2 << 3 | 7 << 11);
+        let b = binding_writing(0, 0, 0);
+        let mut c = Caches::default();
+        c.metas.insert(0x2000, b.meta.clone());
+        let g = G::new(&m);
+        let first = binding_part(&g, &mut c, 0x1000, None, None).ok().unwrap();
+        let moved = binding_part(&g, &mut c, 0x3000, None, None).ok().unwrap();
+        assert!(Arc::ptr_eq(&first, &moved));
+        let other = binding_part(&g, &mut c, 0x5000, None, None).ok().unwrap();
+        assert!(!Arc::ptr_eq(&first, &other));
+        assert_eq!(other.alpha, Some((3, 7)));
+    }
+
+    /// Parts kept across frames: the same frame's part from the map; a new
+    /// frame builds again and keeps the earlier part (the same Arc) when
+    /// equal, a new one when changed; refusals are kept too.
+    #[test]
+    fn kept_parts_are_rebuilt_each_frame_and_reused_when_unchanged() {
+        let mut map: FxMap<u32, (u64, Result<Arc<u32>, Refusal>)> = FxMap::default();
+        let first = kept_part(&mut map, 1, 7, || Ok(5), &mut 0).unwrap();
+        let mut built = false;
+        let mut builds = 0;
+        let same = kept_part(&mut map, 1, 7, || {
+            built = true;
+            Ok(6)
+        }, &mut builds)
+        .unwrap();
+        assert_eq!(builds, 0);
+        assert!(!built && Arc::ptr_eq(&first, &same));
+        let unchanged = kept_part(&mut map, 2, 7, || Ok(5), &mut 0).unwrap();
+        assert!(Arc::ptr_eq(&first, &unchanged));
+        let changed = kept_part(&mut map, 3, 7, || Ok(6), &mut 0).unwrap();
+        assert_eq!(*changed, 6);
+        assert!(matches!(kept_part(&mut map, 4, 7, || Err(Refusal::Missing), &mut 0), Err(Refusal::Missing)));
+        assert!(matches!(kept_part(&mut map, 4, 7, || Ok(1), &mut 0), Err(Refusal::Missing)));
+        assert_eq!(*kept_part(&mut map, 5, 7, || Ok(1), &mut 0).unwrap(), 1);
     }
 
     #[test]
@@ -2282,6 +3121,226 @@ mod tests {
         assert!(again.is_empty() && again.ctx.is_empty());
     }
 
+    /// Float registers a binding reads and does not write: noted (not
+    /// refused), then filled from the newest pending upload writing them,
+    /// else the device.
+    #[test]
+    fn uncovered_floats_come_from_the_newest_upload_else_the_device() {
+        let mut m = TestMem::default();
+        m.set_u32(0x1008, 0x2000);
+        let mut b = binding_writing(0, 0, 0);
+        let meta = Arc::get_mut(&mut Arc::get_mut(&mut b).unwrap().meta).unwrap();
+        // the VS reads c0..c7; the binding (no uploads) writes none
+        meta.reads[0].floats[0] = 0xFF;
+        let mut c = Caches::default();
+        c.metas.insert(0x2000, b.meta.clone());
+        let part = binding_part(&G::new(&m), &mut c, 0x1000, None, None).ok().expect("not refused");
+        assert_eq!(part.uncovered, [[0xFF, 0, 0, 0], [0; 4]]);
+        // pending: an older binding writing c0..c7 (seed 1), a newer one c0..c5 (seed 2)
+        let mut uploads = Uploads::default();
+        uploads.add(&binding_writing(8, 0, 1));
+        uploads.add(&binding_writing(6, 0, 2));
+        let mut banks = CowBanks::new(part.constants.clone());
+        let left = fill_from_uploads(&mut banks, part.uncovered, &uploads).unwrap();
+        assert_eq!(left, [[0; 4]; 2]);
+        let expected: Vec<[u32; 4]> = (0..8).map(|k| [if k < 6 { 2 } else { 1 }, k, 0, 0]).collect();
+        assert_eq!(banks.bank(0).f[..8], expected[..]);
+        assert_eq!(banks.bank(0).f[8..], part.constants[0].f[8..]);
+        // nothing pending: all from the device
+        let left = fill_from_uploads(&mut banks, part.uncovered, &Uploads::default()).unwrap();
+        assert_eq!(left, part.uncovered);
+        fill_registers(&mut banks, left, |stage, n| Some([stage as u32, n as u32, 9, 9])).unwrap();
+        // L180: unchanged registers copy nothing
+        let mut same = CowBanks::new(part.constants.clone());
+        fill_registers(&mut same, left, |stage, n| Some(part.constants[stage].f[n])).unwrap();
+        assert!(same.finish().is_none());
+        let expected: Vec<[u32; 4]> = (0..8).map(|k| [0, k, 9, 9]).collect();
+        assert_eq!(banks.bank(0).f[..8], expected[..]);
+        // no device value: refused
+        assert_eq!(fill_registers(&mut banks, left, |_, _| None), Err(Refusal::FloatsUncovered));
+    }
+
+    /// Instanced draws: each stream with an object and a handle gets the
+    /// frequency the executor sets; instance data starts at its instance
+    /// offset (step * stride + its own offset).
+    #[test]
+    fn instanced_streams_carry_the_executors_frequencies_and_offsets() {
+        let mut m = TestMem::default();
+        let (record, binding) = (0x1000, 0x2000);
+        // stream 0 geometry, stride 32; stream 2 instance data, stride 16,
+        // offset 8; stream 3 an object without a handle (not on the device)
+        for (k, vb, handle, stride, offset, data) in [(0u32, 0x3000, 7, 32u8, 0, 0u8), (2, 0x3100, 9, 16, 8, 1), (3, 0x3200, 0, 4, 0, 1)] {
+            m.set_u32(binding + 4 * k, vb);
+            m.set_u32(vb + 0x20, handle);
+            m.set_u8(binding + 0x10 + k, stride);
+            m.set_u32(binding + 0x14 + 4 * k, offset);
+            m.set_u8(binding + 0x24 + k, data);
+        }
+        // type 2: instances +0x1C, step +0x20; type 3: +0x20, +0x24
+        m.set_u32(record + 0x1C, 5);
+        m.set_u32(record + 0x20, 3);
+        m.set_u32(record + 0x24, 11);
+        let g = G::new(&m);
+        assert_eq!(&*instanced_streams(&g, record, binding, 2), &[(0, 7, 0, 32, 0x4000_0005), (2, 9, 3 * 16 + 8, 16, 0x8000_0001)]);
+        assert_eq!(&*instanced_streams(&g, record, binding, 3), &[(0, 7, 0, 32, 0x4000_0003), (2, 9, 11 * 16 + 8, 16, 0x8000_0001)]);
+    }
+
+    /// Pruning (in place) keeps each word once, where it was first
+    /// written, with its last value, drops what memory already holds, and
+    /// reads each word once (codex-11, L154).
+    #[test]
+    fn pruning_keeps_first_order_and_last_values_in_place() {
+        use std::cell::RefCell;
+        struct Trace {
+            reads: RefCell<Vec<u32>>,
+        }
+        impl Mem for Trace {
+            fn u8(&self, _: u32) -> u8 {
+                unreachable!()
+            }
+            fn set_u8(&mut self, _: u32, _: u8) {
+                unreachable!()
+            }
+            fn u32(&self, a: u32) -> u32 {
+                self.reads.borrow_mut().push(a);
+                a / 4
+            }
+        }
+        let mirror = Mirror { epoch: 0, rows: [[0; 14]; 21], textures: [0; 21] };
+        let mut seed = 17u32;
+        for len in 0..128 {
+            for _ in 0..32 {
+                let input: Vec<_> = (0..len)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 17;
+                        seed ^= seed << 5;
+                        ((seed % 32) * 4, (seed >> 16) % 32)
+                    })
+                    .collect();
+                // the words in first-write order, each with its last value
+                let mut order = Vec::new();
+                for &(a, _) in &input {
+                    if !order.contains(&a) {
+                        order.push(a);
+                    }
+                }
+                let expected: Vec<_> = order
+                    .iter()
+                    .filter_map(|&a| {
+                        let v = input.iter().rev().find(|w| w.0 == a).unwrap().1;
+                        (v != a / 4).then_some((a, v))
+                    })
+                    .collect();
+                let mut sh = Shadow { ctx: input, ..Default::default() };
+                let (ptr, capacity) = (sh.ctx.as_ptr(), sh.ctx.capacity());
+                let m = Trace { reads: RefCell::new(Vec::new()) };
+                sh.prune(&G::new(&m), &mirror);
+                assert_eq!(sh.ctx, expected);
+                assert_eq!(*m.reads.borrow(), order);
+                assert_eq!((sh.ctx.as_ptr(), sh.ctx.capacity()), (ptr, capacity));
+            }
+        }
+    }
+
+    /// Streams (a fixed array, no Vec): only those with a backend handle,
+    /// in slot order; every bound one counts for the extent.
+    #[test]
+    fn streams_keep_sparse_slots_the_extent_and_the_zero_stride_refusal() {
+        let mut m = TestMem::default();
+        let binding = 0x1000;
+        // slot 1 has no backend handle but still bounds the extent
+        for (slot, size, offset, stride, handle) in [(0, 100, 4, 8, 11), (1, 1000, 0, 4, 0), (3, 240, 16, 16, 33)] {
+            let vb = 0x2000 + slot * 0x100;
+            m.set_u32(binding + 4 * slot, vb);
+            m.set_u32(binding + 0x14 + 4 * slot, offset);
+            m.set_u8(binding + 0x10 + slot, stride as u8);
+            m.set_u32(vb + 0x14, size);
+            m.set_u32(vb + 0x20, handle);
+        }
+        m.set_u32(binding + 0x28, 0x3000);
+        m.set_u32(0x3020, 99);
+        let s = stream_part(&G::new(&m), binding).ok().unwrap();
+        assert_eq!(&*s.streams, &[(0, 11, 4, 8, 1), (3, 33, 16, 16, 1)]);
+        assert_eq!((s.extent, s.indices), (250, 99));
+        m.set_u8(binding + 0x13, 0);
+        assert!(matches!(stream_part(&G::new(&m), binding), Err(Refusal::ZeroStride)));
+        let s = stream_part(&G::new(&TestMem::default()), binding).ok().unwrap();
+        assert!(s.streams.is_empty());
+        assert_eq!((s.extent, s.indices), (0, 0));
+    }
+
+    /// The texture list: every bound slot the backend knows, in slot
+    /// order, with the shadow's overrides; earlier lists unchanged.
+    #[test]
+    fn texture_lists_keep_every_slot_and_the_shadow_overrides() {
+        let mut c = Caches::default();
+        let mut mirror = Mirror { epoch: 0, rows: [[0; 14]; 21], textures: [0; 21] };
+        for i in 0..21 {
+            let h = 0x1000 + i as u32;
+            mirror.textures[i] = h;
+            mirror.rows[i] = [i as u32; 14];
+            c.textures.insert(
+                h,
+                Some(TextureBinding {
+                    sampler: 0,
+                    resource: h,
+                    kind: d3d9cmd::TexKind::Flat,
+                    format: 21,
+                    width: 8,
+                    height: 8,
+                    depth: 1,
+                    levels: 1,
+                    usage: 0,
+                    states: [0; 14],
+                }),
+            );
+        }
+        let all = mirror.textures(&Shadow::default(), &mut c);
+        assert_eq!(all.len(), 21);
+        // L180: the same content again: the same list
+        assert!(Arc::ptr_eq(&all, &mirror.textures(&Shadow::default(), &mut c)));
+        for (i, t) in all.iter().enumerate() {
+            assert_eq!((t.sampler, t.resource, t.states), (stage_of(i), 0x1000 + i as u32, [i as u32; 14]));
+        }
+        // slot 1 unknown to the backend, stage 0 unbound by the shadow,
+        // a vertex sampler state overridden
+        c.textures.insert(0x1001, None);
+        let sh = Shadow { textures: vec![(0, 0)], sampler_states: vec![(260, 3, 77)], ..Default::default() };
+        let sparse = mirror.textures(&sh, &mut c);
+        assert_eq!(sparse.len(), 19);
+        assert_eq!((sparse[0].sampler, sparse.last().unwrap().states[3]), (2, 77));
+        assert_eq!(all[20].states[3], 20);
+        mirror.textures.fill(0);
+        assert!(mirror.textures(&Shadow::default(), &mut c).is_empty());
+    }
+
+    /// A binding refused for registers its writes do not cover gives the
+    /// constant banks back: the next binding reuses their storage.
+    #[test]
+    fn refused_bindings_keep_the_constant_banks() {
+        for (kind, expected) in [(1, Refusal::IntsUncovered), (2, Refusal::BoolsUncovered)] {
+            let mut m = TestMem::default();
+            m.set_u32(0x1008, 0x2000);
+            let mut b = binding_writing(0, 0, 0);
+            let meta = Arc::get_mut(&mut Arc::get_mut(&mut b).unwrap().meta).unwrap();
+            match kind {
+                0 => meta.reads[0].floats[0] = 1,
+                1 => meta.reads[0].ints = 1,
+                _ => meta.reads[0].bools = 1,
+            }
+            let mut c = Caches::default();
+            c.metas.insert(0x2000, b.meta.clone());
+            c.banks[0].f.reserve(256);
+            c.banks[1].f.reserve(224);
+            let storage = c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity()));
+            for _ in 0..3 {
+                assert!(matches!(binding_part(&G::new(&m), &mut c, 0x1000, None, None), Err(e) if e == expected));
+                assert_eq!(c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity())), storage);
+            }
+        }
+    }
+
     /// A shader binding writing `vs` vertex and `ps` pixel float
     /// registers.
     fn binding_writing(vs: usize, ps: usize, seed: u32) -> Arc<BindingPart> {
@@ -2302,6 +3361,8 @@ mod tests {
             alpha: None,
             constants: [Arc::new(bank(vs, 256)), Arc::new(bank(ps, 224))],
             written: [(mask(vs), 0, 0), (mask(ps), 0, 0)],
+            native: Default::default(),
+            uncovered: [[0; 4]; 2],
         })
     }
 
@@ -2375,6 +3436,33 @@ mod tests {
 struct Expected {
     call: DrawCall,
     reads: [Reads; 2],
+    /// the draw's record and binding, for a mismatch report
+    context: VerifyContext,
+}
+
+/// A verified draw's record and binding (printed with a mismatch).
+#[derive(Default)]
+struct VerifyContext {
+    record: u32,
+    binding: u32,
+    /// decoded for this draw, not this frame's cached part
+    rebuilt: bool,
+    /// float registers written and uncovered, per stage
+    written: [[u64; 4]; 2],
+    uncovered: [[u64; 4]; 2],
+}
+
+impl std::fmt::Display for VerifyContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "record {:#x}, binding {:#x} {}, written vs {:x?} ps {:x?}, uncovered vs {:x?} ps {:x?}",
+            self.record,
+            self.binding,
+            if self.rebuilt { "decoded for this draw" } else { "from this frame's cache" },
+            self.written[0], self.written[1], self.uncovered[0], self.uncovered[1],
+        )
+    }
 }
 
 thread_local! {
@@ -2427,7 +3515,7 @@ pub(crate) fn observe(d: &DrawCall) {
         let printed = v.printed.entry(field).or_default();
         if *printed < 5 {
             *printed += 1;
-            eprintln!("ndraw native verify: {field} differs: {detail}");
+            eprintln!("ndraw native verify: {field} differs: {detail} ({})", e.context);
         }
     }
 }
@@ -2436,7 +3524,7 @@ pub(crate) fn observe(d: &DrawCall) {
 /// it, its shaders reading `reads`) and the D3D9 path's `actual` differ.
 pub fn differences(expected: &DrawCall, reads: [Reads; 2], actual: &DrawCall) -> Vec<(&'static str, String)> {
     let mut wrong = Vec::new();
-    compare(&Expected { call: expected.clone(), reads }, actual, &mut wrong);
+    compare(&Expected { call: expected.clone(), reads, context: Default::default() }, actual, &mut wrong);
     wrong
 }
 

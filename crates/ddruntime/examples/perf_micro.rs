@@ -62,12 +62,35 @@ fn ns(t: Instant, n: u32) -> f64 {
 }
 
 fn main() {
+    // the game's main thread owns the guest lock: creating the runtime starts its time slice
+    let _ = ddruntime::threads::parallel();
     let mut mem = GuestMemory::new();
     mem.map(0x1000_0000, 0x10_0000, READ | WRITE).unwrap();
 
     let mut registry = Registry::new();
     registry.insert(0x0100_0000, Binding::Service(just_return)).unwrap();
+    registry.insert(0x0100_0010, Binding::Lifted(just_return)).unwrap();
+    // the CRT's memcpy service, bound as the runtime binds it (LockFree) and
+    // on the Integer path
+    registry.insert(0x0100_0020, Binding::LockFree(ddruntime::fastmem::memcpy)).unwrap();
+    registry.insert(0x0100_0030, Binding::Integer(ddruntime::fastmem::memcpy)).unwrap();
     let registry = std::sync::Arc::new(registry);
+    // the floor of call_ext itself: a handler that only returns
+    {
+        x86::set_ext_calls(Some(Box::new(|m, c, _| just_return(m, c))));
+        let mut cpu = Cpu { esp: 0x1008_0000, ..Cpu::default() };
+        for round in 0..2 {
+            let t = Instant::now();
+            for _ in 0..N {
+                cpu.esp -= 4;
+                mem.set_u32(cpu.esp, 0x1234_5678);
+                x86::call_ext(&mut mem, &mut cpu, 0x0100_0010);
+            }
+            if round == 1 {
+                println!("call_ext -> trivial handler (push, ret): {:.2} ns per call", ns(t, N));
+            }
+        }
+    }
     registry.install();
     let mut cpu = Cpu { esp: 0x1008_0000, ..Cpu::default() };
     let t = Instant::now();
@@ -77,6 +100,38 @@ fn main() {
         x86::call_ext(&mut mem, &mut cpu, 0x0100_0000);
     }
     println!("call_ext -> Registry -> service (push, ret): {:.2} ns per call", ns(t, N));
+    // a lifted function reached through call_ext (a call between lifted
+    // functions the generated code does not link directly)
+    let t = Instant::now();
+    for _ in 0..N {
+        cpu.esp -= 4;
+        mem.set_u32(cpu.esp, 0x1234_5678);
+        x86::call_ext(&mut mem, &mut cpu, 0x0100_0010);
+    }
+    println!("call_ext -> Registry -> lifted (push, ret): {:.2} ns per call", ns(t, N));
+    // the same loop calling the function directly: what call_ext adds
+    let direct: fn(&mut dyn Mem, &mut Cpu) = std::hint::black_box(just_return);
+    let t = Instant::now();
+    for _ in 0..N {
+        cpu.esp -= 4;
+        mem.set_u32(cpu.esp, 0x1234_5678);
+        direct(&mut mem, &mut cpu);
+    }
+    println!("direct call (push, ret): {:.2} ns per call", ns(t, N));
+    for (label, target) in [("LockFree", 0x0100_0020u32), ("Integer", 0x0100_0030)] {
+        for n in [32u32, 256] {
+            let t = Instant::now();
+            for _ in 0..N / 10 {
+                cpu.esp -= 16;
+                for (k, v) in [0x1234_5678, 0x1000_1000, 0x1000_2000, n].into_iter().enumerate() {
+                    mem.set_u32(cpu.esp + 4 * k as u32, v);
+                }
+                x86::call_ext(&mut mem, &mut cpu, target);
+                cpu.esp += 12;
+            }
+            println!("memcpy {n} B through call_ext ({label}): {:.2} ns per call", ns(t, N / 10));
+        }
+    }
     x86::set_ext_calls(None);
 
     for round in 0..2 {

@@ -259,7 +259,11 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     // the native draw carries the same state
     let id = identity(&s.mem, record);
     assert_eq!((id.blend.address, id.depth.address, id.raster.address, id.raster_flip), (blend, depth_state, raster, false));
-    let n = native_draw(&native, id, &mut caches).expect("native");
+    let n = native_draw(&native, &first.binding, id, &mut caches).expect("native");
+    // the banks' arrays are made once: the next draw of the binding shares them
+    let again = native_draw(&native, &first.binding, id, &mut caches).expect("native");
+    assert!(std::sync::Arc::ptr_eq(&n.vs_constants, &again.vs_constants));
+    assert!(std::sync::Arc::ptr_eq(&n.ps_constants, &again.ps_constants));
     assert_eq!(&n.state.render_states[..], &native.render_states[..]);
     assert_eq!(&n.vs_constants.floats[0].registers[..], &native.vs_constants.f[..]);
     assert_eq!(n.vs_constants.floats[0].first, 0);
@@ -289,6 +293,8 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
     assert!(!std::sync::Arc::ptr_eq(&changed.vs_constants, &native.vs_constants));
     assert_eq!(changed.vs_constants.f[0][0], 99f32.to_bits());
     assert_eq!(changed.ps_constants, native.ps_constants);
+    // the unchanged stage keeps its bank (not copied again)
+    assert!(std::sync::Arc::ptr_eq(&changed.ps_constants, &native.ps_constants));
 
     // NDRAW_BENCH=1 (release): what a taken draw costs, by part
     if std::env::var_os("NDRAW_BENCH").is_some() {
@@ -300,9 +306,52 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
             }
             eprintln!("{what}: {:.3} us", t.elapsed().as_secs_f64() * 1e6 / n as f64);
         };
+        // another record and binding: the same shaders and pixel values,
+        // other vertex values (draws alternating between the two decode the
+        // vertex stage every time, the pixel uploads are skipped)
+        let (record_b, shader_b, vs_values_b) = (NDRAW + 0x100 * 30, NDRAW + 0x100 * 31, NDRAW + 0x100 * 32);
+        for k in 0..0x30 {
+            let w = s.mem.u32(record + 4 * k);
+            s.mem.set_u32(record_b + 4 * k, w);
+        }
+        s.mem.set_u32(record_b + 0xC, shader_b);
+        for k in 0..7 {
+            let w = s.mem.u32(shader + 4 * k);
+            s.mem.set_u32(shader_b + 4 * k, w);
+        }
+        s.mem.set_u32(shader_b + 4 * 5, vs_values_b);
+        put(&mut s, vs_values_b, &(0..32).map(|k| (k as f32 + 0.25).to_bits()).collect::<Vec<_>>());
         let mem = &s.mem;
+        // the guest words a draw from the caches reads (every read through
+        // the counted slow path: no page table)
+        struct Counted<'a>(&'a dyn Mem, std::cell::Cell<u32>);
+        impl Mem for Counted<'_> {
+            fn u8(&self, a: u32) -> u8 {
+                self.1.set(self.1.get() + 1);
+                self.0.u8(a)
+            }
+            fn set_u8(&mut self, _: u32, _: u8) {
+                unreachable!()
+            }
+            fn u32(&self, a: u32) -> u32 {
+                self.1.set(self.1.get() + 4);
+                self.0.u32(a)
+            }
+            fn u16(&self, a: u32) -> u16 {
+                self.1.set(self.1.get() + 2);
+                self.0.u16(a)
+            }
+        }
+        let counted = Counted(mem, std::cell::Cell::new(0));
+        std::hint::black_box(draw_call(&counted, &info, &mut caches, CONTEXT, record, 1).unwrap());
+        eprintln!("guest bytes a draw from the caches reads: {}", counted.1.get());
         time("draw_call from the caches", &mut || {
             std::hint::black_box(draw_call(mem, &info, &mut caches, CONTEXT, record, 1).unwrap());
+        });
+        let mut flip = false;
+        time("draw_call alternating two bindings (each decoded)", &mut || {
+            flip = !flip;
+            std::hint::black_box(draw_call(mem, &info, &mut caches, CONTEXT, if flip { record } else { record_b }, 1).unwrap());
         });
         time("a new frame and its first draw (the binding unchanged)", &mut || {
             caches.begin_frame(&info);
@@ -322,7 +371,104 @@ fn a_taken_draw_is_the_draw_the_d3d9_path_makes() {
                 ddruntime::ndraw_native::send_draws(std::mem::take(&mut run));
             }
         });
+        // the backend is the null one now: the sections below compare with
+        // the D3D9 path's recorded draws, which it does not record
+        return;
     }
+
+    // a binding whose VS reads c0..c7 and writes c0..c5 (another binding,
+    // meta and descriptors): the D3D9 path draws with the device's c6, c7
+    let (shader2, meta2, descs2) = (NDRAW + 0x100 * 19, NDRAW + 0x100 * 20, NDRAW + 0x100 * 21);
+    put(&mut s, shader2, &[3 << 21, 0, meta2, sampler, tex, vs_values, ps_values]);
+    put(&mut s, meta2, &[0, descs2, 1 | 1 << 12, 2 | 1 << 8 | 1 << 12, vs, ps, declaration]);
+    put(&mut s, descs2, &[2 << 1 | 6 << 24, 1 << 22, 3 << 1 | 4 << 24]);
+    put(&mut s, DATA, &[7, 8, 9, 10, 11, 12, 13, 14].map(|k| (k as f32).to_bits()));
+    assert_eq!(com(&mut s, dev, 94, &[6, DATA, 2]), 0); // SetVertexShaderConstantF c6, c7
+    s.mem.set_u32(record + 0xC, shader2);
+    caches.begin_frame(&info);
+    let mut filled = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("not refused");
+    ddruntime::ndraw_native::fill_uncovered(&mut filled.call, &filled.binding, &Default::default(), dev).expect("filled");
+    assert_eq!(filled.call.vs_constants.f[6..8], [[7, 8, 9, 10], [11, 12, 13, 14]].map(|r| r.map(|k| (k as f32).to_bits())));
+    let mut ctx = Context { m: &s.mem, words: vec![0; 0xE28 / 4] };
+    let calls = mtstate::shader(&mut ctx, CTX, shader2, false, 0).unwrap();
+    drop(ctx);
+    make(&mut s, dev, &calls);
+    let extent = decode(&s.mem, record, [0; 4], false).unwrap().extent;
+    let (primitive, primitives, start, base, vertices) = draw_params(&s.mem, record, 1, extent).unwrap();
+    assert_eq!(com(&mut s, dev, 82, &[primitive, base as u32, 0, vertices, start, primitives]), 0);
+    let d3d9 = ddruntime::d3d9draw::recorded(|r| r.draws.last().cloned()).flatten().expect("the D3D9 path drew");
+    assert_eq!(differences(&filled.call, r, &d3d9), vec![]);
+    s.mem.set_u32(record + 0xC, shader);
+
+    // L180: the constants as the original's apply (0x00DAA8B0) leaves
+    // them. After a binding with the same shaders whose value slot holds
+    // the same pointer, the upload is skipped: the device keeps the earlier
+    // values even though the memory changed. After one with another
+    // pointer, it uploads (reads) again. The same binding again: nothing.
+    let c0y = s.mem.u32(vs_values + 4);
+    let _ = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    s.mem.set_u32(record + 0xC, shader2);
+    let _ = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    s.mem.set_u32(record + 0xC, shader);
+    s.mem.set_u32(vs_values + 4, 123f32.to_bits());
+    let skipped = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    assert!(skipped.rebuilt);
+    assert_eq!(skipped.call.vs_constants.f[0][1], c0y, "the skipped upload keeps the earlier value");
+    let (shader3, vs_values3) = (NDRAW + 0x100 * 22, NDRAW + 0x100 * 23);
+    put(&mut s, shader3, &[3 << 21, 0, meta2, sampler, tex, vs_values3, ps_values]);
+    put(&mut s, vs_values3, &(0..24).map(|k| (k as f32 + 100.0).to_bits()).collect::<Vec<_>>());
+    s.mem.set_u32(record + 0xC, shader3);
+    let _ = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    s.mem.set_u32(record + 0xC, shader);
+    let read = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    assert_eq!(read.call.vs_constants.f[0][1], 123f32.to_bits(), "another pointer before: uploaded again");
+    s.mem.set_u32(vs_values + 4, 7f32.to_bits());
+    let next = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 1).expect("taken");
+    assert!(!next.rebuilt);
+    assert_eq!(next.call.vs_constants.f[0][1], 123f32.to_bits(), "the same binding: nothing uploaded");
+    s.mem.set_u32(vs_values + 4, c0y);
+
+    // an instanced draw (type 3): stream 1 instance data (stride 16,
+    // offset 8), 5 instances, instance step 2. The D3D9 path: the stream
+    // apply, then the calls 0x00DAB480's type 3 makes around the draw
+    // (crates/mtdraw executor set_frequencies/reset_frequencies)
+    let vb2 = out(&mut s, dev, 26, &[1600, 8, 0, 1, OUT, 0]);
+    let vbo2 = NDRAW + 0x100 * 18;
+    put(&mut s, vbo2 + 0x14, &[1600, 0, 0, vb2]);
+    s.mem.set_u32(streams + 4, vbo2);
+    s.mem.set_u8(streams + 0x11, 16);
+    s.mem.set_u32(streams + 0x18, 8);
+    s.mem.set_u8(streams + 0x25, 1);
+    s.mem.set_u16(record + 2, 3);
+    put(&mut s, record + 0x20, &[5, 2]);
+    caches.begin_frame(&info);
+    let instanced = draw_call(&s.mem, &info, &mut caches, CONTEXT, record, 3).expect("taken").call;
+    let mut ctx = Context { m: &s.mem, words: vec![0; 0xE28 / 4] };
+    // the streams, and the binding again (its VS c0 was changed above)
+    let mut calls = mtstate::streams(&mut ctx, CTX, streams);
+    calls.extend(mtstate::shader(&mut ctx, CTX, shader, false, 0).unwrap());
+    let extent = ctx.words[0xE20 / 4];
+    drop(ctx);
+    make(&mut s, dev, &calls);
+    assert_eq!(com(&mut s, dev, 102, &[0, 0x4000_0005]), 0); // SetStreamSourceFreq
+    assert_eq!(com(&mut s, dev, 102, &[1, 0x8000_0001]), 0);
+    assert_eq!(com(&mut s, dev, 100, &[1, vb2, 2 * 16 + 8, 16]), 0); // SetStreamSource
+    let (primitive, primitives, start, base, vertices) = draw_params(&s.mem, record, 1, extent).unwrap();
+    assert_eq!(com(&mut s, dev, 82, &[primitive, base as u32, 0, vertices, start, primitives]), 0);
+    let d3d9 = ddruntime::d3d9draw::recorded(|r| r.draws.last().cloned()).flatten().expect("the D3D9 path drew");
+    let d3d9cmd::Vertices::Streams(st) = &d3d9.vertices else { panic!("streams") };
+    assert_eq!(st.iter().map(|s| s.4).collect::<Vec<_>>(), [0x4000_0005, 0x8000_0001]);
+    assert_eq!(differences(&instanced, r, &d3d9), vec![]);
+    let (mut a, mut b) = (d3d9.clone(), instanced.clone());
+    a.render_states = Default::default();
+    b.render_states = Default::default();
+    a.vs_constants = b.vs_constants.clone();
+    a.ps_constants = b.ps_constants.clone();
+    assert_eq!(a, b);
+    for k in [0, 1] {
+        assert_eq!(com(&mut s, dev, 102, &[k, 1]), 0);
+    }
+    assert_eq!(com(&mut s, dev, 100, &[1, vb2, 8, 16]), 0);
     assert_eq!(com(&mut s, dev, 42, &[]), 0); // EndScene
 }
 

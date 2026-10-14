@@ -32,7 +32,9 @@ fn inflate_registration_defaults_on_and_respects_explicit_override() {
     if !disabled {
         let fast = std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("1");
         let expected: ddnative_base::x86::LiftFn =
-            if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("2") {
+            if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("3") {
+                ddruntime::archive_inflate::inflate_fast_flat
+            } else if std::env::var("DDRUNTIME_ZLIB_FAST").as_deref() == Ok("2") {
                 ddruntime::archive_inflate::inflate_fast_wide
             } else if fast {
                 ddruntime::archive_inflate::inflate_fast_pages
@@ -116,8 +118,8 @@ fn original_fast_inflate_registers_and_all_memory() {
         let (r, xmm, input) = machine(&mut c);
         let (expected, out_xmm, output) = machine(&mut c);
         let flags = word(&mut c);
-        for implementation in 0..5 {
-            let mut m: Box<dyn Mem> = if implementation == 2 || implementation == 4 {
+        for implementation in 0..7 {
+            let mut m: Box<dyn Mem> = if implementation == 2 || implementation == 4 || implementation == 6 {
                 let mut mapped = ddruntime::memory::GuestMemory::new();
                 let mut pages = std::collections::BTreeSet::new();
                 for (address, bytes) in &input {
@@ -153,6 +155,8 @@ fn original_fast_inflate_registers_and_all_memory() {
             cpu.xmm = xmm;
             if implementation == 0 {
                 ddruntime::archive_inflate::inflate_fast(&mut *m, &mut cpu);
+            } else if implementation >= 5 {
+                ddruntime::archive_inflate::inflate_fast_flat(&mut *m, &mut cpu);
             } else if implementation >= 3 {
                 ddruntime::archive_inflate::inflate_fast_wide(&mut *m, &mut cpu);
             } else {
@@ -185,4 +189,61 @@ fn original_fast_inflate_registers_and_all_memory() {
     }
     assert_eq!(c.position() as usize, c.get_ref().len());
     eprintln!("{count} original fast inflate cases matched in five memory/decoder configurations");
+}
+
+/// Leaf throughput on the recorded calls: decimal MB of output per second for
+/// each decoder, setup excluded. `cargo test --release -- --ignored --nocapture`.
+#[test]
+#[ignore = "microbenchmark"]
+fn leaf_throughput() {
+    ddnative_base::mem::ATOMIC_ACCESSES.store(true, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::var("L109_VECTORS")
+        .unwrap_or_else(|_| "E:/ddda-re/notes/native-L109/vectors/inflate_fast.bin".into());
+    let bytes = std::fs::read(&path).unwrap();
+    let mut c = Cursor::new(bytes);
+    let mut magic = [0; 8];
+    c.read_exact(&mut magic).unwrap();
+    let count = word(&mut c);
+    let decoders: [(&str, ddnative_base::x86::LiftFn); 3] = [
+        ("scalar (default)", ddruntime::archive_inflate::inflate_fast),
+        ("FAST=2 wide", ddruntime::archive_inflate::inflate_fast_wide),
+        ("FAST=3 flat", ddruntime::archive_inflate::inflate_fast_flat),
+    ];
+    let mut elapsed = [std::time::Duration::ZERO; 3];
+    let mut output_bytes = [0u64; 3];
+    for _ in 0..count {
+        let (r, xmm, input) = machine(&mut c);
+        let _expected = machine(&mut c);
+        let _flags = word(&mut c);
+        for (which, (_, decoder)) in decoders.iter().enumerate() {
+            let mut mapped = ddruntime::memory::GuestMemory::new();
+            let mut pages = std::collections::BTreeSet::new();
+            for (address, bytes) in &input {
+                for page in (*address & !4095..address + bytes.len() as u32 + 4095 & !4095).step_by(4096) {
+                    if pages.insert(page) {
+                        mapped.map(page, 4096, ddruntime::memory::READ | ddruntime::memory::WRITE).unwrap();
+                    }
+                }
+            }
+            for (addr, bytes) in &input {
+                ddruntime::fastmem::write_bulk(&mut mapped, *addr, bytes);
+            }
+            let mut cpu = Cpu::from(Entry { eax: r[0], ecx: r[1], edx: r[2], ebx: r[3], esp: r[4], ebp: r[5], esi: r[6], edi: r[7], xmm0: xmm[0][0] });
+            cpu.xmm = xmm;
+            let stream = mapped.u32(r[4] + 4);
+            let before = mapped.u32(stream + 0xc);
+            let start = std::time::Instant::now();
+            decoder(&mut mapped, &mut cpu);
+            elapsed[which] += start.elapsed();
+            output_bytes[which] += mapped.u32(stream + 0xc).wrapping_sub(before) as u64;
+        }
+    }
+    for (which, (name, _)) in decoders.iter().enumerate() {
+        eprintln!(
+            "{name}: {} output bytes in {:.1} ms = {:.0} MB/s",
+            output_bytes[which],
+            elapsed[which].as_secs_f64() * 1e3,
+            output_bytes[which] as f64 / elapsed[which].as_secs_f64() / 1e6
+        );
+    }
 }

@@ -82,6 +82,94 @@ pub const THREAD_RETURN: u32 = 0xFFFF_FFD0;
 pub const FAULT_EXIT: u32 = 0xC000_0005;
 const SLICE: Duration = Duration::from_millis(2);
 
+/// The time-slice clock of [`maybe_yield`], which every API call reads
+/// (L185: `Instant::elapsed` is a QueryPerformanceCounter call, ~40 ns,
+/// more than the rest of a service call together). Where the processor's
+/// TSC is invariant (CPUID 0x80000007 EDX bit 8: constant rate, kept
+/// across cores) a stamp is its RDTSC value (~7 ns) and a slice is the
+/// number of ticks measured once against `Instant` over one slice; else a
+/// stamp is the nanoseconds since the first stamp. The slice is the same
+/// 2 ms either way (the tick count is calibrated, so it is exact to the
+/// calibration's resolution, well under a microsecond per millisecond).
+mod slice_clock {
+    use super::SLICE;
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    #[derive(Clone, Copy)]
+    pub(super) struct Stamp(u64);
+
+    struct Clock {
+        /// stamps are TSC ticks (else nanoseconds since `base`)
+        tsc: bool,
+        /// the length of a slice in stamp units
+        slice: u64,
+        base: Instant,
+    }
+
+    static CLOCK: OnceLock<Clock> = OnceLock::new();
+
+    #[cfg(target_arch = "x86_64")]
+    fn tsc_invariant() -> bool {
+        // SAFETY: CPUID exists on every x86-64 processor
+        unsafe {
+            use std::arch::x86_64::__cpuid;
+            __cpuid(0x8000_0000).eax >= 0x8000_0007 && __cpuid(0x8000_0007).edx & (1 << 8) != 0
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    fn tsc_invariant() -> bool {
+        false
+    }
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn rdtsc() -> u64 {
+        // SAFETY: RDTSC is available to user code on Windows
+        unsafe { std::arch::x86_64::_rdtsc() }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    fn rdtsc() -> u64 {
+        0
+    }
+
+    #[cold]
+    fn calibrate() -> Clock {
+        let base = Instant::now();
+        if !tsc_invariant() || std::env::var_os("DDRUNTIME_LEGACY_DISPATCH").is_some_and(|v| v == "1") {
+            return Clock { tsc: false, slice: SLICE.as_nanos() as u64, base };
+        }
+        let (t0, c0) = (Instant::now(), rdtsc());
+        while t0.elapsed() < SLICE {
+            std::hint::spin_loop();
+        }
+        let (elapsed, c1) = (t0.elapsed(), rdtsc());
+        let ticks = c1.wrapping_sub(c0) as u128 * SLICE.as_nanos() / elapsed.as_nanos().max(1);
+        Clock { tsc: true, slice: ticks as u64, base }
+    }
+
+    #[inline(always)]
+    fn clock() -> &'static Clock {
+        match CLOCK.get() {
+            Some(c) => c,
+            None => CLOCK.get_or_init(calibrate),
+        }
+    }
+
+    #[inline]
+    pub(super) fn now() -> Stamp {
+        let c = clock();
+        Stamp(if c.tsc { rdtsc() } else { c.base.elapsed().as_nanos() as u64 })
+    }
+
+    /// Whether a slice has passed since `start`.
+    #[inline]
+    pub(super) fn used_up(start: Stamp) -> bool {
+        let c = clock();
+        let now = if c.tsc { rdtsc() } else { c.base.elapsed().as_nanos() as u64 };
+        now.wrapping_sub(start.0) >= c.slice
+    }
+}
+
 // --- the guest lock -----------------------------------------------------------
 
 #[derive(Default)]
@@ -141,7 +229,7 @@ impl Default for GuestLock {
     /// The thread that creates the runtime holds the lock. The mode comes
     /// from `DDRUNTIME_PARALLEL` (1: parallel); [`set_parallel`] changes it.
     fn default() -> Self {
-        SLICE_START.with(|t| t.set(Some(Instant::now())));
+        SLICE_START.with(|t| t.set(Some(slice_clock::now())));
         let parallel = std::env::var("DDRUNTIME_PARALLEL").is_ok_and(|v| v == "1");
         if parallel {
             ANY_PARALLEL.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -187,7 +275,7 @@ pub fn set_parallel(on: bool) {
 }
 
 thread_local! {
-    static SLICE_START: Cell<Option<Instant>> = const { Cell::new(None) };
+    static SLICE_START: Cell<Option<slice_clock::Stamp>> = const { Cell::new(None) };
 }
 
 /// Make this host thread guest thread `tid` (tests of other modules).
@@ -257,7 +345,7 @@ impl GuestLock {
         s.holder_host = asked.map(|_| std::thread::current().id());
         s.depth = depth;
         s.acquisitions += 1;
-        SLICE_START.with(|t| t.set(Some(Instant::now())));
+        SLICE_START.with(|t| t.set(Some(slice_clock::now())));
     }
 }
 
@@ -413,6 +501,7 @@ pub(crate) mod stats {
     #[cfg(test)]
     pub(crate) fn force_on() {
         ON.store(2, Ordering::Relaxed);
+        crate::dispatch::forget_lean();
         WOKEN.store(0, Ordering::Relaxed);
         table().lock().unwrap_or_else(|e| e.into_inner()).clear();
         blockers().lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -814,7 +903,7 @@ pub(crate) fn yield_now() {
     let rt = runtime::pin();
     let mut s = rt.lock.lock();
     if s.waiting == 0 {
-        SLICE_START.with(|t| t.set(Some(Instant::now())));
+        SLICE_START.with(|t| t.set(Some(slice_clock::now())));
         return;
     }
     let seen = s.acquisitions;
@@ -909,7 +998,7 @@ pub(crate) fn preempt_entry() {
 
 /// At an API call: yield if the time slice is used up.
 pub(crate) fn maybe_yield() {
-    let due = SLICE_START.with(|t| t.get().is_some_and(|t0| t0.elapsed() >= SLICE));
+    let due = SLICE_START.with(|t| t.get().is_some_and(slice_clock::used_up));
     if due {
         yield_now();
     }
@@ -1997,6 +2086,24 @@ pub const APIS: &[(&str, &str, fn(&mut dyn Mem, &mut Cpu))] = &[
 
 #[cfg(test)]
 mod tests {
+    /// L185: the time-slice clock reports a slice used up after about 2 ms,
+    /// not before 1.8 ms and not after 3 ms (calibration and sleep slack).
+    #[test]
+    fn slice_clock_measures_the_slice() {
+        let start = slice_clock::now();
+        assert!(!slice_clock::used_up(start));
+        let t0 = Instant::now();
+        let mut at = None;
+        while t0.elapsed() < Duration::from_millis(20) {
+            if slice_clock::used_up(start) {
+                at = Some(t0.elapsed());
+                break;
+            }
+        }
+        let at = at.expect("the slice never ran out");
+        assert!(at >= Duration::from_micros(1800) && at <= Duration::from_millis(3), "{at:?}");
+    }
+
     use super::*;
     use crate::dispatch::{Binding, Registry};
     use ddnative_base::x86::LiftFn;
@@ -2589,6 +2696,8 @@ mod tests {
             Some(Binding::Service(f)) => (f, true, false),
             Some(Binding::ServiceTail(f)) => (f, true, true),
             Some(Binding::LockFree(f)) => (f, false, false),
+            // L170: the Integer path as the dispatch runs it
+            Some(b @ Binding::Integer(_)) => return r.run_binding(b, m, c, target),
             _ => unreachable!(),
         };
         r.run_service(f, m, c, target, locked, tail);

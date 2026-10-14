@@ -68,6 +68,17 @@ pub fn live_id() -> u64 {
     (crate::hooks::get().x87_live)()
 }
 
+/// `X87::supported` for every opcode byte 0xd8..=0xdf and ModRM, as a table.
+static SUPPORTED: [bool; 2048] = {
+    let mut t = [false; 2048];
+    let mut op = 0;
+    while op < 2048 {
+        t[op] = X87::supported(((op >> 8) as u16 + 0xd8) | ((op & 255) as u16) << 8);
+        op += 1;
+    }
+    t
+};
+
 pub struct X87 {
     /// The state while `home` is 0; otherwise stale.
     pub state: [u8; 108],
@@ -159,16 +170,14 @@ impl X87 {
         self.execute::<OP, true>(data)
     }
 
-    #[cfg(target_arch = "x86_64")]
-    fn execute<const OP: u16, const CAPTURE_FLAGS: bool>(&mut self, data: &mut [u8; 10]) -> u32 {
-        let (opcode, modrm) = (OP & 255, OP >> 8);
-        let valid = if modrm < 0xc0 {
+    /// Whether `op` (opcode byte | ModRM << 8) is a supported encoding.
+    const fn supported(op: u16) -> bool {
+        let (opcode, modrm) = (op & 255, op >> 8);
+        if modrm < 0xc0 {
             match opcode {
                 0xd8 | 0xda | 0xdc | 0xde => modrm <= 0x38 && modrm % 8 == 0,
-                0xd9 => matches!(modrm, 0 | 0x10 | 0x18 | 0x28 | 0x38),
-                0xdb => matches!(modrm, 0 | 0x10 | 0x18 | 0x28 | 0x38),
+                0xd9 | 0xdb | 0xdf => matches!(modrm, 0 | 0x10 | 0x18 | 0x28 | 0x38),
                 0xdd => matches!(modrm, 0 | 0x10 | 0x18 | 0x38),
-                0xdf => matches!(modrm, 0 | 0x10 | 0x18 | 0x28 | 0x38),
                 _ => false,
             }
         } else {
@@ -186,14 +195,35 @@ impl X87 {
                 0xde => matches!(modrm, 0xc0..=0xcf | 0xd9 | 0xe0..=0xff),
                 _ => false,
             }
-        };
-        assert!(valid, "unsupported x87 encoding {OP:#x}");
-        if OP == 0x28d9 {
-            assert_eq!(data[0] & 0x3f, 0x3f, "unmasked guest x87 exceptions");
+        }
+    }
+
+    /// Everything before an instruction: its encoding is supported, a
+    /// control word load keeps every exception masked, and this state is the
+    /// one live on the thread's FPU. One optimised copy (L185).
+    #[cfg(target_arch = "x86_64")]
+    #[inline(never)]
+    fn enter(&mut self, op: u16, data: *const u8) {
+        let opcode = op & 255;
+        assert!(
+            (0xd8..=0xdf).contains(&opcode) && SUPPORTED[(((opcode - 0xd8) << 8) | (op >> 8)) as usize],
+            "unsupported x87 encoding {op:#x}"
+        );
+        if op == 0x28d9 {
+            // SAFETY: fldcw's operand buffer has at least two bytes.
+            assert_eq!(unsafe { *data } & 0x3f, 0x3f, "unmasked guest x87 exceptions");
         }
         if live_id() != self.id {
             self.acquire();
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)] // flat in the shards: one call (enter) plus the instruction
+    fn execute<const OP: u16, const CAPTURE_FLAGS: bool>(&mut self, data: &mut [u8; 10]) -> u32 {
+        // L185: the encoding and control-word checks and the live check are one
+        // optimised call, not code instantiated in every (opt-level-0) shard
+        self.enter(OP, data.as_ptr());
         if CAPTURE_FLAGS {
             let flags: u64;
             unsafe {
@@ -293,37 +323,50 @@ impl X87 {
         self.execute::<0x00d9, false>(&mut data); // fld m32real
     }
 
+    #[inline(always)]
     pub fn memory<const OP: u16, const SIZE: usize, const WRITE: bool>(
         &mut self, m: &mut dyn crate::mem::Mem, addr: u32,
     ) {
-        assert!(SIZE <= 10);
+        const { assert!(SIZE <= 10) };
         // the page-table fast path, as the lifted code's own accesses (the
-        // trait methods were 30% of the sound decoder thread, L62 profile)
+        // trait methods were 30% of the sound decoder thread, L62 profile);
+        // the operand copies are optimised calls (L185)
         let pt = m.page_table();
         let mut data = [0; 10];
         if !WRITE {
-            let mut k = 0;
-            while k + 4 <= SIZE {
-                data[k..k + 4].copy_from_slice(&m.fast_u32(pt, addr.wrapping_add(k as u32)).to_le_bytes());
-                k += 4;
-            }
-            if k < SIZE {
-                data[k..k + 2].copy_from_slice(&m.fast_u16(pt, addr.wrapping_add(k as u32)).to_le_bytes());
-            }
+            Self::load_operand(m, pt, addr, SIZE, &mut data);
         }
         self.execute::<OP, false>(&mut data);
         if WRITE {
-            let mut k = 0;
-            while k + 4 <= SIZE {
-                m.fast_set_u32(pt, addr.wrapping_add(k as u32), u32::from_le_bytes(data[k..k + 4].try_into().unwrap()));
-                k += 4;
-            }
-            if k < SIZE {
-                m.fast_set_u16(pt, addr.wrapping_add(k as u32), u16::from_le_bytes([data[k], data[k + 1]]));
-            }
+            Self::store_operand(m, pt, addr, SIZE, &data);
         }
     }
 
+    #[inline(never)]
+    fn load_operand(m: &mut dyn crate::mem::Mem, pt: Option<std::ptr::NonNull<crate::mem::PageTable>>, addr: u32, size: usize, data: &mut [u8; 10]) {
+        let mut k = 0;
+        while k + 4 <= size {
+            data[k..k + 4].copy_from_slice(&m.fast_u32(pt, addr.wrapping_add(k as u32)).to_le_bytes());
+            k += 4;
+        }
+        if k < size {
+            data[k..k + 2].copy_from_slice(&m.fast_u16(pt, addr.wrapping_add(k as u32)).to_le_bytes());
+        }
+    }
+
+    #[inline(never)]
+    fn store_operand(m: &mut dyn crate::mem::Mem, pt: Option<std::ptr::NonNull<crate::mem::PageTable>>, addr: u32, size: usize, data: &[u8; 10]) {
+        let mut k = 0;
+        while k + 4 <= size {
+            m.fast_set_u32(pt, addr.wrapping_add(k as u32), u32::from_le_bytes(data[k..k + 4].try_into().unwrap()));
+            k += 4;
+        }
+        if k < size {
+            m.fast_set_u16(pt, addr.wrapping_add(k as u32), u16::from_le_bytes([data[k], data[k + 1]]));
+        }
+    }
+
+    #[inline(always)]
     pub fn register<const OP: u16>(&mut self) { self.execute::<OP, false>(&mut [0; 10]); }
     pub fn compare_flags<const OP: u16>(&mut self) -> crate::x86::Flags {
         crate::x86::Flags::new(crate::x86::RAW, 0, 0, self.exec::<OP>(&mut [0; 10]), 32)
@@ -352,6 +395,7 @@ impl X87 {
     /// memory(), without generic byte slices or their copies/conversions.
     /// Only these exact opcode/width/direction triples can use this path.
     #[cfg(target_arch = "x86_64")]
+    #[inline(always)] // the optimised body is real_memory_dyn (L185)
     pub fn real_memory<const OP: u16, const SIZE: usize, const WRITE: bool>(
         &mut self,
         m: &mut dyn crate::mem::Mem,
@@ -366,29 +410,77 @@ impl X87 {
                         && ((!WRITE && OP == 0x00dd) || (WRITE && matches!(OP, 0x10dd | 0x18dd))))
             );
         }
+        self.real_memory_dyn(m, OP, SIZE, WRITE, addr);
+    }
+
+    /// The body of [`Self::real_memory`], one optimised copy (L185): the
+    /// generic wrapper is instantiated in every (opt-level-0) shard and
+    /// used to make four calls and run the checks there. An aligned operand
+    /// inside one readable (writable) page is read (written) by the x87
+    /// instruction itself, the same bytes without the copy through a
+    /// buffer; anything else (unaligned, across pages, a lazy or faulting
+    /// page) takes the buffered path through the trait accessors.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(never)]
+    fn real_memory_dyn(&mut self, m: &mut dyn crate::mem::Mem, op: u16, size: usize, write: bool, addr: u32) {
         let pt = m.page_table();
+        let perm = if write { crate::mem::WRITE } else { crate::mem::READ };
+        // SAFETY (both): the caller's opcode is one of real_memory's
+        // whitelisted triples, and the operand pointer has `size` bytes
+        // (a page-table pointer from `allowed`, or the `data` buffer).
+        if addr as usize & (size - 1) == 0 {
+            if let Some(p) = crate::mem::allowed(pt, addr, size, perm) {
+                if live_id() != self.id {
+                    self.acquire();
+                }
+                unsafe { Self::run_real(op, p) };
+                return;
+            }
+        }
+        self.real_memory_buffered(m, pt, op, size, write, addr);
+    }
+
+    /// The operand copied through a buffer with the trait-checked accessors:
+    /// unaligned, across pages, lazy or faulting pages.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(never)]
+    fn real_memory_buffered(&mut self, m: &mut dyn crate::mem::Mem, pt: Option<std::ptr::NonNull<crate::mem::PageTable>>, op: u16, size: usize, write: bool, addr: u32) {
         let mut data = [0u32; 2];
-        if !WRITE {
+        if !write {
             data[0] = m.fast_u32(pt, addr);
-            if SIZE == 8 {
+            if size == 8 {
                 data[1] = m.fast_u32(pt, addr.wrapping_add(4));
             }
         }
         if live_id() != self.id {
             self.acquire();
         }
-        // SAFETY: the compile-time whitelist admits only instructions with
-        // 4/8-byte real operands; data has 8 initialized bytes. The same
-        // hardware opcode runs on the acquired guest FPU. Default asm
-        // memory/flag clobbers match execute::<OP,false>.
-        unsafe {
-            std::arch::asm!(".byte {opcode}, {modrm}",in("rax") data.as_mut_ptr(),opcode=const(OP&255),modrm=const(OP>>8));
-        }
-        if WRITE {
+        unsafe { Self::run_real(op, data.as_mut_ptr() as *mut u8) };
+        if write {
             m.fast_set_u32(pt, addr, data[0]);
-            if SIZE == 8 {
+            if size == 8 {
                 m.fast_set_u32(pt, addr.wrapping_add(4), data[1]);
             }
+        }
+    }
+
+    /// fld m32, fadd m32, fmul m32, fst m32, fstp m32, fld m64, fst m64 or
+    /// fstp m64 on the operand at `p`.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    unsafe fn run_real(op: u16, p: *mut u8) {
+        macro_rules! direct {
+            ($($op:literal => $a:literal, $b:literal;)*) => {
+                match op {
+                    $($op => unsafe { std::arch::asm!(concat!(".byte ", $a, ", ", $b), in("rax") p) },)*
+                    _ => unreachable!(),
+                }
+            };
+        }
+        direct! {
+            0x00d9 => "0xd9", "0x00"; 0x00d8 => "0xd8", "0x00"; 0x08d8 => "0xd8", "0x08";
+            0x10d9 => "0xd9", "0x10"; 0x18d9 => "0xd9", "0x18";
+            0x00dd => "0xdd", "0x00"; 0x10dd => "0xdd", "0x10"; 0x18dd => "0xdd", "0x18";
         }
     }
     #[cfg(not(target_arch = "x86_64"))]

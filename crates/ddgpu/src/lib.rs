@@ -38,7 +38,10 @@ mod shader_cache;
 mod pipeline_log;
 mod warmup;
 pub mod present;
-pub use pipelines::{default_cache_dir, pipeline_stats, report_pipeline_stats_every, save_pipeline_caches, PipelineStats};
+pub use pipelines::{
+    default_cache_dir, pipeline_stats, pipelines_created_on_this_thread, report_pipeline_stats_every, save_pipeline_caches,
+    PipelineStats,
+};
 use cache::{ModuleKey, PipelineKey, Ring, SamplerKinds, TargetKey, TexGroupKey, DRAWS_PER_SUBMIT, INLINE_RING, PS_BLOCK, UNIFORM_ALIGN, UNIFORM_RING, VS_BLOCK};
 mod shader_identity;
 use std::future::Future;
@@ -442,6 +445,11 @@ pub struct WgpuBackend {
     vk: Option<vk::Context>,
     vk_pass: RefCell<Option<vk::Pass>>,
     tex_groups: cache::FxMap<TexGroupKey, wgpu::BindGroup>,
+    /// The guest resources the caches release() clears (tex_groups,
+    /// target_views, memo, vk_bindings and their Vulkan mirrors) were made
+    /// from since they were last cleared (L179): a release of any other
+    /// resource leaves them as they are, since nothing in them can name it.
+    cached_resources: cache::FxSet<u32>,
     /// per stage (0 pixel, 1 vertex): the last draw's bind group key and
     /// group (L94b: a draw binding what the previous one bound takes no
     /// lookup), and a reused buffer the key is built in
@@ -814,6 +822,7 @@ impl WgpuBackend {
             pipeline_layouts: Default::default(),
             pipelines: Default::default(),
             tex_groups: Default::default(),
+            cached_resources: Default::default(),
             last_group: Default::default(),
             group_key: Default::default(),
             target_views: Default::default(),
@@ -1096,6 +1105,12 @@ impl WgpuBackend {
         off
     }
 
+    /// Note that the caches now hold views of `t`'s resources.
+    fn mark_target(&mut self, t: &Target) {
+        self.cached_resources.insert(t.surface);
+        if let Some(texture) = t.texture { self.cached_resources.insert(texture.resource); }
+    }
+
     /// target_view, cached (release() drops the cache).
     fn cached_target_view(&mut self, t: &Target, srgb: bool) -> Option<(wgpu::TextureView, wgpu::TextureFormat)> {
         let key = (t.surface, t.texture.map(|x| x.resource), t.level, t.format, srgb);
@@ -1117,6 +1132,7 @@ impl WgpuBackend {
             let usage=if format.is_depth_stencil_format() {wgpu::TextureUses::DEPTH_STENCIL_WRITE} else {wgpu::TextureUses::COLOR_TARGET};
             if let Err(e)=vk.view(view,&desc,usage) {eprintln!("DDGPU_VK target fallback: {e}");}
         }
+        self.mark_target(t);
         self.target_views.insert(key, v.clone());
         v
     }
@@ -2207,6 +2223,7 @@ impl WgpuBackend {
             return Ok(m.derived.clone());
         }
         let derived = Arc::new(self.derive(d, instanced)?);
+        for t in d.targets.iter().flatten().chain(d.depth.iter()) { self.mark_target(t); }
         self.memo.insert(slot, DrawMemo {
             vs: vs.clone(), ps: ps.clone(), declaration: d.declaration.clone(), states: d.render_states.clone(),
             primitive: d.primitive, index_format, ones, instanced: instanced.to_vec(),
@@ -2352,6 +2369,7 @@ impl WgpuBackend {
                 last.0.clear();
                 last.0.extend_from_slice(&gkey.1);
                 last.1 = Some(g.clone());
+                self.cached_resources.extend(gkey.1.iter().map(|entry| entry.2));
                 self.tex_groups.insert(gkey, g.clone()); // a snapshot is for this draw only
             }
             groups[stage] = Some(g);
@@ -2374,6 +2392,7 @@ impl WgpuBackend {
         if d.textures.is_empty() {
             let _ = x.vk_empty_bindings.set(bindings.clone());
         } else if snapshots.is_empty() {
+            self.cached_resources.extend(d.textures.iter().map(|t| t.resource));
             self.vk_bindings.insert(identity, BindingMemo {
                 derived: x.clone(), textures: d.textures.clone(), bindings: bindings.clone(),
             });
@@ -3177,14 +3196,20 @@ impl GraphicsBackend for WgpuBackend {
                 self.native_stats.resource_resets += 1;
             }
         }
-        // cached views and bind groups may hold the resource
-        self.tex_groups.clear();
-        if let Some(vk) = &mut self.vk { vk.release_resources(); }
-        self.last_group = Default::default();
-        self.target_views.clear();
-        // memo entries hold target views (L99)
-        self.memo.clear();
-        self.vk_bindings.clear();
+        // cached views and bind groups may hold the resource: cleared when
+        // they were made from it (L179: the game streams textures out while
+        // the camera moves, and clearing on every release rebuilt every view,
+        // bind group and target initialization, ~12 fps dips)
+        if self.cached_resources.contains(&resource) {
+            self.cached_resources.clear();
+            self.tex_groups.clear();
+            if let Some(vk) = &mut self.vk { vk.release_resources(); }
+            self.last_group = Default::default();
+            self.target_views.clear();
+            // memo entries hold target views (L99)
+            self.memo.clear();
+            self.vk_bindings.clear();
+        }
         self.textures.remove(&resource);
         self.pending.remove(&resource);
         self.buffers.remove(&resource);

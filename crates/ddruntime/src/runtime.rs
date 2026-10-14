@@ -59,6 +59,11 @@ pub struct Runtime {
     /// whether `d3d` holds destructions deferred by a method without the
     /// guest lock (L101: the D3D lock's per-call check reads only this)
     pub(crate) d3d_deferred: std::sync::atomic::AtomicBool,
+    /// How many D3D resources are dirty (crate::d3d9dev::DirtySet's size,
+    /// readable without the D3D lock: crate::d3d9dev::dirty_count)
+    pub(crate) d3d_dirty: std::sync::atomic::AtomicUsize,
+    /// Bumped on every change of that set (crate::d3d9dev::dirty_generation)
+    pub(crate) d3d_dirty_generation: std::sync::atomic::AtomicU64,
     /// The live queries' state by guest address (crate::d3d9dev::QueryCell)
     pub(crate) queries: std::sync::Mutex<crate::fasthash::FxMap<u32, std::sync::Arc<crate::d3d9dev::QueryCell>>>,
     /// The display the adapter answers from (crate::d3d9::display).

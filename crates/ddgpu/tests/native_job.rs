@@ -79,13 +79,13 @@ fn draw(blend: bool, scissor: bool, depth: bool, colour: [f32; 4]) -> NativeDraw
             format: 101,
         }),
         vs_constants: Default::default(),
-        ps_constants: NativeConstants {
+        ps_constants: Arc::new(NativeConstants {
             floats: vec![NativeFloatWrite {
                 first: 0,
                 registers: vec![colour.map(f32::to_bits)].into(),
             }],
             ..Default::default()
-        },
+        }),
         viewport: [0, 0, 8, 8, 0, 1f32.to_bits()],
         scissor: scissor.then_some([1, 2, 6, 7]),
         primitive: 4,
@@ -234,6 +234,7 @@ fn native_job_encoding_cost() {
     let full_banks = std::env::var("L164_FULL_BANKS").as_deref() == Ok("1");
     if full_banks {
         for constants in [&mut seed.ps_constants, &mut seed.vs_constants] {
+            let constants = Arc::make_mut(constants);
             constants.ints.push(NativeIntWrite { first: 0, registers: vec![[0; 4]; 16].into() });
             constants.bools.push(NativeBoolWrite { first: 0, registers: vec![0; 16].into() });
         }
@@ -242,7 +243,7 @@ fn native_job_encoding_cost() {
         let mut pass = job(seed.clone(),&t,None).passes.remove(0);
         pass.draws = (p*draws/passes..(p+1)*draws/passes).map(|i| {
             let mut d = seed.clone();
-            d.ps_constants.floats[0].registers = vec![[(i%17) as f32/16.0,(i%13) as f32/12.0,0.25,1.0].map(f32::to_bits)].into();
+            Arc::make_mut(&mut d.ps_constants).floats[0].registers = vec![[(i%17) as f32/16.0,(i%13) as f32/12.0,0.25,1.0].map(f32::to_bits)].into();
             d
         }).collect();
         j.passes.push(pass);
@@ -253,7 +254,7 @@ fn native_job_encoding_cost() {
     let churn = std::env::var("L152_CHURN").as_deref() == Ok("1");
     let mut alternate = j.clone();
     for d in alternate.passes.iter_mut().flat_map(|p| &mut p.draws) {
-        Arc::make_mut(&mut d.ps_constants.floats[0].registers)[0][2] = 0.75f32.to_bits();
+        Arc::make_mut(&mut Arc::make_mut(&mut d.ps_constants).floats[0].registers)[0][2] = 0.75f32.to_bits();
     }
     assert!(backend.native(alternate.clone()).is_ok());
     let alternate_expected = backend.read_back(&t).unwrap();
@@ -374,7 +375,7 @@ fn native_job_rejection_is_atomic_and_recovers() {
     let before = backend.read_back(&t).unwrap();
     let good = draw(false, false, false, [1.0, 0.0, 0.0, 1.0]);
     let mut bad = good.clone();
-    bad.ps_constants = NativeConstants::default();
+    bad.ps_constants = Default::default();
     let mut j = job(good.clone(), &t, None);
     j.passes[0].clear_colour = Some(0xff00ff00);
     j.passes[0].draws.push(bad);
@@ -521,7 +522,7 @@ fn native_resident_jobs_follow_async_finisher_and_skip_unchanged_uploads() {
     assert_eq!(backend.native_job_stats().upload_bytes, uploaded);
     let expected = backend.read_back(&t).unwrap();
     let mut green = red.clone();
-    green.ps_constants.floats[0].registers = vec![[0.0f32, 1.0, 0.0, 1.0].map(f32::to_bits)].into();
+    Arc::make_mut(&mut green.ps_constants).floats[0].registers = vec![[0.0f32, 1.0, 0.0, 1.0].map(f32::to_bits)].into();
     assert!(backend.native(job(green, &t, None)).is_ok());
     assert!(backend.native_job_stats().upload_bytes > uploaded);
     let changed = backend.read_back(&t).unwrap();
@@ -741,9 +742,13 @@ fn releases_keep_the_native_worker_and_its_pipelines() {
     backend.upload(Upload::Buffer { resource: 99, bytes: vec![0; 64] });
     let d = draw(false, false, false, [0.0, 1.0, 0.0, 1.0]);
     backend.clear(&clear(&t, None));
+    let before = ddgpu::pipelines_created_on_this_thread();
     assert!(backend.native(job(d.clone(), &t, None)).is_ok());
     let first = backend.read_back(&t).unwrap();
-    let pipeline_creations = ddgpu::pipeline_stats().pipelines;
+    // this thread's count (tests running in parallel create their own):
+    // the first job made its pipelines here
+    let pipeline_creations = ddgpu::pipelines_created_on_this_thread();
+    assert!(pipeline_creations > before, "the first job creates its pipeline on this thread");
     // not held by the worker
     backend.release(99);
     assert!(backend.native(job(d.clone(), &t, None)).is_ok());
@@ -755,7 +760,7 @@ fn releases_keep_the_native_worker_and_its_pipelines() {
     backend.clear(&clear(&t, None));
     assert!(backend.native(job(d, &t, None)).is_ok());
     assert_eq!(backend.read_back(&t).unwrap(), first);
-    assert_eq!(ddgpu::pipeline_stats().pipelines, pipeline_creations,
+    assert_eq!(ddgpu::pipelines_created_on_this_thread(), pipeline_creations,
         "resource release must retain both wgpu and raw pipeline objects");
     let s = backend.native_job_stats();
     assert_eq!((s.worker_instances, s.resource_resets, s.accepted), (1, 1, 3));

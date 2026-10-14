@@ -192,6 +192,49 @@ const OVERRIDE_LIMIT: u32 = 0x0200_0000;
 static OVERRIDE_BITS: [std::sync::atomic::AtomicU32; ((OVERRIDE_LIMIT - OVERRIDE_BASE) >> 9) as usize] =
     [const { std::sync::atomic::AtomicU32::new(0) }; ((OVERRIDE_LIMIT - OVERRIDE_BASE) >> 9) as usize];
 static OVERRIDES: std::sync::OnceLock<Box<[(u32, LiftFn)]>> = std::sync::OnceLock::new();
+/// The overrides by address in an open-addressing table (L180): a lookup
+/// in a probe or two, not a binary search over every override (~12 ns
+/// once the semantic ports made them many; every call of an overridden
+/// function looks its address up).
+static OVERRIDE_TABLE: std::sync::OnceLock<OverrideTable> = std::sync::OnceLock::new();
+
+/// Slots of (address, function), a power of two of them, at most half
+/// full; address 0 marks an empty slot (no override is at 0).
+struct OverrideTable(Box<[(u32, Option<LiftFn>)]>);
+
+impl OverrideTable {
+    fn new(list: &[(u32, LiftFn)]) -> Self {
+        let size = (list.len() * 2).next_power_of_two().max(16);
+        let mut slots = vec![(0u32, None); size].into_boxed_slice();
+        for &(a, f) in list {
+            let mut i = Self::home(a, size);
+            while slots[i].0 != 0 {
+                i = (i + 1) & (size - 1);
+            }
+            slots[i] = (a, Some(f));
+        }
+        OverrideTable(slots)
+    }
+    #[inline]
+    fn home(target: u32, size: usize) -> usize {
+        (target.wrapping_mul(0x9E37_79B1) >> 8) as usize & (size - 1)
+    }
+    #[inline]
+    fn get(&self, target: u32) -> Option<LiftFn> {
+        let size = self.0.len();
+        let mut i = Self::home(target, size);
+        loop {
+            let (a, f) = self.0[i];
+            if a == target {
+                return f;
+            }
+            if a == 0 {
+                return None;
+            }
+            i = (i + 1) & (size - 1);
+        }
+    }
+}
 /// Set once a lifted target was resolved (and may be cached): overrides
 /// must be registered before.
 static RESOLVING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -212,13 +255,14 @@ pub fn set_overrides(list: &[(u32, LiftFn)]) {
         let bit = (a - OVERRIDE_BASE) >> 4;
         OVERRIDE_BITS[(bit >> 5) as usize].fetch_or(1 << (bit & 31), std::sync::atomic::Ordering::Relaxed);
     }
+    let table = OverrideTable::new(&v);
     assert!(OVERRIDES.set(v.into_boxed_slice()).is_ok(), "overrides are already registered");
+    let _ = OVERRIDE_TABLE.set(table);
 }
 
 /// The override registered for `target`, if any.
 pub fn override_of(target: u32) -> Option<LiftFn> {
-    let v = OVERRIDES.get()?;
-    v.binary_search_by_key(&target, |e| e.0).ok().map(|k| v[k].1)
+    OVERRIDE_TABLE.get()?.get(target)
 }
 
 /// Every registered override (address order).
@@ -252,25 +296,68 @@ fn call_overridden(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32, f: L
     override_of(target).unwrap_or(f)(m, cpu)
 }
 
+/// This thread's `call_ext` handler: owned here; `EXT_FAST` points at it
+/// (cleared when the owner goes, at thread exit too).
+struct ExtOwner(Option<std::rc::Rc<ExtCall>>);
+impl Drop for ExtOwner {
+    fn drop(&mut self) {
+        EXT_FAST.with(|f| f.set(None));
+    }
+}
+
 thread_local! {
-    static EXT: std::cell::RefCell<Option<std::rc::Rc<ExtCall>>> = std::cell::RefCell::new(None);
+    static EXT: std::cell::RefCell<ExtOwner> = const { std::cell::RefCell::new(ExtOwner(None)) };
+    /// The installed handler, read by `call_ext` without a reference count
+    /// or a borrow (L170: a destructor-free thread-local).
+    static EXT_FAST: std::cell::Cell<Option<std::ptr::NonNull<ExtCall>>> = const { std::cell::Cell::new(None) };
+    /// `call_ext` calls running on this thread.
+    static EXT_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// Handlers replaced while a call ran (one may still be running): kept
+    /// until a replacement made with no call running.
+    static EXT_RETIRED: std::cell::RefCell<Vec<std::rc::Rc<ExtCall>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Install the handler for `call_ext` on this thread; returns the old one.
 pub fn set_ext_calls(f: Option<Box<ExtCall>>) -> Option<std::rc::Rc<ExtCall>> {
-    EXT.with(|e| std::mem::replace(&mut *e.borrow_mut(), f.map(std::rc::Rc::from)))
+    let new: Option<std::rc::Rc<ExtCall>> = f.map(std::rc::Rc::from);
+    EXT_FAST.with(|p| p.set(new.as_ref().map(|r| std::ptr::NonNull::from(&**r))));
+    let old = EXT.with(|e| std::mem::replace(&mut e.borrow_mut().0, new));
+    EXT_RETIRED.with(|r| {
+        let mut r = r.borrow_mut();
+        if EXT_DEPTH.with(|d| d.get()) == 0 {
+            r.clear();
+        } else if let Some(old) = &old {
+            r.push(old.clone());
+        }
+    });
+    old
 }
 
-/// A call from lifted code to `target`, which is not lifted. The handler is
-/// cloned out of the thread-local slot (a reference count), not taken, so a
-/// handler that dispatches into lifted code which calls `call_ext` again
-/// (nested calls, callbacks, recursion) finds it installed, and a panic
-/// inside the handler leaves it in place.
+/// Ends a `call_ext` call (also when its handler panics).
+struct ExtCallDepth;
+impl Drop for ExtCallDepth {
+    #[inline]
+    fn drop(&mut self) {
+        EXT_DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
+/// A call from lifted code to `target`, which is not lifted. A handler that
+/// dispatches into lifted code which calls `call_ext` again (nested calls,
+/// callbacks, recursion) finds itself installed; one replaced meanwhile
+/// stays alive until no call runs (`EXT_RETIRED`), and a panic inside the
+/// handler leaves it in place.
 #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
 pub fn call_ext(m: &mut dyn crate::mem::Mem, cpu: &mut Cpu, target: u32) {
-    let f = EXT.with(|e| e.borrow().clone())
-        .unwrap_or_else(|| panic!("call to {target:#010x}: no handler for untranslated code"));
-    f(m, cpu, target);
+    let Some(f) = EXT_FAST.with(|f| f.get()) else {
+        panic!("call to {target:#010x}: no handler for untranslated code")
+    };
+    EXT_DEPTH.with(|d| d.set(d.get() + 1));
+    let _depth = ExtCallDepth;
+    // SAFETY: `f` points into a handler that EXT, or EXT_RETIRED while this
+    // call runs, holds: set_ext_calls retires a replaced handler while any
+    // call runs, and the owner's drop clears EXT_FAST.
+    unsafe { f.as_ref()(m, cpu, target) }
 }
 
 impl Flags {
@@ -352,6 +439,12 @@ impl Flags {
     pub fn new(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
         Self::from_parts(kind, a, b, r, bits)
     }
+    /// `Flags::new` for callers inside this crate (inlined: the public
+    /// constructor stays out of line for the shards).
+    #[inline(always)]
+    pub(crate) fn make(kind: u8, a: u32, b: u32, r: u32, bits: u32) -> Self {
+        Self::from_parts(kind, a, b, r, bits)
+    }
     // Internal construction avoids an out-of-line sret temporary/copy in each
     // ALU helper. The public constructor remains out of line for the shards.
     #[inline]
@@ -363,8 +456,9 @@ impl Flags {
     fn imul_overflow(&self) -> bool {
         (self.a as i32 as i64) * (self.b as i32 as i64) != self.r as i32 as i64
     }
-    #[inline]
-    fn mask(&self) -> u32 { if self.bits == 32 { u32::MAX } else { (1 << self.bits) - 1 } }
+    /// The width mask (bits is 8, 16 or 32 wherever a Flags is built).
+    #[inline(always)]
+    fn mask(&self) -> u32 { u32::MAX >> (32 - self.bits) }
     #[inline]
     fn sign(&self, v: u32) -> bool { (v >> (self.bits - 1)) & 1 != 0 }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
@@ -372,6 +466,10 @@ impl Flags {
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
     fn zf_value(&self) -> bool {
+        // L185: add, sub, logic, inc and dec (nearly every use): nothing to check
+        if (ADD..=DEC).contains(&self.kind) {
+            return self.r & self.mask() == 0;
+        }
         self.defined(0x40);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x40 != 0; }
         if self.kind == COMISS { return self.r != 1 && self.r != 2 } // r: 0 equal, 1 greater, 2 less, 3 unordered
@@ -381,12 +479,23 @@ impl Flags {
     pub fn sf(&self) -> bool { self.sf_value() }
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
-    fn sf_value(&self) -> bool { self.defined(0x80); if matches!(self.kind, RAW | PARTIAL) { self.r & 0x80 != 0 } else { self.kind != COMISS && self.sign(self.r) } }
+    fn sf_value(&self) -> bool {
+        // L185: the ALU kinds first, without the undefined-flag check
+        if (ADD..=DEC).contains(&self.kind) { return self.sign(self.r); }
+        self.defined(0x80); if matches!(self.kind, RAW | PARTIAL) { self.r & 0x80 != 0 } else { self.kind != COMISS && self.sign(self.r) } }
     #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
     pub fn cf(&self) -> bool { self.cf_value() }
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
     fn cf_value(&self) -> bool {
+        // L185: the common kinds first, without the undefined-flag check
+        match self.kind {
+            SUB => { let m = self.mask(); return (self.a & m) < (self.b & m); }
+            ADD => { let m = self.mask(); return (self.a & m) as u64 + (self.b & m) as u64 > m as u64; }
+            LOGIC => return false,
+            INC | DEC => return self.cf_in,
+            _ => {}
+        }
         self.defined(1);
         let m = self.mask();
         match self.kind {
@@ -407,6 +516,15 @@ impl Flags {
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
     fn of_value(&self) -> bool {
+        // L185: the ALU kinds first, without the undefined-flag check
+        match self.kind {
+            ADD => { let (a, b, r) = (self.sign(self.a), self.sign(self.b), self.sign(self.r)); return a == b && r != a; }
+            SUB => { let (a, b, r) = (self.sign(self.a), self.sign(self.b), self.sign(self.r)); return a != b && r != a; }
+            LOGIC => return false,
+            INC => return !self.sign(self.a) && self.sign(self.r),
+            DEC => return self.sign(self.a) && !self.sign(self.r),
+            _ => {}
+        }
         self.defined(0x800);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 0x800 != 0; }
         let (a, b, r) = (self.sign(self.a), self.sign(self.b), self.sign(self.r));
@@ -426,6 +544,8 @@ impl Flags {
     // Only helper-to-helper composition inlines; shard calls stay out of line.
     #[inline]
     fn pf_value(&self) -> bool {
+        // L185: the ALU kinds first, without the undefined-flag check
+        if (ADD..=DEC).contains(&self.kind) { return (self.r & 0xFF).count_ones() % 2 == 0; }
         self.defined(4);
         if matches!(self.kind, RAW | PARTIAL) { return self.r & 4 != 0; }
         if self.kind == COMISS { return self.r == 3 }
@@ -512,3 +632,34 @@ mod sse {
 #[cfg(target_arch = "x86_64")]
 pub use sse::*;
 
+#[cfg(test)]
+mod override_table_tests {
+    use super::*;
+
+    fn a(_: &mut dyn crate::mem::Mem, _: &mut Cpu) {}
+    fn b(_: &mut dyn crate::mem::Mem, _: &mut Cpu) {}
+
+    /// L180: every registered address finds its function (collisions and
+    /// wrap-around included), every other address none.
+    #[test]
+    fn the_override_table_finds_exactly_the_registered_addresses() {
+        for n in [0usize, 1, 7, 8, 100, 1000] {
+            let list: Vec<(u32, LiftFn)> = (0..n as u32)
+                .map(|k| (0x0040_0000 + k.wrapping_mul(0x1_0010) % 0x01C0_0000 & !15, if k % 2 == 0 { a as LiftFn } else { b }))
+                .collect();
+            let mut list = list;
+            list.sort_unstable_by_key(|e| e.0);
+            list.dedup_by_key(|e| e.0);
+            let table = OverrideTable::new(&list);
+            for &(addr, f) in &list {
+                assert_eq!(table.get(addr).map(|g| g as usize), Some(f as usize), "{addr:#x}");
+            }
+            for k in 0..5000u32 {
+                let addr = 0x0040_0000 + k * 0x1234 + 8;
+                if !list.iter().any(|e| e.0 == addr) {
+                    assert!(table.get(addr).is_none(), "{addr:#x}");
+                }
+            }
+        }
+    }
+}

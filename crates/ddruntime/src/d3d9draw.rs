@@ -346,6 +346,9 @@ fn in_scene(dev: u32) -> bool {
 /// draw carrying them reached wgpu as an indexed strip and failed).
 pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if census::enabled() {
+        census::count("DrawPrimitive", m, cpu, arg(m, cpu, 0));
+    }
     let (dev, ty, start, count) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) => {
@@ -363,6 +366,9 @@ pub fn draw_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// count, start index, primitive count).
 pub fn draw_indexed_primitive(m: &mut dyn Mem, cpu: &mut Cpu) {
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if census::enabled() {
+        census::count("DrawIndexedPrimitive", m, cpu, arg(m, cpu, 0));
+    }
     let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     let (dev, ty) = (a[0], a[1]);
     cpu.eax = match vertex_count(ty, a[6]) {
@@ -397,6 +403,9 @@ fn reset_after_up(dev: u32, indices: bool) {
 /// DrawPrimitiveUP(this, type, primitive count, vertex data*, stride).
 pub fn draw_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if census::enabled() {
+        census::count("DrawPrimitiveUP", m, cpu, arg(m, cpu, 0));
+    }
     let (dev, ty, count, data, stride) = (arg(m, cpu, 0), arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3), arg(m, cpu, 4));
     cpu.eax = match vertex_count(ty, count) {
         Some(n) if in_scene(dev) && data != 0 => {
@@ -415,6 +424,9 @@ pub fn draw_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// count, index data*, index format, vertex data*, stride).
 pub fn draw_indexed_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
     DRAWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if census::enabled() {
+        census::count("DrawIndexedPrimitiveUP", m, cpu, arg(m, cpu, 0));
+    }
     let a: [u32; 9] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     let (dev, ty, min, nverts, count, idata, ifmt, vdata, stride) = (a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
     cpu.eax = match vertex_count(ty, count) {
@@ -436,6 +448,9 @@ pub fn draw_indexed_primitive_up(m: &mut dyn Mem, cpu: &mut Cpu) {
 /// Clear(this, rect count, D3DRECT*, flags, colour, z, stencil).
 pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
     let a: [u32; 7] = std::array::from_fn(|k| arg(m, cpu, k as u32));
+    if census::enabled() {
+        census::count("Clear", m, cpu, a[0]);
+    }
     let dev = a[0];
     let rects: Vec<[i32; 4]> = (0..if a[2] != 0 { a[1] } else { 0 })
         .map(|k| std::array::from_fn(|c| m.u32(a[2] + 16 * k + 4 * c as u32) as i32)).collect();
@@ -448,6 +463,7 @@ pub fn clear(m: &mut dyn Mem, cpu: &mut Cpu) {
         rects, flags: a[3], colour: a[4], z: f32::from_bits(a[5]), stencil: a[6],
         targets: std::array::from_fn(|k| target(rts[k])), depth: target(ds), viewport, scissor, srgb,
     };
+    crate::ndraw_native::observe_op(crate::ndraw_native::Op::Clear(c.clone()));
     backend_unlocked(|b| b.clear(&c));
     cpu.eax = D3D_OK;
     ret(m, cpu, 28);
@@ -459,6 +475,9 @@ pub fn present_back_buffer(m: &dyn Mem, back_buffer: u32) {
     crate::load_log::once(&FIRST_PRESENT, "first_present");
     crate::load_log::timeline::present();
     PRESENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if census::enabled() {
+        census::frame();
+    }
     flush(m, back_buffer);
     if let Some(t) = target(back_buffer) {
         // read under the guest lock for the host's sink (d3d9dev::presented)
@@ -526,6 +545,51 @@ mod deferred_tests {
 /// from draws per frame (title, menus and loading screens draw a few
 /// hundred things per frame, the world over a thousand).
 static DRAWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The D3D9 path's residue (L144, `DDRUNTIME_D3D9_CENSUS=1`): with the
+/// native renderer on, every draw and clear that still reaches these
+/// services, counted by kind, the device's first colour target size and the
+/// game's call site (the return address), printed per frame every 300
+/// presents: what is left to move onto the native path.
+pub(crate) mod census {
+    use ddnative_base::mem::Mem;
+    use ddnative_base::x86::Cpu;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    type Key = (&'static str, (u32, u32), u32);
+    static COUNTS: Mutex<BTreeMap<Key, u64>> = Mutex::new(BTreeMap::new());
+    static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    pub(crate) fn enabled() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("DDRUNTIME_D3D9_CENSUS").is_some_and(|v| v == "1"))
+    }
+
+    /// One call of `kind` on device `dev` (the service's entry state).
+    pub(crate) fn count(kind: &'static str, m: &dyn Mem, cpu: &Cpu, dev: u32) {
+        let site = m.u32(cpu.esp);
+        let size = crate::d3d9dev::with_device(dev, |d| d.render_targets[0]);
+        let size = super::target(size).map_or((0, 0), |t| (t.width, t.height));
+        *COUNTS.lock().unwrap_or_else(|e| e.into_inner()).entry((kind, size, site)).or_default() += 1;
+    }
+
+    /// A present: every 300, the counts per frame since the last report.
+    pub(crate) fn frame() {
+        let n = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if n % 300 != 0 {
+            return;
+        }
+        let counts = std::mem::take(&mut *COUNTS.lock().unwrap_or_else(|e| e.into_inner()));
+        let total: u64 = counts.values().sum();
+        eprintln!("d3d9 census: {:.1} D3D9-path calls per frame over 300 frames", total as f64 / 300.0);
+        let mut rows: Vec<_> = counts.into_iter().collect();
+        rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+        for ((kind, (w, h), site), c) in rows.into_iter().take(40) {
+            eprintln!("  {:8.2}/frame  {kind:<24} {w}x{h}  from {site:#010x}", c as f64 / 300.0);
+        }
+    }
+}
 
 /// Count draws made outside the D3D9 draw services (the native paths, L119):
 /// the stage probes and the autoplay's gameplay detection read these counts.

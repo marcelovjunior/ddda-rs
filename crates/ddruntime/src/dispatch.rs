@@ -201,6 +201,38 @@ impl Registry {
         ddports::ensure_with(|ports| {
             crate::archive_inflate::install(ports);
             crate::procedural_geometry::install(ports);
+            // L171: semantic 0x00E12A20 keeps the original body for its rare branch
+            if std::env::var("DDRUNTIME_SEMANTIC").as_deref() == Ok("1") && ddports::semantic_selected(0x00e1_2a20) {
+                let bodies = ddnative::generated::lifted::bodies();
+                if let Some(&(_, original)) = bodies.iter().find(|(a, _)| *a == 0x00e1_2a20) {
+                    let _ = ddports::mtcore::semantic::E12A20_ORIGINAL.set(original);
+                    ports.retain(|p| p.0 != 0x00e1_2a20);
+                    // L184 (s3): the fully inline lookup; it falls back to the one above
+                    let lookup: ddnative_base::x86::LiftFn = if std::env::var("DDRUNTIME_SEMANTIC_L184").as_deref() == Ok("1") {
+                        ddports::mtcore::semantic_s3::shader_lookup
+                    } else {
+                        ddports::mtcore::semantic::shader_lookup
+                    };
+                    ports.push((0x00e1_2a20, lookup));
+                }
+            }
+            // L179 experiment (never a default): DDRUNTIME_SKIP_STABLE_SHADOW=1
+            // skips the sky stable-shadow cascades, uStableShadow::vf24
+            // 0x00EFEF80 (`ret 4`), so the shadow map stops updating: an
+            // upper bound for what a parallel shadow job (L172) can gain.
+            if std::env::var("DDRUNTIME_SKIP_STABLE_SHADOW").as_deref() == Ok("1") {
+                fn skip_stable_shadow(_: &mut dyn ddnative_base::mem::Mem, c: &mut ddnative_base::x86::Cpu) {
+                    c.esp = c.esp.wrapping_add(8);
+                }
+                ports.retain(|p| p.0 != 0x00ef_ef80);
+                ports.push((0x00ef_ef80, skip_stable_shadow as LiftFn));
+            }
+            // s10: find_nearest_object falls back to the original body past 256 hits
+            if std::env::var("DDRUNTIME_SEMANTIC_L184").as_deref() == Ok("1") {
+                if let Some(&(_, original)) = ddnative::generated::lifted::bodies().iter().find(|(a, _)| *a == 0x0049_e920) {
+                    let _ = ddports::mtcore::semantic_s10::FIND_NEAREST_ORIGINAL.set(original);
+                }
+            }
             if crate::critical_jobs::enabled() {
                 crate::critical_jobs::install(ports, &ddnative::generated::lifted::bodies());
             }
@@ -369,6 +401,42 @@ impl Registry {
 
     #[inline]
     pub(crate) fn run_binding(&self, binding: Binding, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
+        // L185: no diagnostic is on (the usual run): a lifted binding is its
+        // function, a service is the bare sequence of run_service_lean
+        if lean() {
+            return match binding {
+                Binding::Lifted(f) => f(m, cpu),
+                Binding::Service(f) => run_service_lean(f, m, cpu, true, false, false),
+                Binding::ServiceTail(f) => run_service_lean(f, m, cpu, true, true, false),
+                Binding::LockFree(f) => run_service_lean(f, m, cpu, false, false, false),
+                Binding::Integer(f) => run_integer_lean(f, m, cpu),
+                Binding::Device(f, guest) => run_service_lean(f, m, cpu, guest, false, true),
+                Binding::DeviceState(f) => run_device_state_lean(f, m, cpu),
+            };
+        }
+        if let Binding::Lifted(f) = binding {
+            let sample = if crate::threads::sync_profile::enabled() {
+                crate::threads::sync_profile::begin_job(target, m, cpu)
+            } else { None };
+            let critical = if crate::critical_jobs::enabled() {
+                crate::critical_jobs::begin_job(target, m, cpu)
+            } else { None };
+            f(m, cpu);
+            drop(critical);
+            if let Some(sample) = sample { crate::threads::sync_profile::finish_job(sample); }
+            return;
+        }
+        // L170: DDRUNTIME_SERVICE_CENSUS
+        if crate::service_census::on() {
+            let return_to = m.u32(cpu.esp);
+            return crate::service_census::service(target, return_to, || self.run_service_binding(binding, m, cpu, target));
+        }
+        self.run_service_binding(binding, m, cpu, target)
+    }
+
+    /// A service binding (a lifted one runs in run_binding).
+    #[inline]
+    fn run_service_binding(&self, binding: Binding, m: &mut dyn Mem, cpu: &mut Cpu, target: u32) {
         match binding {
             Binding::Service(f) => self.run_service(f, m, cpu, target, true, false),
             Binding::ServiceTail(f) => self.run_service(f, m, cpu, target, true, true),
@@ -376,17 +444,7 @@ impl Registry {
             Binding::Integer(f) => self.run_integer(f, m, cpu, target),
             Binding::Device(f, guest) => self.run_service_as(f, m, cpu, target, guest, false, true),
             Binding::DeviceState(f) => self.run_device_state(f, m, cpu, target),
-            Binding::Lifted(f) => {
-                let sample = if crate::threads::sync_profile::enabled() {
-                    crate::threads::sync_profile::begin_job(target, m, cpu)
-                } else { None };
-                let critical = if crate::critical_jobs::enabled() {
-                    crate::critical_jobs::begin_job(target, m, cpu)
-                } else { None };
-                f(m, cpu);
-                drop(critical);
-                if let Some(sample) = sample { crate::threads::sync_profile::finish_job(sample); }
-            },
+            Binding::Lifted(_) => unreachable!("run_binding runs lifted bindings"),
         }
     }
 
@@ -477,7 +535,10 @@ impl Registry {
         let sync_sample = if crate::threads::sync_profile::enabled() {
             crate::threads::sync_profile::begin(self.names.get(&target).map(String::as_str), target, m, cpu)
         } else { None };
-        let critical = crate::critical_jobs::begin_join(self.names.get(&target).map(String::as_str), m, cpu);
+        // (the name's map lookup only when a diagnostic wants it: L170)
+        let critical = if crate::critical_jobs::enabled() {
+            crate::critical_jobs::begin_join(self.names.get(&target).map(String::as_str), m, cpu)
+        } else { None };
         let stats = crate::threads::stats::on().then(|| {
             let name = self.names.get(&target).cloned().unwrap_or_else(|| format!("{target:#010x}"));
             crate::threads::stats::start(name)
@@ -495,7 +556,9 @@ impl Registry {
         drop(lock);
         drop(stats);
         if let Some(sample) = critical { sample.finish(cpu.eax); }
-        crate::critical_jobs::presented(self.names.get(&target).map(String::as_str), cpu.eax);
+        if crate::critical_jobs::enabled() {
+            crate::critical_jobs::presented(self.names.get(&target).map(String::as_str), cpu.eax);
+        }
         if let Some(sample) = sync_sample { sample.finish(cpu.eax); }
         if crate::threads::sync_profile::enabled() {
             crate::threads::sync_profile::presented(self.names.get(&target).map(String::as_str), cpu.eax);
@@ -525,17 +588,28 @@ impl Registry {
         // lifted calls are preemption points in serial mode (crate::threads)
         ddnative_host::install();
         ddnative_host::set_preempt_hook(crate::threads::preempt);
+        crate::service_census::set_names(&self.names);
         let me = Arc::clone(self);
         // L101: the bindings this thread called, direct-mapped by address
         // (the registry no longer changes once shared, so they never go
         // stale): a hit skips the map lookup
-        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 256]> = Box::new([const { std::cell::Cell::new(None) }; 256]);
+        // L171: 4096 entries (256 thrashed on the game's call mix)
+        let cache: Box<[std::cell::Cell<Option<(u32, Binding)>>; 4096]> = Box::new([const { std::cell::Cell::new(None) }; 4096]);
         x86::set_ext_calls(Some(Box::new(move |m, cpu, target| {
-            let slot = &cache[((target >> 2) ^ (target >> 10)) as usize & 255];
+            let slot = &cache[((target >> 2) ^ (target >> 14)) as usize & 4095];
             if let Some((t, b)) = slot.get() {
                 if t == target {
+                    // (L185: a lifted function with no diagnostic on is just called)
+                    if let Binding::Lifted(f) = b {
+                        if lean() {
+                            return f(m, cpu);
+                        }
+                    }
                     return me.run_binding(b, m, cpu, target);
                 }
+            }
+            if crate::service_census::on() {
+                crate::service_census::miss();
             }
             if let Some(b) = me.direct(target) {
                 slot.set(Some((target, b)));
@@ -545,6 +619,102 @@ impl Registry {
                 std::panic::panic_any(u);
             }
         })));
+    }
+}
+
+/// 0: not read yet, 1: no diagnostic is on, 2: one is.
+static LEAN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Whether every per-call diagnostic is off (L185): the job and sync
+/// censuses, the critical-job trace, the service census, the lock
+/// statistics, the service trace and the load timeline. Each is decided by
+/// an environment variable read once, so the answer never changes; a call
+/// then skips their (many) checks.
+#[inline]
+pub(crate) fn lean() -> bool {
+    match LEAN.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => init_lean(),
+    }
+}
+
+/// A test turned a diagnostic on after the flag was read: read it again.
+#[cfg(test)]
+pub(crate) fn forget_lean() {
+    LEAN.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cold]
+#[inline(never)]
+fn init_lean() -> bool {
+    // DDRUNTIME_LEGACY_DISPATCH=1: the full per-call sequence (A/B timing)
+    let off = std::env::var_os("DDRUNTIME_LEGACY_DISPATCH").is_none_or(|v| v != "1")
+        && !crate::threads::sync_profile::enabled()
+        && !crate::critical_jobs::enabled()
+        && !crate::service_census::on()
+        && !crate::threads::stats::on()
+        && !trace::on()
+        && !crate::load_log::enabled();
+    LEAN.store(if off { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+    off
+}
+
+/// [`Registry::run_service_as`] with no diagnostic on ([`lean`]): the same
+/// sequence of MXCSR swap, x87 park, guest lock, service scope and (device)
+/// D3D lock around the call, in the same order, without the census, trace
+/// and statistics branches.
+fn run_service_lean(f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu, locked: bool, tail: bool, device: bool) {
+    // L22: a service is Rust: it runs under the host default MXCSR and
+    // the guest's (live while lifted code runs) waits in cpu.mxcsr
+    let guest = x86::stmxcsr();
+    cpu.mxcsr = x86::Mxcsr(guest);
+    if guest != x86::MXCSR_DEFAULT {
+        x86::ldmxcsr(x86::MXCSR_DEFAULT);
+    }
+    // L62: the guest x87 state leaves the host FPU
+    ddnative_base::x87::park();
+    let lock = if locked { crate::threads::service() } else { crate::threads::service_lock_free() };
+    let scope = crate::threads::ServiceScope::enter_with_tail(tail);
+    let d3d = device.then(crate::d3d9dev::device_lock);
+    f(m, cpu);
+    drop(d3d);
+    drop(scope);
+    drop(lock);
+    if x86::stmxcsr() != cpu.mxcsr.0 {
+        x86::ldmxcsr(cpu.mxcsr.0);
+    }
+}
+
+/// [`Registry::run_integer`] with no diagnostic on.
+fn run_integer_lean(f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu) {
+    if !cfg!(all(windows, target_arch = "x86_64")) {
+        return run_service_lean(f, m, cpu, false, false, false);
+    }
+    cpu.mxcsr = x86::Mxcsr(x86::stmxcsr());
+    let lock = crate::threads::service_lock_free();
+    let scope = crate::threads::ServiceScope::enter_with_tail(false);
+    f(m, cpu);
+    drop(scope);
+    drop(lock);
+}
+
+/// [`Registry::run_device_state`] with no diagnostic on.
+fn run_device_state_lean(f: LiftFn, m: &mut dyn Mem, cpu: &mut Cpu) {
+    let guest = x86::stmxcsr();
+    cpu.mxcsr = x86::Mxcsr(guest);
+    if guest != x86::MXCSR_DEFAULT {
+        x86::ldmxcsr(x86::MXCSR_DEFAULT);
+    }
+    let lock = crate::threads::service_lock_free();
+    let scope = crate::threads::ServiceScope::enter_with_tail(false);
+    let d3d = crate::d3d9dev::device_lock();
+    f(m, cpu);
+    drop(d3d);
+    drop(scope);
+    drop(lock);
+    if x86::stmxcsr() != cpu.mxcsr.0 {
+        x86::ldmxcsr(cpu.mxcsr.0);
     }
 }
 
@@ -895,5 +1065,40 @@ mod tests {
         eprintln!("Registry::call to a lifted function: {:.1} M calls/s ({:.1} ns each)", calls / 1e6, 1e9 / calls);
         eprintln!("instruction() at a step entry:       {:.1} M lookups/s ({:.1} ns each)", steps / 1e6, 1e9 / steps);
         eprintln!("registry built in {:.1} ms", build.as_secs_f64() * 1e3);
+    }
+
+    /// A service that does host floating-point work (sets sticky flags,
+    /// reads the rounding mode) and changes registers.
+    fn float_service(m: &mut dyn Mem, c: &mut Cpu) {
+        let x = std::hint::black_box(1.0f32) / std::hint::black_box(3.0f32);
+        c.eax = x.to_bits() ^ ddnative_base::x86::stmxcsr();
+        c.esp = c.esp.wrapping_add(4);
+        let _ = m;
+    }
+
+    /// L185: the lean service sequence does what the full one does: same
+    /// registers and the same live MXCSR afterwards, for guest MXCSR values
+    /// that are default, rounding differently, or carry sticky flags.
+    #[test]
+    fn lean_service_equals_the_full_sequence() {
+        let registry = Registry::new();
+        let saved = ddnative_base::x86::stmxcsr();
+        for guest in [0x1F80u32, 0x1F81, 0x3F80, 0x5F80, 0x7F80, 0x1FBF, 0x9F80] {
+            let mut outcomes = Vec::new();
+            for lean in [false, true] {
+                let mut mem = GuestMemory::new();
+                mem.map(0x1000_0000, 0x1000, READ | WRITE).unwrap();
+                let mut cpu = Cpu { esp: 0x1000_0800, ..Cpu::default() };
+                ddnative_base::x86::ldmxcsr(guest);
+                if lean {
+                    run_service_lean(float_service, &mut mem, &mut cpu, true, false, false);
+                } else {
+                    registry.run_service_as(float_service, &mut mem, &mut cpu, 0x0100_0000, true, false, false);
+                }
+                outcomes.push((cpu.eax, cpu.esp, cpu.mxcsr.0, ddnative_base::x86::stmxcsr()));
+            }
+            assert_eq!(outcomes[0], outcomes[1], "guest MXCSR {guest:#x}");
+        }
+        ddnative_base::x86::ldmxcsr(saved);
     }
 }

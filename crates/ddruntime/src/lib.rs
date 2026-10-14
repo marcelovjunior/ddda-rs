@@ -59,6 +59,8 @@ pub mod win32;
 pub mod movies;
 pub mod net;
 pub mod ndraw_stats;
+/// L170: DDRUNTIME_SERVICE_CENSUS (service calls by service and call site)
+mod service_census;
 /// L119: the native path through the nDraw executor port
 pub mod ndraw_native;
 

@@ -2,7 +2,7 @@
 //! Keep guest spills, callback order and the original queue decision.
 use ddnative_base::{
     mem::{Mem, Pages},
-    x86::{self, Cpu},
+    x86::Cpu,
 };
 
 #[inline]
@@ -13,7 +13,7 @@ pub(crate) fn push(m: &mut dyn Mem, p: &Pages, c: &mut Cpu, value: u32) {
 #[inline]
 pub(crate) fn call(m: &mut dyn Mem, p: &Pages, c: &mut Cpu, target: u32, resume: u32) {
     push(m, p, c, resume);
-    x86::call_ext(m, c, target);
+    crate::semantic::call_guest(m, c, target);
 }
 #[inline]
 fn finish(m: &mut dyn Mem, p: &Pages, c: &mut Cpu) {

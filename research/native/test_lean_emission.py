@@ -321,7 +321,7 @@ class Differential(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="lean-test-", dir=target) as tmp:
             src, exe = Path(tmp) / "fixture.rs", Path(tmp) / "fixture.exe"
             src.write_text(source)
-            for opt in (0, 1):
+            for opt in (0, 1, 2):
                 for command in (["rustc", "--edition=2021", "--test", f"-Copt-level={opt}", str(src), "-o", str(exe)], [str(exe)]):
                     result = subprocess.run(command, capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

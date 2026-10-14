@@ -4,22 +4,6 @@ use crate::mem::Mem;
 use crate::x86::{self, Cpu, Flags};
 use ddnative_base::emit;
 
-// Translated from 0x00E25260 (DDDA.exe 2017-12-13 Steam), Global::FUN_00e25260.
-pub fn f_00e25260(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let pt = m.page_table();
-    let mut pc: u32 = 0xE25260;
-    loop {
-        match pc {
-            0xE25260 => { cpu.eax = cpu.ecx; cpu.ecx = m.fast_u32(pt, cpu.esp.wrapping_add(0xC)); cpu.fl.alu_sub(cpu.ecx, 0x8u32, 32); pc = if (cpu.fl.a >= cpu.fl.b) { 0xE25283 } else { 0xE2526B }; continue; }
-            0xE2526B => { cpu.ecx = m.fast_u32(pt, cpu.eax.wrapping_add(cpu.ecx.wrapping_mul(4)).wrapping_add(0x8)); cpu.fl.alu_and(cpu.ecx, cpu.ecx, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0xE25283 } else { 0xE25273 }; continue; }
-            0xE25273 => { cpu.eax = m.fast_u32(pt, cpu.eax.wrapping_add(0x4)); cpu.fl.alu_and(cpu.eax, cpu.eax, 32); pc = if (((cpu.fl.a & cpu.fl.b) as i32) == 0) { 0xE25283 } else { 0xE2527A }; continue; }
-            0xE2527A => { m.fast_set_u32(pt, cpu.esp.wrapping_add(0xC), cpu.eax);  x86::call_ext(m, cpu, 0xE239C0); return; }
-            0xE25283 => { cpu.esp = cpu.esp.wrapping_add(4 + 12);  return; }
-            _ => unreachable!(),
-        }
-    }
-}
-
 // Translated from 0x00E25290 (DDDA.exe 2017-12-13 Steam), Global::FUN_00e25290.
 pub fn f_00e25290(m: &mut dyn Mem, cpu: &mut Cpu) {
     let pt = m.page_table();

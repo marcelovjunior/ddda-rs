@@ -20,11 +20,15 @@ fn rect(m: &dyn Mem, p: u32) -> [i32; 4] {
 
 /// StretchRect(this, src surface, src RECT*, dst surface, dst RECT*, filter).
 pub fn stretch_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
+    if crate::d3d9draw::census::enabled() {
+        crate::d3d9draw::census::count("StretchRect", m, cpu, arg(m, cpu, 0));
+    }
     let a: [u32; 6] = std::array::from_fn(|k| arg(m, cpu, k as u32));
     cpu.eax = match (target(a[1]), target(a[3])) {
         (Some(src), Some(dst)) => {
             flush(m, a[1]);
             let c = CopyCall { src, src_rect: rect(m, a[2]), dst, dst_rect: rect(m, a[4]), filter: a[5] };
+            crate::ndraw_native::observe_op(crate::ndraw_native::Op::Copy(c.clone()));
             backend(|b| b.copy(&c));
             D3D_OK
         }
@@ -35,6 +39,9 @@ pub fn stretch_rect(m: &mut dyn Mem, cpu: &mut Cpu) {
 
 /// ColorFill(this, surface, RECT*, D3DCOLOR).
 pub fn color_fill(m: &mut dyn Mem, cpu: &mut Cpu) {
+    if crate::d3d9draw::census::enabled() {
+        crate::d3d9draw::census::count("ColorFill", m, cpu, arg(m, cpu, 0));
+    }
     let (s, r, colour) = (arg(m, cpu, 1), arg(m, cpu, 2), arg(m, cpu, 3));
     cpu.eax = match target(s) {
         Some(dst) => {

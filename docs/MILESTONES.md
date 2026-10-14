@@ -1,5 +1,118 @@
 # Milestones
 
+### L179 head: frame bound analysis, all draws native, semantic ports (2026-10-13)
+
+- Train 5 (combo38) 28.5 fps heavy scene, train 6 (combo39) **31.8** (rewrites off 25.1).
+  `DDDRAW_NATIVE_TARGETS=all` (now standard): verify 0 mismatches over ~5.4M draws in train 5;
+  train 6 takes all 5,364 draws/frame natively (refused 0), 1 float-register mismatch in
+  1.74M under investigation (claude-2); 13-34 D3D9-path calls/frame left (clears, StretchRect,
+  11 refused type-0 draws: claude-9).
+- mimalloc as ddplay's allocator (default feature); parallel-mode `write_bulk` stores 8 bytes
+  at a time; `DDRUNTIME_SEMANTIC_ONLY`/`_SKIP` select rewrites per address.
+- Semantic ports (DDRUNTIME_SEMANTIC=1): 0x00CD8760 find_identifier (devirtualized entry
+  walk, 4,000 randomized cases vs the port), 0x00DD42C0 dispatch_event (1,500 Unicorn-recorded
+  cases, research/native/record_dispatch.py), 0x005B31A0 find_sorted (2,000 cases,
+  research/native/record_find_sorted.py).
+- Frame (train 6 sync): main runs jobs ~13 ms and waits ~10.5 ms/frame at job joins (long
+  single jobs: the shadow job, L172); the render worker waits ~11 ms/frame for main; GPU ~37%.
+- Next: L172 parallel shadow (capture accepted; parallel replay needs CreateEventA), train 7.
+### L180 render-worker per-draw cost (2026-10-13)
+
+- The render worker (guest thread 0x1034) bounds the frame once the
+  semantic rewrites are on. Implemented and tested:
+  - kept stream/target parts and inline guest reads;
+  - bulk register reads and moved constant banks;
+  - one dirty pass per taken draw;
+  - binding parts and texture lists reused by content, with entries aged
+    out instead of whole-table clears;
+  - no Vec of calls in the sampler section.
+- Release NDRAW_BENCH: `draw_call` from the caches 0.34-0.41 -> 0.20-0.30
+  us; a new frame's first draw 2.5-2.7 -> 1.31-1.43 us. In-game effect
+  pending train 6.
+- Next: the train 6 profile, then per-draw guest reads. Details:
+  docs/tasks/L180-render-worker.md.
+
+### L177 semantic state commit and model mesh (2026-10-13)
+
+- Opt-in FEE320/FFC350/01145BF0 native semantic ports: **1,664 original
+  returns** pass ABI replay including heap/live stack. Reachable FEE320
+  instructions **761/761**, FFC350 **440/440**, material wrapper **17/17**.
+- Eleven isolated tests pass, including opt2 baseline, serial/atomic Pages
+  and deliberate heap corruption rejection. Runtime light **260 pass /
+  zero failures / seven ignored**; mtcore/ddports **35 pass / nine ignored**.
+  Guest x87 precision/rounding retained.
+- Synthetic median paired gains **1.665x / 2.126x / 1.102x** respectively;
+  callee seams and shared-host noise limit attribution. No gameplay claim.
+- Next: head accumulated semantic train and real shadow-job/image gate.
+  Details, hashes and limitations: `docs/tasks/L177-semantic-state-commit.md`.
+
+### L174b semantic model palette and culled instances (2026-10-13)
+
+- Opt-in SEMANTIC ports FFC9F0/1140180 retain original guest seams;
+  prior 10655A0 is retained. Requested integration base 1fcd6330 merged.
+- 247 original returns pass sparse/serial/atomic Pages and isolated opt2
+  lifted replay. Instruction coverage 641/644 and 824/824; signaling-NaN
+  x87 oracle boundary documented, hardware behavior retained.
+- 24/24 paired scenario medians improve: model 1.188–1.485x, instancing
+  1.248–1.914x. No game/shard run or FPS claim. Evidence and private hashes:
+  `docs/tasks/L174-semantic-draw-b.md`, continuation Results.
+- Runtime light rerun: 260 passed, zero failed, seven ignored. Default
+  and SEMANTIC/JOB_HASH/JOB_LOOKUP registration checks pass. Full mtcore
+  and ddports gate: 38 passed, zero failed, 11 ignored.
+- Next: head combined semantic train and matched critical-job/image gate.
+
+### L174 semantic material draw and dependency hash (2026-10-13)
+
+- `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
+  and 1066C60 pass selection; original guest callees retained. Defaults
+  unchanged; hash override takes precedence over JOB_HASH without duplicates.
+- 1,168 original synthetic returns pass ABI checks in sparse, serial Pages
+  and atomic Pages modes. Both isolated opt2 lifted draw bodies pass all
+  640 draw vectors; 197/197 and 377/377 original instructions covered.
+- 24/24 draw benchmark scenario medians improve: apply 1.546–2.111x,
+  selection 1.221–1.507x. Shared-host isolated results, no FPS/image claim.
+  Evidence and limitations: `docs/tasks/L174-semantic-draw-b.md`.
+- Runtime light: 255 pass, zero failures, seven ignored. Five ABI mutation
+  variants are rejected, including corrupted and extra heap writes below ESP.
+- Next: head merges registrations and validates the combined semantic train
+  against the native gate and matched image/critical-job capture.
+### L178 semantic instanced-model draw (2026-10-13)
+
+- C24640 `uOmSwingBaseInstancing::vf26` registered under SEMANTIC:
+  **256 original returns**, **337/337 body instructions**, including
+  callback buffers and nonstandard register arguments.
+- Five combined isolated tests pass, opt2 and serial/atomic Pages;
+  synthetic paired median **1.076x**, 58/77 improving pairs. No game run.
+- Next: head combined train; D7CF70 collision/simplex proof remains open.
+  Detailed evidence and runtime timing-test failures: L178 brief.
+
+### L178 semantic job bounds traversal (2026-10-13)
+
+- Opt-in `DDRUNTIME_SEMANTIC=1` replaces 010A35D0 with a semantic
+  four-way bounds traversal preserving guest work records and callbacks.
+- **192 original returns**, **369/369 body instructions**; ABI and
+  serial/atomic Pages replay pass. Four isolated tests include an opt2
+  lifted baseline and deliberate heap-corruption rejection.
+- Synthetic paired median **1.243x**, 63/77 improving pairs; individual
+  regressions remain. No gameplay/FPS or shard-build claim.
+- Next: head accumulated train; complete D7CF70/C24640 gates. Evidence,
+  private corpus hash and light-suite results: `docs/tasks/L178-semantic-jobs.md`.
+
+### L169 exact shadow traversal and setup (2026-10-13)
+
+- Independent opt-ins `DDRUNTIME_SHADOW_TRAVERSAL=1` (DB63E0) and
+  `DDRUNTIME_SHADOW_PASS=1` (EFD240) preserve the original queue/serial
+  choice, callback order, guest state and x87 operations. Defaults off.
+- **420 original returns**, all **63 lifted basic blocks**, **15,660 paired
+  fault/access cases**, production GuestMemory serial/atomic replay pass.
+  Eight isolated tests pass; mtcore/ddports **20 pass / nine ignored**;
+  runtime light **255 pass / zero failures / seven ignored**.
+- Synthetic paired median gains: traversal **1.22–1.89x**, setup
+  **1.07–1.28x**. No gameplay/FPS claim. Shared nesting guard, lane-ordered
+  merge and callback mutations block a simple parallel traversal toggle.
+- Next: head combined native gate and independent same-route port A/B;
+  retain opt-ins until image/job-time acceptance. Evidence and divisibility
+  limits: `docs/tasks/L169-shadow.md`.
 ### L172 isolated parallel-shadow proof runner (2026-10-13)
 
 - Gameplay capture48124: original serial/live66 entries PASS;175 queued
@@ -61,6 +174,49 @@
 - Family split posted to head: codex-7 FED480/EA5B50, codex-9 DB63E0/EFD240
   and split proof, codex-11 FEE320 evaluation. Next: isolated original
   oracles/microbenchmarks before one integration train. See L162 brief.
+### L175 semantic material and package leaves (2026-10-13)
+
+- Opt-in EA23F0/FED190/E0F3C0/01008200 native semantic ports: **2,226
+  original returns** pass ABI replay; EA23F0 reaches **712/712 decoded
+  instructions**, both growth sites, NaNs and unaligned/aliased inputs.
+- Seven isolated tests pass, including heap-corruption rejection, opt2 lifted bodies and serial/atomic
+  Pages. Runtime light **255 pass / zero failures / seven ignored**.
+- Median paired synthetic gains EA23F0 **1.512x**, E0F3C0 **2.734x**,
+  01008200 **1.141x**; some individual samples regress, FED190 mixed
+  across runs. mtcore/ddports **26 pass / zero failures / nine ignored**.
+  No game/image/FPS claim. Details: `docs/tasks/L175-semantic-draw-c.md`.
+- Next: head accumulated train with `DDRUNTIME_SEMANTIC=1`, then real
+  job/image acceptance. Virtual/growth callees remain recorded mock seams
+  in isolated tests; full gameplay comparison remains open.
+### L174 semantic material draw and dependency hash (2026-10-13)
+
+- `DDRUNTIME_SEMANTIC=1`: native E0E5E0 hash, 10655A0 material apply,
+  and 1066C60 pass selection; original guest callees retained. Defaults
+  unchanged; hash override takes precedence over JOB_HASH without duplicates.
+- 1,168 original synthetic returns pass ABI checks in sparse, serial Pages
+  and atomic Pages modes. Both isolated opt2 lifted draw bodies pass all
+  640 draw vectors; 197/197 and 377/377 original instructions covered.
+- 24/24 draw benchmark scenario medians improve: apply 1.546–2.111x,
+  selection 1.221–1.507x. Shared-host isolated results, no FPS/image claim.
+  Evidence and limitations: `docs/tasks/L174-semantic-draw-b.md`.
+- Runtime light: 255 pass, zero failures, seven ignored. Five ABI mutation
+  variants are rejected, including corrupted and extra heap writes below ESP.
+- Next: head merges registrations and validates the combined semantic train
+  against the native gate and matched image/critical-job capture.
+### L173 semantic model draw leaves (2026-10-13)
+
+- Native FF1920/FF14D0/FEFB90 under `DDRUNTIME_SEMANTIC=1`: 480 original
+  ABI returns pass, including all heap writes and external call arguments.
+  Seven isolated checks pass with lifted/semantic serial/atomic Pages;
+  runtime light 255 pass, zero failures, seven ignored.
+- Median isolated gains across four cases: FF1920 1.07–2.02x,
+  FF14D0 2.25–2.56x, FEFB90 1.48–1.67x. Synthetic callees; no gameplay or
+  FPS acceptance. x87 signaling-NaN emulator limit documented.
+- Head EA5320 follow-up: 302 originals pass head/strict ABI harnesses and
+  isolated lift; callback spheres and heap writes included. Leaf oracle
+  rejects three deliberate below-stack heap corruptions.
+- Next: head combined train/image acceptance. Evidence and reproduction:
+  `docs/tasks/L173-semantic-draw-a.md`.
 
 ### L169 exact shadow traversal and setup (2026-10-13)
 
@@ -77,6 +233,18 @@
 - Next: head combined native gate and independent same-route port A/B;
   retain opt-ins until image/job-time acceptance. Evidence and divisibility
   limits: `docs/tasks/L169-shadow.md`.
+### L170 game-thread service-call overhead (2026-10-13)
+
+- Sizing (c31def, game threads): out-of-line guest memory accessors ~40%
+  of busy samples (Team A), `call_ext` dispatch ~6%, real service work ~4%
+  (`run_service_as` 11.2%, of which waits 7.1%).
+- Implemented and tested, not yet run in game: `call_ext` without an Rc
+  clone per call; an opt-in service census (`DDRUNTIME_SERVICE_CENSUS=1`);
+  memcpy/memset without a heap buffer up to 256 bytes; the CRT memory and
+  string routines and TLS/last-error imports on the Integer service path.
+  memcpy 32 B through the dispatch: 100.8 -> 48.1 ns.
+- Next: a census run in game to rank the remaining services and call sites.
+  Details: docs/tasks/L170-service-calls.md.
 
 ### L162c job distribution and host scheduling (2026-10-13)
 
@@ -120,6 +288,10 @@
   Combined native gate and head image/per-job A/B pending.
 - Next: head train with this independent switch, then matched shadow-save
   0/1 capture. Full evidence: `docs/tasks/L167-critical-callbacks.md`.
+- EA5B50 follow-up: 576 original caller fixtures cover 112/112 block
+  starts; 28,800 fault/access pairs and both memory modes pass. Split/flat
+  Pages specializations regress on some paths; neither is registered.
+  Oracle/replay retained for codegen work, not a gameplay-input corpus.
 
 ### L158 combo31 critical paths and next lookup leaves (2026-10-13)
 
@@ -259,6 +431,38 @@
   5,000-draw jobs **1.804 -> 1.832** (regression). Same bytes/submits/hashes;
   no gameplay gain claimed. Next: head native VK=1 A/B and zero-mismatch
   compare. Details and limitations: `docs/tasks/L164-native-backend.md`.
+### L161c opt-in guest register/flag locals (2026-10-13)
+
+- Default-off `LIFT_REG_LOCALS=1` keeps GPRs and Flags in host locals,
+  flushing at known full-Cpu calls and exits. Split parts and helper
+  boundaries covered; restartable steps unchanged. DD42C0 opt2 Cpu ESP
+  loads/stores **23/14 -> 3/3**; EDI loads **6 -> 3**.
+- **51 focused tests**, **40 original cases per variant at opt0/1/2**,
+  paired full-state/byte checks, and **234 light runtime tests pass**
+  (seven ignored). No shard/game/GPU run or full-corpus gate.
+- No general timing gain: four hot-function opt2 fixture ratios
+  **0.974..1.007x**. Locals also inhibit default opt2 dispatcher removal
+  in DD42C0; isolated LLVM clone-rate-32 removes that dispatcher but still
+  gives no sparse-fixture win. Compiler profiles/defaults unchanged.
+  Next: head's combined train and real worker corpus, including the
+  separate inline-flags candidate. Details: `docs/tasks/L161-codegen.md`.
+
+### L161b adjacent-result zero predicates (2026-10-13)
+
+- Default-off `LIFT_RESULT_ZF=1` replaces adjacent 32-bit result ZF
+  helper calls with direct zero tests; preserves all flag writes, memory,
+  calls and restartable steps. Selected fourteen-body audit removes eleven
+  ZF calls across four bodies, with no other source changes.
+- **47 focused tests pass**, including 13,608 synthetic state/access/fault
+  cases at each opt0/opt1; **31 original cases** pass for each variant at
+  both levels. Recorded FEDD60 loops with synthetic inputs improve median
+  thread cycles **1.054..1.213x opt0 / 1.005..1.155x opt1**. No game gain
+  claimed; not additive when codex-6's pending FEDD60 port is enabled.
+- Push fusion and CFG experiments rejected. No shard generation/build or
+  game/GPU run. Full corpus and gameplay acceptance remain with the head.
+  Next: shared train with the switch enabled; broader redesign measured on
+  codex-6's forthcoming corpus. Details: `docs/tasks/L161-codegen.md`.
+
 ### L161 generator flag fixed point (2026-10-13)
 
 - Audited ten hot main/job lifted routines against raw stacks and opt1
@@ -621,6 +825,26 @@
   generated source **+0.2194%**. No comparative compile-speed/FPS claim.
 - Next: head's same-scene loading/image/FPS measurement. Details and
   timing/profile limits: `docs/tasks/L129-dead-flags.md`.
+
+### L141 native jobs (`DDDRAW_NATIVE=1`) viable (2026-10-13)
+
+- Implemented (task/L141-native-viable, merged up to 32f6792f in combo29):
+  one native worker kept across releases (only what the guest released is
+  forgotten), render-target channel fill and D3D9 depth bias in the pixel
+  shader as the D3D9 path does, strips by the D3D9 path's rule, draws that
+  sample their own target through a snapshot copy, draws inside a query
+  span left to the D3D9 path, and no per-job finisher wait (a ring of
+  scatter sources with submission tickets).
+- **Compared with the D3D9 path in game**: combo29 `compare` with
+  DDGPU_VK=1, 143,744 passes matched, 0 mismatched. combo29 native VK1:
+  20.6 fps (combo28 17.0), worker_instances 1, 6 jobs refused (indexed
+  line strips); sink refusals per frame: Instanced 90, FloatsUncovered 44,
+  Query 6.
+- After combo29, tested but not yet run in game: 58093ee0 (codex-11's L154
+  sink allocation fixes, reviewed), ef80de30 (NativeDraw constants as
+  Arc<NativeConstants>, made once per bank: c29nat1's render thread spent
+  15% in native_draw's per-draw constants), c49461f6 (a test race).
+- Next: the head's native VK1, compare VK1 and default runs of ef80de30.
 
 ### L119 native sink: drawcall is the default (2026-10-13)
 

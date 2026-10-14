@@ -141,10 +141,73 @@ pub(crate) struct Objects {
     /// Conservative dirty index: surface IDs AND their texture owner IDs.
     /// A directly flushed child can leave a clean parent indexed until its
     /// next flush; false positives cost one scan, never change uploads.
-    pub(crate) dirty: crate::fasthash::FxSet<u32>,
+    pub(crate) dirty: DirtySet,
     /// The device last looked up, and its data (L144: every device method
     /// found it in `live` again); cleared when that object leaves `live`.
     device: Option<(u32, DevicePtr)>,
+}
+
+/// The dirty index, its size mirrored in `Runtime::d3d_dirty` so a reader
+/// can skip the D3D lock when nothing is dirty ([`dirty_count`]).
+#[derive(Default)]
+pub(crate) struct DirtySet(crate::fasthash::FxSet<u32>);
+
+impl DirtySet {
+    fn publish(&self) {
+        let n = self.0.len();
+        crate::runtime::with(|rt| {
+            rt.d3d_dirty.store(n, std::sync::atomic::Ordering::Release);
+            // (L180, claude-2: every change, for readers keeping a copy)
+            rt.d3d_dirty_generation.fetch_add(1, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    /// The dirty resources, into `out` (cleared first).
+    pub(crate) fn snapshot(&self, out: &mut Vec<u32>) {
+        out.clear();
+        out.extend(self.0.iter().copied());
+    }
+
+    pub(crate) fn insert(&mut self, resource: u32) -> bool {
+        let new = self.0.insert(resource);
+        if new {
+            self.publish();
+        }
+        new
+    }
+
+    pub(crate) fn remove(&mut self, resource: &u32) -> bool {
+        let had = self.0.remove(resource);
+        if had {
+            self.publish();
+        }
+        had
+    }
+
+    #[inline]
+    pub(crate) fn contains(&self, resource: &u32) -> bool {
+        self.0.contains(resource)
+    }
+
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// How many resources the dirty index holds, without the D3D lock: 0 means
+/// no draw has a dirty resource to flush. A writer publishes under the D3D
+/// lock, so a non-zero count read here may already be stale; take the lock
+/// before acting on it.
+pub(crate) fn dirty_count() -> usize {
+    crate::runtime::with(|rt| rt.d3d_dirty.load(std::sync::atomic::Ordering::Acquire))
+}
+
+/// A number that changes with every change of the dirty index (L180): a
+/// copy of the index taken at one value is the index while it holds. Exact
+/// under the D3D lock; without it, stale like [`dirty_count`].
+pub(crate) fn dirty_generation() -> u64 {
+    crate::runtime::with(|rt| rt.d3d_dirty_generation.load(std::sync::atomic::Ordering::Acquire))
 }
 
 /// A live device's boxed data: the box does not move while the object is
@@ -574,6 +637,28 @@ fn write_pp(m: &mut dyn Mem, p: u32, pp: &PresentParameters) {
     }
 }
 
+/// D3D9's CreateDevice without D3DCREATE_FPU_PRESERVE (0x2) sets the
+/// calling thread's x87 control word to single precision, round to nearest
+/// (the D3DCREATE_FPU_PRESERVE documentation), and every later x87
+/// computation on that thread runs that way. The runtime did not, so the
+/// guest kept MSVC's 53-bit precision (L182, claude-9: the executor's clear
+/// compares an unrounded x87 product with 1.0 and missed at 53 bits).
+/// `DDRUNTIME_D3D_FPU_PRESERVE=1` keeps the old behaviour.
+fn single_precision_unless_preserved(m: &mut dyn Mem, cpu: &mut Cpu, flags: u32) {
+    const D3DCREATE_FPU_PRESERVE: u32 = 0x2;
+    if flags & D3DCREATE_FPU_PRESERVE != 0 || std::env::var("DDRUNTIME_D3D_FPU_PRESERVE").as_deref() == Ok("1") {
+        return;
+    }
+    // precision control (bits 8-9) 00 = 24 bits, rounding (bits 10-11) 00 = nearest
+    let control = cpu.st.control() & !0x0f00;
+    // FLDCW m16 (D9 /5) from a scratch word below the stack pointer, as the
+    // guest's own code would load it
+    let scratch = cpu.esp.wrapping_sub(16);
+    m.set_u16(scratch, control);
+    cpu.st.memory::<0x28d9, 2, false>(m, scratch);
+    eprintln!("ddruntime: CreateDevice set the guest x87 control word to {control:#06x} (no D3DCREATE_FPU_PRESERVE)");
+}
+
 /// IDirect3D9::CreateDevice(this, adapter, devtype, focus window, flags,
 /// D3DPRESENT_PARAMETERS*, IDirect3DDevice9**). The completed parameters
 /// are written back, as D3D9 does.
@@ -594,7 +679,9 @@ pub fn create_device(m: &mut dyn Mem, cpu: &mut Cpu) {
             with_device(device, |d| d.swap_chains.push(chain));
             bind_implicit(m, device, chain, pp);
             m.set_u32(out, device);
-            crate::load_log::event("d3d_device_created", format_args!("device={device:#x}"));
+            crate::load_log::event("d3d_device_created", format_args!("device={device:#x} flags={flags:#x}"));
+            eprintln!("ddruntime: CreateDevice behavior flags {flags:#x}");
+            single_precision_unless_preserved(m, cpu, flags);
             D3D_OK
         }
     };
@@ -1281,6 +1368,8 @@ const STATE_SLOTS: &[u32] = &[
 /// at run time.
 pub fn install(m: &mut dyn Mem, registry: &mut Registry, tokens: &mut Tokens) -> Result<(), Conflict> {
     objects(|o| *o = Objects::default());
+    crate::runtime::with(|rt| rt.d3d_dirty.store(0, std::sync::atomic::Ordering::Release));
+    crate::runtime::with(|rt| rt.d3d_dirty_generation.fetch_add(1, std::sync::atomic::Ordering::Release));
     crate::runtime::with(|rt| rt.queries.lock().unwrap_or_else(|e| e.into_inner()).clear());
     for spec in INTERFACES.iter().chain(crate::d3dx::INTERFACES) {
         let v = interfaces::vtable(m, registry, tokens, spec)?;
@@ -1350,6 +1439,34 @@ mod tests {
         })).is_err());
         assert_eq!(cell.owner.load(Ordering::Acquire), 0);
         assert_eq!(cell.with(|v| *v), 7);
+    }
+
+    /// The lock-free dirty count follows the index's size through inserts,
+    /// repeats and removes (claude-2's sink skips `objects` when it is 0).
+    #[test]
+    fn dirty_count_mirrors_the_dirty_index() {
+        let original = crate::runtime::current();
+        crate::runtime::enter(Arc::new(crate::runtime::Runtime::default()));
+        assert_eq!(dirty_count(), 0);
+        let mut set = DirtySet::default();
+        let generation = dirty_generation();
+        assert!(set.insert(0x100));
+        assert!(!set.insert(0x100));
+        assert!(set.insert(0x200));
+        assert_eq!(dirty_count(), 2);
+        // L180: two changes (the repeat is none), and the copy is the set
+        assert_eq!(dirty_generation(), generation + 2);
+        let mut copy = vec![9];
+        set.snapshot(&mut copy);
+        copy.sort_unstable();
+        assert_eq!(copy, [0x100, 0x200]);
+        assert!(!set.remove(&0x300));
+        assert!(set.remove(&0x100));
+        assert_eq!(dirty_count(), 1);
+        assert!(set.contains(&0x200) && !set.is_empty());
+        assert!(set.remove(&0x200));
+        assert_eq!(dirty_count(), 0);
+        crate::runtime::enter(original);
     }
 
     const SCRATCH: u32 = 0x7EFF_0000;
