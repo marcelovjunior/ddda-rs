@@ -174,3 +174,58 @@ slices against the uninterrupted route around a wall; that and the two
 installed Cassardis door/village navigation tests pass in release mode.
 Live timing of the incremental planner and the completed field cell
 crossing remain pending the core fix. No new performance acceptance claim.
+
+
+### Clean route checkpoint (2026-10-09, 23:47:27–23:51:08 UTC)
+
+Branch `task/opening-perf-route`: harness `c41e7be`, incremental planner
+`68f78a3`, plus the core owner's field detection `952176d` cherry-picked
+as `195c1ca`. Combined release build passed. Shared-target reuse initially
+selected a stale ddstory artifact; cleaning only that release package and
+rebuilding resolved it. The final planner clippy has existing warnings only.
+
+Ran the copied executable hidden with `--perf-route --size 1920x1080`.
+All Codex builds and GPU runs were held; a board-wide hold was posted.
+The original stayed paused with background execution off. Owned PID31060
+exited and all holds were released. Private evidence:
+`E:/ddda-re/notes/opening-perf-codex29/route-clean.stderr.log`,
+`route-clean-summary.json`, and `route-combined-build.log`.
+
+The route completed room exit, Quina, the village walk, q2 event, and the
+real gate handoff. It entered stage100/start2 at
+(41337.184, 31001.443, 143614.31), cell (64,54). The previous field detection
+error is gone. The next host frame stopped explicitly on `scenario task 13`;
+there was **no field cell crossing or 30-second field settle**. The original
+callback dispatcher 0x00798ce0 returns null for tasks outside 1–11, and
+0x00798250 treats a null callback as result zero without changing terminal
+status bits. This sourced task13 correction is handed to the core owner;
+the harness does not skip the failure.
+
+Five-second windows grouped by the current demo step (boundary windows
+can include the preceding step, and room/q2 include cutscenes):
+
+| Step | Windows / frames | Median range (ms) | p99 range (ms) | Worst (ms) | Frames >16.67 / >33 ms |
+| --- | --- | --- | --- | --- | --- |
+| RoomExit, including startup | 12 / 8,263 | 6.9–7.0 | 7.4–44.5 | 752.1 | 61 / 20 |
+| TalkQuina | 2 / 1,209 | 7.0–7.4 | 22.1–55.3 | 76.8 | 26 / 17 |
+| WalkOut | 2 / 1,176 | 7.5–7.9 | 11.9–19.1 | 28.4 | 7 / 0 |
+| Q0002Event, walk and cutscene | 25 / 11,776 | 7.1–17.5 | 8.0–22.9 | 27.2 | 1,322 / 0 |
+
+The long village search again produced 196 waypoints, spread over 375
+calls: the first report covered 323 calls averaging 1.09 ms, worst 2.0 ms;
+the next covered 52 averaging 1.05 ms, worst 1.5 ms. A shorter 10-waypoint
+search took five calls, averaging 1.41 ms, worst 2.7 ms. This validates the
+harness hitch removal structurally and in a live run; it is not a matched
+render optimization comparison. Focus logging captured both focused and
+unfocused operation with continuous updates; no claim is made that focus
+caused the earlier field spikes.
+
+**Implemented/tested:** bounded route driver through the gate, continuous
+unattended updates, focus diagnostics, incremental collision planner,
+three release navigation regressions, release build and targeted clippy.
+**Measured:** clean room/street/cutscene windows and live planner slices.
+**Not accepted:** steady60fps, walked field streaming, full authored NPC
+route, or visual comparison against the original. No rendering or LOD
+optimization was made. Next action: merge the core owner's source-correct
+task13 dispatch, then rerun the route when the coordinator schedules it.
+Camera-feel work takes priority over another perf run (head2666).
