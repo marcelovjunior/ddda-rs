@@ -849,3 +849,48 @@ live serial`) is vertex constant c4.xyz at one entry (residue bytes at
 rule the serial/parallel check has.
 
 Next action: the head's decision on the non-exclusive design above.
+
+## View-mode root cause and why there is no safe speedup (shadow agent, 2026-10-14)
+
+**Root cause of the view-mode crash (static, from the decompiles; the
+crashing frames are consistent, not run-proven with a fix).** The crash is
+on the *main* (or another outer-batch) thread, in a plain outer unit
+(`DBE560 -> DBD8D0 -> DB7620 -> ... 0x00E75EA0/0x01253200`), reading
+`null+0x24`: an outer job's sPrimitive lane state object was corrupted by the
+shadow traversal. `DB63E0`'s parallel branch calls `0x0107FF00`/`0x0107FF30`
+(sPrimitive `vf11` 0x00E61010 / `vf12` 0x00E68390) with the parallel flag:
+- `vf11` pushes a list level (0x0111D610) on **every** lane object
+  `[0x018D1848]+0x30+4*i`, `i < [sp+0xD0]`;
+- `vf12` sums, merges (its own scratch at `sp+0x58..`) and pops (0x0111D650)
+  **all 8** lane objects.
+The private manager's lanes get lane id 0,1 (`FED200` stores the loop index at
+context+0x58), and the units of every unit kind index the same global objects
+by `ctx+0x58`. Outer jobs running on participants 0 and 1 use those very
+objects, so begin/merge/end of the traversal consumes and pops their lists.
+Exclusive mode is safe because nothing else runs. A correct non-exclusive
+design needs (1) lane ids = ids of *idle* participants only (private
+contexts' +0x58 patched after FED200), (2) `vf11`/`vf12` restricted to that
+lane set (a masked port of vf12's 8 slot reads, scratch use and final pop
+loop; vf12's scratch in `this` also needs a lock between two concurrent
+windows), (3) `waits::help` is one-at-a-time (`assert !active`).
+
+**Why it was not built (numbers, DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE=stats
+and =skip, benchmark save, 2 runs each, fps = mean stage-probe over t=46-84 s
+WITHOUT the >45 filter because the scene is fast now):**
+- `skip` (traversal removed entirely, an upper bound) 64.5 / 62.3 vs stats
+  (serial, timing only) 57.5 / 57.2: the *whole* traversal is worth at most
+  ~10% fps; a 2-way parallel version could recover about a third of that
+  (~3%), below the 7 fps run-to-run noise.
+- Idle participants at traversal start (stats run): 0 parked for 9865 of
+  ~14800 traversals and 8.4 s of 12.1 s total traversal time (5.4 s of it in
+  the >1 ms ones); lanes bound to idle participants would only help the
+  other third.  (A late-joining design, idle workers claiming lane ids when
+  they park, could capture more but needs the masked vf11/vf12 above plus
+  dynamic lane binding.)
+- EE2C90 total: n=35923, 16.3 s per run (~2.2 ms/frame summed over threads).
+Runs made before 01:45 on the Cassardis-gate save (st1, st2, off1, off2,
+skip1) are discarded; they only showed the same shape (skip +6 fps over 42).
+
+Debug switches added: `DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE=stats` (serial,
+logs parked-workers histogram and EE2C90 time) and `=skip` (no traversal,
+fps ceiling; breaks rendering of shadows).
