@@ -184,3 +184,23 @@ fn semantic_setup_cascade_view_matches_original() {
     let n = abi_cases_checked("E:/ddda-re/notes/native-L184/cascade_view.json", mtcore::semantic_s3b::setup_cascade_view, false, cascade_callee, check_st0);
     eprintln!("{n} ABI-level setup_cascade_view cases passed");
 }
+
+/// Cost of one hardware x87 step through `c.st.exec` (the port does about 22 per call).
+#[test]
+#[ignore = "microbenchmark"]
+fn x87_step_cost() {
+    ddnative_host::install();
+    let mut c = Cpu::default();
+    let start = std::time::Instant::now();
+    let iterations = 200_000u32;
+    for _ in 0..iterations {
+        let mut d = [0u8; 10];
+        d[..4].copy_from_slice(&1.5f32.to_le_bytes());
+        c.st.exec::<0x00d9>(&mut d); // fld m32
+        c.st.exec::<0x08d8>(&mut d); // fmul m32
+        let mut out = [0u8; 10];
+        c.st.exec::<0x18d9>(&mut out); // fstp m32
+    }
+    eprintln!("{:.1} ns per x87 step", start.elapsed().as_nanos() as f64 / (3 * iterations) as f64);
+    (ddnative_base::hooks::get().x87_release)(&mut c.st);
+}
