@@ -2709,6 +2709,9 @@ impl Native {
                     send_batch(&mut g.batch);
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
                 }
+                if crate::measure::enabled() {
+                    crate::measure::note_draw(size, &d);
+                }
                 g.batch.push(d);
                 crate::d3d9draw::count_draws(1);
                 t.taken += 1;
