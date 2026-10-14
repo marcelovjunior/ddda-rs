@@ -192,6 +192,9 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x007f_fcc0, mtcore::semantic_s10::submit_pass_records),
             (0x00b8_a7f0, mtcore::semantic_s10::player_prepare_draw),
             (0x00fe_4780, mtcore::semantic_s10::bind_consumer_to_model),
+            // L190: per-unit leaves of the shadow/model draw (ESI = model for 0x00B8B800)
+            (0x00fa_5860, mtcore::semantic_l190::swing_model_draw_unit),
+            (0x00b8_b800, mtcore::semantic_l190::rebuild_skin_remap),
         ] {
             if !semantic_selected(a) {
                 continue;

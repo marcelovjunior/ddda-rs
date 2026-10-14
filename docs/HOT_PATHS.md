@@ -101,6 +101,7 @@ L180 render-worker sink plus the L172 view-mode scheduler tree (base5).
 | `semantic_s1` | `FEDB80/FEDC00` save/restore recording state (8.4x/5.9x), `F23260` draw_attachment 2.5x, tick_gauges, update_instancing | |
 | `semantic_s2/s3` | cast chain `FAC6F0 DEA870 11787C0`, shader_lookup, cull helpers, classify_overlap `EA1EE0`, any_member_test `E61010` | 2-6x |
 | `semantic_s4..s8` | actor/joint/pose/motion filter (`6419 -> 203 ns` 31x), GJK sweep `D7CF70` (3.4x), CRT math | 3-30x |
+| `semantic_l190` (L190) | `FA5860` uSwingModel::vf11 swing_model_draw_unit, `B8B800` rebuild_skin_remap (ESI = model) | 1.8-2.5x, 14.7x (6930 -> 471 ns) |
 | `job_*`, `shadow_*` | `E0E5E0` dependency hash, `FED480` save_state, `DB63E0` traverse, `EFD240` setup, `E61010/E68390` sPrimitive vf11/12, `111E180` pair sort (7.9x) | 1.4-8x |
 | `mtframe` / `mtdraw` / `mtmath` | frame logic, cull, lights, set_render_target, math | see NATIVE_PIPELINE.md |
 
@@ -116,8 +117,9 @@ inclusive share x (1 - 1/speedup) at an assumed 2-3x on lifted bodies.
 
 | # | Function | Role | Incl. CPU-s | Size | Difficulty | Expected |
 |---|---|---|---:|---:|---|---|
-| 1 | `B89790` (vf208) + `B6A070` uPlayerBase::vf11 + `B8B800` | player consumer draw in the shadow/model units; B6A070 -> vf+0x340 -> B89790 | 3.6 (base5), 9-11 (s2e) | 0x84A / 0x7C / 0x209 | medium (B8B800 uses implicit ESI) | 1-3 CPU-s of ~70 on workers |
-| 2 | `FA5860` uSwingModel::vf11 | integer-only flag/queue shuffle plus base `EA3130` | 2.3 | 0x272 | easy | ~1 CPU-s |
+| 1 | `B89790` uPlayerBase::vf208 | player draw: float distance/LOD math, ~10 callees (`B89FE0`, `B8A770`, `7FFCC0` [ported], uModel::vf26), state-slot tail identical to `base_model_draw_unit` | 3.6 (base5), 9-11 (s2e) | 0x84A | medium-hard (floats, mins, loops) | 1-2 CPU-s |
+| 2 | `B8B430` (caller of ported `B8B800`), `B89FE0`, `B8A770` | player skeleton helpers | unknown | | medium | |
+| done L190 | `FA5860` (2.5x), `B8B800` (14.7x) ported; `B6A070` uPlayerBase::vf11 measured 0.91x (3 guest calls dominate), not shipped | | | | | |
 | 3 | `886880`/`886530`/`885DC0` uObjModel::vf09/vf11/vf08 and `0084C720` uCharacterBase::vf09 | per-model draw prep | 2.3-3.2 each | small | easy-medium | ~1-2 |
 | 4 | `01174730`, `0116B670`, `01165B40` | probe/sky tree search used by the ambient probe (chain with the ported `11787C0`) | 4.0 | ? | medium | 1-2 |
 | 5 | `EE5CE0` (cascade split math), `EEA950`, `EE2C90` | shadow chain top (floating point; per frame, not per unit) | 2.3-6.8 | | medium, overlaps the shadow owner | small: runs once per cascade |
