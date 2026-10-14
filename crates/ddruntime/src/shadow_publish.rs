@@ -63,10 +63,12 @@ pub(super) enum Decision {
     Parallel,
 }
 
-/// At least one guard proof passed (nothing is published before).
-static PROVEN: AtomicBool = AtomicBool::new(false);
-/// The traversal number the next proof is due at after an inconclusive one.
-static PROOF_DUE: AtomicU64 = AtomicU64::new(u64::MAX);
+/// The recording contexts (the traversal's argument: one per shadow pass
+/// kind) a guard proof passed for. Only these are published: a context the
+/// proof cannot carry out (inconclusive) stays serial.
+static PROVEN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+/// The traversal number the next proof of an unproven context may run at.
+static PROOF_DUE: AtomicU64 = AtomicU64::new(0);
 static INCONCLUSIVE: AtomicU64 = AtomicU64::new(0);
 /// Time spent waiting for the other participants to park, and windows
 /// that became exclusive only after waiting.
@@ -82,20 +84,29 @@ fn wait_limit() -> std::time::Duration {
     }))
 }
 
-pub(super) fn decide() -> Decision {
+fn proven(context: u32) -> bool {
+    PROVEN.lock().unwrap_or_else(|e| e.into_inner()).contains(&context)
+}
+
+pub(super) fn decide(context: u32) -> Decision {
     let call = CALLS.fetch_add(1, Relaxed);
     if call % 512 == 511 {
         report();
     }
     if FALLBACK.load(Relaxed) {
         Decision::Serial
-    } else if call % check_every() == 0 || call >= PROOF_DUE.load(Relaxed) {
-        PROOF_DUE.store(u64::MAX, Relaxed);
+    } else if call % check_every() == 0 {
         Decision::Proof
-    } else if !PROVEN.load(Relaxed) {
-        Decision::Serial
-    } else {
+    } else if proven(context) {
         Decision::Parallel
+    } else if call >= PROOF_DUE.load(Relaxed) {
+        // an unproven context: a proof, at most one per 16 traversals,
+        // doubling with every inconclusive proof (up to the check interval)
+        let gap = (16u64 << INCONCLUSIVE.load(Relaxed).min(16)).min(check_every().max(16));
+        PROOF_DUE.store(call + gap, Relaxed);
+        Decision::Proof
+    } else {
+        Decision::Serial
     }
 }
 
@@ -116,19 +127,24 @@ fn inconclusive(reason: &str) -> bool {
     .any(|p| reason.starts_with(p))
 }
 
-/// The proof of a guard traversal. Passed: publication may run. Refuted
-/// (serial and parallel differ, or anything not listed in [`inconclusive`]):
-/// publication OFF for the rest of the run. Inconclusive: counted, and
-/// another proof is due 16 traversals later.
-pub(super) fn proof_result(result: &Result<usize, String>) {
+/// The proof of a guard traversal on `context`. Passed: the context may be
+/// published. Refuted (serial and parallel differ, or anything not listed in
+/// [`inconclusive`]): publication OFF for the rest of the run. Inconclusive:
+/// counted; the context stays serial (and is retried while unproven).
+pub(super) fn proof_result(context: u32, result: &Result<usize, String>) {
     PROOFS.fetch_add(1, Relaxed);
     match result {
-        Ok(_) => PROVEN.store(true, Relaxed),
+        Ok(_) => {
+            let mut proven = PROVEN.lock().unwrap_or_else(|e| e.into_inner());
+            if !proven.contains(&context) {
+                proven.push(context);
+                eprintln!("parallel-shadow publish: context {context:#x} proven ({} proven)", proven.len());
+            }
+        }
         Err(reason) if inconclusive(reason) => {
             if INCONCLUSIVE.fetch_add(1, Relaxed) < 8 {
-                eprintln!("parallel-shadow publish: guard proof inconclusive: {reason}");
+                eprintln!("parallel-shadow publish: guard proof inconclusive on context {context:#x}: {reason}");
             }
-            PROOF_DUE.store(CALLS.load(Relaxed) + 16, Relaxed);
         }
         Err(reason) => {
             if !FALLBACK.swap(true, Relaxed) {
@@ -140,9 +156,9 @@ pub(super) fn proof_result(result: &Result<usize, String>) {
 
 fn report() {
     eprintln!(
-        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, proven {}) units {} lanes helped {} task errors {} woke {} woke inside {} fallback {}",
+        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, contexts proven {}) units {} lanes helped {} task errors {} woke {} woke inside {} fallback {}",
         CALLS.load(Relaxed), WINDOWS.load(Relaxed), WAITED.load(Relaxed), WAITED_US.load(Relaxed),
-        NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed), INCONCLUSIVE.load(Relaxed), PROVEN.load(Relaxed),
+        NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed), INCONCLUSIVE.load(Relaxed), PROVEN.lock().unwrap_or_else(|e| e.into_inner()).len(),
         UNITS.load(Relaxed), HELPED.load(Relaxed), TASK_ERRORS.load(Relaxed), WOKE.load(Relaxed),
         WOKE_INSIDE.load(Relaxed), FALLBACK.load(Relaxed)
     );
@@ -195,6 +211,19 @@ fn copy(m: &mut dyn Mem, from: u32, to: u32, size: u32) {
     m.read_bytes(from, &mut bytes);
     crate::fastmem::write_bulk(m, to, &bytes);
 }
+
+/// The private recording manager: the manager's header and its eight inline
+/// recording contexts, of which only the header and the first two (the
+/// private scheduler has two participants: FED200 initialises lanes 0..2,
+/// the units record into them, FED3B0 merges them) are copied. The rest is
+/// fresh private storage: the proof's parallel runs use the same copy and
+/// their definedness runs fill the uncopied bytes with 0x00 and 0xFF, so a
+/// dependence on them refutes the proof.
+pub(super) const MANAGER_BYTES: u32 = 0xd40 + 8 * LANE_BYTES;
+pub(super) const MANAGER_COPIED: [std::ops::Range<u32>; 1] = [0..0xd40 + 2 * LANE_BYTES];
+/// The private scheduler, copied whole.
+pub(super) const SCHEDULER_BYTES: u32 = 0x1c150;
+pub(super) const SCHEDULER_COPIED: [std::ops::Range<u32>; 1] = [0..0x1c150];
 
 /// The job participants' start and done events from the scheduler's slots.
 fn participant_events(m: &dyn Mem, scheduler: u32) -> (Vec<u32>, Vec<u32>) {
@@ -353,8 +382,12 @@ pub(super) fn run_window(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn, stora
     // the private copies and the top-level globals (as the proof replay)
     let manager = cpu.ecx;
     if !storage.prefilled {
-        copy(m, scheduler, private_scheduler, 0x1c150);
-        copy(m, manager, private_manager, 0xd40 + 8 * LANE_BYTES);
+        for part in SCHEDULER_COPIED {
+            copy(m, scheduler + part.start, private_scheduler + part.start, part.end - part.start);
+        }
+        for part in MANAGER_COPIED {
+            copy(m, manager + part.start, private_manager + part.start, part.end - part.start);
+        }
     }
     let nesting = [m.u8(NESTING), m.u8(NESTING_OTHER)];
     let use_secondary = m.u32(context + 0x54) == 0;

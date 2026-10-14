@@ -825,7 +825,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     let publishing = publish::enabled();
     if publishing {
         // S1 publication: a guard proof every Nth traversal, else the window
-        match publish::decide() {
+        match publish::decide(memory.u32(cpu.esp + 4)) {
             publish::Decision::Serial => return original(memory, cpu),
             publish::Decision::Parallel => {
                 if !publish::run(memory, cpu, original) {
@@ -1004,7 +1004,7 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     };
     eprintln!("parallel-shadow sample={index} audit={result:?} publish=serial");
     if publishing {
-        publish::proof_result(&result);
+        publish::proof_result(context, &result);
     }
     x86::ldmxcsr(result_mxcsr);
 }
@@ -1266,7 +1266,7 @@ fn compare_replays(
                     // Retarget only this method's manager, preserving the root
                     // context argument and every original object/list pointer.
                     let (copy, range) = input
-                        .private_copy(cpu.ecx, 0xd40 + 8 * LANE_BYTES)
+                        .private_copy_parts(cpu.ecx, publish::MANAGER_BYTES, &publish::MANAGER_COPIED)
                         .map_err(|error| format!("private recording manager: {error:?}"))?;
                     cpu.ecx = range.start;
                     private_ranges.push(range);
@@ -1280,7 +1280,7 @@ fn compare_replays(
                 // DBE560/DBD8D0 access fields through +1C14C (captured below).
                 let (input, private_scheduler) = if parallel {
                     let (copy, range) = input
-                        .private_copy(scheduler, 0x1c150)
+                        .private_copy_parts(scheduler, publish::SCHEDULER_BYTES, &publish::SCHEDULER_COPIED)
                         .map_err(|error| format!("private scheduler: {error:?}"))?;
                     let base = range.start;
                     private_ranges.push(range);
@@ -1423,8 +1423,12 @@ fn compare_replays(
             .spawn(move || -> Result<mtcore::shadow_lanes::StreamSnapshot, String> {
                 let capacity = input.u32(context + 0x4c).saturating_mul(8).max(1);
                 let live_scheduler = input.u32(SCHEDULER_GLOBAL);
-                let (input, scheduler_range) = input.private_copy(live_scheduler, 0x1c150).map_err(|e| format!("{e:?}"))?;
-                let (input, manager_range) = input.private_copy(cpu.ecx, 0xd40 + 8 * LANE_BYTES).map_err(|e| format!("{e:?}"))?;
+                let (input, scheduler_range) = input
+                    .private_copy_parts(live_scheduler, publish::SCHEDULER_BYTES, &publish::SCHEDULER_COPIED)
+                    .map_err(|e| format!("{e:?}"))?;
+                let (input, manager_range) = input
+                    .private_copy_parts(cpu.ecx, publish::MANAGER_BYTES, &publish::MANAGER_COPIED)
+                    .map_err(|e| format!("{e:?}"))?;
                 let (input, secondary_range) = input.private_arena(capacity).map_err(|e| format!("{e:?}"))?;
                 let storage = publish::Storage {
                     scheduler: scheduler_range.start,

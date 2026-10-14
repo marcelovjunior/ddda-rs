@@ -44,6 +44,21 @@ impl Snapshot {
         }
         Ok((output, range))
     }
+    /// [`Self::private_copy`] of only the byte ranges `parts` (offsets into
+    /// `length`); the rest is fresh private storage (`PRIVATE_FILL`).
+    pub(crate) fn private_copy_parts(&self, source: u32, length: u32, parts: &[Range<u32>]) -> Result<(Self, Range<u32>), Reject> {
+        source.checked_add(length).ok_or(Reject::InvalidPrivateRange)?;
+        let (mut output, range) = self.private_arena(length)?;
+        for part in parts {
+            assert!(part.end <= length, "private copy part outside the object");
+            for offset in part.clone() {
+                let at = range.start + offset;
+                let page = Arc::make_mut(output.pages.get_mut(&(at & !(PAGE - 1))).unwrap());
+                page.bytes[(at & (PAGE - 1)) as usize] = self.byte(source + offset, false)?;
+            }
+        }
+        Ok((output, range))
+    }
     /// Storage owned solely by the offline transaction, not the live guest
     /// allocator. Select an unused range in THIS snapshot's address space.
     /// Consumers must prove all published references leave this storage before
