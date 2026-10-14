@@ -397,3 +397,23 @@ about 12 minutes), so the pass was applied to the tracked text instead.
 `DDRUNTIME_STACK_WINDOW=0` (window never installed: the helpers fall to the page table) against
 the default. Merge `task/L190-hot-paths`; `ddruntime/src/threads.rs` gets a 3-line hunk in `run_thread`.
 
+## 12. State and next steps (end of the L190 night shift, 2026-10-14)
+
+**Done and committed (branch `task/L190-hot-paths`, merge it whole):**
+- This document; `scripts/profile_units.py`, `scripts/hot_list.py`, `autorun3.sh` (repo sampler with self time per lifted function).
+- Ports (`mtcore::semantic_l190`, registered in `ddports`): `FA5860` 1.9x, `B8B800` 17x (partly its bulk copy), `B89790` 2.3x, `B89FE0` 1.9x, `B8A770` 2.0x. Rejected: `B6A070` 0.91x, `B8B430` (setup path), `F20640` soft body (equal on 60k states, 1.0x: 35 guest calls).
+- `semantic_rt` NaN fix (SSE returns the first operand when both are NaN).
+- `ddnative-base` `lean-access` (default on): measured 2.02 -> 1.77 ns per dword access. `inline-access`: no gain, off.
+- `stack-window` (off by default, sections 11): shards rewritten, runtime installs the window. NOT yet measured in game.
+
+**Gate status:** `cargo test -p ddnative -p ddnative-base` passes (vectors required); the second half (`mtmath mtcore mtframe mtdraw ddports mtstate`, built with `--features ddnative-base/stack-window`) passes except the two known `semantic_s5` failures (its vectors are newer than the port; fails on the base too). `scripts/inventory.py` was not run.
+
+**Next steps, in order:**
+1. Measure `stack-window` in game (section 11, "To measure it"). If it gains, make `ddruntime/stack-window` a default feature; if the exe crashes or a thread stops, `DDRUNTIME_STACK_WINDOW=0` is the quick off switch and `git revert` of the shard rewrite is not needed (the feature off compiles to the old calls).
+2. Capture a fresh profile with `bash C:/ddda-targets/L172/runs/autorun3.sh EXE TAG` on the current build, then `python scripts/profile_units.py stacks_TAG.json` and `python scripts/hot_list.py stacks_TAG.json --top 1000 --out hot.txt`: the old captures pre-date most ports.
+3. Memory helpers are still 44% of guest time. Ideas not yet tried: a second window for the thread's TEB/TLS; `DDNATIVE_BACKING=regions|large` (existing env, 2 MB regions or large pages: fewer host TLB misses; untested on the game); caching `page_table()` in `Cpu` instead of the dyn call at every function entry (2.8%, needs a lifter change); a one-entry last-page cache for ESI/EDI object accesses (needs invalidation on `set_perm`/`unback`).
+4. Port only bodies with few guest calls (under ~10 per invocation): count the calls first. Candidates left in the shadow units are small or call-bound (section 9).
+5. Regenerating shards: `lift.py gen` reproduces the tracked shards except 756 files of shift formatting; do a deliberate regen + gate before changing the lifter, with `LIFT_DATA`/`INVENTORY_DB` copies as in `scripts/l161_gate.sh` (about 12 minutes, 1.5 GB).
+
+**Commands.** Tests: `CARGO_TARGET_DIR=C:/ddda-targets/L190 cargo test --release -p mtcore --test semantic_l190` (ports), `... --test rt_nan`, `... -p ddnative-base --features stack-window --test stack_window`, `... -p mtcore --features ddnative-base/stack-window --test l190_bench stack_window_variants -- --nocapture`. Benches (ignored tests): `--test l190_bench -- --ignored --nocapture --test-threads=1`, `--test helper_bench`. Vectors: `E:/ddda-re/tools/pyenv/Scripts/python.exe research/native/record_l190_*.py OUT.json N` into `E:/ddda-re/notes/native-L190/`. Stack-window rewrite: `python research/native/stack_window.py in.rs out.rs`.
+
