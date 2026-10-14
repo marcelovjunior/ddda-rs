@@ -21,6 +21,9 @@ fn boundaries(value: &str) -> Vec<(u64, String)> {
         if !matches!(phase, "boot" | "title" | "menu" | "loading" | "gameplay") { continue; }
         if let Ok(frame) = frame.parse() { phases.push((frame, phase.into())); }
     }
+    // An explicit frame-zero marker defines the whole initial interval;
+    // the unknown fallback must not override it at frame one.
+    if phases.iter().skip(2).any(|p| p.0 == 0) { phases.remove(1); }
     phases.sort_by_key(|p| p.0);
     phases
 }
@@ -52,5 +55,11 @@ mod tests {
         assert_eq!(p.len(), 7);
         assert_eq!(p.iter().rev().find(|p| p.0 <= 35).unwrap().1, "loading");
         assert_eq!(p.iter().rev().find(|p| p.0 <= 2).unwrap().1, "unknown");
+    }
+    #[test]
+    fn explicit_boot_interval_continues_until_the_next_marker() {
+        let p = super::boundaries("0:boot,100:title");
+        assert_eq!(p.iter().rev().find(|p| p.0 <= 99).unwrap().1, "boot");
+        assert_eq!(p.iter().rev().find(|p| p.0 <= 100).unwrap().1, "title");
     }
 }

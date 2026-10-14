@@ -2,8 +2,8 @@
 
 Usage: python scripts/pipeline_summary.py run.log --phases 0:boot,100:title,...
 Without --phases use labels recorded by DDGPU_PIPELINE_PHASES.
-Times are summed CPU-call wall times, not elapsed loading time. Nested IR events
-are separate rows and must not be added to enclosing shader-module totals.
+Times are summed CPU-call wall times, not elapsed loading time. Background
+compilation can overlap the draw consumer's work; kinds remain separate rows.
 """
 import argparse
 import collections

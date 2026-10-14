@@ -1063,6 +1063,24 @@
   1 ignored (initial parallel lock-timing failure passes serially).
 - Next: L112/L110 integration and head-run frame comparison. No GPU/game
   run or image/FPS claim. Details: `docs/tasks/L117-state-semantics.md`.
+### L116 pipeline warmup (2026-10-13; game timings pending)
+
+- Opt-in per-creation frame/phase telemetry and run summarizer, checkpoint
+  **2c12eab2**. Persisted complete pipeline recipes plus local generated
+  shader sources are keyed by exe hash, driver and compiler/device schema.
+  One background worker precreates objects; current source digests guard
+  adoption, with ordinary validated creation on a miss.
+- Checks: **10 ddgpu CPU units, 2 parser tests, 3 Vulkan cache cases**
+  pass. Synthetic 12-draw replay restores **12 pipelines / 4 modules**,
+  makes **zero on-demand creations**, and matches both target images.
+  Final source-variant guard replay passes; source **aeb8e5df**.
+- Runtime **156 pass across invocations / 1 ignored** (29 unit, 127
+  integration). Full-suite attempts hit existing Present timing/host gamma
+  failures; recorded-display integration binaries all pass.
+- Head instr1 baseline: 552 pipelines / 1,526.307 ms total; late one-second
+  buckets include 9 / 386.270 ms and 2 / 163.885 ms. No phase/FPS gain claim.
+  **Next:** head's driver-cache-warm off/on run with observed phase boundaries.
+  Details: `docs/tasks/L116-pipeline-warmup.md`.
 
 ### L90 shared draw payloads (2026-10-13)
 
