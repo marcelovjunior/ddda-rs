@@ -221,7 +221,14 @@ thread_local! {
 /// the earlier exclusive window with the globals redirected in memory.
 fn view_mode() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE").as_deref() != Ok("1"))
+    *ON.get_or_init(|| std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE").is_none())
+}
+
+/// `DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE=view`: the exclusive window, with the
+/// per-thread view instead of the globals redirected in memory.
+fn exclusive_view() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDRUNTIME_PARALLEL_SHADOW_EXCLUSIVE").as_deref() == Ok("view"))
 }
 
 /// Windows that ran their lanes without helpers (another window was open).
@@ -399,7 +406,7 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
         return false;
     }
     LIVE_WINDOW.with(|w| w.set(helpers_enabled()));
-    let result = run_window(m, cpu, original, &storage);
+    let result = run_window_with(m, cpu, original, &storage, exclusive_view());
     LIVE_WINDOW.with(|w| w.set(false));
     if window.violated() {
         WOKE_INSIDE.fetch_add(1, Relaxed);
