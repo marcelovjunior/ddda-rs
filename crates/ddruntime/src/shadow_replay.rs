@@ -1068,7 +1068,14 @@ pub fn replay_file(path: &std::path::Path) -> Result<usize, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let fixture =
         capture_file::Fixture::read(&mut std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
-    replay_fixture(fixture, RAW.get().unwrap().clone())
+    // the read-only image pages come from the player's exe, loaded as the
+    // runtime loads it (DDRUNTIME_PARALLEL_SHADOW_EXE, default the Steam path)
+    let exe_path = std::env::var("DDRUNTIME_PARALLEL_SHADOW_EXE")
+        .unwrap_or_else(|_| "E:/SteamLibrary/steamapps/common/DDDA/DDDA.exe".into());
+    let exe = ddexe::ExeFile::open(&exe_path).map_err(|e| format!("{exe_path}: {e}"))?;
+    let mut image = crate::memory::GuestMemory::new();
+    crate::image::load(&mut image, &exe).map_err(|e| e.to_string())?;
+    replay_with_image(&image, fixture)
 }
 
 fn replay_fixture(fixture: capture_file::Fixture, raw: Arc<BTreeMap<u32, LiftFn>>) -> Result<usize, String> {
