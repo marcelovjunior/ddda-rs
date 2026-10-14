@@ -548,3 +548,47 @@ profile (FRAME_RATE.md 6), independent of the tick.
 | 4 A2 replay | high | 150-240+ | yes |
 | 5 threads | medium | stable pacing | yes for no-stutter |
 | B items | medium-high each | +10-25% | no (tick budget only) |
+
+---
+
+## 10. Measurements (shadow agent, 2026-10-14; fast2 build, benchmark save, 1080p windowed, instrumentation in the L172 tree)
+
+Switches (all off by default): `DDRUNTIME_MEASURE=1` (main-thread halves + worker per target size, report every 240 frames),
+`DDRUNTIME_MEASURE_STREAM=1` (draw-stream stability; slows the game to ~25 fps, so only its ratios are meaningful),
+`DDGPU_BUSY_STATS=1` (GPU busy from submit-completion callbacks, one line per second). Code: `crates/ddruntime/src/measure.rs`,
+`crates/ddgpu/src/gpu_busy.rs` (task/L172-parallel-shadow, commits "L192: ..."). 3 measurement runs.
+
+**V1 sim vs production (main thread, 7440 frames, mean ms/frame, with the timers on: ~44 fps run):**
+frame 13.27 = **sim half 9.49 (entry .. sSceneExt::vf06 0x49B030, i.e. steps 1-55) + production half 3.78 (steps 56-65)**.
+Inside: unit pass A (0xDB6740) 2.73, pass C (0xDB5690) 1.61, pass B 0.09; sRender 0xDAF000 2.73 (the draw job batch and camera setup are
+here); `sShadow::vf06` 0xE277A0 only 0.09 and 0x4B9660 0.12 (the shadow *drawing* is a job inside sRender's batch, not these).
+So sim is ~71% of the main thread's frame, passes A/B/C are 4.4 ms of it, and the remaining ~5 ms of the sim half is AI/input/effects/
+sound/network. This **corrects the doc's "production ~6.6 ms" figure**: on the main thread production is 3.8 ms; the rest of the cost
+is on the job workers and the render worker. A1 (skip steps 1-55 on in-between frames) can therefore save up to ~9.5 of 13.3 ms of
+main-thread time per skipped frame, much more than the 22% (passes only) assumed in section 5.
+
+**V3 render worker per target size (per frame; draws seen / sink-decode ms, decided draws only):** 1920x1080 main view 1448 / 5.38 ms;
+512x1536 shadow maps 206 / 0.66; 64x8 soft-body 178 / 0.87; 64x16 soft-body 79 / 0.36; 960x540 67 / 0.26; 192x128 23 / 0.09.
+Total decode ~7.6 ms/frame (this run has the timers' own cost). The "~900 soft-body passes" assumption does not hold in this
+scene: 257 soft-body draws (64x8 + 64x16) per frame; and shadow maps are 206 draws, not ~1,500. The 1080p main view is 70% of
+the worker's sink time and ~1,450 draws, not ~3,400.
+
+**V2 GPU time: inconclusive, an upper bound only.** No timestamp queries exist on this path; the completion-callback metric says the
+GPU queue is "busy" 97-99% of wall time (about 21-23 ms per present at ~44 presents/s, 650-730 submits/s ~ 15 submits per
+frame). That cannot be read as 22 ms of GPU work: callbacks are delivered when wgpu polls, so a late poll counts as busy. It does not
+rule out a GPU-bound frame either. **Before any 240-fps decision a real measurement is needed:** enable `Features::TIMESTAMP_QUERY`
+and write timestamps at the start/end of the main pass and the shadow passes in `vk/pass.rs` (the passes are built in one place), or
+compare fps at a lowered resolution (GPU-bound => fps rises). The cheap test: DDRUNTIME_DISPLAY / config Resolution=1280x720 run.
+
+**V5 stream stability (consecutive frames, taken draws, 1080p main view):** loose key (shaders, declaration, primitive counts, texture
+resources) equal at the same index 30.5%, strict key (also vertex buffers/offsets, render states, targets, viewport) 14.1%, loose
+multiset overlap 32.8%. Shadow, soft-body and 192x128 draws: 0% on both keys. Draw streams are therefore **not** stable
+draw-for-draw between consecutive frames with these keys: per-frame dynamic resources (stream offsets in ring buffers, render-target
+and texture handles for shadow/soft-body targets, visibility changes) differ. The measurement used handles, so it is a lower bound for
+"same draw"; matching by (vertex shader, pixel shader, declaration) alone was not measured. Route A2's identity matching must be
+designed with the dynamic handles in mind (the draw index is not an identity), and the replay of shadow/soft-body passes (0%) must be
+treated as tick-bound passes, as section 4.2 already assumes.
+
+**Gotcha found while measuring:** the user's config.ini was changed to FullScreen=ON, RefreshRate=240Hz; the game then stops at boot
+with "ERR09: Unsupported function" / MissingInstruction at 0x12F507F (device creation) in the sandbox. Runs must force
+FullScreen=OFF in the sandbox copy.
