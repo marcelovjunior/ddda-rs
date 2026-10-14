@@ -104,8 +104,9 @@ pub struct Options {
     pub capture_position: Option<[f32; 4]>,
     /// Pixel shaders: the location of each declared input in declaration
     /// order, from linking with the vertex stage's outputs by usage and
-    /// index; None for an input the vertex stage does not write (it reads
-    /// 0). Without this, input k is at location k.
+    /// index; None for an input without a matching vertex output (it reads
+    /// (1,1,1,1) for COLOR0 and zero otherwise, as measured on the host
+    /// D3D9 driver). Without this, input k is at location k.
     pub ps_input_locations: Option<Vec<Option<u32>>>,
     /// Vertex shaders: the class of each declared input's vertex format
     /// (integer formats arrive as integers and are converted, as D3D9 does).
@@ -392,9 +393,16 @@ pub fn translate_with(shader: &Shader, options: Options) -> Result<Translation, 
         cx.instruction(ins)?;
     }
     writeln!(w, "@fragment\nfn main(input: In) -> Out {{").unwrap();
-    for (k, &(_, _, r)) in iface.inputs.iter().enumerate() {
+    for (k, &(usage, index, r)) in iface.inputs.iter().enumerate() {
         if let Some(Some(_)) = locations.get(k) {
             writeln!(w, "  v{r} = input.v{r};").unwrap();
+        } else if usage == 10 && index == 0 {
+            // Missing COLOR0 is white on the host D3D9 driver; COLOR1 and
+            // TEXCOORD are zero (the private variable's initializer).
+            // Measured by tests/support/unlinked.rs on float render targets.
+            // SM3 docs call an unmatched semantic invalid, so this is driver
+            // compatibility behavior, not a portable D3D9 default.
+            writeln!(w, "  v{r} = vec4<f32>(1.0);").unwrap();
         }
     }
     // D3D9's vPos is the pixel's integer position (no half-pixel offset)
