@@ -105,6 +105,7 @@ impl App {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         })).map_err(|e| format!("an adapter: {e}"))?;
+        if std::env::var("DDGPU_TIMESTAMPS").as_deref() == Ok("1") { eprintln!("gpu-ts: adapter {:?} timestamp features {:?}", adapter.get_info(), adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)); }
         let needed = ddgpu::WgpuBackend::required_features();
         if !adapter.features().contains(needed) {
             return Err(format!("the adapter lacks {:?}", needed - adapter.features()));
