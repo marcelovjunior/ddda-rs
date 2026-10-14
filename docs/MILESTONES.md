@@ -638,6 +638,24 @@
 - Next: head adopts corrected census alongside L158's correlated batch trace,
   identifies long-join worker jobs, and performs profile-off matched image/FPS
   acceptance. Event cache/futex remain opt-in; no part 2 game gain claimed.
+### L154 render-worker allocation census (2026-10-13)
+
+- c26 offline wait attribution: render request event 323 samples at DAC0B4;
+  main residual join 512 at DBE66D; Present retirement 7, command send 2.
+  Wake notifications now classified separately; **25 Python tests pass**.
+- CPU deltas (main 54.4%, render 55.3%) differ from sampled busy shares;
+  22.28 Hz sequential sampling cannot establish the causal frame timeline.
+  L153 measured durations and L157 source map provide the complementary evidence.
+
+- Timed exact-thread Rust allocation/free census avoids startup contamination;
+  all bounded-table rows and overflow are reported, ranked by calls or bytes.
+- Standalone allocator/parser **3 tests pass**, command **14**, ddgpu CPU **26**;
+  GPU **26 pass / 2 ignored / 2 bounded timeouts**. Runtime baseline **208 pass /
+  3 fail / 5 ignored**; two timing failures pass isolated, inherited gamma remains.
+- No shard build or game run. c24/c25 heap time shares cannot rank counts/bytes.
+- Isolated four-hunk ndraw candidate: **11 tests pass / 1 ignored**; repository
+  file awaits owner agreement. Next: head hunk decision and gameplay census.
+  Protocol and limitations: `docs/tasks/L154-worker-alloc.md`.
 
 ### L139 combo21 combined native gate (2026-10-13)
 ### L149 loading timeline (2026-10-13)

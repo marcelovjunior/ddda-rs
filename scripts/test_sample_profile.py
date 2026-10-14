@@ -17,6 +17,11 @@ C = 'ddlift_01::generated::lifted_003::f_00401000'
 
 
 class AttributionTests(unittest.TestCase):
+    def test_alert_is_a_wake_not_a_wait(self):
+        self.assertFalse(any(w in "NtAlertThreadByThreadIdEx" for w in profile.WAITS))
+        self.assertTrue(any(w in "ZwWaitForAlertByThreadId" for w in profile.WAITS))
+
+
     def test_symbol_forms(self):
         for symbol in (A, '_' + A, A[3:], A + '+0x10',
                        'ddlift_27::generated::lifted_001::f_00DB82C0',
