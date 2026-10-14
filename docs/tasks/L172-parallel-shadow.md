@@ -808,4 +808,15 @@ read-only exe image pages from the live image on demand and repeats.
 |---|---|---|
 | s1a/s1b | S1 | first proof `MissingPage(0xEA3120)` -> off (s1b ran a stale binary: R172 merge conflict) |
 | s1c | S1 + image pages | proofs 0..1200 pass (7x `audit=Ok(6)`), 20 windows / 418 units, woke 0, no crash; 1373 of ~1400 not exclusive; proof 1400 `original serial replay stream differs from live serial` -> off; heavy-window 29.67 fps |
-| s2a | S2 + wait + inconclusive class | running |
+| s2a | S2 + wait + inconclusive class, CHECK=200, dumps | publication works: 2195 windows, 118k units, 1431 lanes on parked workers, 0 task errors, woke 0; conclusive proofs all pass (Ok 58..78); 6.6 fps: every proof stalls the outer join for seconds |
+| base2 | same binary, no publish | 32.73 |
+| s2b / s1d | S2 / S1, CHECK=100000 | 20.59 / 21.00: x87 park/acquire 15-20% on every thread (a fresh x87 state per unit, acquired and leaked into the spill tables) |
+| s2c | S2 + one x87 state per lane (b5ac50fd) | 30.33; 8191 windows, 716k units, 8699 helped lanes; costs left: the exclusivity wait (7 s per run) and the per-window copies (1.7 MB manager, 115 KB scheduler) |
+
+Soundness gap (s2a): the inconclusive proofs (`original serial replay
+stream differs from live serial`) all fall on one traversal kind (samples
+N*200; the +17 retries pass), so that kind was published unproven.
+Publication is now per recording context (the traversal's argument): a
+context publishes only after a proof passed on it; unproven contexts get
+proofs with a doubling backoff. The failing kind's captures are in
+`C:/ddda-targets/L172/dumps` (private) for the serial-replay gap.
