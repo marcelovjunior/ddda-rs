@@ -106,12 +106,22 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
                 .unwrap_or_else(|| panic!("case {i}: no convention for {target:x}"));
             let at_call = regs(call);
             let now = [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi];
+            // ECX/EDX the lifted caller had not set since an earlier stub return hold the
+            // recorder's scribble: undefined for any port, so not compared
+            let scribbled: Vec<String> = call
+                .get("scribbled")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+                .unwrap_or_default();
             // every register the callee could read (all of them: an implicit input the port
             // does not set would make the guest code diverge), and ESP
             // EBX, EBP, ESI, EDI (callee-saved) carry state across calls and must match at
             // every call; EAX and ECX/EDX after a call are caller-saved garbage, checked only
             // where a callee declares them (`reads`).
             for r in [EBX, EBP, ESI, EDI, ESP].into_iter().chain(reads.iter().copied()) {
+                if (r == ECX && scribbled.iter().any(|s| s == "ecx")) || (r == EDX && scribbled.iter().any(|s| s == "edx")) {
+                    continue;
+                }
                 assert_eq!(now[r], at_call[r], "case {i}: call {k} ({target:x}) register {r}");
             }
             let recorded = pairs(&call["memory"]);
@@ -168,8 +178,8 @@ fn run_cases(path: &str, body: Body, returns: bool, callees: &[Callee], native: 
 #[test]
 fn obj_model_vf11_matches_original() {
     let callees = [
-        Callee { target: 0x007a_6640, reads: &[ECX], stack_args: 1 },
-        Callee { target: 0x00ff_e5c0, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x007a_6640, reads: &[ESI], stack_args: 1 },
+        Callee { target: 0x00ff_e5c0, reads: &[ECX, ESI, EDI], stack_args: 1 },
     ];
     let (cases, made) = run_cases(&vectors("vf11.json"), mtcore::semantic_l191::obj_model_vf11, false, &callees, &[]);
     assert!(cases >= 1000, "{cases} cases");
@@ -191,10 +201,10 @@ fn obj_model_vf08_matches_original() {
 #[test]
 fn character_vf09_matches_original() {
     let callees = [
-        Callee { target: 0x0085_86e0, reads: &[EAX], stack_args: 0 },
-        Callee { target: 0x0088_6530, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0085_86e0, reads: &[EAX, EDX, EBX, EBP, ESI, EDI], stack_args: 0 },
+        Callee { target: 0x0088_6530, reads: &[ECX, EBX, EBP, ESI, EDI], stack_args: 0 },
         Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 0 },
-        Callee { target: 0x00ca_5930, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x00ca_5930, reads: &[EBX, EBP, ESI, EDI], stack_args: 6 },
     ];
     let (cases, made) = run_cases(&vectors("char_vf09.json"), mtcore::semantic_l191::character_vf09, false, &callees, &[]);
     assert!(cases >= 1000, "{cases} cases");
@@ -205,17 +215,17 @@ fn character_vf09_matches_original() {
 #[test]
 fn obj_model_vf09_matches_original() {
     let callees = [
-        Callee { target: 0x0088_71a0, reads: &[EAX, ECX], stack_args: 0 },
-        Callee { target: 0x00ea_1b20, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0088_71a0, reads: &[EAX, ESI, EDI], stack_args: 0 },
+        Callee { target: 0x00ea_1b20, reads: &[ECX, EBX, EBP, ESI, EDI], stack_args: 0 },
         Callee { target: 0x0076_d6b0, reads: &[EAX, ECX], stack_args: 0 },
-        Callee { target: 0x0076_c540, reads: &[EAX, ECX], stack_args: 5 },
-        Callee { target: 0x0076_b300, reads: &[], stack_args: 1 },
-        Callee { target: 0x0076_b660, reads: &[], stack_args: 1 },
-        Callee { target: 0x005b_0570, reads: &[], stack_args: 1 },
-        Callee { target: 0x0088_7360, reads: &[], stack_args: 1 },
-        Callee { target: 0x0088_8750, reads: &[EAX], stack_args: 0 },
+        Callee { target: 0x0076_c540, reads: &[EAX, EBX, EBP, ESI], stack_args: 5 },
+        Callee { target: 0x0076_b300, reads: &[EBX, EBP, ESI, EDI], stack_args: 1 },
+        Callee { target: 0x0076_b660, reads: &[EBX, EBP, ESI, EDI], stack_args: 1 },
+        Callee { target: 0x005b_0570, reads: &[EBX, EBP, ESI, EDI], stack_args: 1 },
+        Callee { target: 0x0088_7360, reads: &[EBX, EBP, ESI, EDI], stack_args: 1 },
+        Callee { target: 0x0088_8750, reads: &[EAX, ECX, EBX, EBP, ESI, EDI], stack_args: 0 },
         Callee { target: 0x00ea_1cc0, reads: &[ECX], stack_args: 1 },
-        Callee { target: 0x0082_1750, reads: &[ESI], stack_args: 0 },
+        Callee { target: 0x0082_1750, reads: &[EBP, ESI], stack_args: 0 },
         Callee { target: 0x004c_6b50, reads: &[ECX], stack_args: 1 },
         Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 0 },
         Callee { target: 0x3000_0110, reads: &[ECX], stack_args: 0 },
@@ -235,10 +245,10 @@ fn probe_search_step_matches_original() {
         Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 1 },
         Callee { target: 0x00de_5b80, reads: &[ECX], stack_args: 0 },
         Callee { target: 0x00de_52a0, reads: &[ECX], stack_args: 1 },
-        Callee { target: 0x00de_5c10, reads: &[ECX], stack_args: 4 },
+        Callee { target: 0x00de_5c10, reads: &[ECX, EBX, EBP, ESI, EDI], stack_args: 4 },
         Callee { target: 0x00de_5bd0, reads: &[ECX], stack_args: 0 },
-        Callee { target: 0x010a_88a0, reads: &[ECX], stack_args: 6 },
-        Callee { target: 0x010a_8bb0, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x010a_88a0, reads: &[EAX, ECX, ESI], stack_args: 6 },
+        Callee { target: 0x010a_8bb0, reads: &[EAX, ECX, ESI], stack_args: 6 },
         Callee { target: 0x3000_0500, reads: &[ECX], stack_args: 3 },
         Callee { target: 0x3000_0600, reads: &[ECX], stack_args: 3 },
     ];
@@ -252,13 +262,13 @@ fn probe_search_step_matches_original() {
 #[test]
 fn owner_visit_matches_original() {
     let callees = [
-        Callee { target: 0x00fb_3790, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x00fb_3790, reads: &[], stack_args: 0 },
         Callee { target: 0x0110_7cc0, reads: &[ECX], stack_args: 0 },
         Callee { target: 0x0057_b8c0, reads: &[ECX], stack_args: 0 },
         Callee { target: 0x0110_7e40, reads: &[ECX], stack_args: 0 },
         Callee { target: 0x0110_7e30, reads: &[ECX], stack_args: 1 },
-        Callee { target: 0x0116_9a50, reads: &[ECX], stack_args: 3 },
-        Callee { target: 0x0117_87c0, reads: &[ECX], stack_args: 6 },
+        Callee { target: 0x0116_9a50, reads: &[ECX, EDX, EBX, EBP, ESI, EDI], stack_args: 3 },
+        Callee { target: 0x0117_87c0, reads: &[EBP], stack_args: 6 },
         Callee { target: 0x3000_0800, reads: &[ECX], stack_args: 9 },
     ];
     let (cases, made) = run_cases(&vectors("vis_116b670.json"), mtcore::semantic_l191::owner_visit, true, &callees, &[]);

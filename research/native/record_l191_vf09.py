@@ -13,6 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import harness as h  # noqa: E402
 from s10_oracle import Oracle, finish  # noqa: E402
+import unicorn.x86_const as x  # noqa: E402
+from unicorn import UC_HOOK_CODE  # noqa: E402
 import s10_oracle as so  # noqa: E402
 
 ENTRY, LENGTH = 0x00886530, 0x350
@@ -92,6 +94,11 @@ def main():
             (GLOBAL, 0x1000), (PTR, 0x1000), (0x0F000000, 0x10000), (SHAPE & ~0xFFF, 0x1000),
             (TABLES[0], TABLES[1])]
     oracle = Oracle(ENTRY, LENGTH, stubs, maps, extra_code=((ATAN2, 0x400),))
+    # the native atan2 returns to 0x008867DA: ECX and EDX are then undefined for the port
+    def after_atan2(uc, addr, size, data):
+        oracle._scribble[x.UC_X86_REG_ECX] = uc.reg_read(x.UC_X86_REG_ECX)
+        oracle._scribble[x.UC_X86_REG_EDX] = uc.reg_read(x.UC_X86_REG_EDX)
+    oracle.uc.hook_add(UC_HOOK_CODE, after_atan2, 0x008867DA, 0x008867DA)
     uc = oracle.uc
     # the image's constants and tables (read-only data of the original)
     uc.mem_write(SHAPE, h.code(SHAPE, 4))

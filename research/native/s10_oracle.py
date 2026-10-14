@@ -53,6 +53,7 @@ class Oracle:
         uc.hook_add(UC_HOOK_MEM_WRITE, self._write)
         uc.hook_add(UC_HOOK_CODE, self._code)
         self.initial, self.written, self.events = {}, set(), []
+        self._scribble = {}
         self.rng = None
 
     def remember(self, address, size):
@@ -92,6 +93,9 @@ class Oracle:
         esp = uc.reg_read(x.UC_X86_REG_ESP)
         window = [(esp + i, b) for i, b in enumerate(uc.mem_read(esp, 4 * (1 + nargs + extra)))]
         before = dict(regs=self.regs(), memory=window)
+        # ECX/EDX that still hold a value this oracle scribbled at an earlier stub return
+        # (the lifted caller never set them since): their value is undefined for a port
+        before["scribbled"] = [name for name, reg in (("ecx", x.UC_X86_REG_ECX), ("edx", x.UC_X86_REG_EDX)) if self._scribble.get(reg) == uc.reg_read(reg)]
         # optional extra memory the callee reads (stub[3](oracle, regs, esp) -> [(address, length)])
         if len(stub) > 3:
             before['checks'] = [(a + i, b) for a, n in stub[3](self, self.regs(), esp) for i, b in enumerate(uc.mem_read(a, n))]
@@ -109,8 +113,10 @@ class Oracle:
         back = self.u32(esp)
         uc.reg_write(x.UC_X86_REG_EAX, eax)
         # scribble the caller-saved registers: a port must not rely on them
-        uc.reg_write(x.UC_X86_REG_ECX, self.rng.randrange(1 << 32))
-        uc.reg_write(x.UC_X86_REG_EDX, self.rng.randrange(1 << 32))
+        self._scribble[x.UC_X86_REG_ECX] = self.rng.randrange(1 << 32)
+        uc.reg_write(x.UC_X86_REG_ECX, self._scribble[x.UC_X86_REG_ECX])
+        self._scribble[x.UC_X86_REG_EDX] = self.rng.randrange(1 << 32)
+        uc.reg_write(x.UC_X86_REG_EDX, self._scribble[x.UC_X86_REG_EDX])
         uc.reg_write(x.UC_X86_REG_ESP, esp + 4 + 4 * nargs)
         uc.reg_write(x.UC_X86_REG_EIP, back)
         effects = [(a, uc.mem_read(a, 1)[0]) for a in sorted(self._stub_writes)]
@@ -121,6 +127,7 @@ class Oracle:
         overwritten), the stack at `esp` = return address + `args_words`."""
         uc = self.uc
         self.initial, self.written, self.events = {}, set(), []
+        self._scribble = {}
         uc.mem_write(esp, struct.pack('<I', h.RET) + b''.join(struct.pack('<I', w & M32) for w in args_words))
         start = list(regs)
         start[4] = esp
