@@ -345,6 +345,13 @@ impl Goblin {
         !shrink || self.motion_ended
     }
 
+    /// Native message 0x22's ordinary type-5 influence. Perception, alert
+    /// and the current think/action slot are left to the existing S49 path.
+    // Translated from 0x00AAC5A0 -> 0x00AACA80 (DDDA.exe 2017-12-13 Steam).
+    pub fn receive_provoke(&mut self, source: u32, amount: u32, decay: u32) {
+        self.distance_hate.provoke(source, amount, decay);
+    }
+
     /// The push rank (actor +0x1DF0) `uEnemy::vf90` (0x00AA96E0) derives
     /// from the base and the action's +0x2360 bits: +1 for 0x104 (attacks
     /// 0x101, walks 5), else +2 for 0x18 (runs 9, dashes 0x11); the other
