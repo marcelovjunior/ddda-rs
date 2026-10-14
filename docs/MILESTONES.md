@@ -811,8 +811,8 @@
   tests pass**; runtime light **187 pass / one inherited gamma failure /
   three ignored**. Query, channel-fill and depth-bias cases keep FIFO fallback.
 - Raw Vulkan drawing with wgpu-owned targets/VB/IB, tracked barriers and
-  wgpu queue submission: **eight image cases pass**. Preliminary median
-  **0.354 us/draw** vs ash **0.326** / wgpu **1.129**, prefilled uniforms;
+  wgpu queue submission: **eight image cases pass twice**. Confirmed median
+  **0.333 us/draw** vs ash **0.315** / wgpu **0.966**, prefilled uniforms;
   shared-load timing limits and migration risks in the L133 brief.
 - Next: head's fresh Compare/Native run with the strip fix to measure wider
   uptake and FPS. No valid combo17 native image/FPS acceptance claim.
