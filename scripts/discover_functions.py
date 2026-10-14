@@ -238,7 +238,74 @@ def text_like(v):
     return b[3] == 0 and all(32 <= c < 127 for c in b[:3])
 
 
-def callback_tables(pe, md, known, extents=()):
+def referenced(pe):
+    """Data addresses that appear as a dword anywhere in the image (at any
+    byte offset: code immediates too)."""
+    image = b''.join(pe.read(s['va'], min(s['virtual_size'], s['raw_size'])) for s in pe.sections)
+    data = [(s['va'], s['va'] + min(s['virtual_size'], s['raw_size'])) for s in pe.sections
+            if not s['flags'] & 0x20000000]
+    lo, hi = min(a for a, _ in data), max(b for _, b in data)
+    refs = set()
+    for off in range(4):
+        for (v,) in struct.iter_unpack('<I', image[off:off + (len(image) - off) // 4 * 4]):
+            if lo <= v < hi:
+                refs.add(v)
+    return refs
+
+
+def record_tables(pe, md, known, extents=(), refs=None):
+    """L58: arrays of records in data where some fields are callbacks: the
+    {size, getter, handler} table at 0x01441CF0, whose x87-returning
+    getters 0x0112BB20..0x0112BBE0 are called through `call ecx` at
+    0x0112DA12. From a referenced address, records of a stride of 2 to 8
+    dwords whose fields are code pointers, NULLs or small integers
+    (< 0x10000); each field keeps one kind over the records (a NULL fits
+    either), at least one field holds pointers and one holds a nonzero
+    integer (a plain pointer run is callback_tables'), and the records
+    stop where a field changes kind. The smallest consistent stride is
+    taken. As in callback_tables, a pointer must be a known entry and
+    every other one at a function boundary, inside no known function and
+    not text-like, or nothing is admitted."""
+    refs = referenced(pe) if refs is None else refs
+    for s in pe.sections:
+        if s['flags'] & 0x20000000:
+            continue
+        writable = bool(s['flags'] & 0x80000000)
+        end = s['va'] + min(s['virtual_size'], s['raw_size'])
+        words = [struct.unpack('<I', pe.read(a, 4))[0] for a in range(s['va'], end - 3, 4)]
+        kinds = ['p' if v and pe.executable(v) else ('z' if v == 0 else ('d' if v < 0x10000 else 'x'))
+                 for v in words]
+        for i in range(len(words)):
+            a = s['va'] + 4 * i
+            if kinds[i] == 'x' or a not in refs:
+                continue
+            for stride in range(2, 9):
+                fields, n = None, 0
+                while i + (n + 1) * stride <= len(words):
+                    rec = kinds[i + n * stride:i + (n + 1) * stride]
+                    if 'x' in rec:
+                        break
+                    if fields is None:
+                        fields = list(rec)
+                    elif any(f != k and 'z' not in (f, k) for f, k in zip(fields, rec)):
+                        break
+                    else:
+                        fields = [k if f == 'z' else f for f, k in zip(fields, rec)]
+                    n += 1
+                if n < 2 or 'p' not in fields or 'd' not in fields:
+                    continue
+                pointers = sorted({words[i + r * stride + k] for r in range(n) for k, f in enumerate(fields)
+                                   if f == 'p' and words[i + r * stride + k]})
+                new = [v for v in pointers if v not in known]
+                if (pointers != new and new and all(function_boundary(pe, md, v) and not inside(extents, v)
+                                                    and not text_like(v) for v in new)):
+                    for v in new:
+                        yield v, dict(source='record_table', table=a, stride=4 * stride, records=n,
+                                      **({'writable': True} if writable else {}))
+                break  # the smallest consistent stride
+
+
+def callback_tables(pe, md, known, extents=(), refs=None):
     """L54: tables of callbacks in data (the libvorbis floor and
     residue export tables at 0x014701E0 and 0x01470210; the emulator found
     0x01325580, 0x01325830 and 0x013271E0 called through the first). A run
@@ -251,7 +318,7 @@ def callback_tables(pe, md, known, extents=()):
     too: its initial pointers are code the image names, even where startup
     code may rewrite the table (the dispatch table at 0x0163537C); the
     evidence says which."""
-    image = b''.join(pe.read(s['va'], min(s['virtual_size'], s['raw_size'])) for s in pe.sections)
+    refs = referenced(pe) if refs is None else refs
     for s in pe.sections:
         if s['flags'] & 0x20000000:  # code, not data
             continue
@@ -275,8 +342,7 @@ def callback_tables(pe, md, known, extents=()):
             # the table's base: a referenced slot among the leading NULLs
             # (zero padding before it, or an unused first callback) and its
             # first code pointer
-            bases = [slot for slot, _ in run[:run.index(code[0]) + 1]
-                     if struct.pack('<I', slot) in image]
+            bases = [slot for slot, _ in run[:run.index(code[0]) + 1] if slot in refs]
             if not bases:
                 continue
             run = run[run.index(next(r for r in run if r[0] == bases[-1])):]
@@ -344,7 +410,9 @@ def discover(pe, known, lifted, extents=(), runtime=()):
                 candidates.append((i.operands[0].imm & 0xffffffff,
                                    dict(source='call', caller=f['addr'], instruction=pc)))
     candidates += list(vtables(pe, md, {a for a, _ in init}, known, stores, vptr_stores))
-    candidates += list(callback_tables(pe, md, known, extents))
+    refs = referenced(pe)
+    candidates += list(callback_tables(pe, md, known, extents, refs))
+    candidates += list(record_tables(pe, md, known, extents, refs))
     # runtime evidence passes the same boundary checks as an address-taken entry
     candidates += [(a, ev) for a, ev in runtime
                    if pe.executable(a) and not inside(extents, a) and function_boundary(pe, md, a)]
@@ -400,7 +468,8 @@ def main():
     report = dict(image_sha256=hashlib.sha256(pe.data).hexdigest(),
                   export_sha256=hashlib.sha256(args.export.read_bytes()).hexdigest(),
                   lifted_sha256=hashlib.sha256(args.lifted.read_bytes()).hexdigest(),
-                  discovered=len(rows), per_source={s: counts[s] for s in ('c_initializer', 'cpp_initializer', 'vtable', 'call', 'address_taken', 'callback_table', 'runtime')},
+                  discovered=len(rows), per_source={s: counts[s] for s in ('c_initializer', 'cpp_initializer', 'vtable', 'call', 'address_taken', 'callback_table',
+                                                    'record_table', 'runtime')},
                   size_kinds=dict(collections.Counter(r['size_kind'] for r in rows)), rejected=rejected)
     args.out.with_suffix('.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k != 'rejected'}, indent=2))
