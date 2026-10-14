@@ -196,3 +196,183 @@ pub fn character_vf09(m: &mut dyn Mem, c: &mut Cpu) {
     c.ebp = pg.u32(m, entry.wrapping_sub(4));
     c.esp = entry.wrapping_add(4);
 }
+
+/// Calls the vtable slot `slot` of `object` (thiscall, no arguments).
+fn vmethod(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, object: u32, slot: u32, back: u32) {
+    let vtable = pg.u32(m, object);
+    let target = pg.u32(m, vtable.wrapping_add(slot));
+    call_from(m, c, pg, frame, object, &[], back, |m, c| call_guest(m, c, target));
+}
+
+/// The float block of `obj_model_vf09` (flag 0x400000): the model's offsets
+/// from the shape at +0xE70.. are stored, and the angle of the lateral
+/// offset is taken by the CRT atan2 (native, bit exact).
+fn angle_block(m: &mut dyn Mem, pg: Pages, this: u32) {
+    let f = |m: &dyn Mem, a: u32| f32::from_bits(pg.u32(m, a));
+    let (a1, a0, a2) = (f(m, this + 0x44) - f(m, this + 0xe74), f(m, this + 0x40) - f(m, this + 0xe70), f(m, this + 0x48) - f(m, this + 0xe78));
+    pg.set_u32(m, this + 0xf70, a0.to_bits());
+    pg.set_u32(m, this + 0xf74, a1.to_bits());
+    pg.set_u32(m, this + 0xf78, a2.to_bits());
+    pg.set_u32(m, this + 0xf7c, 0);
+    let (b1, b0, b2) = (f(m, this + 0xe4) - f(m, this + 0xe84), f(m, this + 0xe0) - f(m, this + 0xe80), f(m, this + 0xe8) - f(m, this + 0xe88));
+    pg.set_u32(m, this + 0xf80, b0.to_bits());
+    pg.set_u32(m, this + 0xf84, b1.to_bits());
+    pg.set_u32(m, this + 0xf88, b2.to_bits());
+    pg.set_u32(m, this + 0xf8c, 0);
+    let (c2, c0) = (f(m, this + 0xe78) - f(m, this + 0x48), f(m, this + 0xe70) - f(m, this + 0x40));
+    let length = ((c2 * c2) + (c0 * c0)).sqrt();
+    pg.set_u32(m, this + 0xf90, length.to_bits());
+    let (d2, d0) = (f(m, this + 0x48) - f(m, this + 0xe78), f(m, this + 0x40) - f(m, this + 0xe70));
+    let tables = crate::semantic_s6_crt::Tables { memory: &*m, pages: pg };
+    let angle = crate::semantic_s6_crt::atan2(&tables, d0 as f64, d2 as f64) as f32;
+    pg.set_u32(m, this + 0xf94, angle.to_bits());
+}
+
+/// The body of `obj_model_vf09` between its prologue and epilogue.
+fn draw_prep_body(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, this: u32, frame: u32) {
+    // The byte flag at +0x20FC == 1 calls one virtual method and returns.
+    if pg.u8(m, this.wrapping_add(0x20fc)) == 1 {
+        vmethod(m, c, pg, frame, this, 0x3c, 0x0088_654e);
+        return;
+    }
+    // 0x008871A0 (EAX = this): a non-zero low byte of its result ends the call.
+    c.eax = this;
+    let query = call_from(m, c, pg, frame, this, &[], 0x0088_655c, |m, c| call_guest(m, c, 0x0088_71a0));
+    if query & 0xff != 0 {
+        return;
+    }
+    // The pass word at +0x1F98 must be 1 for the rest.
+    if pg.u32(m, this.wrapping_add(0x1f98)) != 1 {
+        return;
+    }
+    call_from(m, c, pg, frame, this, &[], 0x0088_6578, |m, c| call_guest(m, c, 0x00ea_1b20));
+    if pg.u32(m, this.wrapping_add(0x2398)) & 0x0001_0000 != 0 {
+        vmethod(m, c, pg, frame, this, 0x17c, 0x0088_6590);
+    }
+    if pg.u8(m, this.wrapping_add(0x2398)) & 4 != 0 {
+        // the sub-object at +0x10E0; EAX = the object at +0x40
+        c.eax = this.wrapping_add(0x40);
+        call_from(m, c, pg, frame, this.wrapping_add(0x10e0), &[], 0x0088_65a7, |m, c| call_guest(m, c, 0x0076_d6b0));
+        if pg.u8(m, this.wrapping_add(0x2398)) & 4 != 0 {
+            // bit 2 of the byte at +0x20E4 goes to the byte at +0x1B6F
+            let flag = (pg.u8(m, this.wrapping_add(0x20e4)) >> 2) & 1;
+            pg.set_u8(m, this.wrapping_add(0x1b6f), flag);
+            pg.set_u32(m, this.wrapping_add(0x1b68), 0);
+            let tail = pg.u8(m, this.wrapping_add(0xec0)) as u32;
+            let args = [this.wrapping_add(0x40), this.wrapping_add(0xe70), this.wrapping_add(0xe90), this, tail];
+            c.eax = this.wrapping_add(0x10e0);
+            call_from(m, c, pg, frame, this.wrapping_add(0x40), &args, 0x0088_65f1, |m, c| call_guest(m, c, 0x0076_c540));
+            pg.set_u8(m, this.wrapping_add(0x1ed4), 0);
+        }
+    }
+    if pg.u32(m, this.wrapping_add(0x2398)) & 0x0008_0000 != 0 {
+        vmethod(m, c, pg, frame, this, 0x180, 0x0088_6610);
+    }
+    if pg.u32(m, this.wrapping_add(0x2398)) & 0x0010_0000 != 0 {
+        vmethod(m, c, pg, frame, this, 0x184, 0x0088_6628);
+    }
+    if pg.u32(m, this.wrapping_add(0x2398)) & 0x0020_0000 != 0 {
+        // the two child objects' method 0x24, each only when set
+        let first = pg.u32(m, this.wrapping_add(0x1ef8));
+        if first != 0 {
+            vmethod(m, c, pg, frame, first, 0x24, 0x0088_664a);
+        }
+        let second = pg.u32(m, this.wrapping_add(0x1efc));
+        if second != 0 {
+            vmethod(m, c, pg, frame, second, 0x24, 0x0088_6660);
+        }
+    }
+    // The bounds test: the squared distance from the global reference point
+    // (its object at +0x34) against the threshold at 0x0150929C.
+    if pg.u32(m, this.wrapping_add(0x1f80)) != 0 {
+        let mut call_helper = true;
+        if pg.u8(m, this.wrapping_add(0x206d)) & 1 != 0 && pg.u8(m, this.wrapping_add(0x206e)) & 0x10 == 0 {
+            call_helper = false;
+            let global = pg.u32(m, 0x018d_0b6c);
+            let reference = pg.u32(m, global.wrapping_add(0x34));
+            if reference != 0 {
+                let p = call_from(m, c, pg, frame, this, &[frame.wrapping_add(0x10)], 0x0088_6694, |m, c| call_guest(m, c, 0x004c_6b50));
+                let coord = |a: u32| f32::from_bits(pg.u32(m, a));
+                let (x, y, z) = (coord(p) - coord(reference + 0x40), coord(p + 4) - coord(reference + 0x44), coord(p + 8) - coord(reference + 0x48));
+                let squared = ((y * y) + (x * x)) + (z * z);
+                call_helper = f32::from_bits(pg.u32(m, 0x0150_929c)) > squared;
+            }
+        }
+        if call_helper {
+            c.esi = pg.u32(m, this.wrapping_add(0x1f80));
+            call_from(m, c, pg, frame, this, &[], 0x0088_66d9, |m, c| call_guest(m, c, 0x0082_1750));
+        }
+    }
+    if pg.u32(m, this.wrapping_add(0x2398)) & 0x0040_0000 != 0 {
+        angle_block(m, pg, this);
+    }
+    if pg.u8(m, this.wrapping_add(0x2398)) & 4 != 0 {
+        let block = this.wrapping_add(0x10e0);
+        call_from(m, c, pg, frame, this, &[block], 0x0088_67fb, |m, c| call_guest(m, c, 0x0076_b300));
+        call_from(m, c, pg, frame, this, &[block], 0x0088_6801, |m, c| call_guest(m, c, 0x0076_b660));
+    }
+    if pg.u32(m, this.wrapping_add(0x23b4)) != 0 && pg.u8(m, this.wrapping_add(0x23b8)) & 2 == 0 {
+        let count = pg.u32(m, this.wrapping_add(0x23a4));
+        if (count as i32) > 0 {
+            // each non-null element of the table at +0x23B0 is released
+            let mut i = 0u32;
+            loop {
+                let table = pg.u32(m, this.wrapping_add(0x23b0));
+                let element = pg.u32(m, table.wrapping_add(i.wrapping_mul(4)));
+                if element != 0 {
+                    call_from(m, c, pg, frame, this, &[element], 0x0088_6833, |m, c| call_guest(m, c, 0x005b_0570));
+                }
+                i = i.wrapping_add(1);
+                if (i as i32) >= (count as i32) {
+                    break;
+                }
+            }
+        }
+    }
+    let flags = pg.u32(m, this.wrapping_add(0x20c4)) & 0xffff_fff3;
+    pg.set_u32(m, this.wrapping_add(0x20c4), flags);
+    if pg.u8(m, this.wrapping_add(0x2398)) & 0x10 != 0 {
+        call_from(m, c, pg, frame, this, &[this], 0x0088_684e, |m, c| call_guest(m, c, 0x0088_7360));
+    }
+    c.eax = this;
+    call_from(m, c, pg, frame, this, &[], 0x0088_6855, |m, c| call_guest(m, c, 0x0088_8750));
+    if pg.u32(m, this.wrapping_add(0x1f40)) == 0 || pg.u32(m, this.wrapping_add(0x1f44)) == 0 {
+        return;
+    }
+    if pg.u8(m, this.wrapping_add(0x1f76)) == 0 {
+        return;
+    }
+    call_from(m, c, pg, frame, this, &[0], 0x0088_6879, |m, c| call_guest(m, c, 0x00ea_1cc0));
+}
+
+// Translated from 0x00886530 (DDDA.exe 2017-12-13 Steam), uObjModel::vf09.
+/// 0x00886530, `uObjModel::vf09()` (thiscall, plain `ret`; void): the model's
+/// per-frame draw prep. A byte flag at +0x20FC == 1 calls the method at slot
+/// 0x3C and returns. Otherwise a query (0x008871A0) decides whether the rest
+/// runs; the flag word at +0x2398 selects the sub-object and child-object
+/// method calls, the bounds test may call 0x00821750, the bit 0x400000 step
+/// computes the angle block (`angle_block`), and the table at +0x23B0 is
+/// released element by element when its flags allow.
+pub fn obj_model_vf09(m: &mut dyn Mem, c: &mut Cpu) {
+    let pg = Pages::of(m);
+    let entry = c.esp;
+    let this = c.ecx;
+    let saved = (c.ebp, c.ebx, c.esi, c.edi);
+    // Prologue: EBP, then the frame aligned to 16 with 0x14 bytes of locals,
+    // then EBX, ESI and EDI pushed below them.
+    let aligned = entry.wrapping_sub(4) & !15;
+    let frame = aligned.wrapping_sub(0x20);
+    pg.set_u32(m, entry.wrapping_sub(4), saved.0);
+    pg.set_u32(m, aligned.wrapping_sub(0x18), saved.1);
+    pg.set_u32(m, aligned.wrapping_sub(0x1c), saved.2);
+    pg.set_u32(m, aligned.wrapping_sub(0x20), saved.3);
+
+    draw_prep_body(m, c, pg, this, frame);
+
+    // Epilogue: the saved registers come back from the frame.
+    c.edi = pg.u32(m, aligned.wrapping_sub(0x20));
+    c.esi = pg.u32(m, aligned.wrapping_sub(0x1c));
+    c.ebx = pg.u32(m, aligned.wrapping_sub(0x18));
+    c.ebp = pg.u32(m, entry.wrapping_sub(4));
+    c.esp = entry.wrapping_add(4);
+}

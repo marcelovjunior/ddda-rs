@@ -66,7 +66,16 @@ fn bench(path: &str, name: &str, bodies: &[(&str, LiftFn)]) {
                 for _ in 0..20 {
                     let at = std::cell::Cell::new(0usize);
                     let ev = events.clone();
-                    x86::set_ext_calls(Some(Box::new(move |m, c, _| {
+                    x86::set_ext_calls(Some(Box::new(move |m, c, target| {
+                        if target == 0x012f_1109 {
+                            // the CRT atan2 runs natively in both bodies (as in the recordings)
+                            let double = |lanes: [u32; 4]| f64::from_bits(lanes[0] as u64 | ((lanes[1] as u64) << 32));
+                            let (y, x) = (double(c.xmm[0]), double(c.xmm[1]));
+                            let tables = mtcore::semantic_s6_crt::Tables { memory: &*m, pages: ddnative_base::mem::Pages::of(m) };
+                            let r = mtcore::semantic_s6_crt::atan2(&tables, y, x).to_bits();
+                            c.xmm[0] = [r as u32, (r >> 32) as u32, 0, 0];
+                            return;
+                        }
                         let (effects, eax, esp) = &ev[at.get()];
                         at.set(at.get() + 1);
                         for &(a, b) in effects {
@@ -119,4 +128,10 @@ fn bench_obj_model_vf08() {
 #[ignore]
 fn bench_character_vf09() {
     bench(&format!("{DIR}char_vf09.json"), "0x0084C720", &[("lifted", lifted::f_0084c720), ("port", mtcore::semantic_l191::character_vf09)]);
+}
+
+#[test]
+#[ignore]
+fn bench_obj_model_vf09() {
+    bench(&format!("{DIR}objmodel_vf09.json"), "0x00886530", &[("lifted", lifted::f_00886530), ("port", mtcore::semantic_l191::obj_model_vf09)]);
 }

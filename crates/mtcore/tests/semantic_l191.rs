@@ -187,3 +187,30 @@ fn character_vf09_matches_original() {
     assert!(cases >= 1000, "{cases} cases");
     eprintln!("{cases} ABI-level char_vf09 cases passed; calls {made:x?}");
 }
+
+// verifies 0x00886530 (ABI level; void; the callees as recorded stubs, atan2 native)
+#[test]
+fn obj_model_vf09_matches_original() {
+    let callees = [
+        Callee { target: 0x0088_71a0, reads: &[EAX, ECX], stack_args: 0 },
+        Callee { target: 0x00ea_1b20, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x0076_d6b0, reads: &[EAX, ECX], stack_args: 0 },
+        Callee { target: 0x0076_c540, reads: &[EAX, ECX], stack_args: 5 },
+        Callee { target: 0x0076_b300, reads: &[], stack_args: 1 },
+        Callee { target: 0x0076_b660, reads: &[], stack_args: 1 },
+        Callee { target: 0x005b_0570, reads: &[], stack_args: 1 },
+        Callee { target: 0x0088_7360, reads: &[], stack_args: 1 },
+        Callee { target: 0x0088_8750, reads: &[EAX], stack_args: 0 },
+        Callee { target: 0x00ea_1cc0, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x0082_1750, reads: &[ESI], stack_args: 0 },
+        Callee { target: 0x004c_6b50, reads: &[ECX], stack_args: 1 },
+        Callee { target: 0x3000_0100, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x3000_0110, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x3000_0120, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x3000_0130, reads: &[ECX], stack_args: 0 },
+        Callee { target: 0x3000_0140, reads: &[ECX], stack_args: 0 },
+    ];
+    let (cases, made) = run_cases(&vectors("objmodel_vf09.json"), mtcore::semantic_l191::obj_model_vf09, false, &callees, &[]);
+    assert!(cases >= 1000, "{cases} cases");
+    eprintln!("{cases} ABI-level vf09 cases passed; calls {made:x?}");
+}
