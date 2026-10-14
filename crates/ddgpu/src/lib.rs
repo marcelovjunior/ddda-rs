@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 mod cache;
 mod gpu_busy;
+mod gpu_ts;
 mod upload_data;
 mod compute_quads;
 mod backend_data;
@@ -737,6 +738,7 @@ impl WgpuBackend {
                 panic!("wgpu error: {error}\n");
             }));
         }
+        gpu_ts::init(&device, &queue);
         let uniforms = Ring::new(&device, UNIFORM_RING, wgpu::BufferUsages::UNIFORM, "constants");
         let inline = Ring::new(&device, INLINE_RING, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::INDEX, "inline data");
         // L113: with DDGPU_NATIVE_SIM the pixel stage's bindings are also
