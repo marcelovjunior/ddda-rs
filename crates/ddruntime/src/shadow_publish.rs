@@ -257,7 +257,8 @@ fn run_view(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     let scheduler = m.u32(SCHEDULER_GLOBAL);
     let (starts, dones) = participant_events(m, scheduler);
     let guarded: Vec<u32> = starts.iter().chain(&dones).copied().collect();
-    let window = crate::threads::waits::open(&guarded);
+    // the window only serves the helpers (help() needs one)
+    let window = if helpers_enabled() { crate::threads::waits::open(&guarded) } else { None };
     if window.is_none() {
         NO_HELPERS.fetch_add(1, Relaxed);
     }
