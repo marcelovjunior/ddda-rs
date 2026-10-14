@@ -39,6 +39,14 @@ pub(super) fn enabled() -> bool {
     })
 }
 
+/// Guard proofs are opt-in (`DDRUNTIME_PARALLEL_SHADOW_CHECK=N`, head
+/// #14617, user order): a proof stalls the frame for about a second. Without
+/// it every exclusive traversal publishes, unproven, and nothing turns
+/// publication off.
+fn checking() -> bool {
+    std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_CHECK").is_some()
+}
+
 fn check_every() -> u64 {
     static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *N.get_or_init(|| {
@@ -76,11 +84,11 @@ static WAITED_US: AtomicU64 = AtomicU64::new(0);
 static WAITED: AtomicU64 = AtomicU64::new(0);
 
 /// How long a traversal waits for the other participants to park before it
-/// runs serially (`DDRUNTIME_PARALLEL_SHADOW_WAIT_US`, default 2000).
+/// runs serially (`DDRUNTIME_PARALLEL_SHADOW_WAIT_US`, default 0: s2d 33.7 fps vs 33.0 with 500 and 30.3 with 2000).
 fn wait_limit() -> std::time::Duration {
     static US: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     std::time::Duration::from_micros(*US.get_or_init(|| {
-        std::env::var("DDRUNTIME_PARALLEL_SHADOW_WAIT_US").ok().and_then(|v| v.parse().ok()).unwrap_or(2000)
+        std::env::var("DDRUNTIME_PARALLEL_SHADOW_WAIT_US").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
     }))
 }
 
@@ -93,7 +101,9 @@ pub(super) fn decide(context: u32) -> Decision {
     if call % 512 == 511 {
         report();
     }
-    if FALLBACK.load(Relaxed) {
+    if !checking() {
+        Decision::Parallel
+    } else if FALLBACK.load(Relaxed) {
         Decision::Serial
     } else if call % check_every() == 0 {
         Decision::Proof
@@ -156,10 +166,10 @@ pub(super) fn proof_result(context: u32, result: &Result<usize, String>) {
 
 fn report() {
     eprintln!(
-        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, contexts proven {}) units {} lanes helped {} task errors {} woke {} woke inside {} fallback {}",
+        "parallel-shadow publish: traversals {} windows {} (after waiting {}, {} us) not exclusive {} proofs {} (inconclusive {}, contexts proven {}) units {} lanes helped {} task errors {} window errors {} woke {} woke inside {} fallback {}",
         CALLS.load(Relaxed), WINDOWS.load(Relaxed), WAITED.load(Relaxed), WAITED_US.load(Relaxed),
         NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed), INCONCLUSIVE.load(Relaxed), PROVEN.lock().unwrap_or_else(|e| e.into_inner()).len(),
-        UNITS.load(Relaxed), HELPED.load(Relaxed), TASK_ERRORS.load(Relaxed), WOKE.load(Relaxed),
+        UNITS.load(Relaxed), HELPED.load(Relaxed), TASK_ERRORS.load(Relaxed), WINDOW_ERRORS.load(Relaxed), WOKE.load(Relaxed),
         WOKE_INSIDE.load(Relaxed), FALLBACK.load(Relaxed)
     );
 }
@@ -302,13 +312,19 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     drop(window);
     if let Err(reason) = result {
         // the published state is the original parallel branch's, but not
-        // proven equal: stop publishing
-        if !FALLBACK.swap(true, Relaxed) {
-            eprintln!("parallel-shadow publish: {reason}; publication OFF");
+        // the proven shape: with guard proofs on, stop publishing; without
+        // them (the default) count it and go on
+        if WINDOW_ERRORS.fetch_add(1, Relaxed) < 8 {
+            eprintln!("parallel-shadow publish: window error: {reason}");
+        }
+        if checking() && !FALLBACK.swap(true, Relaxed) {
+            eprintln!("parallel-shadow publish: publication OFF");
         }
     }
     true
 }
+
+static WINDOW_ERRORS: AtomicU64 = AtomicU64::new(0);
 
 /// One lane of a private batch: its recording context and its jobs, run in
 /// order with DBD8D0's callback registers and return addresses
