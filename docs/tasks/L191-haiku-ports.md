@@ -13,11 +13,11 @@ call are caller-saved and are not compared unless declared.
 
 | Address | Function | Role | What it does | Speedup | Cases / mutations | Commit |
 |---|---|---|---|---|---|---|
-| 0x00886880 | `uObjModel::vf11` | per-model draw prep | Copies the model level to +0x158 and sets bit 30 of +0x108 when the level is above a constant; may run the state handler 0x007A6640, then tail-calls 0x00FFE5C0. | 3.3x (6.5x before the register fix) | 3000 / 3 of 3 | 1f92321b, register fix below |
-| 0x00885DC0 | `uObjModel::vf08` | per-model draw prep | Clears the draw counter; the first time calls vtable 0x80; when the pass word is 1 calls vtable 0x168, 0x16C, 0x170 and tail-calls 0x174. | 1.11x | 3000 / 3 of 3 | 6e1bbb3d, register fix below |
-| 0x0084C720 | `uCharacterBase::vf09` | per-character draw prep | Sets bit 0x200000 from a mode byte, calls 0x008586E0 and the model prep 0x00886530; with a block it calls a vtable slot 0x94 and the stdcall 0x00CA5930. | 1.41x | 3000 / 3 of 3 | c5525508, register fix below |
-| 0x00886530 | `uObjModel::vf09` | per-model draw prep | Flag-driven sub-object and child method calls; bounds test on the global reference (may call 0x00821750); angle block with the native CRT atan2; releases the table at +0x23B0. | 1.33x | 3000 (a third with exact bound ties) / 3 of 3 | 2126666c, register fix below |
-| 0x01165B40 | probe search step | probe tree step (`Global::FUN_01165b40`) | Picks an 80-byte record of the table, may ask a vtable method, a callback and table lookups; returns the last callee's EAX. | 1.68x | 3000 / 3 of 3 | aaa9a018, register fix below |
+| 0x00886880 | `uObjModel::vf11` | per-model draw prep | Copies the model level to +0x158 and sets bit 30 of +0x108 when the level is above a constant; may run the state handler 0x007A6640, then tail-calls 0x00FFE5C0. | 3.3x (6.5x before the audit) | 3000 / 3 of 3 | 1f92321b; register audit c6c8df77 |
+| 0x00885DC0 | `uObjModel::vf08` | per-model draw prep | Clears the draw counter; the first time calls vtable 0x80; when the pass word is 1 calls vtable 0x168, 0x16C, 0x170 and tail-calls 0x174. | 1.11x (borderline) | 3000 / 3 of 3 | 6e1bbb3d; register audit c6c8df77 |
+| 0x0084C720 | `uCharacterBase::vf09` | per-character draw prep | Sets bit 0x200000 from a mode byte, calls 0x008586E0 and the model prep 0x00886530; with a block it calls a vtable slot 0x94 and the stdcall 0x00CA5930. | 1.41x | 3000 / 3 of 3 | c5525508; register audit c6c8df77 |
+| 0x00886530 | `uObjModel::vf09` | per-model draw prep | Flag-driven sub-object and child method calls; bounds test on the global reference (may call 0x00821750); angle block with the native CRT atan2; releases the table at +0x23B0. | 1.33x | 3000 (a third with exact bound ties) / 3 of 3 | 2126666c; register audit c6c8df77 |
+| 0x01165B40 | probe search step | probe tree step (`Global::FUN_01165b40`) | Picks an 80-byte record of the table, may ask a vtable method, a callback and table lookups; returns the last callee's EAX. | 1.68x | 3000 / 3 of 3 | aaa9a018; register audit c6c8df77 |
 
 ## Register audit (after the crash report)
 
