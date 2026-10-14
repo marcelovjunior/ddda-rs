@@ -113,6 +113,11 @@ fn shader_key(s: &Option<std::sync::Arc<[u32]>>) -> u64 {
 
 /// A taken draw: its state key (everything but the shader constants) and its constants.
 pub(crate) fn note_draw(size: (u32, u32), d: &d3d9cmd::DrawCall) {
+    static STREAM: OnceLock<bool> = OnceLock::new();
+    if !*STREAM.get_or_init(|| std::env::var("DDRUNTIME_MEASURE_STREAM").as_deref() == Ok("1")) {
+        with(|w| w.sizes.entry(size).or_default().taken += 1);
+        return;
+    }
     let mut s = crate::fasthash::FxHasher::default();
     (d.primitive, d.primitives, d.start, d.base_vertex, d.min_index, d.vertex_count, d.fvf, d.viewport, d.scissor).hash(&mut s);
     format!("{:?}{:?}{:?}{:?}{:?}{:?}", d.vertices, d.indices, d.textures, d.render_states, d.targets, d.depth).hash(&mut s);
