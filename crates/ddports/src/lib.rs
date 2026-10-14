@@ -187,6 +187,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00cf_ec00, mtcore::semantic_s7_stream::stream_read),
             (0x00cf_e9d0, mtcore::semantic_s7_stream::stream_refill),
             (0x00ea_5320, mtcore::semantic_draw::draw_mesh_folded),
+            (0x00f1_1610, mtcore::semantic_s9::draw_with_resources),
             (0x00c8_5a00, mtcore::semantic_s10::apply_param_block),
             (0x007f_fcc0, mtcore::semantic_s10::submit_pass_records),
             (0x00b8_a7f0, mtcore::semantic_s10::player_prepare_draw),
