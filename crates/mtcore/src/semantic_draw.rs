@@ -305,7 +305,7 @@ fn view_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, ctx: u32, ba
 /// caller's ESP at its call of 0x00FEEF20, which pushes a return address,
 /// its saved ESI and two arguments before calling 0x00FEE320.
 // Translated from 0x00FEEF20 (DDDA.exe 2017-12-13 Steam)
-fn flush_primitive_state(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, ctx: u32) {
+pub(crate) fn flush_primitive_state(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, ctx: u32) {
     if pg.u8(m, ctx.wrapping_add(0x5c)) & 0x40 != 0 {
         return;
     }
