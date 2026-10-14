@@ -108,3 +108,9 @@ const DIR: &str = "E:/ddda-re/notes/native-L191/";
 fn bench_obj_model_vf11() {
     bench(&format!("{DIR}vf11.json"), "0x00886880", &[("lifted", lifted::f_00886880), ("port", mtcore::semantic_l191::obj_model_vf11)]);
 }
+
+#[test]
+#[ignore]
+fn bench_obj_model_vf08() {
+    bench(&format!("{DIR}vf08.json"), "0x00885DC0", &[("lifted", lifted::f_00885dc0), ("port", mtcore::semantic_l191::obj_model_vf08)]);
+}

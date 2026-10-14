@@ -194,6 +194,7 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00fe_4780, mtcore::semantic_s10::bind_consumer_to_model),
             // L191: per-model draw prep (uObjModel::vf11)
             (0x0088_6880, mtcore::semantic_l191::obj_model_vf11),
+            (0x0088_5dc0, mtcore::semantic_l191::obj_model_vf08),
         ] {
             if !semantic_selected(a) {
                 continue;

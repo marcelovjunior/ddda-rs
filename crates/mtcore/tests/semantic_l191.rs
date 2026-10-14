@@ -162,3 +162,14 @@ fn obj_model_vf11_matches_original() {
     assert!(cases >= 1000, "{cases} cases");
     eprintln!("{cases} ABI-level vf11 cases passed; calls {made:x?}");
 }
+
+// verifies 0x00885dc0 (ABI level; void; the vtable slots of the model as recorded stubs)
+#[test]
+fn obj_model_vf08_matches_original() {
+    let stubs = [0x3000_0100, 0x3000_0200, 0x3000_0300, 0x3000_0400];
+    let callees: Vec<Callee> = stubs.iter().map(|&target| Callee { target, reads: &[ECX], stack_args: 0 }).collect();
+    let callees: &'static [Callee] = Box::leak(callees.into_boxed_slice());
+    let (cases, made) = run_cases(&vectors("vf08.json"), mtcore::semantic_l191::obj_model_vf08, false, callees, &[]);
+    assert!(cases >= 1000, "{cases} cases");
+    eprintln!("{cases} ABI-level vf08 cases passed; calls {made:x?}");
+}
