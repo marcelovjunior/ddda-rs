@@ -100,7 +100,10 @@ fn schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
     // Registering this address also routes in-shard calls through the private
     // resolver. Ordinary execution retains the previous exact binding.
     let private = publish::window_scheduler();
-    if private != 0 && cpu.ecx == private {
+    if (private != 0 && cpu.ecx == private) || publish::is_private_scheduler(cpu.ecx) {
+        // any thread, any depth: a private copy's batch runs as lanes here,
+        // never through the game's dispatch (its events are the real
+        // participants')
         return publish::dispatch(memory, cpu);
     }
     ORIGINAL.get().unwrap()[2](memory, cpu);

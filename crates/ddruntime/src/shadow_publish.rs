@@ -275,7 +275,7 @@ fn run_view(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     let storage = THREAD_STORAGE.with(|s| {
         let mut s = s.borrow_mut();
         let st = s.get_or_insert_with(|| Storage {
-            scheduler: allocate(SCHEDULER_BYTES),
+            scheduler: register_private_scheduler(allocate(SCHEDULER_BYTES)),
             manager: allocate(MANAGER_BYTES),
             secondary: (0, 0),
             prefilled: false,
@@ -306,6 +306,28 @@ fn window_result(result: Result<usize, String>) {
             eprintln!("parallel-shadow publish: publication OFF");
         }
     }
+}
+
+/// Every private scheduler copy ever allocated (each thread's view-mode
+/// storage and the exclusive window's). DBE560 must never run the game's own
+/// dispatch on one of them: a copy holds the real participants' event
+/// handles, so the lifted dispatch would wake real workers that then read
+/// the real scheduler, find no batch, and never signal its done events (the
+/// view-mode deadlock: a nested or helper-thread dispatch on a private copy).
+static PRIVATE_SCHEDULERS: [std::sync::atomic::AtomicU32; 64] = [const { std::sync::atomic::AtomicU32::new(0) }; 64];
+
+fn register_private_scheduler(address: u32) -> u32 {
+    for slot in &PRIVATE_SCHEDULERS {
+        if slot.compare_exchange(0, address, Relaxed, Relaxed).is_ok() {
+            return address;
+        }
+    }
+    panic!("parallel-shadow publish: more than 64 private schedulers");
+}
+
+/// Whether `scheduler` is one of the private copies (see [`PRIVATE_SCHEDULERS`]).
+pub(super) fn is_private_scheduler(scheduler: u32) -> bool {
+    scheduler != 0 && PRIVATE_SCHEDULERS.iter().any(|slot| slot.load(Relaxed) == scheduler)
 }
 
 fn allocate(size: u32) -> u32 {
@@ -388,7 +410,7 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     let storage = {
         let mut s = STORAGE.lock().unwrap_or_else(|e| e.into_inner());
         let st = s.get_or_insert_with(|| Storage {
-            scheduler: allocate(0x1c150),
+            scheduler: register_private_scheduler(allocate(0x1c150)),
             manager: allocate(0xd40 + 8 * LANE_BYTES),
             secondary: (0, 0),
             prefilled: false,
