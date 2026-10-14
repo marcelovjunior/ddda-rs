@@ -760,3 +760,9 @@ the whole stream: ~970-1450 main-view draws (3-5.4 ms), 125-206 shadow draws (0.
 main thread's production: the worker still receives them when a stream carries them), + GPU 6.5 ms. A retained-stream replay must therefore take the
 frame from (production 3.8 + worker 5-7.6) to (patch ~0.3 + sink for the main view ~1.5-2.5): i.e. the unchanged parts above, not the sim, are the
 displayed-frame cost, and they cap the displayed rate at roughly 60-70 fps in this build regardless of N.
+
+### 11.5 Config note (head, 2026-10-14)
+The user's live config changed at 04:13 (CameraFov 0 -> 15, JobThread 1 -> 7, RenderingThread OFF -> ON, MaxFPS 150, Grass LOW, Aniso X4). CameraFov=15 roughly
+triples the main-view draw count (~4.5k per frame), so the render worker matters even more than the section 11.4 numbers suggest. All sections 11.1-11.4 numbers
+were taken with the live config of that time (draws/frame 4.4-5.2k); from 11.5 on every run copies the pinned `E:/ddda-re/bench/config.ini` (windowed) and
+restores the benchmark save into the sandbox first; compare only against baselines taken on it (fast2 41.5/41.7, main 41.1/41.4).

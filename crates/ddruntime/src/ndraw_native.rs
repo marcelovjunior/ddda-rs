@@ -1543,6 +1543,9 @@ impl Caches {
         if self.frame % 8 == 0 {
             let frame = self.frame;
             self.bindings.retain(|_, (seen, _)| *seen + 3 > frame);
+            // L193: the stream and target parts leave the same way (a table-wide clear past 16384 entries cost the worker 1.5% in one frame)
+            self.streams.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.target_bindings.retain(|_, (seen, _)| *seen + 3 > frame);
             let capacity = self.by_content.len();
             let current = std::mem::replace(&mut self.by_content, FxMap::with_capacity_and_hasher(capacity, Default::default()));
             let parts = std::mem::replace(&mut self.by_content_old, current);
