@@ -106,6 +106,17 @@ fn schedule(memory: &mut dyn Mem, cpu: &mut Cpu) {
         // participants')
         return publish::dispatch(memory, cpu);
     }
+    if private != 0 || ddnative_base::sched::view() != 0 {
+        // the game's dispatch while this thread is in a window or a lane
+        static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if SEEN.fetch_add(1, Relaxed) < 16 {
+            eprintln!(
+                "parallel-shadow schedule passthrough ecx={:#x} window={private:#x} view={:#x} top={} real={:#x} tid={:#x} mode={} count={}",
+                cpu.ecx, ddnative_base::sched::view(), ddnative_base::sched::top_level(), memory.u32(SCHEDULER_GLOBAL),
+                crate::threads::current_tid(), memory.u32(cpu.esp + 4), memory.u32(cpu.ecx + 0x8c)
+            );
+        }
+    }
     ORIGINAL.get().unwrap()[2](memory, cpu);
 }
 
