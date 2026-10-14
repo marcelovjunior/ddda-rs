@@ -114,6 +114,18 @@ pub(crate) fn submit(queue: &wgpu::Queue, ready: Vec<Ready>) -> wgpu::Submission
         keepalive: vec![],
         checks: vec![],
     };
+    if crate::gpu_ts::enabled() {
+        let mut runs = vec![];
+        for r in ready {
+            let label = r.keepalive.iter().max_by_key(|p| p.extent.width as u64 * p.extent.height as u64)
+                .map_or_else(|| "other".to_string(), |p| crate::gpu_ts::pass_label(p.extent, p.native_colors.iter().flatten().count(), p.native_depth.is_some()));
+            combined.keepalive.extend(r.keepalive);
+            combined.checks.extend(r.checks);
+            runs.push((label, r.commands));
+        }
+        combined.commands = crate::gpu_ts::wrap(runs);
+        return combined.submit(queue);
+    }
     for r in ready {
         combined.commands.extend(r.commands);
         combined.keepalive.extend(r.keepalive);

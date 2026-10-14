@@ -192,5 +192,6 @@ impl Blitter {
         }
         queue.submit([enc.finish()]);
         crate::gpu_busy::submitted(queue, true);
+        crate::gpu_ts::end_frame();
     }
 }
