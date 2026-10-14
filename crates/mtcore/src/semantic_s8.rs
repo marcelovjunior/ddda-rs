@@ -283,7 +283,7 @@ impl Chain {
             // return sites of the original's two call sites
             let back = if scaled { 0x00e5_18d0 } else { 0x00e5_260a };
             let matrix = crate::semantic::call_from(m, c, pg, self.call_frame, self.skeleton, &[u32::MAX], back, |m, c| {
-                ddnative_base::x86::call_ext(m, c, method)
+                crate::semantic::call_guest(m, c, method)
             });
             (matrix, true)
         } else {

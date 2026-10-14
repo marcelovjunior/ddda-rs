@@ -205,7 +205,7 @@ fn original_apply_standard_material() {
     verify(
         "E:/ddda-re/notes/native-L177/01145bf0.json",
         0x1145bf0,
-        mtcore::semantic_draw_c::apply_standard_material,
+        mtcore::semantic_draw_c::apply_standard_material_guest_callee,
     );
 }
 

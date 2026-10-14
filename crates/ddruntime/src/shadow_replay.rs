@@ -1000,13 +1000,61 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     let result = if let Some(reason) = &fixture.rejection {
         Err(reason.clone())
     } else {
-        replay_fixture(fixture, RAW.get().unwrap().clone())
+        replay_with_image(&*memory, fixture)
     };
     eprintln!("parallel-shadow sample={index} audit={result:?} publish=serial");
     if publishing {
         publish::proof_result(&result);
     }
     x86::ldmxcsr(result_mxcsr);
+}
+
+/// Read-only pages of the exe image the replay needed in earlier proofs.
+static IMAGE_PAGES: std::sync::Mutex<std::collections::BTreeSet<u32>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// The exe image's read-only page holding `address` (code, .rdata: the
+/// loader maps every section but .data without write permission, and
+/// nothing writes them), else None.
+fn read_only_image_page(live: &dyn Mem, address: u32) -> Option<u32> {
+    let base = crate::win32::IMAGE_BASE;
+    let header = base + live.u32(base + 0x3c);
+    let size = live.u32(header + 0x50);
+    let page = address & !4095;
+    (page >= base
+        && page < base.wrapping_add(size)
+        && live.probe(page, 4096, false).is_ok()
+        && live.probe(page, 4096, true).is_err())
+    .then_some(page)
+}
+
+/// The replay with the read-only image pages it reads. The live run reads
+/// what its ports read; the replay runs the lifted bodies, which also read
+/// e.g. switch tables placed in .text (0x00EA3110.. after FUN_00ea23f0's
+/// body). Those pages are constant, so they are added from the live image
+/// on demand (remembered for later proofs) and the replay is repeated.
+/// Any other missing page stays a refusal.
+fn replay_with_image(live: &dyn Mem, fixture: capture_file::Fixture) -> Result<usize, String> {
+    let mut fixture = fixture;
+    for _ in 0..64 {
+        let mut input = (*fixture.input).clone();
+        for &page in IMAGE_PAGES.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+            if !input.has_page(page) {
+                input.capture_page(live, page, ddnative_base::mem::READ);
+            }
+        }
+        fixture.input = Arc::new(input);
+        lanes::LAST_MISSING.store(0, Relaxed);
+        let result = replay_fixture(fixture.clone(), RAW.get().unwrap().clone());
+        let missing = lanes::LAST_MISSING.swap(0, Relaxed);
+        match (&result, read_only_image_page(live, missing)) {
+            (Err(reason), Some(page)) if missing != 0 && reason.contains("MissingPage") => {
+                eprintln!("parallel-shadow replay reads image page {page:#x}; added, replay repeated");
+                IMAGE_PAGES.lock().unwrap_or_else(|e| e.into_inner()).insert(page);
+            }
+            _ => return result,
+        }
+    }
+    Err("replay needs more than 64 image pages".into())
 }
 
 /// Offline proof only: no Session, live game, services or graphics device is

@@ -32,7 +32,25 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
     if std::env::var("DDRUNTIME_SHADOW_TRAVERSAL").as_deref() == Ok("1") {
         ports.push((0x00db63e0, mtcore::shadow_traversal::traverse));
     }
-    if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
+    // L172 P2b: the sPrimitive begin/end methods and their dispatch thunks.
+    if std::env::var("DDRUNTIME_SHADOW_PRIMITIVE").as_deref() == Ok("1") {
+        ports.push((0x00e61010, mtcore::shadow_primitive::sprimitive_vf11));
+        ports.push((0x00e68390, mtcore::shadow_primitive::sprimitive_vf12));
+        ports.push((0x0107ff00, mtcore::shadow_primitive::dispatch_begin));
+        ports.push((0x0107ff30, mtcore::shadow_primitive::dispatch_end));
+        ports.push((0x0111e180, mtcore::shadow_primitive::sprimitive_sort));
+    }
+    if std::env::var("DDRUNTIME_SHADOW_TOP").as_deref() == Ok("1") {
+        // L172 P2a/P2d: the shadow job's top levels and the lane init/merge
+        // (semantic ports; setup_pass replaces the instruction-level port)
+        ports.push((0x00efd240, mtcore::shadow_top::setup_pass));
+        ports.push((0x00efdc70, mtcore::shadow_top::draw_cascades));
+        ports.push((0x00efef80, mtcore::shadow_top::draw_cascades));
+        ports.push((0x00ee2c90, mtcore::shadow_top::draw_shadow));
+        ports.push((0x00db7620, mtcore::shadow_top::run_unit_job));
+        ports.push((0x00fed200, mtcore::semantic_p2a::init_recording_lanes));
+        ports.push((0x00fed3b0, mtcore::semantic_p2a::merge_recording_lanes));
+    } else if std::env::var("DDRUNTIME_SHADOW_PASS").as_deref() == Ok("1") {
         ports.push((0x00efd240, mtcore::shadow_pass::setup));
     }
     // L176: the nDraw material's parameter binding, colour and update
@@ -171,11 +189,14 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00ff_04c0, mtcore::semantic_s9::set_viewport_rect),
             (0x0049_e920, mtcore::semantic_s10::find_nearest_object),
             (0x00fe_66a0, mtcore::semantic_s10::gather_ambient_probe),
+            (0x00ea_3130, mtcore::semantic_p2c::base_model_draw_unit),
+            (0x00ea_1fd0, mtcore::semantic_p2c::select_shadow_state_abi),
             (0x00fe_db80, mtcore::semantic_s1::save_recording_state),
             (0x00fe_dc00, mtcore::semantic_s1::restore_recording_state),
             (0x00cf_eec0, mtcore::semantic_s7_stream::stream_skip),
             (0x00cf_ec00, mtcore::semantic_s7_stream::stream_read),
             (0x00cf_e9d0, mtcore::semantic_s7_stream::stream_refill),
+            (0x00ea_5320, mtcore::semantic_draw::draw_mesh_folded),
             (0x00c8_5a00, mtcore::semantic_s10::apply_param_block),
             (0x007f_fcc0, mtcore::semantic_s10::submit_pass_records),
             (0x00b8_a7f0, mtcore::semantic_s10::player_prepare_draw),

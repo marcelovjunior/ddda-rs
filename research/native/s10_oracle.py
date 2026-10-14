@@ -35,8 +35,10 @@ class Oracle:
         uc = self.uc = Uc(UC_ARCH_X86, UC_MODE_32)
         self.entry, self.length, self.stubs = entry, length, stubs
         pages = {entry & ~0xFFF, (entry + length) & ~0xFFF}
-        for a in list(stubs) + [c[0] for c in extra_code]:
+        for a in stubs:
             pages.add(a & ~0xFFF)
+        for a, n in extra_code:
+            pages.update(range(a & ~0xFFF, ((a + n - 1) & ~0xFFF) + 0x1000, 0x1000))
         for p in sorted(pages):
             uc.mem_map(p, 0x1000)
         for a, n in maps:

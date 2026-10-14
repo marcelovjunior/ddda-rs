@@ -16,6 +16,7 @@ pub mod audio;
 pub mod archive_inflate;
 pub mod procedural_geometry;
 mod job_participants;
+mod waits;
 pub mod input;
 pub mod d3d9;
 pub mod d3d9copy;

@@ -6,6 +6,7 @@ use std::io::{self, Read, Write};
 const MAGIC: &[u8; 8] = b"DDSH172\x04";
 const CPU_WORDS: usize = 84;
 
+#[derive(Clone)]
 pub(super) struct Fixture {
     pub input: Arc<Snapshot>,
     pub incoming: Cpu,

@@ -499,3 +499,131 @@ fn crt_log_matches_original() {
         mtcore::semantic_s9::crt_log(m, pg, f64::from_bits(x)).to_bits()
     });
 }
+
+/// MXCSR and x87 control word of a recorded case, restored on drop.
+struct FloatingControl(u32);
+impl Drop for FloatingControl {
+    fn drop(&mut self) {
+        ddnative_base::x86::ldmxcsr(self.0);
+    }
+}
+fn floating_control(c: &mut Cpu, before: &Value) -> FloatingControl {
+    use ddnative_base::x86;
+    let old = x86::stmxcsr();
+    x86::ldmxcsr(n(&before["mxcsr"]));
+    let mut control = [0; 10];
+    control[..2].copy_from_slice(&(n(&before["x87"][0]) as u16).to_le_bytes());
+    c.st.exec::<0x28d9>(&mut control);
+    FloatingControl(old)
+}
+
+/// The record_draw_mesh_real.py vectors (callee format of record_l177.py):
+/// the folded callees run as real code in the oracle, so the only recorded
+/// calls are the stubs; each call must see the recorded registers, stack
+/// arguments, memory so far and (for the listener callback) the sphere.
+fn draw_mesh_real_cases(body: LiftFn) -> usize {
+    use ddnative_base::x86;
+    use std::{cell::Cell, rc::Rc};
+    let path = "E:/ddda-re/notes/native-L184/draw_mesh_real.json";
+    let text = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if std::env::var_os("DDNATIVE_REQUIRE_VECTORS").is_some() => panic!("{path}: {e}"),
+        Err(_) => return 0,
+    };
+    ddnative_host::install();
+    let data: Value = serde_json::from_str(&text).unwrap();
+    let mut count = 0;
+    for case in data["cases"].as_array().unwrap() {
+        let seed = n(&case["seed"]);
+        let mut m = Memory {
+            bytes: pairs(&case["initial"]),
+            ..Default::default()
+        };
+        let mut expected = m.bytes.clone();
+        expected.extend(pairs(&case["after"]["memory"]));
+        let mut c = Cpu::default();
+        [c.eax, c.ecx, c.edx, c.ebx, c.esp, c.ebp, c.esi, c.edi] =
+            std::array::from_fn(|i| n(&case["before"]["regs"][i]));
+        // the CRT memcpy inside the commit is done natively
+        let calls: Vec<Value> = case["calls"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|call| n(&call["target"]) != 0x012e_fea0)
+            .collect();
+        let total = calls.len();
+        let cursor = Rc::new(Cell::new(0));
+        let pos = cursor.clone();
+        x86::set_ext_calls(Some(Box::new(move |m, c, target| {
+            let call = &calls[pos.get()];
+            pos.set(pos.get() + 1);
+            assert_eq!(target, n(&call["target"]), "seed {seed}: call target");
+            assert_eq!(c.ecx, n(&call["regs"][1]), "seed {seed}: call {target:x} ECX");
+            assert_eq!(c.esp, n(&call["regs"][4]), "seed {seed}: call {target:x} ESP");
+            for (i, v) in call["args"].as_array().unwrap().iter().enumerate() {
+                assert_eq!(
+                    m.u32(c.esp + i as u32 * 4),
+                    n(v),
+                    "seed {seed}: call {target:x} argument {i}"
+                );
+            }
+            if std::env::var_os("S9_DEBUG").is_some() {
+                for (a, b) in pairs(&call["memory"]) {
+                    if !(0x0f000000..0x0f010000).contains(&a) && m.u8(a) != b {
+                        eprintln!(
+                            "seed {seed}: call {target:x}: byte {a:x} want {b:02x} got {:02x}",
+                            m.u8(a)
+                        );
+                    }
+                }
+            }
+            for (a, b) in pairs(&call["memory"]) {
+                if !(0x0f000000..0x0f010000).contains(&a) {
+                    assert_eq!(m.u8(a), b, "seed {seed}: call {target:x} memory {a:x}");
+                }
+            }
+            if let Some(buffer) = call.get("buffer") {
+                for (a, b) in pairs(buffer) {
+                    assert_eq!(m.u8(a), b, "seed {seed}: call {target:x} buffer {a:x}");
+                }
+            }
+            for (a, b) in pairs(&call["effects"]) {
+                m.set_u8(a, b);
+            }
+            c.eax = n(&call["result"]);
+            c.esp = n(&call["return_esp"]);
+            c.ecx = 0xc1a0;
+            c.edx = 0xd1a0;
+        })));
+        let _floating = floating_control(&mut c, &case["before"]);
+        body(&mut m, &mut c);
+        x86::set_ext_calls(None);
+        assert_eq!(cursor.get(), total, "seed {seed}: calls made");
+        // void function: EAX is not part of the ABI
+        let got = [c.ebx, c.esp, c.ebp, c.esi, c.edi];
+        let want = [3, 4, 5, 6, 7].map(|i| n(&case["after"]["regs"][i]));
+        assert_eq!(got, want, "seed {seed}: ebx/esp/ebp/esi/edi");
+        let observable = |a: u32, esp: u32| !(0x0f000000..esp).contains(&a);
+        for (&a, &b) in &expected {
+            if observable(a, c.esp) {
+                assert_eq!(m.bytes.get(&a), Some(&b), "seed {seed}: memory {a:x}");
+            }
+        }
+        for (&a, &b) in &m.writes {
+            if observable(a, c.esp) {
+                assert_eq!(expected.get(&a), Some(&b), "seed {seed}: extra write {a:x}");
+            }
+        }
+        count += 1;
+    }
+    count
+}
+
+// verifies 0x00ea5320 with 0x00fed940, 0x00feef20 and 0x00fee320 folded in
+#[test]
+fn draw_mesh_folded_matches_original() {
+    let n = draw_mesh_real_cases(mtcore::semantic_draw::draw_mesh_folded);
+    assert!(n >= 1000, "{n} cases");
+    eprintln!("{n} ABI-level draw_mesh (folded) cases passed");
+}

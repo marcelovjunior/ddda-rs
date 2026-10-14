@@ -736,3 +736,27 @@ E:/ddda-re/notes/runs/run_live172.log. All three samples report
 
 These are proofs only: nothing is published from the parallel run, and
 there is no speed-up yet.
+
+## P2d: semantic ports of the shadow job's top levels (s1, 2026-10-14)
+
+Module `mtcore::shadow_top` (branch `task/L172-p2d`), ABI-level ports in the
+style of the L184 semantic ports (callee-saved registers, ESP, every guest
+write above the returned stack, each guest call made as the original makes
+it, through `shadow_top::call_guest`, which enters a registered native port
+directly and otherwise `call_ext`):
+
+| address | port | proof |
+|---|---|---|
+| 0x00EFD240 | `setup_pass` | the 96 original L169 vectors (`native-L169/shadow_pass.json`), 9/10 mutations (the tenth is equivalent: bit 0 of the shader tag is masked) |
+| 0x00EFDC70, 0x00EFEF80 (jmp thunk) | `draw_cascades` | 2000 recorded cases (`record_shadow_cascades.py`), x87 balance checked, 8/8 mutations |
+| 0x00EE2C90 | `draw_shadow` | 2000 recorded cases (`record_shadow_wrappers.py draw`) |
+| 0x00DB7620 | `run_unit_job` | 2000 recorded cases (`record_shadow_wrappers.py job`), ends in a tail jump to 0x00BFC7D0 |
+
+Registration is not in this branch (ddports): `0x00EFD240 -> setup_pass`
+(replacing the instruction-level `shadow_pass::setup`), `0x00EFDC70` and
+`0x00EFEF80 -> draw_cascades`, `0x00EE2C90 -> draw_shadow`,
+`0x00DB7620 -> run_unit_job`. Known limit of the setup_pass vectors: the
+pass index `k` (stored in `ctx[0x180]` only for the duration of one callee)
+is 0 in all recorded cases, so only a callee could observe it. `setup_pass`
+vs the instruction-level port on the same vectors: about 720 -> 480..730 ns
+per call (the replayed callees dominate).

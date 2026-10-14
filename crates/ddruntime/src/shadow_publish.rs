@@ -52,6 +52,10 @@ static WINDOWS: AtomicU64 = AtomicU64::new(0);
 static NOT_EXCLUSIVE: AtomicU64 = AtomicU64::new(0);
 static PROOFS: AtomicU64 = AtomicU64::new(0);
 static UNITS: AtomicU64 = AtomicU64::new(0);
+/// windows aborted before the redirect because a participant woke
+static WOKE: AtomicU64 = AtomicU64::new(0);
+/// participants that woke (and were held) during a completed window
+static WOKE_INSIDE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) enum Decision {
     Serial,
@@ -85,9 +89,9 @@ pub(super) fn proof_result(result: &Result<usize, String>) {
 
 fn report() {
     eprintln!(
-        "parallel-shadow publish: traversals {} windows {} not exclusive {} proofs {} units {} fallback {}",
+        "parallel-shadow publish: traversals {} windows {} not exclusive {} proofs {} units {} woke {} woke inside {} fallback {}",
         CALLS.load(Relaxed), WINDOWS.load(Relaxed), NOT_EXCLUSIVE.load(Relaxed), PROOFS.load(Relaxed),
-        UNITS.load(Relaxed), FALLBACK.load(Relaxed)
+        UNITS.load(Relaxed), WOKE.load(Relaxed), WOKE_INSIDE.load(Relaxed), FALLBACK.load(Relaxed)
     );
 }
 
@@ -125,47 +129,30 @@ fn copy(m: &mut dyn Mem, from: u32, to: u32, size: u32) {
     crate::fastmem::write_bulk(m, to, &bytes);
 }
 
-/// The other job participants all blocked in their waits (see the module
-/// notes), as `[handles guarded]` when exclusive.
-fn exclusive(m: &dyn Mem, scheduler: u32) -> Option<Vec<u32>> {
+/// The job participants' start and done events from the scheduler's slots.
+fn participant_events(m: &dyn Mem, scheduler: u32) -> (Vec<u32>, Vec<u32>) {
     let participants = m.u32(scheduler + 0x98).min(64);
-    let mut starts = Vec::new();
-    let mut dones = Vec::new();
+    let (mut starts, mut dones) = (Vec::new(), Vec::new());
     for k in 1..participants {
         let slot = scheduler + 0x1bdec + 0x20 * (k - 1);
         dones.push(m.u32(slot));
         starts.push(m.u32(slot - 4));
     }
-    let others = crate::threads::waits::others();
-    let unblocked = starts.iter().filter(|&&s| !others.iter().any(|(_, h)| h.contains(&s))).count();
-    let main_blocked = others.iter().any(|(_, h)| !h.is_empty() && h.iter().all(|x| dones.contains(x)));
-    // the main thread itself (every worker parked), or one worker (this one)
-    // with the main thread in the join
-    let ok = (unblocked == 0 && !main_blocked) || (unblocked == 1 && main_blocked);
-    ok.then(|| starts.into_iter().chain(dones).collect())
+    (starts, dones)
 }
 
 /// Run the traversal's parallel branch in a window. False: not exclusive
 /// (nothing was changed; the caller runs it serially).
 pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
     let scheduler = m.u32(SCHEDULER_GLOBAL);
-    // open first (a waking participant is then held), then check
-    let guarded = {
-        let participants = m.u32(scheduler + 0x98).min(64);
-        let mut h = Vec::new();
-        for k in 1..participants {
-            let slot = scheduler + 0x1bdec + 0x20 * (k - 1);
-            h.push(m.u32(slot));
-            h.push(m.u32(slot - 4));
-        }
-        h
-    };
-    if !crate::threads::waits::open(&guarded) {
+    let (starts, dones) = participant_events(m, scheduler);
+    // open first (a waking participant is then held and flagged), then check
+    let guarded: Vec<u32> = starts.iter().chain(&dones).copied().collect();
+    let Some(window) = crate::threads::waits::open(&guarded) else {
         NOT_EXCLUSIVE.fetch_add(1, Relaxed);
         return false;
-    }
-    if exclusive(m, scheduler).is_none() {
-        crate::threads::waits::close();
+    };
+    if window.check(&starts, &dones).is_none() {
         NOT_EXCLUSIVE.fetch_add(1, Relaxed);
         return false;
     }
@@ -185,8 +172,18 @@ pub(super) fn run(m: &mut dyn Mem, cpu: &mut Cpu, original: LiftFn) -> bool {
         }
         Storage { scheduler: st.scheduler, manager: st.manager, secondary: st.secondary, prefilled: false }
     };
+    // the last check before any redirect: a participant that woke while the
+    // window was being set up (it is held, but the premise is gone) aborts
+    if window.violated() || window.check(&starts, &dones).is_none() {
+        NOT_EXCLUSIVE.fetch_add(1, Relaxed);
+        WOKE.fetch_add(1, Relaxed);
+        return false;
+    }
     let result = run_window(m, cpu, original, &storage);
-    crate::threads::waits::close();
+    if window.violated() {
+        WOKE_INSIDE.fetch_add(1, Relaxed);
+    }
+    drop(window);
     if let Err(reason) = result {
         // the published state is the original parallel branch's, but not
         // proven equal: stop publishing

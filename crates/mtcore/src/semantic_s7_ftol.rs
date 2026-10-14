@@ -12,7 +12,7 @@
 //!
 //! Translated from 0x012F05C0 (DDDA.exe 2017-12-13 Steam).
 use ddnative_base::mem::{Mem, Pages};
-use ddnative_base::x86::{call_ext, Cpu};
+use ddnative_base::x86::Cpu;
 
 const SSE2_FLAG: u32 = 0x019a_a078;
 const NO_SSE2_PATH: u32 = 0x012f_05f6;
@@ -32,7 +32,7 @@ fn truncate_to_i32(v: f64) -> u32 {
 pub fn ftol2_sse(m: &mut dyn Mem, c: &mut Cpu) {
     let pg = Pages::of(m);
     if pg.u32(m, SSE2_FLAG) == 0 {
-        return call_ext(m, c, NO_SSE2_PATH);
+        return crate::semantic::call_guest(m, c, NO_SSE2_PATH);
     }
     let entry = c.esp;
     // the original's 8-byte aligned slot below its frame

@@ -47,7 +47,7 @@ fn forward_record_table(m: &mut dyn Mem, c: &mut Cpu, count: u32, table: u32, re
     emit::push(c.edx, m, pt, c);
     emit::push(c.ecx, m, pt, c);
     emit::push(resume, m, pt, c);
-    x86::call_ext(m, c, 0x582a10);
+    crate::semantic::call_guest(m, c, 0x582a10);
     ret(c, 12);
 }
 
@@ -157,7 +157,7 @@ pub fn save_draw_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
     c.ecx = c.eax.wrapping_add(c.esi).wrapping_add(0x81f8);
     emit::push(c.ecx, m, pt, c);
     emit::push(0xfedbc7, m, pt, c);
-    x86::call_ext(m, c, 0x12efea0);
+    crate::semantic::call_guest(m, c, 0x12efea0);
     c.edx = (c.edx & 0xffff0000) | u32::from(m.fast_u16(pt, c.esp.wrapping_add(0x14)));
     let depth = m.fast_u32(pt, c.esi.wrapping_add(0x30874));
     m.fast_set_u32(pt, c.esi.wrapping_add(0x30874), depth.wrapping_add(1));
@@ -199,7 +199,7 @@ pub fn restore_draw_recording_state(m: &mut dyn Mem, c: &mut Cpu) {
     macro_rules! call {
         ($target:expr, $resume:expr) => {{
             push_fast!($resume);
-            x86::call_ext(m, c, $target);
+            crate::semantic::call_guest(m, c, $target);
         }};
     }
     push_fast!(c.ebx);
@@ -326,7 +326,7 @@ pub fn initialize_draw_recording_lanes(m: &mut dyn Mem, c: &mut Cpu) {
     macro_rules! call {
         ($target:expr, $resume:expr) => {{
             push_fast!($resume);
-            x86::call_ext(m, c, $target);
+            crate::semantic::call_guest(m, c, $target);
         }};
     }
     c.esp = c.esp.wrapping_sub(0x1c);
@@ -516,7 +516,7 @@ pub fn intern_dependency_keys(m: &mut dyn Mem, c: &mut Cpu) {
             push_fast!(value);
             c.ecx = c.ebp;
             push_fast!(resume);
-            x86::call_ext(m, c, 0xe0ec50);
+            crate::semantic::call_guest(m, c, 0xe0ec50);
         }
     }
     c.ebx = r!(stack!(0x428));
@@ -556,7 +556,7 @@ pub fn intern_dependency_keys(m: &mut dyn Mem, c: &mut Cpu) {
     push_fast!(c.eax);
     c.ecx = c.ebp;
     push_fast!(0xe1118f);
-    x86::call_ext(m, c, 0xe0e5e0);
+    crate::semantic::call_guest(m, c, 0xe0e5e0);
     c.edi = emit::pop(m, pt, c);
     c.esi = emit::pop(m, pt, c);
     c.ebp = emit::pop(m, pt, c);
@@ -705,7 +705,7 @@ pub fn dispatch_geometry(m: &mut dyn Mem, c: &mut Cpu) {
                 push_fast!(c.eax);
             }
             push_fast!(return_to);
-            x86::call_ext(m, c, target);
+            crate::semantic::call_guest(m, c, target);
             c.esp = c.ebp;
             c.ebp = ddnative_base::emit::pop(m, pt, c);
             ret(c, 0x18);
@@ -737,7 +737,7 @@ pub fn resolve_identifier(m: &mut dyn Mem, c: &mut Cpu) {
         ($return_to:expr) => {{
             let target = c.edx;
             push_fast!($return_to);
-            x86::call_ext(m, c, target);
+            crate::semantic::call_guest(m, c, target);
         }};
     }
     if (c.eax as i32) < 0 {
@@ -1000,7 +1000,7 @@ pub fn expand_dependencies(m: &mut dyn Mem, c: &mut Cpu) {
                                             // ADD ESI is the last flag writer before CALL.
                                             c.esi = c.fl.alu_add(c.esi, 2, 32);
                                             push(m, c, 0x00e0edd6);
-                                            x86::call_ext(m, c, 0x00e0ec50);
+                                            crate::semantic::call_guest(m, c, 0x00e0ec50);
                                             c.ecx = (r!(c.ebx) >> 20) & 63;
                                             c.edi = c.edi.wrapping_add(1);
                                             if c.edi >= c.ecx {

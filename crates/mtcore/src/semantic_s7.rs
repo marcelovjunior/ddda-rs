@@ -35,7 +35,7 @@
 use crate::semantic::call_from;
 use crate::semantic_s7_trig::{cosf, sinf};
 use ddnative_base::mem::{Mem, Pages};
-use ddnative_base::x86::{call_ext, Cpu};
+use ddnative_base::x86::Cpu;
 
 /// One `float` of the original with its arithmetic pinned to the SSE
 /// scalar instruction in the written operand order. Plain `f32` rounds the
@@ -226,7 +226,7 @@ fn sin_cos_of_angles(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, angles
     const COS_BACK: [u32; 3] = [0x00f2_b6a1, 0x00f2_b6b2, 0x00f2_b6c3];
     let guest = |m: &mut dyn Mem, c: &mut Cpu, target: u32, back: u32, x: F| -> F {
         c.xmm[0] = [x.to_bits(), 0, 0, 0];
-        call_from(m, c, pg, frame, 0, &[], back, |m, c| call_ext(m, c, target));
+        call_from(m, c, pg, frame, 0, &[], back, |m, c| crate::semantic::call_guest(m, c, target));
         F::from_bits(c.xmm[0][0])
     };
     let mut sin = [ZERO; 3];
@@ -341,7 +341,7 @@ fn reference_matrix(m: &mut dyn Mem, c: &mut Cpu, pg: Pages, frame: u32, joint_p
         call_from(m, c, pg, frame, model_ptr, &[0xffff_ffff], 0x00f2_bf47, |m, c| {
             let vtable = pg.u32(m, model_ptr);
             let method = pg.u32(m, vtable.wrapping_add(model::DEFAULT_REFERENCE_SLOT));
-            call_ext(m, c, method)
+            crate::semantic::call_guest(m, c, method)
         })
     } else {
         let joints = pg.u32(m, model_ptr.wrapping_add(model::JOINTS));

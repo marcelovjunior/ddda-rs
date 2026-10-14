@@ -22,7 +22,7 @@ use crate::object;
 use crate::property;
 use ddnative_base::mem::Mem;
 use ddnative_base::platform;
-use ddnative_base::x86::{self, Cpu, LiftFn};
+use ddnative_base::x86::{Cpu, LiftFn};
 use std::cell::RefCell;
 
 /// The import slots of EnterCriticalSection and LeaveCriticalSection.
@@ -323,7 +323,7 @@ pub fn f_00cf5e40(m: &mut dyn Mem, cpu: &mut Cpu) {
     let changed = ((index << dti::ALLOCATOR_SHIFT) ^ d.size_flags(m)) & dti::ALLOCATOR_MASK;
     dti::set_allocator(m, d, index, |m, d| {
         (cpu.eax, cpu.ecx) = (changed, d.0);
-        x86::call_ext(m, cpu, 0x00CF_5750); // jmp: returns to our caller
+        crate::semantic::call_guest(m, cpu, 0x00CF_5750); // jmp: returns to our caller
     });
 }
 

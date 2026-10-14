@@ -2,7 +2,7 @@
 use crate::semantic::call_from;
 use ddnative_base::{
     mem::{Mem, Pages},
-    x86::{self, Cpu},
+    x86::Cpu,
 };
 
 fn call(
@@ -16,7 +16,7 @@ fn call(
     target: u32,
 ) -> u32 {
     call_from(m, c, p, frame, receiver, args, back, |m, c| {
-        x86::call_ext(m, c, target)
+        crate::semantic::call_guest(m, c, target)
     })
 }
 

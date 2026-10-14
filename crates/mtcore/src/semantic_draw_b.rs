@@ -356,6 +356,18 @@ fn bind_shader_key(m: &mut dyn Mem, p: Pages, draw: u32, key: u32) {
 /// optionally repeat with the secondary material, then clear transient
 /// state. Bounds, counts, sort keys and bindings remain runtime guest data.
 pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
+    draw_culled(m, cpu, true);
+}
+
+/// [`draw_culled_instances`] with 0x00FF1920, 0x00FEEF20 and the CRT memcpy
+/// as guest calls, as the original makes them (differential tests).
+pub fn draw_culled_instances_guest_callees(m: &mut dyn Mem, cpu: &mut Cpu) {
+    draw_culled(m, cpu, false);
+}
+
+/// `native`: run the shadow-draw replay, the current-state commit and the
+/// parameter copy directly instead of as guest calls.
+fn draw_culled(m: &mut dyn Mem, cpu: &mut Cpu, native: bool) {
     let p = Pages::of(m);
     let sp = cpu.esp;
     let frame = ((sp.wrapping_sub(4)) & !15).wrapping_sub(0x60);
@@ -370,7 +382,7 @@ pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
     }
     let primitive = p.u32(m, sp + 8);
     let mask = p.u8(m, primitive + 7) & 7;
-    call(m, cpu, p, frame, 0xff1920, draw, &[], 0x11401d4);
+    shadow_draws_call(m, cpu, p, frame, draw, 0x11401d4, native);
     bind_shader_key(m, p, draw, 0x8771a00f);
     let key = p.u32(m, table + 0x64);
     let resource = p.u32(m, table + 0x60);
@@ -385,9 +397,9 @@ pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
         p.set_u32(m, draw + 0x150, 1);
     }
     bind_bank(m, p, draw, 0x2ff8, 0x2e00, 0x5c0);
-    let first_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, false);
+    let first_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, false, native);
     if first_drawn {
-        call(m, cpu, p, frame, 0xff1920, draw, &[], 0x11405a5);
+        shadow_draws_call(m, cpu, p, frame, draw, 0x11405a5, native);
     }
     if p.u8(m, object + 0x26) != 0 {
         bind_bank(m, p, draw, 0x2ee0, 0x2cf0, 0x2399759e);
@@ -406,14 +418,14 @@ pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
         let manager = p.u32(m, 0x18d2c80);
         let texture = p.u32(m, manager + 0x2cc);
         bind_resource(m, p, draw, 0x1cf0, texture, 0x45fbb000, 0);
-        instance_parameter(m, cpu, p, frame, draw, true);
+        instance_parameter(m, cpu, p, frame, draw, true, native);
         bind_shader_key(m, p, draw, 0x8771a00f);
-        let second_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, true);
+        let second_drawn = instance_ranges(m, cpu, p, frame, object, draw, primitive, table, mask, true, native);
         if second_drawn {
-            call(m, cpu, p, frame, 0xff1920, draw, &[], 0x1140c32);
+            shadow_draws_call(m, cpu, p, frame, draw, 0x1140c32, native);
         }
         bind_bank(m, p, draw, 0x2eb0, 0x2cc8, 0x950a6599);
-        instance_parameter(m, cpu, p, frame, draw, false);
+        instance_parameter(m, cpu, p, frame, draw, false, native);
         bind_bank(m, p, draw, 0x2ee0, 0x2ce8, 0x59d);
     }
     bind_shader_key(m, p, draw, 0);
@@ -423,13 +435,34 @@ pub fn draw_culled_instances(m: &mut dyn Mem, cpu: &mut Cpu) {
         p.set_u32(m, draw + 0x144, 0);
         p.set_u32(m, draw + 0x150, 1);
     }
-    call(m, cpu, p, frame, 0xfeef20, draw, &[], 0x1140edb);
+    commit_current_call(m, cpu, p, frame, draw, 0x1140edb, native);
     cpu.esp = sp.wrapping_add(16);
+}
+
+/// `draw->shadow_draws()` (0x00FF1920): direct, or the original's guest call.
+fn shadow_draws_call(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, resume: u32, native: bool) {
+    if native {
+        cpu.ecx = draw;
+        cpu.esp = frame.wrapping_sub(4);
+        crate::semantic_draw_a::shadow_draws(m, cpu);
+    } else {
+        call(m, cpu, p, frame, 0xff1920, draw, &[], resume);
+    }
+}
+
+/// `draw->commit_current()` (0x00FEEF20): direct, or the original's guest call.
+fn commit_current_call(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, resume: u32, native: bool) {
+    if native {
+        crate::semantic_draw_c::commit_current_state_native(m, cpu, p, draw, frame);
+        cpu.eax = 0;
+    } else {
+        call(m, cpu, p, frame, 0xfeef20, draw, &[], resume);
+    }
 }
 
 /// 0114085E..01140938 / 01140CC1..01140D9E: copy the parameter template
 /// through the original cdecl memcpy, then toggle its third float.
-fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, enabled: bool) {
+pub(crate) fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw: u32, enabled: bool, native: bool) {
     let flags = p.u32(m, draw + 0x5c);
     p.set_u32(m, draw + 0x5c, flags | 2);
     save_pair(m, p, draw, 0x1330, 0x227);
@@ -458,16 +491,20 @@ fn instance_parameter(m: &mut dyn Mem, cpu: &mut Cpu, p: Pages, frame: u32, draw
     if output != 0 {
         let size = u32::from(p.u16(m, descriptor + 0x18)) * 4;
         let source = p.u32(m, descriptor + 0x24);
-        call(
-            m,
-            cpu,
-            p,
-            frame,
-            0x12efea0,
-            if enabled { size } else { memcpy_this },
-            &[output, source, size],
-            if enabled { 0x1140928 } else { 0x1140d93 },
-        );
+        if native {
+            crate::semantic_s10::copy_words(m, p, output, source, size / 4);
+        } else {
+            call(
+                m,
+                cpu,
+                p,
+                frame,
+                0x12efea0,
+                if enabled { size } else { memcpy_this },
+                &[output, source, size],
+                if enabled { 0x1140928 } else { 0x1140d93 },
+            );
+        }
     }
     let value = if enabled { p.u32(m, 0x1406ce0) } else { 0 };
     p.set_u32(m, output + 8, value);
@@ -488,6 +525,7 @@ fn instance_ranges(
     table: u32,
     mask: u8,
     secondary: bool,
+    native: bool,
 ) -> bool {
     let mut drawn = false;
     for i in 0..3u32 {
@@ -501,16 +539,7 @@ fn instance_ranges(
             continue;
         }
         if drawn {
-            call(
-                m,
-                cpu,
-                p,
-                frame,
-                0xff1920,
-                draw,
-                &[],
-                if secondary { 0x11409ff } else { 0x1140371 },
-            );
+            shadow_draws_call(m, cpu, p, frame, draw, if secondary { 0x11409ff } else { 0x1140371 }, native);
         }
         let sort = p.u32(m, table + 0x20 + i * 4);
         let old = p.u32(m, draw + 0x164);
@@ -556,16 +585,7 @@ fn instance_ranges(
             &[draw, first, second, sphere],
             if secondary { 0x1140ad1 } else { 0x1140443 },
         );
-        call(
-            m,
-            cpu,
-            p,
-            frame,
-            0xfeef20,
-            draw,
-            &[],
-            if secondary { 0x1140ad8 } else { 0x114044a },
-        );
+        commit_current_call(m, cpu, p, frame, draw, if secondary { 0x1140ad8 } else { 0x114044a }, native);
         let values = [
             p.u32(m, primitive + 0x18),
             p.u32(m, primitive + 0x1c),
@@ -694,33 +714,118 @@ fn call(
         pages.set_u32(memory, cpu.esp, value);
     }
     cpu.ecx = this;
-    x86::call_ext(memory, cpu, target);
+    crate::semantic::call_guest(memory, cpu, target);
 }
 
 // Translated from 0x010655A0 (DDDA.exe 2017-12-13 Steam).
-/// Apply material state to a draw context, then call its original finalizer.
+/// Apply material state to a draw context, then run its finalizer natively
+/// ([`finalize_material`]).
 /// Material +0x10 is the dependency key; +0x14 packs render flags, +0x40
 /// contains RGBA floats, and +0x30 addresses twelve-byte override records
 /// (slot in the high twelve bits, then two value words). Draw +0x1f8 is
 /// the eight-byte value bank; +0x154 contains its dirty/render flags.
 pub fn apply_material(memory: &mut dyn Mem, cpu: &mut Cpu) {
+    apply_material_with(memory, cpu, finalize_material);
+}
+
+/// The finalizer step of [`apply_material`]: (memory, cpu, pages, material,
+/// draw, the original's frame at the finalizer's allocator call) -> the
+/// original's leftover EAX.
+pub type Finalizer = fn(&mut dyn Mem, &mut Cpu, Pages, u32, u32, u32) -> u32;
+
+/// [`apply_material`] with the guest finalizer 0x01062F20 (the original's
+/// own call, for tests against vectors that record it as a callee).
+pub fn apply_material_guest_finalizer(memory: &mut dyn Mem, cpu: &mut Cpu) {
+    apply_material_with(memory, cpu, |memory, cpu, pages, material, draw, frame| {
+        // the finalizer is entered with its frame less the argument and return address
+        call(memory, cpu, pages, frame.wrapping_add(0x24 + 8), 0x0106_2f20, material, &[draw], 0x0106_589c);
+        cpu.eax
+    });
+}
+
+/// 0x01062F20 as the ABI entry of the native finalizer (tests).
+pub fn finalize_material_abi(memory: &mut dyn Mem, cpu: &mut Cpu) {
+    let pages = Pages::of(memory);
+    let entry_stack = cpu.esp;
+    let draw = pages.u32(memory, entry_stack.wrapping_add(4));
+    let material = cpu.ecx;
+    cpu.eax = finalize_material(memory, cpu, pages, material, draw, entry_stack.wrapping_sub(0x24));
+    cpu.esp = entry_stack.wrapping_add(8);
+}
+
+pub fn apply_material_with(memory: &mut dyn Mem, cpu: &mut Cpu, finalize: Finalizer) {
     let pages = Pages::of(memory);
     let entry_stack = cpu.esp;
     let material = cpu.ecx;
     let draw = pages.u32(memory, entry_stack.wrapping_add(4));
     let variant = pages.u32(memory, entry_stack.wrapping_add(8));
     apply_material_state(memory, pages, material, draw, variant);
-    call(
-        memory,
-        cpu,
-        pages,
-        entry_stack.wrapping_sub(12),
-        0x0106_2f20,
-        material,
-        &[draw],
-        0x0106_589c,
-    );
+    // The finalizer's frame at its allocator call: apply_material's frame
+    // less the argument and return address, then 0x14 locals and four pushes.
+    let eax = finalize(memory, cpu, pages, material, draw, entry_stack.wrapping_sub(12 + 8 + 0x24));
+    cpu.eax = eax;
     cpu.esp = entry_stack.wrapping_add(12);
+}
+
+/// 0x01062F20, `material->finalize(draw)` (thiscall, `ret 4`; void): the
+/// material's four group slots (u16 indices at +0x50, 8 bytes apart; a set
+/// sign bit means unused) each name a group whose entries (count in the top
+/// 14 bits of its +4, entry numbers at its +8, low 12 bits) are bank slots
+/// of the draw context: every such slot gets a private copy of its constant
+/// block (size from the draw's descriptor bank at +0x18), allocated from the
+/// draw's arena (+0x24 cursor, +0x28 end; the allocator 0x00FED890 grows it)
+/// and copied from the slot's previous block (+0x1f8 + 8 * slot), then
+/// marks the draw dirty. Returns the original's leftover EAX (the last
+/// group, entry count or slot word, see the code) for ABI exactness;
+/// `frame` is the original's ESP at its allocator call.
+pub(crate) fn finalize_material(
+    memory: &mut dyn Mem,
+    cpu: &mut Cpu,
+    pages: Pages,
+    material: u32,
+    draw: u32,
+    frame: u32,
+) -> u32 {
+    let mut leftover = 0;
+    for slot in 0..4u32 {
+        let record = material.wrapping_add(0x50 + 8 * slot);
+        let index = pages.u16(memory, record);
+        leftover = u32::from(index);
+        if index & 0x8000 != 0 {
+            continue;
+        }
+        let group_table = pages.u32(memory, pages.u32(memory, material.wrapping_add(0x74)).wrapping_add(0x10));
+        let group = pages.u32(memory, group_table.wrapping_add(4).wrapping_add((index as i16 as i32 as u32).wrapping_mul(4)));
+        leftover = group;
+        if pages.u32(memory, group.wrapping_add(4)) & 0xfffc_0000 == 0 {
+            continue;
+        }
+        let mut j = 0u32;
+        loop {
+            let entries = pages.u32(memory, group.wrapping_add(8));
+            let number = pages.u32(memory, entries.wrapping_add(j.wrapping_mul(4))) & 0xfff;
+            let descriptor = pages.u32(memory, pages.u32(memory, draw.wrapping_add(0x18)).wrapping_add(number.wrapping_mul(4)));
+            let words = u32::from(pages.u16(memory, descriptor.wrapping_add(0x18)));
+            let size = (words.wrapping_mul(4).wrapping_add(0xf)) & !0xf;
+            if pages.u32(memory, draw.wrapping_add(0x24)).wrapping_add(size) > pages.u32(memory, draw.wrapping_add(0x28)) {
+                call(memory, cpu, pages, frame, 0x00fe_d890, draw, &[size], 0x0106_2fbe);
+            }
+            let block = pages.u32(memory, draw.wrapping_add(0x24));
+            pages.set_u32(memory, draw.wrapping_add(0x24), block.wrapping_add(size));
+            let slot_address = draw.wrapping_add(0x1f8).wrapping_add(number.wrapping_mul(8));
+            let source = pages.u32(memory, slot_address);
+            let words = u32::from(pages.u16(memory, descriptor.wrapping_add(0x18)));
+            crate::semantic_s10::copy_words(memory, pages, block, source, words);
+            pages.set_u32(memory, slot_address, block);
+            dirty(memory, pages, draw, 1);
+            j = j.wrapping_add(1);
+            leftover = j;
+            if j >= pages.u32(memory, group.wrapping_add(4)) >> 18 {
+                break;
+            }
+        }
+    }
+    leftover
 }
 
 fn apply_material_state(memory: &mut dyn Mem, pages: Pages, material: u32, draw: u32, variant: u32) {
@@ -809,6 +914,14 @@ fn apply_material_state(memory: &mut dyn Mem, pages: Pages, material: u32, draw:
     dirty(memory, pages, draw, 3);
 }
 
+/// [`select_material_pass`] called directly by another port: `entry` is the
+/// ESP the original would have at its entry.
+pub(crate) fn select_material_pass_at(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, material: u32, draw: u32, requested: u32, entry: u32) -> u32 {
+    let result = select_pass(memory, cpu, pages, entry, material, true, Some((draw, requested)));
+    cpu.eax = result;
+    result
+}
+
 // Translated from 0x01066C60 (DDDA.exe 2017-12-13 Steam), nDraw::Material::vf12.
 /// Select a material pass, preserving the original virtual/direct callees.
 /// Draw +0x16a selects the material family, +0x1d4 resolves an optional
@@ -818,12 +931,35 @@ pub fn select_material_pass(memory: &mut dyn Mem, cpu: &mut Cpu) {
     let entry_stack = cpu.esp;
     let pages = Pages::of(memory);
     let material = cpu.ecx;
-    let result = select_pass(memory, cpu, pages, entry_stack, material);
+    let result = select_pass(memory, cpu, pages, entry_stack, material, true, None);
     cpu.eax = result;
     cpu.esp = entry_stack.wrapping_add(12);
 }
 
-fn select_pass(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, entry_stack: u32, material: u32) -> u32 {
+/// [`select_material_pass`] with its callees 0x00FF1090 (set_pass) and
+/// 0x010655A0 (apply_material) as guest calls, as the original makes them
+/// (differential tests against the direct version).
+pub fn select_material_pass_guest_callees(memory: &mut dyn Mem, cpu: &mut Cpu) {
+    let entry_stack = cpu.esp;
+    let pages = Pages::of(memory);
+    let material = cpu.ecx;
+    let result = select_pass(memory, cpu, pages, entry_stack, material, false, None);
+    cpu.eax = result;
+    cpu.esp = entry_stack.wrapping_add(12);
+}
+
+/// `native`: run set_pass and apply_material directly instead of as guest calls.
+/// `given`: the (draw, requested pass) arguments when called directly by
+/// another port (the stack words are then not read).
+fn select_pass(
+    memory: &mut dyn Mem,
+    cpu: &mut Cpu,
+    pages: Pages,
+    entry_stack: u32,
+    material: u32,
+    native: bool,
+    given: Option<(u32, u32)>,
+) -> u32 {
     let frame = (entry_stack.wrapping_sub(4) & !15).wrapping_sub(0x20);
     let vtable = pages.u32(memory, material);
     let get_color = pages.u32(memory, vtable.wrapping_add(0x24));
@@ -843,8 +979,10 @@ fn select_pass(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, entry_stack: u
     if threshold > alpha {
         return 0;
     }
-    let requested = pages.u32(memory, entry_stack.wrapping_add(8));
-    let draw = pages.u32(memory, entry_stack.wrapping_add(4));
+    let (draw, requested) = match given {
+        Some(arguments) => arguments,
+        None => (pages.u32(memory, entry_stack.wrapping_add(4)), pages.u32(memory, entry_stack.wrapping_add(8))),
+    };
     if (requested as i32) < 24 {
         pass = requested;
     }
@@ -853,16 +991,7 @@ fn select_pass(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, entry_stack: u
     } else {
         pass
     };
-    call(
-        memory,
-        cpu,
-        pages,
-        frame,
-        0x00ff_1090,
-        draw,
-        &[selected, 0],
-        0x0106_6cc3,
-    );
+    set_pass(memory, cpu, pages, frame, native, draw, selected, 0x0106_6cc3);
     let owner = pages.u32(memory, draw.wrapping_add(0x1d4));
     let mut binding = 0;
     if owner != 0 {
@@ -925,16 +1054,14 @@ fn select_pass(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, entry_stack: u
             &[draw, high],
             0x0106_6fa7,
         );
-        call(
-            memory,
-            cpu,
-            pages,
-            frame,
-            0x0106_55a0,
-            material,
-            &[draw, 0],
-            0x0106_6fb1,
-        );
+        if native {
+            // apply_material(draw, 0) called directly: its entry ESP is the
+            // frame less the two arguments and the return address
+            apply_material_state(memory, pages, material, draw, 0);
+            finalize_material(memory, cpu, pages, material, draw, frame.wrapping_sub(12 + 12 + 8 + 0x24));
+        } else {
+            call(memory, cpu, pages, frame, 0x0106_55a0, material, &[draw, 0], 0x0106_6fb1);
+        }
         if pages.u32(memory, material.wrapping_add(0x18)) >> 31 != 0 {
             let texture = pages.u32(memory, draw.wrapping_add(0xd80));
             let color = pages.u32(memory, 0x0162_1120);
@@ -948,16 +1075,7 @@ fn select_pass(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, entry_stack: u
         }
         if pass == 16 {
             if nonzero_factor(memory, pages, draw) {
-                call(
-                    memory,
-                    cpu,
-                    pages,
-                    frame,
-                    0x00ff_1090,
-                    draw,
-                    &[12, 0],
-                    0x0106_703c,
-                );
+                set_pass(memory, cpu, pages, frame, native, draw, 12, 0x0106_703c);
             }
         } else if pass == 11 || pass == 12 {
             // JBE also returns immediately for unordered alpha.
@@ -977,16 +1095,7 @@ fn select_pass(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, entry_stack: u
                         resume = 0x0106_70c7;
                     }
                 }
-                call(
-                    memory,
-                    cpu,
-                    pages,
-                    frame,
-                    0x00ff_1090,
-                    draw,
-                    &[selected, 0],
-                    resume,
-                );
+                set_pass(memory, cpu, pages, frame, native, draw, selected, resume);
             }
         }
         1
@@ -1017,6 +1126,15 @@ fn select_pass(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, entry_stack: u
         } else {
             0
         }
+    }
+}
+
+/// `set_pass(selected, 0)` on the draw context: direct, or the original's guest call.
+fn set_pass(memory: &mut dyn Mem, cpu: &mut Cpu, pages: Pages, frame: u32, native: bool, draw: u32, pass: u32, resume: u32) {
+    if native {
+        crate::semantic::set_pass_at(memory, cpu, pages, draw, pass, false, frame.wrapping_sub(12));
+    } else {
+        call(memory, cpu, pages, frame, 0x00ff_1090, draw, &[pass, 0], resume);
     }
 }
 

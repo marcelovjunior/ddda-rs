@@ -20,6 +20,10 @@ struct Page {
     permissions: u8,
 }
 
+/// The address of the last read that found no captured page (0: none), for
+/// the proof runner's read-only image pages (shadow_replay::traverse).
+pub(crate) static LAST_MISSING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Explicit immutable input. No lazy reads from the running guest: missing
 /// capture pages reject execution rather than mixing two frame states.
 #[derive(Clone, Default)]
@@ -142,10 +146,10 @@ impl Snapshot {
     }
 
     fn byte(&self, address: u32, write: bool) -> Result<u8, Reject> {
-        let page = self
-            .pages
-            .get(&(address & !(PAGE - 1)))
-            .ok_or(Reject::MissingPage(address))?;
+        let page = self.pages.get(&(address & !(PAGE - 1))).ok_or_else(|| {
+            LAST_MISSING.store(address, std::sync::atomic::Ordering::Relaxed);
+            Reject::MissingPage(address)
+        })?;
         if page.permissions & if write { WRITE } else { READ } == 0 {
             return Err(Reject::Permission { address, write });
         }
