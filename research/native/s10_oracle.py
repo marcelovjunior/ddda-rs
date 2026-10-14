@@ -98,7 +98,10 @@ class Oracle:
         before["scribbled"] = [name for name, reg in (("ecx", x.UC_X86_REG_ECX), ("edx", x.UC_X86_REG_EDX)) if self._scribble.get(reg) == uc.reg_read(reg)]
         # optional extra memory the callee reads (stub[3](oracle, regs, esp) -> [(address, length)])
         if len(stub) > 3:
-            before['checks'] = [(a + i, b) for a, n in stub[3](self, self.regs(), esp) for i, b in enumerate(uc.mem_read(a, n))]
+            windows = stub[3](self, self.regs(), esp)
+            for a, n in windows:
+                self.remember(a, n)
+            before['checks'] = [(a + i, b) for a, n in windows for i, b in enumerate(uc.mem_read(a, n))]
         self._stub_writes = set()
         result = behaviour(self, self.regs(), esp)
         if isinstance(result, dict):
