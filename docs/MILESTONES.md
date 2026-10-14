@@ -29,7 +29,13 @@
 - Release NDRAW_BENCH: `draw_call` from the caches 0.34-0.41 -> 0.20-0.30
   us; a new frame's first draw 2.5-2.7 -> 1.31-1.43 us. In-game effect
   pending train 6.
-- Next: the train 6 profile, then per-draw guest reads. Details:
+- Verified in game: combo46 verify, 0 mismatches with the original's
+  upload skipping modelled (cb495a30); combo42's mismatches came from a
+  per-frame binding cache and from skipped uploads. Since then, tested
+  and cut (copy-on-write banks, skipped uploads unread, a lock-free dirty
+  check, O(1) override lookup, generation tables dropped off-thread, a
+  newest-writer index, batched sampler states).
+- Next: the train 18 verify and profile. Details:
   docs/tasks/L180-render-worker.md.
 
 ### L177 semantic state commit and model mesh (2026-10-13)
