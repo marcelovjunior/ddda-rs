@@ -1009,6 +1009,36 @@ fn traverse(memory: &mut dyn Mem, cpu: &mut Cpu) {
     x86::ldmxcsr(result_mxcsr);
 }
 
+/// Debug (DDRUNTIME_PARALLEL_SHADOW_DIFF): the differing bindings of the
+/// record at `path` in two streams, byte by byte with the constant origins.
+fn print_binding_difference(a: &mtcore::shadow_lanes::StreamSnapshot, b: &mtcore::shadow_lanes::StreamSnapshot, path: &[usize]) {
+    let mut ea = a.entries.get(path[0]);
+    let mut eb = b.entries.get(path[0]);
+    for &k in &path[1..] {
+        ea = ea.and_then(|e| e.record.children.get(k));
+        eb = eb.and_then(|e| e.record.children.get(k));
+    }
+    let (Some(ea), Some(eb)) = (ea, eb) else {
+        eprintln!("parallel-shadow diff: path {path:?} missing on one side");
+        return;
+    };
+    eprintln!("parallel-shadow diff: key {:#x}/{:#x} header {:#x}/{:#x} bindings {}/{}", ea.key, eb.key, ea.record.header, eb.record.header, ea.record.bindings.len(), eb.record.bindings.len());
+    for (i, (x, y)) in ea.record.bindings.iter().zip(&eb.record.bindings).enumerate() {
+        if x == y {
+            continue;
+        }
+        eprintln!("  binding {i}: kind {:?}/{:?} identity {}/{} len {}/{}", x.kind, y.kind, x.identity, y.identity, x.bytes.len(), y.bytes.len());
+        let mut shown = 0;
+        for (j, (p, q)) in x.bytes.iter().zip(&y.bytes).enumerate() {
+            if p != q && shown < 24 {
+                shown += 1;
+                let origin = x.constants.iter().find(|(o, _)| *o == j as u32).map(|(_, c)| *c);
+                eprintln!("    byte {j:#x}: {p:#04x}/{q:#04x} origin {origin:?}");
+            }
+        }
+    }
+}
+
 /// Read-only pages of the exe image the replay needed in earlier proofs.
 static IMAGE_PAGES: std::sync::Mutex<std::collections::BTreeSet<u32>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
@@ -1182,6 +1212,9 @@ fn compare_replays(
         compare_control_state(&outgoing, result_mxcsr, &result.0, result.3)
             .map_err(|field| format!("live/original serial replay {field} mismatch"))?;
         if let Some(d) = observed.first_difference(&result.1) {
+            if std::env::var_os("DDRUNTIME_PARALLEL_SHADOW_DIFF").is_some() {
+                print_binding_difference(&observed, &result.1, &d.path);
+            }
             return Err(format!("original serial replay stream differs from live serial: {d:?}"));
         }
         for address in observed_writes.keys().chain(result.2.keys()) {
