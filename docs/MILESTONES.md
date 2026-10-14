@@ -3317,3 +3317,10 @@ opening (codex-31), route perf (codex-29).
   Neither isolates L89. Next: head integrates L90 snapshot groups and L98 dirty
   flushes after addressing the newly exposed query/D3D-lock wait in L102.
   No game or lifted-shard build by this lane. Details: `tasks/L89-backend-worker.md`.
+- Minimal fix `df6ae57c` merged by head. Light runtime suite and focused
+  batching/order regression pass (0.81 s; 2,048 commands across two limits).
+  Full cache acceptance remains unverified: one run interrupted at 92.12 s;
+  final process exit 1 at 9.51 s without a test-result diagnostic.
+- Head #10593 ordered wrap-up/no new runs. No game/FPS comparison by this
+  agent. Evidence and limits: `docs/tasks/L96-encoder-hang.md`.
+- Next: head's uninterrupted cache gate, then L88/L95 gameplay/FPS comparison.
