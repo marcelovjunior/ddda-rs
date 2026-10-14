@@ -56,7 +56,9 @@ Next: head train acceptance; complete D7CF70/C24640 original-vector gates.
 
 ## Remaining routines
 
-- D7CF70: checkpoint below; not registered or TRAIN READY.
+- D7CF70: source inspected. Swept collision/simplex routine, including x87
+  copies in triangle-reduction branches; must preserve copy quieting and
+  exact SSE operation order. No port or acceptance claim yet.
 
 ## Results: C24640
 
@@ -85,35 +87,3 @@ register arguments and the callee-visible selection/sphere buffers.
 
 Next: head combined train; finish D7CF70 original-vector proof. Prior light
 timing-test failures remain the full runtime gate limitation, not a pass.
-
-## WIP checkpoint: D7CF70 (head stop request #14255)
-
-Complete semantic draft in `semantic_collision::sweep_support_shape`,
-compiled as an mtcore module but **not registered**. Source D7CF70..D7E24E
-plus its private switch table. Native support/simplex callees remain mock
-seams in the oracle and guest calls in production.
-
-- **640 original returns pass** the standalone ABI test, comparing full
-  EAX (including incidental upper bits), nonvolatile registers, ESP, all
-  observable memory and callee-visible vector buffers. Corpus includes
-  triangle regions, count 0..6, accepted travel, early rejection, limit
-  exit, optional outputs and NaN/infinity/subnormal/signed-zero inputs.
-- **960/1001 decoded body instructions** reached (plus four callee targets).
-  Reciprocal/negative-weight corner paths remain uncovered. No all-path
-  or gameplay acceptance claim.
-- An earlier **544-case** corpus passed all six combined isolated tests,
-  including opt2 and serial/atomic Pages. Paired median **1.106x**, 65/77
-  improving pairs, per-case medians **0.988–1.208x**. These timings precede
-  the final unordered-comparison correction and are not final acceptance.
-- The expanded corpus found unordered-comparison errors in the decompiler
-  condition spelling; direct COMISS branch review corrected them. Final
-  640-case ABI replay passes. The final combined optimized gate was still
-  in progress when head explicitly requested an immediate WIP commit and
-  stop to reserve quota for L172; do not register without finishing it.
-- Private corpus `E:/ddda-re/notes/native-L178/00d7cf70.json`, SHA-256
-  `cd197fcf602cbd94725eef26a44a0fafbaf839b7b57ca27146396e40aae678da`.
-  Recorder: `research/native/l178_collision.py` in the shared heavy slot.
-  Final gate: `python scripts/check_l178.py --bench`.
-
-Next owner: complete the final opt2/Pages gate, inspect remaining corner
-coverage, benchmark the final version, then register and TRAIN READY.

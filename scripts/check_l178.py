@@ -4,7 +4,6 @@ Extracted generated bodies and build products stay private. No shard build.
 """
 import argparse
 import os
-import re
 from pathlib import Path
 import subprocess
 
@@ -36,7 +35,6 @@ fn original_lifted_vectors() {
     x86::set_lifted_lookup(resolve);
     verify("E:/ddda-re/notes/native-L178/010a35d0.json",0x10a35d0,lifted::f_010a35d0);
     verify("E:/ddda-re/notes/native-L178/00c24640.json",0xc24640,lifted::f_00c24640);
-    verify("E:/ddda-re/notes/native-L178/00d7cf70.json",0xd7cf70,lifted::f_00d7cf70);
 }
 #[test]
 fn pages_and_cost() {
@@ -50,7 +48,6 @@ fn pages_and_cost() {
         for(entry,bodies) in [
             (0x10a35d0,[lifted::f_010a35d0 as LiftFn,mtcore::semantic_jobs::query_bounds_tree]),
             (0xc24640,[lifted::f_00c24640,mtcore::semantic_instancing::draw_instanced_mesh]),
-            (0xd7cf70,[lifted::f_00d7cf70,mtcore::semantic_collision::sweep_support_shape]),
         ] {
             let path=format!("E:/ddda-re/notes/native-L178/{entry:08x}.json");
             let data:Value=serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
@@ -97,7 +94,7 @@ fn pages_and_cost() {
 }
 fn resolve(target:u32)->Option<LiftFn> {
     macro_rules! routes {($($address:literal),*) => {match target {$($address => Some((|m,c|x86::call_ext(m,c,$address)) as LiftFn),)* _=>None}};}
-    routes!(0x00d63ff0,0x00d1b540,0x00d12e10,0x00d8e400,0x01004ab0,0x00fed940,0x0113c160,0x0113aea0,0x00ff14d0,0x00fed190,0x0113c1b0,0x00ea23f0,0x0113aee0,0x00feef20,0x00c26310,0x00ff1920,0x00c242c0)
+    routes!(0x01004ab0,0x00fed940,0x0113c160,0x0113aea0,0x00ff14d0,0x00fed190,0x0113c1b0,0x00ea23f0,0x0113aee0,0x00feef20,0x00c26310,0x00ff1920,0x00c242c0)
 }
 '''
 
@@ -109,18 +106,14 @@ def main():
     out=Path('E:/ddda-re/notes/native-L178/isolated');out.mkdir(parents=True,exist_ok=True)
     # Locate each body from source; shard allocation can change after regeneration.
     bodies=[]
-    for entry in [0x10a35d0,0xc24640,0xd7cf70]:
+    for entry in [0x10a35d0,0xc24640]:
         needle=f'pub fn f_{entry:08x}('
         matches=subprocess.check_output(['rg','-l','-F',needle,str(repo/'crates/ddlift')],text=True).splitlines()
         assert len(matches)==1,(entry,matches)
         source=Path(matches[0]).read_text();start=source.index(needle)
         end=source.find('\n// Translated from ',start)
         bodies.append(source[start:end if end>=0 else len(source)])
-    source='\n'.join(bodies)
-    local_targets=sorted(set(re.findall(r'super::lifted::f_([0-9a-f]+)',source)))
-    source=source.replace('super::lifted::','mock_callees::')
-    mocks='mod mock_callees {use super::*;'+''.join(f'pub fn f_{a}(m:&mut dyn Mem,c:&mut Cpu){{x86::call_ext(m,c,0x{a});}}' for a in local_targets)+'}'
-    (out/'lifted.rs').write_text('#![allow(warnings)]\npub use ddnative_base::mem;\nuse ddnative_base::{mem::Mem,emit,x86::{self,Cpu,Flags}};\n'+source+'\n'+mocks)
+    (out/'lifted.rs').write_text('#![allow(warnings)]\npub use ddnative_base::mem;\nuse ddnative_base::{mem::Mem,emit,x86::{self,Cpu,Flags}};\n'+'\n'.join(bodies))
     manifest=f'''[package]
 name="l178-isolated"
 version="0.1.0"

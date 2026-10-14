@@ -43,7 +43,6 @@ pub mod semantic_s4_model;
 pub mod semantic_s4_rt;
 pub mod semantic_s4_player;
 pub mod semantic_instancing;
-pub mod semantic_collision;
 pub mod semantic_draw;
 pub mod semantic_s9;
 pub mod semantic_trial;

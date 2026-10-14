@@ -105,7 +105,7 @@ fn verify(path: &str, entry: u32, body: LiftFn) -> usize {
             }
             for (a, b) in pairs(&call["memory"]) {
                 if !(0x0f000000..0x0f010000).contains(&a) {
-                    assert_eq!(m.u8(a), b, "seed {seed}: call memory {a:x}");
+                    assert_eq!(m.u8(a), b, "call memory {a:x}");
                 }
             }
             if call.get("reads").is_some() {
@@ -171,15 +171,6 @@ fn original_instanced_mesh() {
         "E:/ddda-re/notes/native-L178/00c24640.json",
         0xc24640,
         mtcore::semantic_instancing::draw_instanced_mesh,
-    );
-}
-
-#[test]
-fn original_sweep_support_shape() {
-    verify(
-        "E:/ddda-re/notes/native-L178/00d7cf70.json",
-        0xd7cf70,
-        mtcore::semantic_collision::sweep_support_shape,
     );
 }
 
