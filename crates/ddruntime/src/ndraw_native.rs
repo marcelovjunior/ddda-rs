@@ -734,14 +734,10 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
     let mut banks = c.banks.take().unwrap_or_default();
     for (stage, bank) in banks.iter_mut().enumerate() {
         let (floats, ints, bools) = c.banks_written[stage];
-        for word in 0..4 {
-            let mut m = floats[word];
-            while m != 0 {
-                let n = word * 64 + m.trailing_zeros() as usize;
-                m &= m - 1;
-                if let Some(r) = bank.f.get_mut(n) {
-                    *r = [0; 4];
-                }
+        for (start, end) in float_runs(&floats) {
+            let end = end.min(bank.f.len());
+            if start < end {
+                bank.f[start..end].fill([0; 4]);
             }
         }
         for n in 0..16 {
@@ -888,19 +884,39 @@ fn same_part(p: &BindingPart, meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, w
 /// Two banks over zeros (a part's, the scratch) with the same `written`
 /// registers are equal when those registers are (L180: not the whole
 /// banks).
+/// The runs of set bits in a 256-register mask as (first, end) register pairs: bank compares,
+/// clears and hashes then work on slices instead of one register at a time (L193).
+fn float_runs(mask: &[u64; 4]) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let mut at = 0usize;
+    std::iter::from_fn(move || {
+        while at < 256 {
+            let w = mask[at / 64] >> (at % 64);
+            if w == 0 {
+                at = (at / 64 + 1) * 64;
+                continue;
+            }
+            let start = at + w.trailing_zeros() as usize;
+            let mut end = start;
+            while end < 256 && mask[end / 64] >> (end % 64) & 1 != 0 {
+                let ones = (!(mask[end / 64] >> (end % 64))).trailing_zeros() as usize;
+                end += ones.min(64 - end % 64);
+            }
+            at = end;
+            return Some((start, end));
+        }
+        None
+    })
+}
+
 fn same_registers(a: &Constants, b: &Constants, written: &([u64; 4], u16, u16)) -> bool {
     let (floats, ints, bools) = *written;
     if a.f.len() != b.f.len() {
         return false;
     }
-    for word in 0..4 {
-        let mut m = floats[word];
-        while m != 0 {
-            let n = word * 64 + m.trailing_zeros() as usize;
-            m &= m - 1;
-            if a.f.get(n) != b.f.get(n) {
-                return false;
-            }
+    for (start, end) in float_runs(&floats) {
+        let end = end.min(a.f.len());
+        if start < end && a.f[start..end] != b.f[start..end] {
+            return false;
         }
     }
     (0..16).all(|n| (ints >> n & 1 == 0 || a.i[n] == b.i[n]) && (bools >> n & 1 == 0 || a.b[n] == b.b[n]))
@@ -915,13 +931,13 @@ fn content_key(meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64
     h.write_u64(alpha.map_or(u64::MAX, |(f, r)| (f as u64) << 32 | r as u64));
     for (stage, (floats, ints, bools)) in written.iter().enumerate() {
         let bank = &banks[stage];
-        for (word, &mask) in floats.iter().enumerate() {
+        for &mask in floats.iter() {
             h.write_u64(mask);
-            let mut m = mask;
-            while m != 0 {
-                let n = word * 64 + m.trailing_zeros() as usize;
-                m &= m - 1;
-                if let Some(r) = bank.f.get(n) {
+        }
+        for (start, end) in float_runs(floats) {
+            let end = end.min(bank.f.len());
+            if start < end {
+                for r in &bank.f[start..end] {
                     h.write_u64(r[0] as u64 | (r[1] as u64) << 32);
                     h.write_u64(r[2] as u64 | (r[3] as u64) << 32);
                 }
@@ -1499,6 +1515,10 @@ pub struct Caches {
     /// written in them (all others are zero)
     banks: Option<Box<[Constants; 2]>>,
     banks_written: [([u64; 4], u16, u16); 2],
+    /// DDRUNTIME_NDRAW_PHASES=1: per phase ns of draw_call, class 0 = the 512x1536 shadow atlas, 1 = the rest
+    phase_ns: [[u64; 9]; 2],
+    phase_n: [u64; 2],
+    phase_class: usize,
     /// binding parts by content (`content_key`), with the frame they were
     /// last used in: a binding at a new address with content seen lately
     /// takes that part (no allocation, and no drop later)
@@ -1535,6 +1555,9 @@ impl Caches {
     /// (with the D3D lock held).
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
+        if phases_on() && self.frame % 600 == 0 {
+            phase_report(self);
+        }
         self.last = None;
         // bindings unused for three frames go; contents and texture lists
         // unused for a generation (8 to 16 frames) go as a whole, dropped
@@ -1720,11 +1743,39 @@ fn kept_part<T: PartialEq>(
 /// `caches.begin_frame` called for this frame; and the sampler section's
 /// effects, to `commit` if the draw is taken. The resources it reads are
 /// `reads_of` it.
+fn phases_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDRUNTIME_NDRAW_PHASES").as_deref() == Ok("1"))
+}
+fn phase_start() -> Option<Instant> {
+    phases_on().then(Instant::now)
+}
+fn phase_lap(lap: &mut Option<Instant>, c: &mut Caches, k: usize) {
+    if let Some(t) = lap {
+        let now = Instant::now();
+        c.phase_ns[c.phase_class][k] += now.duration_since(*t).as_nanos() as u64;
+        *t = now;
+    }
+}
+/// The phase table (per decided draw, microseconds) printed every 600 frames.
+fn phase_report(c: &Caches) {
+    let names = ["parts", "constants", "fixed+states", "samplers+textures", "assemble", "c:meta+skipped", "c:device_banks", "c:binding_part", "c:held_registers"];
+    for (class, label) in ["shadow atlas 512x1536", "all other"].iter().enumerate() {
+        let n = c.phase_n[class].max(1) as f64;
+        let mut line = format!("ndraw phases {label}: {} draws, us/draw:", c.phase_n[class]);
+        for (k, name) in names.iter().enumerate() {
+            line += &format!(" {name} {:.2}", c.phase_ns[class][k] as f64 / 1e3 / n);
+        }
+        eprintln!("{line}");
+    }
+}
+
 pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, record: u32, kind: u32) -> Result<Decoded, Refusal> {
     if !c.device.usable {
         return Err(Refusal::Device);
     }
     let g = G::new(m);
+    let mut lap = phase_start();
     let [targets, fixed, shader, streams] = [4u32, 8, 0xC, 0x10].map(|o| g.u32(record.wrapping_add(o)));
     if targets == 0 || fixed == 0 || shader == 0 || streams == 0 {
         return Err(Refusal::NullBinding);
@@ -1745,6 +1796,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     // pixel stage): those registers keep what the device holds. The
     // previous apply: the previous decided draw's (the sink's model of the
     // context), else the context's own (the default path made it).
+    phase_lap(&mut lap, c, 0);
     let last = c.last.take();
     let (previous, shaders) = match &last {
         Some(l) => (l.binding, l.shaders),
@@ -1757,6 +1809,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             // the uploads the apply skips read what the device holds: the
             // previous draw's constants when they have every such register,
             // else the device's (L180)
+            let mut lap2 = phase_start();
             let mut skipped = [([0u64; 4], 0u16, 0u16); 2];
             let mut stages = [false; 2];
             if previous != 0 && previous != shader {
@@ -1766,6 +1819,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
                     skipped = skipped_registers(&g, &meta, shader, previous, shaders);
                 }
             }
+            phase_lap(&mut lap2, c, 5);
             let any = skipped.iter().any(|s| *s != ([0; 4], 0, 0));
             let covered = held_constants.as_ref().is_some_and(|h| {
                 (0..2).all(|stage| (0..256).all(|n| skipped[stage].0[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len()))
@@ -1781,6 +1835,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             } else {
                 None
             };
+            phase_lap(&mut lap2, c, 6);
             let held = match (any, &device_banks, &held_constants) {
                 (false, _, _) => None,
                 (true, Some(d), _) => Some(Held { previous, stages, source: [&d[0], &d[1]] }),
@@ -1799,10 +1854,12 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
                     r?
                 }
             };
+            phase_lap(&mut lap2, c, 7);
             // the context holds it and the sink has no constants of it:
             // everything it writes is what the device holds
             let skipped = if previous == shader { b.written } else { [([0; 4], 0, 0); 2] };
             let (b, constants) = held_registers(b, skipped, held_constants.as_ref(), info.device)?;
+            phase_lap(&mut lap2, c, 8);
             c.built[2] += 1;
             (b, constants, false, true)
         }
@@ -1813,6 +1870,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         part: b.clone(),
         constants: Some(constants.clone()),
     });
+    phase_lap(&mut lap, c, 1);
     // the fixed state: the objects by identity, the dynamic values
     let id = identity_of(&g, fixed);
     if id.blend.address == 0 || id.depth.address == 0 || id.raster.address == 0 {
@@ -1869,6 +1927,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             l
         }
     };
+    phase_lap(&mut lap, c, 2);
     // samplers and textures: what the apply would do on this context
     let mut sh = std::mem::take(&mut c.scratch);
     sh.clear();
@@ -1891,6 +1950,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         }
     };
     c.mirror = Some(mirror);
+    phase_lap(&mut lap, c, 3);
     // the draw (types 2 and 3: types 0 and 1 drawn instanced)
     let indexed = kind & 1 == 1;
     if indexed && s.indices == 0 {
@@ -1924,6 +1984,10 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         targets: t.targets.clone(),
         depth: t.depth.clone(),
     };
+    phase_lap(&mut lap, c, 4);
+    if lap.is_some() {
+        c.phase_n[c.phase_class] += 1;
+    }
     Ok(Decoded { call, shadow: sh, binding: b, rebuilt, filled })
 }
 
@@ -2670,6 +2734,7 @@ impl Native {
         static TIMING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let started = (*TIMING.get_or_init(|| std::env::var_os("DDRUNTIME_NDRAW_STATS").is_some() || crate::measure::enabled())).then(Instant::now);
         let lock = crate::d3d9dev::device_lock();
+        g.caches.phase_class = (size == (512, 1536)) as usize ^ 1;
         let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind).and_then(|mut d| {
             if !d.filled {
                 fill_uncovered(&mut d.call, &d.binding, &g.uploads, g.info.device)?;
@@ -2872,6 +2937,17 @@ fn report(mode: Mode, t: &Totals) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn float_runs_are_the_runs_of_set_bits() {
+        let mut m = [0u64; 4];
+        for n in [0usize, 1, 2, 5, 63, 64, 65, 130, 255] {
+            m[n / 64] |= 1 << (n % 64);
+        }
+        assert_eq!(super::float_runs(&m).collect::<Vec<_>>(), vec![(0, 3), (5, 6), (63, 66), (130, 131), (255, 256)]);
+        assert_eq!(super::float_runs(&[u64::MAX; 4]).collect::<Vec<_>>(), vec![(0, 256)]);
+        assert_eq!(super::float_runs(&[0; 4]).count(), 0);
+    }
+
     use super::*;
     use std::collections::HashMap;
 
