@@ -10,7 +10,7 @@
 //! the transitions that precede a run's passes.
 use std::{collections::HashMap, sync::{atomic::{AtomicBool, AtomicUsize, Ordering}, Arc, Mutex, OnceLock}, time::Instant};
 
-const CAP: u32 = 8192;
+const CAP: u32 = 4096;
 const SLOTS: usize = 4;
 
 pub(crate) fn enabled() -> bool {
