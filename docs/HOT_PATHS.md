@@ -511,3 +511,12 @@ module's variable) at the directory you recorded into.
 | Address | Function | What it does | Evidence |
 |---|---|---|---|
 | 0x00DCDDE0 | sound engine `filter_bank(buffer, rounds, lane)` | in-place direct-form-I biquad over the engine's channels, one coefficient lane, flush-to-zero below a threshold | 3,000 recorded cases incl. boundary values at the threshold, EAX/ECX/EDX/ESP and every memory write exact; 5 of 5 injected bugs caught; not benchmarked (1.6% of busy samples in the capture; one call site, a `call; ret 0x14` thunk); NaN payload order and EFLAGS not reproduced |
+
+Second to fourth batches (hand-written, `mtcore::semantic_leaves`, recorders `research/native/record_leaves*.py`; 3,000 cases each, all registers and
+memory exact, EFLAGS checked against Unicorn where marked "flags"; injected bugs: 14 + 28 + 24 caught, survivors were equivalent mutants or vector gaps that
+are now covered): `0x5A65E0` clear a 29 x 29 grid, `0x767B40` two-mask lane test (flags), `0x4EA200` 5-dword record search (flags), `0x1328FD0` bit-reader
+advance (flags), `0x1328F30` bit-reader look (flags), `0x00D00690` xorshift128 step (flags), `0x00FF9A20`/`0x00421ED0` table entry by byte index,
+`0x005D8EB0` state promotion (flags), `0x00E0A4E0` entry by key (flags), `0x00DE5BD0`/`0x00DE0AA0`/`0x00DE5CC0` record initialisers (flags),
+`0x01105EF0` float setter with the `lahf` quirk (flags), `0x011AE1F0` dominant row, `0x004241F0` node initialiser (flags), `0x005F1F90` flag to
+index, `0x00B76580` flag update (flags), `0x00850410` clear entry flags, `0x00B85F70` constant selector (flags), `0x004CA510` vtable initialiser.
+Enable with `DDRUNTIME_SEMANTIC_L184=1` like the other hand-written ports. A further 805 generated ports: see [LEAFGEN.md](LEAFGEN.md).

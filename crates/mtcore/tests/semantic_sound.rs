@@ -60,12 +60,12 @@ fn run_cases(name: &str, body: fn(&mut dyn Mem, &mut Cpu)) -> usize {
         let esp = after[4];
         let expected = pairs(&case["after"]["memory"]);
         for (&a, &b) in &expected {
-            if a >= esp {
+            if !(0x0F00_0000..esp).contains(&a) {
                 assert_eq!(m.bytes.get(&a).copied(), Some(b), "case {i}: memory {a:x}");
             }
         }
         for (&a, &b) in &m.writes {
-            if a >= esp {
+            if !(0x0F00_0000..esp).contains(&a) {
                 assert_eq!(expected.get(&a).copied(), Some(b), "case {i}: extra write {a:x}");
             }
         }

@@ -261,6 +261,17 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             ports.push((a, f));
         }
     }
+    // Generated ports of straight-line leaf functions (research/native/leafgen.py; docs/LEAFGEN.md): every one passes
+    // 400 recorded cases against the original. Opt-in, separate from the hand-written groups above.
+    if std::env::var("DDRUNTIME_SEMANTIC_GENERATED").as_deref() == Ok("1") {
+        for &(a, f) in mtcore::semantic_generated::PORTS {
+            // a hand-written port at the same address wins
+            if !semantic_selected(a) || ports.iter().any(|p| p.0 == a) {
+                continue;
+            }
+            ports.push((a, f));
+        }
+    }
     // L171: semantic ports not yet checked on recorded vectors
     if std::env::var("DDRUNTIME_SEMANTIC_DRAW").as_deref() == Ok("1") {
         for (a, f) in [(0x00ff1090u32, mtcore::semantic::set_pass as LiftFn)] {

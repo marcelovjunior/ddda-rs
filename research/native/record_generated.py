@@ -49,9 +49,18 @@ def record(spec, count, out):
         # a quarter of the words are small values (counts, flags, indices)
         for _ in range(0x600):
             words[r.randrange(0, 0x2000)] = r.choice((0, 1, 2, 3, 4, 7, 8, 0xFF, 0x100, 0xFFFFFFFF, r.randrange(64)))
+        page_bytes = {p: bytearray(r.randbytes(0x1000)) for p in pages_of(abs_addrs)}
+        if spec.get('float_arith'):
+            # Unicorn's SSE NaN propagation differs from the hardware's for a signalling NaN with a quiet NaN (it returns the
+            # second operand; Intel SDM table 4-7 says the first, quieted). The ports use the exact helpers, so the vectors
+            # carry no NaN or infinity bit patterns for these functions: a word with exponent 0xFF loses its exponent's low bit.
+            import numpy as np
+            for data in [buf] + list(page_bytes.values()):
+                words = np.frombuffer(data, dtype=np.uint32)   # writable view of the bytearray
+                words[words & 0x7F800000 == 0x7F800000] &= np.uint32(0xFF7FFFFF)
         uc.mem_write(REGION, bytes(buf))
-        for p in pages_of(abs_addrs):
-            uc.mem_write(p, r.randbytes(0x1000))
+        for p, data in page_bytes.items():
+            uc.mem_write(p, bytes(data))
         pointer = lambda: REGION + 4 * r.randrange(0x1000, 0x2000)
         regs = [r.randrange(1 << 32) for _ in range(8)]
         for name in spec['pointer_inputs']:
