@@ -417,3 +417,26 @@ the default. Merge `task/L190-hot-paths`; `ddruntime/src/threads.rs` gets a 3-li
 
 **Commands.** Tests: `CARGO_TARGET_DIR=C:/ddda-targets/L190 cargo test --release -p mtcore --test semantic_l190` (ports), `... --test rt_nan`, `... -p ddnative-base --features stack-window --test stack_window`, `... -p mtcore --features ddnative-base/stack-window --test l190_bench stack_window_variants -- --nocapture`. Benches (ignored tests): `--test l190_bench -- --ignored --nocapture --test-threads=1`, `--test helper_bench`. Vectors: `E:/ddda-re/tools/pyenv/Scripts/python.exe research/native/record_l190_*.py OUT.json N` into `E:/ddda-re/notes/native-L190/`. Stack-window rewrite: `python research/native/stack_window.py in.rs out.rs`.
 
+
+## 13. Simulation half: profile and the `inline-helpers` feature (L196, 2026-10-14)
+
+**Profile** (fast2 exe, pinned bench config, 30 s sampler, `C:/ddda-targets/s1/runs/agg.py` on the saved stacks; busy samples by leaf category):
+
+| category | main thread (371 busy) | job workers (1932 busy) |
+|---|---:|---:|
+| lifted bodies | 26% | 22% |
+| sync/wake (SetEvent -> signal_key -> NtAlertThreadByThreadId, all from the DBE560 batch dispatch) | 17% | 13% (mostly event-wait spin) |
+| memory helpers (fast_u32 14%, fast_set_u32 3%) | 18% | 17% |
+| ports | 9% | 16% |
+| SSE / flags / x87 / dispatch / page_table | 5/2/2/5/0.5% | 4/3/7/5/2.4% |
+
+Findings: (1) the main thread spends ~17% of its busy time waking workers (a syscall per parked worker); (2) the generated code calls flag/SSE helpers out of line (L77 `inline(never)`, meant for opt-level-0 shards), e.g. 1,006 `sse::mulss` calls in one shard.
+
+**Changes** (branch `task/L196-simfast`):
+- `ddnative-base` feature `inline-helpers` (ddruntime forwards it: `--features ddruntime/inline-helpers`): flag, SSE and integer helpers become `#[inline]`. Off by default (opt-level-0 builds unchanged). Build: `cargo build -j5 --profile play-o2 -p ddplay --features emu,ddruntime/parallel-shadow,ddruntime/stack-window,ddruntime/inline-helpers` (~25 min, exe +6%).
+  A/B, same batch, pinned config, fps mean t46-84: without 49.5 / 51.2 / 45.5, with 53.7 / 52.7 / 48.5 (+6.5% median, 3/3 pairs). `cargo test -p ddnative -p ddnative-base` with the feature + stack-window passes.
+- `signal_key` notifies condvars after releasing the state mutex (`DDRUNTIME_WAKE_INSIDE=1` = old): 41.7/41.8/40.7 vs 41.0/41.4/39.6 (+1.7%).
+- `DDRUNTIME_EVENT_SPIN_US` (default 20): longer spins were worse (150: 45.6/48.6, 400: 43.2/46.3).
+- Rejected: a helper "waker" thread doing the notifies (40.0/38.5/42.5 vs 38.6/42.1/41.5, no gain).
+
+**Next**: make `inline-helpers` a default play feature after the second gate half (mtcore ports with the feature; was running) passes; try `inline-access` (forwarded by ddruntime) on top; cache `page_table()` in Cpu (2.4% of workers); reduce DBE560 wake count.
