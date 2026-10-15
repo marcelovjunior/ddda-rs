@@ -17,6 +17,8 @@ All in `crates/ddruntime/src/ndraw_native.rs`. Expected: a few percent of the re
 | ndraw: keep the previous job's capacity for the next Pending job and draw batch | `Pending::take`/`send_batch` start with last job's size (no regrowth of `Vec<DrawCall>`) |
 | ndraw: native path skips flush_reads when none of the draw's reads is dirty | same `dirty_count()`/`reads_dirty` guard the DrawCall path already had |
 | ndraw: passes start with the previous pass's draw capacity; texture key hashes two states per step | `pass_hint`; `Mirror::texture_key` |
+| ndraw: lazy sampler-table copy in Shadow::prune; box the cached Mirror | no 1.2 KB table copy when a draw has no sampler-state change; the 1.3 KB `Mirror` is no longer moved out and back per draw |
+| ndraw: the scissor-test flag is found once per cached fixed state | was a scan of ~200 render states per draw |
 
 Also merged in (already in your notes): `task/L196-simfast` (feature `ddruntime/inline-helpers` is still OFF unless you build with it; `signal_key` now
 notifies after releasing the mutex, `DDRUNTIME_WAKE_INSIDE=1` = old) and `task/L193-decouple` (all its env knobs are off by default).
