@@ -855,4 +855,10 @@ Plan, each step builds and passes the sink unit tests (`cargo test --profile pla
 - **S2.3 next**: the sink side (`DDDRAW_ARENA=1`): a `ConstArena` in `Caches`; for 512x1536 draws build the two blocks with `arena::encode`-compatible writes and call
   `draw_arena` instead of queuing a `DrawCall` with `Arc<Constants>`; how the sink hands `DrawCall`s over today is `g.batch.push(d)` / `send_batch` (ndraw_native.rs `Native::draw`, `Mode::DrawCall` arm);
   `draw_arena` goes through `crate::d3d9draw` (find the `send_draw`/`backend_unlocked` helper used by `send_batch`). Keep the old path for verify.
+- **S2.3 DONE (transport only)** commit "S2.3": `DDDRAW_ARENA=1` (ndraw_native `arena_on()`): in the DrawCall-mode arm a 512x1536 draw copies its two decoded `Constants` into `Caches::arena` blocks and is sent with
+  `draw_arena` (batch flushed first, one command per draw); the call's own constants are a shared empty Arc. This still builds the `Arc<Constants>` in `binding_part`, so it saves nothing yet; it proves the
+  path end to end. Test: sink tests pass (25); in game `DDDRAW_ARENA=1` must run clean (A/B in `C:/ddda-targets/d1/seq8.out`, tags a0_n/a1_n: exe `runs/d1ar`).
+- **S2.4 next (the saving)**: let `binding_part`/`held_registers` write the shadow draw's registers directly into an arena block (skip `Arc<Constants>`/`BindingPart` creation for that pass): the sink's
+  `LastDraw.constants`, `Uploads` (`each_last`, `last_writer`) and `fill_uncovered` read `Arc<Constants>`/`BindingPart.constants`, so first add a reader trait over "bank or ConstRef" (or keep a `Constants` only for
+  the registers a later draw may need: `written`). Verify with `DDDRAW_NATIVE=verify` after adding the arena block to `expect` (compare `arena::decode(block)` to the D3D9 path's `Constants`).
 
