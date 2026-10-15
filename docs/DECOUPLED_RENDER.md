@@ -876,4 +876,8 @@ Plan, each step builds and passes the sink unit tests (`cargo test --profile pla
   - **`set_register_range`** (commit "register ranges marked a word at a time"): skipped_registers and the binding_part float upload mark a register run with word masks, not one bit per register.
   - fps (pinned config, 3 runs, medians): N=4 d1cs (content-skip only) 54.7 / 60.6 / 62.3 vs W1+W2 exe 57.7 / 57.6 / 54.6 (57.6 -> 60.6, +5%); N=1 44.5 / 48.0 / 35.2 vs 46.9 / 47.9 / 50.7 (noise).
     The `bits_from` exe (`d1bf`) and the `set_register_range` exe (`d1bg`) A/B against `d1cs` is queued in `C:/ddda-targets/d1/seq10.out` (tags p1/q1 N=1, p4/q4 N=4, plus `bg_verify`).
+- **STATE at wrap-up (decouple2):** all commits green (27 sink tests). Last: "sampler mirror applied in place per draw" (no 1.3 KB clone; mirror epoch is stale until `commit`). No half-converted group; the `Bank` refactor was NOT started (re-scoped, see above).
+  Unmeasured in game: `bits_from`, `set_register_range`, mirror-in-place (only `bits_from` has a phase table: c:device_banks 0.27 -> 0.03). Queued unattended, results land in `C:/ddda-targets/d1/`:
+  seq8 (arena A/B a0/a1, exe d1ar) -> seq9 (`DDDRAW_ARENA=verify`) -> seq10 (verify + N=1/N=4 A/B of d1bg vs d1cs) -> seq11 (exe d1bh: `DDDRAW_NATIVE=verify` must show 0 mismatches, phase table, N=1/N=4).
+  Next step: read seq10/seq11 out; if `bh_verify` shows mismatches, revert the mirror-in-place commit first; then update the frame-bound.md numbers; then optionally the arena/Bank work only if the phase table still shows new-part cost above 0.3 us.
 
