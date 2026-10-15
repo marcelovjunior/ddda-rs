@@ -496,3 +496,18 @@ priority on the thread that starts at `0x00DAC090` (`thread_scheduling.rs`), onc
 
 **Windows-only code from the cloud box:** `rustup target add x86_64-pc-windows-gnu` then
 `cargo check -p ddruntime --no-default-features --target x86_64-pc-windows-gnu` type-checks `cfg(windows)` code (about 30 s); it does not link or run.
+
+## 15. Ports from the cloud session (2026-10-15)
+
+Method (all on the cloud box, nothing needs the game): pick a lifted function that the gameplay capture ranks high and whose lifted source has no
+guest calls; disassemble it from `reference/DDDA.exe` (`capstone`); find its call sites (a function with one `call; ret` thunk caller leaves nobody
+reading its registers); record vectors with a Unicorn recorder (`DDDA_EXE=reference/DDDA.exe python3 research/native/record_<name>.py OUT.json N`);
+write the port in `crates/mtcore/src/semantic_*.rs`, a vector test in `crates/mtcore/tests/semantic_*.rs`, register it in `crates/ddports/src/lib.rs`.
+Prove the test can fail by injecting plausible bugs one at a time (a different float grouping, `>=` for `>`, a wrong stride, a dropped step) and
+recording boundary cases for every comparison; a mutant that survives means the vectors do not reach that branch.
+Vectors are private (not committed): the test skips without them unless `DDNATIVE_REQUIRE_VECTORS` is set; point `SOUND_VECTORS_DIR` (or the
+module's variable) at the directory you recorded into.
+
+| Address | Function | What it does | Evidence |
+|---|---|---|---|
+| 0x00DCDDE0 | sound engine `filter_bank(buffer, rounds, lane)` | in-place direct-form-I biquad over the engine's channels, one coefficient lane, flush-to-zero below a threshold | 3,000 recorded cases incl. boundary values at the threshold, EAX/ECX/EDX/ESP and every memory write exact; 5 of 5 injected bugs caught; not benchmarked (1.6% of busy samples in the capture; one call site, a `call; ret 0x14` thunk); NaN payload order and EFLAGS not reproduced |
