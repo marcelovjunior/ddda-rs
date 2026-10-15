@@ -2114,6 +2114,7 @@ fn run_thread(rt: Arc<Runtime>, mut memory: GuestMemory, registry: Arc<Registry>
     runtime::enter(rt.clone());
     runtime::local(|l| l.guest_tid.set(tid));
     crate::load_log::timeline::guest_thread(start);
+    scheduling::boost_render_thread(start);
     registry.install();
     ddnative_base::platform::redirect(&crate::session::REDIRECTED_MODELS);
     let parallel = rt.lock.parallel.load(std::sync::atomic::Ordering::Relaxed);

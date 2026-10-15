@@ -14,6 +14,44 @@ pub(super) fn ideal_enabled() -> bool {
     *ON.get_or_init(|| std::env::var("DDRUNTIME_THREAD_IDEAL").is_ok_and(|s| s == "1"))
 }
 
+/// The render worker's entry point (sRender's replay thread; load_timeline.rs names it "render").
+const RENDER_THREAD: u32 = 0x00DA_C090;
+
+/// `DDRUNTIME_RENDER_PRIORITY`: 1 raises the render worker to above-normal priority, 2 to highest.
+/// In the 2026-10-15 gameplay profile it was busy in 94% of the samples but on a CPU for only 72% of
+/// the time, with the job workers spinning on the other logical CPUs: it is the frame's critical
+/// path and was being preempted. Not the game's own request and not a default: A/B it.
+fn render_priority_level(setting: Option<&str>) -> Option<i32> {
+    match setting? {
+        "1" => Some(1),
+        "2" => Some(2),
+        _ => None,
+    }
+}
+
+/// Raise the calling thread if it is the render worker and the setting asks for it.
+pub(super) fn boost_render_thread(start: u32) {
+    if start != RENDER_THREAD {
+        return;
+    }
+    let Some(level) = render_priority_level(std::env::var("DDRUNTIME_RENDER_PRIORITY").ok().as_deref()) else { return };
+    set_current_priority(level);
+}
+
+#[cfg(windows)]
+fn set_current_priority(level: i32) {
+    // SAFETY: the pseudo handle of the calling thread.
+    let result = unsafe { SetThreadPriority(CURRENT_THREAD as i32 as isize as *mut std::ffi::c_void, level) };
+    if result == 0 {
+        eprintln!("ddruntime: render thread priority {level} refused (error {})", unsafe { GetLastError() });
+    } else {
+        eprintln!("ddruntime: render thread priority {level}");
+    }
+}
+
+#[cfg(not(windows))]
+fn set_current_priority(_: i32) {}
+
 pub(super) fn service(m: &mut dyn Mem, cpu: &mut Cpu, ideal: bool, enabled: bool) {
     cpu.eax = if !enabled {
         if ideal { 0 } else { 1 }
@@ -184,5 +222,23 @@ mod tests {
                 assert_eq!(runtime::last_error(), if enabled { ERROR_INVALID_HANDLE } else { 777 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod render_priority_tests {
+    use super::*;
+
+    #[test]
+    fn the_render_priority_setting() {
+        assert_eq!(render_priority_level(None), None);
+        assert_eq!(render_priority_level(Some("")), None);
+        assert_eq!(render_priority_level(Some("0")), None);
+        assert_eq!(render_priority_level(Some("1")), Some(1));
+        assert_eq!(render_priority_level(Some("2")), Some(2));
+        assert_eq!(render_priority_level(Some("3")), None);
+        // any other thread, and no setting: nothing happens
+        boost_render_thread(0x00DB_DC90);
+        boost_render_thread(RENDER_THREAD);
     }
 }

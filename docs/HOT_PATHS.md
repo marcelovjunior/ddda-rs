@@ -484,3 +484,12 @@ cloud box, not the game). A/B in game with `DDRUNTIME_WAIT_ALL_GATE=1 DDRUNTIME_
 **Known flaky test (not from these changes).** `threads::tests::an_abort_inside_the_window_releases_the_gated_threads` fails ~20% of full
 `cargo test -p ddruntime --lib` runs (2 of 10 on `e942c46f`, before the join changes; it also failed on the first run after merging L196). Window
 tests are process-global: any other test that runs guest threads must hold `WINDOW_TESTS` (the new join test does).
+
+**Render worker priority (`DDRUNTIME_RENDER_PRIORITY=1|2`, off by default).** In the capture the render worker was in a non-wait state in 94% of the
+samples (735 of 778) but used 72% of one CPU (21.5 s of 30): about a fifth of the time it was runnable and not running, with ~20 busy threads on 16
+logical CPUs (spinning job workers, GPU encoders, backend, sound). It is the frame's critical path. The knob sets above-normal (1) or highest (2)
+priority on the thread that starts at `0x00DAC090` (`thread_scheduling.rs`), once, at thread start. A/B 1 and 2 against the default; combine with
+`DDRUNTIME_THREAD_PRIORITY=1` (the game's own background -1 for its low-priority pool) if the first helps.
+
+**Windows-only code from the cloud box:** `rustup target add x86_64-pc-windows-gnu` then
+`cargo check -p ddruntime --no-default-features --target x86_64-pc-windows-gnu` type-checks `cfg(windows)` code (about 30 s); it does not link or run.
