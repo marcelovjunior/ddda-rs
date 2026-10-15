@@ -869,4 +869,11 @@ Plan, each step builds and passes the sink unit tests (`cargo test --profile pla
   `b(n) -> u32` (from the block layout), make those sites use the accessors, then let the new-part branch of `binding_part` encode the scratch banks into an arena block (`Bank::Arena`) instead of `Arc::new(take(banks))`.
   `CowBanks` (copy-on-write) must copy out of an arena bank into an owned `Constants` only when a register changes. Gate after each site group: 25 sink tests, then `DDDRAW_NATIVE=verify` 0 mismatches, then `DDDRAW_ARENA=verify`.
   Expected saving: the 5 allocations and the cross-thread frees of a new part (0.3-0.5 us/draw) plus ddgpu's `pack_constants` (a memcpy the ring copy replaces), i.e. 1.5-2.5 ms a frame if extended to every pass.
+- **S2.4 re-scoped by evidence (decouple2):** the bank pooling experiment (11.7) already removed the Constants allocations for 57% of new parts with no change in time, so replacing `Arc<Constants>` by an
+  arena `Bank` would save about the 2 of 5 allocations of a new part, i.e. ~0.1 us/draw, for a 56-site refactor in the riskiest code; not done. The phase table pointed at cheaper things instead:
+  - **`bits_from` (commit "coverage test by word masks")**: the `covered` test of held registers looped 2 x 256 bit tests per draw; as word masks `c:device_banks` went **0.27 -> 0.03 us/draw**, constants phase
+    1.75 -> 1.44 (shadow atlas, 5-run phase tables, `runs/run_ph10.log`); all passes -0.25 us/draw, about 1.1 ms a frame at 4.5k draws. Unit test: `bits_from_matches_the_bit_by_bit_test`.
+  - **`set_register_range`** (commit "register ranges marked a word at a time"): skipped_registers and the binding_part float upload mark a register run with word masks, not one bit per register.
+  - fps (pinned config, 3 runs, medians): N=4 d1cs (content-skip only) 54.7 / 60.6 / 62.3 vs W1+W2 exe 57.7 / 57.6 / 54.6 (57.6 -> 60.6, +5%); N=1 44.5 / 48.0 / 35.2 vs 46.9 / 47.9 / 50.7 (noise).
+    The `bits_from` exe (`d1bf`) and the `set_register_range` exe (`d1bg`) A/B against `d1cs` is queued in `C:/ddda-targets/d1/seq10.out` (tags p1/q1 N=1, p4/q4 N=4, plus `bg_verify`).
 
