@@ -16,7 +16,8 @@ fn zsp(r: u32, bits: u32) -> u32 {
         | (((r as u8).count_ones() % 2 == 0) as u32 * 4)
 }
 impl Flags {
-    #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
+    #[cfg_attr(feature = "inline-helpers", inline)]
+    #[cfg_attr(not(feature = "inline-helpers"), inline(never))] // L77: one optimised copy, called from opt-level-0 shards
     pub fn partial(value: u32, defined: u32) -> Self {
         Self::from_parts(PARTIAL, defined, 0, value, 32)
     }
@@ -25,7 +26,8 @@ impl Flags {
     /// stays undefined instead of being read: the CRT `_qsort` runs
     /// `div ebx; inc eax; cmp eax, 8` (0x012EEBC6), so that CF is never
     /// observed (L46).
-    #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
+    #[cfg_attr(feature = "inline-helpers", inline)]
+    #[cfg_attr(not(feature = "inline-helpers"), inline(never))] // L77: one optimised copy, called from opt-level-0 shards
     pub fn inc_dec(&mut self, kind: u8, a: u32, r: u32, bits: u32) {
         let cf_defined = self.kind != PARTIAL || self.a & 1 != 0;
         if cf_defined {
@@ -36,7 +38,8 @@ impl Flags {
             *self = Self::partial(value & ARITH_FLAGS & !1, ARITH_FLAGS & !1);
         }
     }
-    #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
+    #[cfg_attr(feature = "inline-helpers", inline)]
+    #[cfg_attr(not(feature = "inline-helpers"), inline(never))] // L77: one optimised copy, called from opt-level-0 shards
     pub fn snapshot(&self) -> (u32, u32) {
         if self.kind == PARTIAL {
             return (self.r, self.a);
@@ -46,7 +49,8 @@ impl Flags {
         }
         (self.lahf() as u32 | ((self.of() as u32) << 11), ARITH_FLAGS)
     }
-    #[inline(never)] // L77: one optimised copy, called from opt-level-0 shards
+    #[cfg_attr(feature = "inline-helpers", inline)]
+    #[cfg_attr(not(feature = "inline-helpers"), inline(never))] // L77: one optimised copy, called from opt-level-0 shards
     pub fn alu_carry(&mut self, a: u32, b: u32, bits: u32, subtract: bool) -> u32 {
         let carry = self.cf() as u64;
         let (a, b) = (a & mask(bits), b & mask(bits));

@@ -828,7 +828,37 @@ pub(crate) mod key {
 /// recheck.
 pub(crate) fn signal_key(key: u64) {
     let rt = runtime::pin();
-    wake(&mut rt.lock.lock(), Some(key));
+    // L196: mark the sleepers woken under the state mutex but notify their
+    // condvars after releasing it. Notifying inside the critical section made
+    // every woken thread run into the still-held mutex (a second sleep and
+    // wake) and kept the syscalls (NtAlertThreadByThreadId, ~10% of the main
+    // thread in gameplay) inside the mutex that every guest-lock hand-off
+    // takes. A sleeper checks `woken` under the mutex before it waits, so no
+    // wake-up is lost. DDRUNTIME_WAKE_INSIDE=1 restores the old behaviour.
+    static INSIDE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *INSIDE.get_or_init(|| std::env::var("DDRUNTIME_WAKE_INSIDE").is_ok_and(|v| v == "1")) {
+        wake(&mut rt.lock.lock(), Some(key));
+        return;
+    }
+    signal_key_to(key);
+}
+
+fn signal_key_to(key: u64) {
+    let rt = runtime::pin();
+    let mut cvs: Vec<Arc<Condvar>> = Vec::new();
+    {
+        let mut s = rt.lock.lock();
+        for w in s.sleepers.values_mut() {
+            if !w.woken && w.keys.contains(&key) {
+                w.woken = true;
+                cvs.push(w.cv.clone());
+                stats::woken();
+            }
+        }
+    }
+    for cv in cvs {
+        cv.notify_one();
+    }
 }
 
 /// Wake the threads waiting for `key` (None: every blocked thread).
@@ -1570,7 +1600,7 @@ fn wait_event(handle: u32, object: u32, e: &EventCell, ms: u32) -> u32 {
             }
             std::hint::spin_loop();
             n += 1;
-            if n % 64 == 0 && (start.elapsed() >= CS_SPIN || deadline.is_some_and(|d| Instant::now() >= d)) {
+            if n % 64 == 0 && (start.elapsed() >= event_spin() || deadline.is_some_and(|d| Instant::now() >= d)) {
                 break;
             }
         }
@@ -1758,6 +1788,15 @@ static CS_WAITERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 /// How long a contended Enter spins before it waits (a section is held
 /// ~1 us; measured gameplay mean 0.64 us). Unmeasured guess, not tuned.
 const CS_SPIN: Duration = Duration::from_micros(20);
+
+/// L196: how long a wait for one event spins before it parks (default CS_SPIN;
+/// DDRUNTIME_EVENT_SPIN_US=N overrides). A SetEvent that finds the waiter still
+/// spinning needs no wake-up syscall (NtAlertThreadByThreadId costs the setter
+/// ~10% of the main thread's busy time in gameplay).
+fn event_spin() -> Duration {
+    static SPIN: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *SPIN.get_or_init(|| std::env::var("DDRUNTIME_EVENT_SPIN_US").ok().and_then(|v| v.parse().ok()).map_or(CS_SPIN, Duration::from_micros))
+}
 
 /// The section's LockCount, RecursionCount and OwningThread as atomics;
 /// None if they are not aligned writable guest words.

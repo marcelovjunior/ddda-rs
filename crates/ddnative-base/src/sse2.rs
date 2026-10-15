@@ -11,12 +11,14 @@ use std::arch::{asm, x86_64::__m128i};
 /// Intel SDM SFENCE: order prior stores before subsequent stores.
 /// Keep a compiler memory barrier and execute the actual host instruction;
 /// guest Mem writes are synchronous, but this is not a concurrency model.
-#[inline(never)] // L77
+#[cfg_attr(feature = "inline-helpers", inline)]
+#[cfg_attr(not(feature = "inline-helpers"), inline(never))] // L77
 pub fn sfence() {
     unsafe { asm!("sfence", options(nostack, preserves_flags)); }
 }
 
-#[inline(never)] // L77
+#[cfg_attr(feature = "inline-helpers", inline)]
+#[cfg_attr(not(feature = "inline-helpers"), inline(never))] // L77
 pub fn comisd(a: [u32; 4], b: [u32; 4]) -> super::Flags {
     let x = a[0] as u64 | ((a[1] as u64) << 32);
     let y = b[0] as u64 | ((b[1] as u64) << 32);
@@ -45,7 +47,8 @@ pub fn comisd(a: [u32; 4], b: [u32; 4]) -> super::Flags {
 
 macro_rules! binary {
     ($($op:ident),* $(,)?) => {$(
-        #[inline(never)]
+        #[cfg_attr(feature = "inline-helpers", inline)]
+        #[cfg_attr(not(feature = "inline-helpers"), inline(never))]
         pub fn $op(a:[u32;4],b:[u32;4])->[u32;4] {
             let mut a:__m128i=unsafe{std::mem::transmute(a)};
             let b:__m128i=unsafe{std::mem::transmute(b)};
@@ -106,7 +109,8 @@ immediate!(compare_ps=>"cmpps",compare_ss=>"cmpss",compare_pd=>"cmppd",compare_s
 
 macro_rules! to_int {
     ($($op:ident),* $(,)?) => {$(
-        #[inline(never)]
+        #[cfg_attr(feature = "inline-helpers", inline)]
+        #[cfg_attr(not(feature = "inline-helpers"), inline(never))]
         pub fn $op(b:[u32;4])->u32 {
             let b:__m128i=unsafe{std::mem::transmute(b)};
             let result:u32;
@@ -118,7 +122,8 @@ macro_rules! to_int {
 }
 to_int!(cvtss2si, cvtsd2si, cvttsd2si);
 
-#[inline(never)] // L77
+#[cfg_attr(feature = "inline-helpers", inline)]
+#[cfg_attr(not(feature = "inline-helpers"), inline(never))] // L77
 pub fn cvtsi2sd(a: [u32; 4], b: u32) -> [u32; 4] {
     let mut a: __m128i = unsafe { std::mem::transmute(a) };
     unsafe {

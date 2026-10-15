@@ -14,6 +14,8 @@ private-replay = []
 # On by default; --no-default-features restores the L77 helpers for A/B timing.
 default = ["lean-access"]
 lean-access = []
+# L196: let optimised (play-o2) shards inline the flag and SSE helpers (L77 kept them out of line for opt-level-0 shards).
+inline-helpers = []
 # L190: let the compiler inline the guest memory accessors into the shards (only sensible when the
 # shards are built at opt-level 2 or higher; at opt-level 0 each access would grow the shard 4x).
 inline-access = []
