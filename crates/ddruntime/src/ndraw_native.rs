@@ -1548,6 +1548,8 @@ pub struct Caches {
     phase_ns: [[u64; 14]; 2],
     phase_n: [u64; 2],
     phase_class: usize,
+    /// DDDRAW_ARENA=1 (L193 S2): constant blocks of the draws sent through `draw_arena`
+    arena: d3d9cmd::arena::ConstArena,
     /// binding parts by content (`content_key`), with the frame they were
     /// last used in: a binding at a new address with content seen lately
     /// takes that part (no allocation, and no drop later)
@@ -1771,6 +1773,11 @@ fn kept_part<T: PartialEq>(
 /// `caches.begin_frame` called for this frame; and the sampler section's
 /// effects, to `commit` if the draw is taken. The resources it reads are
 /// `reads_of` it.
+/// DDDRAW_ARENA=1: shadow-atlas draws send their constants as arena blocks (S2.3).
+fn arena_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDDRAW_ARENA").as_deref() == Ok("1"))
+}
 fn phases_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("DDRUNTIME_NDRAW_PHASES").as_deref() == Ok("1"))
@@ -2817,6 +2824,25 @@ impl Native {
                 }
                 if crate::census::enabled() {
                     crate::census::note_draw(size, &d);
+                }
+                if arena_on() && size == (512, 1536) {
+                    // S2.3: the two constant blocks go to the arena and travel as ConstRefs (the call's own Arcs are shared empties)
+                    let mut block = |c: &Constants| {
+                        let mut w = g.caches.arena.alloc(d3d9cmd::arena::block_len(c.f.len()));
+                        d3d9cmd::arena::encode(c, w.regs());
+                        w.finish()
+                    };
+                    let (vs, ps) = (block(&d.vs_constants), block(&d.ps_constants));
+                    static EMPTY: std::sync::OnceLock<Arc<Constants>> = std::sync::OnceLock::new();
+                    let empty = EMPTY.get_or_init(Default::default);
+                    let mut call = d;
+                    call.vs_constants = empty.clone();
+                    call.ps_constants = empty.clone();
+                    send_batch(&mut g.batch);
+                    crate::d3d9draw::backend_unlocked(|b| b.draw_arena(call, vs, ps));
+                    crate::d3d9draw::count_draws(1);
+                    t.taken += 1;
+                    return Taken::Handled;
                 }
                 g.batch.push(d);
                 crate::d3d9draw::count_draws(1);

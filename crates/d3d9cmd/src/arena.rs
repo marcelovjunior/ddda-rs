@@ -73,6 +73,13 @@ pub struct ConstArena {
     chunks_made: u64,
 }
 
+impl Default for ConstArena {
+    /// 64K registers (1 MB) a chunk: about 250 shadow draws.
+    fn default() -> Self {
+        Self::new(65536)
+    }
+}
+
 impl ConstArena {
     /// `chunk_regs` registers (16 bytes each) per chunk; a block larger than that gets a chunk of its own.
     pub fn new(chunk_regs: usize) -> Self {
