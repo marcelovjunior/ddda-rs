@@ -1589,6 +1589,9 @@ impl Caches {
         if phases_on() && self.frame % 600 == 0 {
             phase_report(self);
         }
+        if arena_on() && self.frame % 600 == 0 {
+            arena_report();
+        }
         self.last = None;
         // bindings unused for three frames go; contents and texture lists
         // unused for a generation (8 to 16 frames) go as a whole, dropped
@@ -1775,8 +1778,25 @@ fn kept_part<T: PartialEq>(
 /// `reads_of` it.
 /// DDDRAW_ARENA=1: shadow-atlas draws send their constants as arena blocks (S2.3).
 fn arena_on() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("DDDRAW_ARENA").as_deref() == Ok("1"))
+    arena_mode() != 0
+}
+/// 0 off, 1 on, 2 verify (`DDDRAW_ARENA=verify`: on, and every block is read back and compared with the `Constants` it replaces).
+fn arena_mode() -> u8 {
+    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("DDDRAW_ARENA").as_deref() {
+        Ok("1") => 1,
+        Ok("verify") => 2,
+        _ => 0,
+    })
+}
+static ARENA_BLOCKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ARENA_BAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+fn arena_report() {
+    eprintln!(
+        "ndraw arena: {} blocks sent, {} differ from the Constants they replace (verify mode only counts)",
+        ARENA_BLOCKS.load(std::sync::atomic::Ordering::Relaxed),
+        ARENA_BAD.load(std::sync::atomic::Ordering::Relaxed)
+    );
 }
 fn phases_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -2833,6 +2853,16 @@ impl Native {
                         w.finish()
                     };
                     let (vs, ps) = (block(&d.vs_constants), block(&d.ps_constants));
+                    ARENA_BLOCKS.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+                    if arena_mode() == 2 {
+                        for (r, c) in [(&vs, &d.vs_constants), (&ps, &d.ps_constants)] {
+                            if d3d9cmd::arena::decode(r.regs()) != **c {
+                                if ARENA_BAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 5 {
+                                    eprintln!("ndraw arena verify: block differs from its Constants ({} registers)", r.regs().len());
+                                }
+                            }
+                        }
+                    }
                     static EMPTY: std::sync::OnceLock<Arc<Constants>> = std::sync::OnceLock::new();
                     let empty = EMPTY.get_or_init(Default::default);
                     let mut call = d;

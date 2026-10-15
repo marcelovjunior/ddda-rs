@@ -861,4 +861,12 @@ Plan, each step builds and passes the sink unit tests (`cargo test --profile pla
 - **S2.4 next (the saving)**: let `binding_part`/`held_registers` write the shadow draw's registers directly into an arena block (skip `Arc<Constants>`/`BindingPart` creation for that pass): the sink's
   `LastDraw.constants`, `Uploads` (`each_last`, `last_writer`) and `fill_uncovered` read `Arc<Constants>`/`BindingPart.constants`, so first add a reader trait over "bank or ConstRef" (or keep a `Constants` only for
   the registers a later draw may need: `written`). Verify with `DDDRAW_NATIVE=verify` after adding the arena block to `expect` (compare `arena::decode(block)` to the D3D9 path's `Constants`).
+- **S2.3b DONE** `DDDRAW_ARENA=verify` (exe `runs/d1ar2`): same as `=1`, and every block sent is read back (`arena::decode`) and compared with the `Constants` it replaces; the log prints
+  `ndraw arena: N blocks sent, M differ ...` every 600 frames (and up to 5 detail lines). Expected M = 0 now (the block is encoded from that very `Constants`); it becomes the gate for S2.4 when the
+  block is written directly and the old `Constants` is built only as the shadow oracle. Run: `bash locked_run.sh arena_verify EXE_DIR=d1ar2 DDRUNTIME_FIXED_TICK=60 DDDRAW_ARENA=verify` (seq9.out).
+- **S2.4 status: not started, scoped.** About 56 sites read bank contents as `Arc<Constants>`/`Vec<[u32;4]>` (`BindingPart.constants`, `LastDraw.constants`, `Uploads::each_last`/`last_writer`, `held_registers`, `CowBanks`,
+  `copy_registers`, `fill_uncovered`, `same_registers`, `content_key`, `native_draw` arrays). The refactor: introduce `enum Bank { Own(Arc<Constants>), Arena(ConstRef) }` with accessors `f() -> &[[u32;4]]`, `i(n) -> [i32;4]`,
+  `b(n) -> u32` (from the block layout), make those sites use the accessors, then let the new-part branch of `binding_part` encode the scratch banks into an arena block (`Bank::Arena`) instead of `Arc::new(take(banks))`.
+  `CowBanks` (copy-on-write) must copy out of an arena bank into an owned `Constants` only when a register changes. Gate after each site group: 25 sink tests, then `DDDRAW_NATIVE=verify` 0 mismatches, then `DDDRAW_ARENA=verify`.
+  Expected saving: the 5 allocations and the cross-thread frees of a new part (0.3-0.5 us/draw) plus ddgpu's `pack_constants` (a memcpy the ring copy replaces), i.e. 1.5-2.5 ms a frame if extended to every pass.
 
