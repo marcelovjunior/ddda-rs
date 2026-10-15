@@ -915,6 +915,20 @@ fn same_part(p: &BindingPart, meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, w
 /// banks).
 /// The runs of set bits in a 256-register mask as (first, end) register pairs: bank compares,
 /// clears and hashes then work on slices instead of one register at a time (L193).
+/// Whether any register at or above `from` is set in a 256-register mask (L193: one mask test per word, not 256 bit tests).
+fn bits_from(mask: &[u64; 4], from: usize) -> bool {
+    (0..4).any(|w| {
+        let lo = w * 64;
+        if from >= lo + 64 {
+            false
+        } else if from <= lo {
+            mask[w] != 0
+        } else {
+            mask[w] >> (from - lo) != 0
+        }
+    })
+}
+
 fn float_runs(mask: &[u64; 4]) -> impl Iterator<Item = (usize, usize)> + '_ {
     let mut at = 0usize;
     std::iter::from_fn(move || {
@@ -1877,7 +1891,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             phase_lap(&mut lap2, c, 5);
             let any = skipped.iter().any(|s| *s != ([0; 4], 0, 0));
             let covered = held_constants.as_ref().is_some_and(|h| {
-                (0..2).all(|stage| (0..256).all(|n| skipped[stage].0[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len()))
+                (0..2).all(|stage| !bits_from(&skipped[stage].0, h[stage].f.len()))
             });
             let device_banks = if any && !covered {
                 Some(
@@ -2175,7 +2189,7 @@ fn held_registers(
     let covered = held.is_some_and(|h| {
         (0..2).all(|stage| {
             let floats = skipped[stage].0;
-            (0..256).all(|n| floats[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len())
+            !bits_from(&floats, h[stage].f.len())
         })
     });
     match held {
@@ -3021,6 +3035,24 @@ fn report(mode: Mode, t: &Totals) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bits_from_matches_the_bit_by_bit_test() {
+        for seed in 0..200u64 {
+            let mut m = [0u64; 4];
+            let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            for w in m.iter_mut() {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                *w = if seed % 3 == 0 { x & (x >> 5) & (x >> 9) & (x >> 17) } else { x & (x >> 7) & (x >> 21) & (x >> 33) & (x >> 41) };
+            }
+            for from in [0usize, 1, 63, 64, 65, 100, 127, 128, 200, 224, 255, 256, 300] {
+                let slow = (0..256).any(|n| m[n / 64] >> (n % 64) & 1 != 0 && n >= from);
+                assert_eq!(super::bits_from(&m, from), slow, "{m:?} from {from}");
+            }
+        }
+    }
+
     #[test]
     fn float_runs_are_the_runs_of_set_bits() {
         let mut m = [0u64; 4];
