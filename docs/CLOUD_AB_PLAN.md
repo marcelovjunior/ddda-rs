@@ -32,6 +32,7 @@ Order below = my expected value, highest first. Change one knob at a time first,
 | `DDRUNTIME_WAIT_ALL_SPIN=1` | that join spins `event_spin()` before parking | 0 / 1 (with the gate) |
 | `DDRUNTIME_JOB_WAKE_FIT=1` | a batch of `n` jobs wakes/joins only `min(participants, n)` threads (rest of the workers stay parked) | 0 / 1 (`DDRUNTIME_JOB_STATS=1` prints batch sizes) |
 | `DDRUNTIME_RENDER_PRIORITY=1` or `2` | render worker above-normal / highest priority (it is preempted ~a fifth of the time) | 0 / 1 / 2 |
+| `DDRUNTIME_EVENT_SPIN_ADAPT=1` | a wait for one event spins only while spinning on that event keeps succeeding (4 misses in a row turn it off; one wait in 16 probes again); keeps the spin where it helps, drops the wasted 20 us where the gap is longer | 0 / 1 (try before lowering the spin value) |
 | `DDRUNTIME_EVENT_SPIN_US=N` (exists since L196) | how long a worker spins on its start event before parking; **only 150 and 400 were tried (worse); try shorter** | 20 (default) / 10 / 5 / 0 |
 
 Why the spin value matters: with 7 workers, ~84 batches per frame and a 20 us spin each, the workers can spin for ~12 ms of CPU per frame on a
@@ -41,7 +42,7 @@ but cost a wake-up (syscall) when the next batch comes quickly: the measurement 
 Environment line to paste (PowerShell), e.g. all candidates together:
 
 ```powershell
-$env:DDRUNTIME_WAIT_ALL_GATE='1'; $env:DDRUNTIME_WAIT_ALL_SPIN='1'; $env:DDRUNTIME_JOB_WAKE_FIT='1'; $env:DDRUNTIME_RENDER_PRIORITY='1'; $env:DDRUNTIME_EVENT_SPIN_US='10'
+$env:DDRUNTIME_WAIT_ALL_GATE='1'; $env:DDRUNTIME_WAIT_ALL_SPIN='1'; $env:DDRUNTIME_JOB_WAKE_FIT='1'; $env:DDRUNTIME_RENDER_PRIORITY='1'; $env:DDRUNTIME_EVENT_SPIN_ADAPT='1'
 ```
 
 If a knob hangs the game (a lost wake-up would show as a stuck loading screen or a frozen frame): unset it. The gate and spin are the only ones that touch

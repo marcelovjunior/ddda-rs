@@ -1081,11 +1081,46 @@ pub struct EventCell {
     /// check it): SetEvent signals the event's key only then
     waiters: std::sync::atomic::AtomicU32,
     address_waiters: std::sync::atomic::AtomicU32,
+    /// whether spinning before a park has paid off for the waits on this event (adaptive spin)
+    spin: SpinHistory,
+}
+
+/// Adaptive spin (`DDRUNTIME_EVENT_SPIN_ADAPT=1`): a wait spins before it parks only while spinning keeps
+/// succeeding. A spin that ends because the event was set (a hit) saves an OS sleep and wake-up; one that
+/// runs out its time (a miss) was CPU burnt for nothing, on a machine whose logical CPUs the job workers,
+/// the render worker and the GPU threads share. After `SPIN_MISSES` misses in a row the event stops
+/// spinning, except for one wait in `SPIN_PROBE` that spins to find out whether the gaps got shorter.
+#[derive(Debug)]
+struct SpinHistory {
+    score: std::sync::atomic::AtomicU32,
+    waits: std::sync::atomic::AtomicU32,
+}
+
+const SPIN_MISSES: u32 = 4;
+const SPIN_PROBE: u32 = 16;
+
+use std::sync::atomic::Ordering::Relaxed;
+
+impl SpinHistory {
+    const fn new() -> Self {
+        SpinHistory { score: std::sync::atomic::AtomicU32::new(SPIN_MISSES), waits: std::sync::atomic::AtomicU32::new(0) }
+    }
+
+    /// Whether this wait should spin.
+    fn should_spin(&self) -> bool {
+        self.score.load(Relaxed) > 0 || self.waits.fetch_add(1, Relaxed) % SPIN_PROBE == 0
+    }
+
+    /// The spin's outcome: a hit refills the budget, a miss uses one up.
+    fn record(&self, hit: bool) {
+        let score = self.score.load(Relaxed);
+        self.score.store(if hit { SPIN_MISSES } else { score.saturating_sub(1) }, Relaxed);
+    }
 }
 
 impl EventCell {
     pub fn new(manual: bool, set: bool) -> Arc<EventCell> {
-        Arc::new(EventCell { manual, set: set.into(), waiters: 0.into(), address_waiters: 0.into() })
+        Arc::new(EventCell { manual, set: set.into(), waiters: 0.into(), address_waiters: 0.into(), spin: SpinHistory::new() })
     }
 
     pub fn is_set(&self) -> bool {
@@ -1638,11 +1673,15 @@ fn wait_event(handle: u32, object: u32, e: &EventCell, ms: u32) -> u32 {
     // a short spin first while other guest threads run, as for a critical
     // section: the game's threads hand events back and forth quickly, and
     // a sleep costs an OS wake-up
-    if parallel() && !holds_lock() {
+    let adapt = event_spin_adapt();
+    if parallel() && !holds_lock() && (!adapt || e.spin.should_spin()) {
         let start = Instant::now();
         let mut n = 0u32;
         loop {
             if e.is_set() && e.take() {
+                if adapt {
+                    e.spin.record(true);
+                }
                 return WAIT_OBJECT_0;
             }
             if waits::help_due(&[handle]) {
@@ -1651,6 +1690,9 @@ fn wait_event(handle: u32, object: u32, e: &EventCell, ms: u32) -> u32 {
             std::hint::spin_loop();
             n += 1;
             if n % 64 == 0 && (start.elapsed() >= event_spin() || deadline.is_some_and(|d| Instant::now() >= d)) {
+                if adapt {
+                    e.spin.record(false);
+                }
                 break;
             }
         }
@@ -1838,6 +1880,19 @@ static CS_WAITERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 /// How long a contended Enter spins before it waits (a section is held
 /// ~1 us; measured gameplay mean 0.64 us). Unmeasured guess, not tuned.
 const CS_SPIN: Duration = Duration::from_micros(20);
+
+/// Test override of `event_spin_adapt`: 1 on, 2 off, 0 the environment.
+static SPIN_ADAPT_FORCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// `DDRUNTIME_EVENT_SPIN_ADAPT=1`: a wait for one event spins only while spinning on that event keeps succeeding ([`SpinHistory`]).
+fn event_spin_adapt() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    match SPIN_ADAPT_FORCE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => *ON.get_or_init(|| std::env::var("DDRUNTIME_EVENT_SPIN_ADAPT").is_ok_and(|v| v == "1")),
+    }
+}
 
 /// Test override of the two wait-for-all knobs below: 1 both on, 2 both off, 0 the environment.
 static WAIT_ALL_FORCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -3396,6 +3451,77 @@ mod tests {
         WAIT_ALL_FORCE.store(0, Ordering::SeqCst);
         assert_eq!(failures.load(Ordering::SeqCst), 0, "a join timed out (force {force})");
         t
+    }
+
+    #[test]
+    fn the_spin_history_stops_spinning_after_misses_and_probes_again() {
+        let h = SpinHistory::new();
+        // a fresh event spins
+        assert!(h.should_spin());
+        // misses use the budget up
+        for _ in 0..SPIN_MISSES {
+            assert!(h.should_spin());
+            h.record(false);
+        }
+        // now it spins only once in SPIN_PROBE waits
+        let spins = (0..SPIN_PROBE * 4).filter(|_| h.should_spin()).count();
+        assert_eq!(spins, 4, "one probe per {SPIN_PROBE} waits");
+        // a probe that hits restores the budget
+        h.record(true);
+        assert!((0..SPIN_PROBE).all(|_| h.should_spin()));
+        // a probe that misses leaves it off
+        let h = SpinHistory::new();
+        for _ in 0..SPIN_MISSES + 3 {
+            h.record(false);
+        }
+        assert_eq!(h.score.load(Relaxed), 0);
+        // the budget never goes below zero, and a probe's hit still refills it
+        h.record(false);
+        assert_eq!(h.score.load(Relaxed), 0);
+        h.record(true);
+        assert_eq!(h.score.load(Relaxed), SPIN_MISSES);
+    }
+
+    /// Two guest threads hand one token back and forth through two events (the shape of a job worker
+    /// and its dispatcher), with the adaptive spin forced on and off, and gaps of changing length: every
+    /// round must complete.
+    #[test]
+    fn a_ping_pong_completes_with_the_adaptive_spin_on_or_off() {
+        let _serial = WINDOW_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        for force in [2u8, 1] {
+            SPIN_ADAPT_FORCE.store(force, Ordering::SeqCst);
+            let (rt, m) = sync_runtime();
+            let a = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+            let b = create_named(&m, 0, || Object::Event(EventCell::new(false, false)));
+            let r = sync_registry(true);
+            let failures = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let f2 = failures.clone();
+            let rounds = 1500u32;
+            run_guest_threads(&rt, &r, &m, 2, Arc::new(move |k, g: &mut GuestCaller| {
+                for round in 0..rounds {
+                    let (mine, theirs) = if k == 0 { (b, a) } else { (a, b) };
+                    if k == 0 {
+                        // gaps: short, then long, so the history flips between spinning and not
+                        for _ in 0..(if (round / 100) % 2 == 0 { 0 } else { 300 }) {
+                            std::thread::yield_now();
+                        }
+                        g.call(S_SET, &[theirs]);
+                        if g.call(S_WAIT1, &[mine, 5_000]) != WAIT_OBJECT_0 {
+                            f2.fetch_add(1, Ordering::SeqCst);
+                            return;
+                        }
+                    } else {
+                        if g.call(S_WAIT1, &[mine, 5_000]) != WAIT_OBJECT_0 {
+                            f2.fetch_add(1, Ordering::SeqCst);
+                            return;
+                        }
+                        g.call(S_SET, &[theirs]);
+                    }
+                }
+            }));
+            SPIN_ADAPT_FORCE.store(0, Ordering::SeqCst);
+            assert_eq!(failures.load(Ordering::SeqCst), 0, "a ping-pong round timed out (force {force})");
+        }
     }
 
     #[test]
