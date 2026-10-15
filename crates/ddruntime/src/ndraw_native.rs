@@ -1583,7 +1583,9 @@ pub struct Caches {
     states: FxMap<StatesKey, RenderStateList>,
     /// native fixed state by identity and render-state list (its address:
     /// the list is held in `states`)
-    native_fixed: FxMap<(NativeStateIdentity, u64), Arc<NativeFixedState>>,
+    /// by the fixed-state objects and the render-state list; with whether the list turns the scissor test on
+    /// (state 174), found once instead of scanning its ~200 states for every draw
+    native_fixed: FxMap<(NativeStateIdentity, u64), (Arc<NativeFixedState>, bool)>,
     // this frame's
     /// shader bindings by address, with the frame they were last built
     /// or checked in (kept across frames: an unchanged binding keeps its
@@ -2489,6 +2491,11 @@ pub fn identity(m: &dyn Mem, record: u32) -> NativeStateIdentity {
     identity_of(&g, g.u32(record.wrapping_add(8)))
 }
 
+/// Whether `states` sets D3DRS_SCISSORTESTENABLE (174) to a non-zero value.
+fn scissor_test_on(states: &[(u32, u32)]) -> bool {
+    states.iter().any(|&(s, v)| s == 174 && v != 0)
+}
+
 /// A taken draw as a native draw: the DrawCall's state; the constants as
 /// one write of each bank the DrawCall carries (every register the shaders
 /// read, see draw_call).
@@ -2507,8 +2514,11 @@ pub fn native_draw(
     let (Some(vertex_shader), Some(pixel_shader)) = (d.vertex_shader.clone(), d.pixel_shader.clone()) else {
         return Err(Refusal::Missing);
     };
-    let state = caches.native_fixed.entry((identity, d.render_states.address())).or_insert_with(|| {
-        Arc::new(NativeFixedState { identity, render_states: d.render_states.iter().copied().collect::<Vec<_>>().into() })
+    let (state, scissor) = caches.native_fixed.entry((identity, d.render_states.address())).or_insert_with(|| {
+        (
+            Arc::new(NativeFixedState { identity, render_states: d.render_states.iter().copied().collect::<Vec<_>>().into() }),
+            scissor_test_on(&d.render_states),
+        )
     }).clone();
     // one set of register arrays per constant bank, made once and held by
     // the binding's part (banks are shared by the draws of a binding, across
@@ -2529,7 +2539,6 @@ pub fn native_draw(
         } else {
             [arrays(&d.vs_constants), arrays(&d.ps_constants)]
         };
-    let scissor = d.render_states.iter().any(|&(s, v)| s == 174 && v != 0);
     Ok(NativeDraw {
         state,
         vertex_shader,
@@ -3279,6 +3288,14 @@ mod tests {
         assert_ne!(a.texture_key(), d.texture_key());
         b.textures[3] = 0xD004;
         assert_ne!(a.texture_key(), b.texture_key());
+    }
+
+    #[test]
+    fn the_scissor_test_state_is_read_from_the_list() {
+        assert!(!scissor_test_on(&[]));
+        assert!(!scissor_test_on(&[(7, 1), (174, 0), (193, 5)]));
+        assert!(scissor_test_on(&[(7, 1), (174, 1), (193, 5)]));
+        assert!(!scissor_test_on(&[(173, 1), (175, 1)]));
     }
 
     #[test]
