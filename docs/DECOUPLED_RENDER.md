@@ -803,3 +803,31 @@ The two report lines printed (one draw each time the report runs): (a) pixel-sha
 Both are the same kind: a vec3 whose three floats differ in the low mantissa bits by a small relative step (about 2e-5), w equal: a value the main thread is still
 writing (a colour/light vector updated every frame) while the worker executes the previous frame's stream, so the two reads (sink first, D3D9 path later) saw different
 generations. It looks like a verify-time race on live memory, not a decode error; it matches the "constant memory is live" risk R1 of NDRAW_DIRECT.md.
+
+### 11.7 Allocation pooling of binding parts, and why the kept register file does not pay in the sink (decouple2)
+
+**Pooling (tried, not kept).** A ring of recently made `Arc<Constants>` banks, rewritten in place when nothing else holds the oldest one (no allocation, no cross-thread free):
+- sweep every 8 frames: 33% of banks reused, "new part" 0.32 -> 0.52 us/draw (shadow atlas), binding_part 1.08 -> 1.25;
+- sweep every 2 frames and a 32768 ring: 57% reused, "new part" 0.47, binding_part 1.06: no gain over the original 1.08.
+Reused banks are cache-cold; a fresh mimalloc block is hot in the thread's free list, so the allocation is not what costs. Removed again.
+
+**Kept (commit "bindings of a metadata whose content never repeats skip the content table").** Per shader metadata the sink counts content-table lookups and hits; a metadata
+with fewer than 5% hits stops hashing, looking up and inserting (one probe in 64 stays). Shadow atlas: lookup/hash 0.18 -> 0.10 us/draw, nothing else moved; its parts also
+leave with the binding table instead of staying 8-16 frames in the content table.
+Verify (`DDDRAW_NATIVE=verify`, pinned config): **983,487 draws compared, 983,487 equal, 0 mismatches**, clears/copies 3,549 of 3,549 (the 1-in-1M float-register race of 11.6 did not recur).
+fps on the pinned config, 3 runs each, old = W1+W2 exe `d1w2`, new = this exe `d1cs`: N=1 old 46.9 / 47.9 / 50.7, new 44.5 / 48.0 / 35.2 (the 35.2 run is a machine outlier);
+N=4 old 57.7 / 57.6 / 54.6, new 54.7 / 60.6 / (third run pending when this was written). All inside the run-to-run noise (up to 7 fps): the change is about 0.08 us of ~2.5 us a draw
+(about 0.35 ms a frame), too small to show in fps. It is safe (0 mismatches) and not slower in the medians' noise band, so it stays.
+
+**Kept register file (NDRAW_DIRECT 3.5): analysis, not implemented.** What the measurements say about the doc's claim for the shadow pass:
+1. A shadow draw's constants are unique per draw (the world matrix / palette registers change every draw; census: 518 draws, 400 mesh+material groups, 0.4% measured static).
+   Every draw therefore needs its own constant block in the `DrawCall` (`Arc<Constants>` that ddgpu packs). A register file kept in place does not remove that block, it only
+   changes how it is filled; the block's allocation, its copy and the comparison against the previous block are the 0.3-0.5 us measured above.
+2. The remaining pieces the register file would replace (upload loop 0.19, clear 0.07, lookup/hash now 0.10, held/skipped 0.2) add up to about 0.5 us of 2.5 us. The model also
+   has to reproduce `Uploads`/`fill_uncovered`/`held_registers` exactly (the combo39/42/44/46 history), and those fill registers from the device and from the newest pending upload
+   across all passes, so a shadow-only register file still has to publish into the shared log.
+3. The doc's large win (2-3 us -> 0.4-0.7 us decode side) needs the per-draw block to stop being an allocation: a per-frame constant arena written once and referenced by offset
+   from the draw (NDRAW_DIRECT S2: `direct_draw` into ddgpu, `Recorder::update_constant_range`). That is a backend interface change, not a sink-side cache.
+Recommendation: do S2 (arena + handle-based draw into ddgpu, behind its own switch) before the sink-side register file; the register file then fills the arena directly and the
+per-draw `Arc<Constants>`, `BindingPart` allocation and ddgpu `pack_constants` copy disappear together. Without S2 the sink-side work is bounded by about 0.3-0.5 us/draw (1.5-2 ms
+a frame at 4.5k draws) for a rewrite of the constants model, with a verify risk that is the highest in the sink.
