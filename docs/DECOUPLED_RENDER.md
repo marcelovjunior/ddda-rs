@@ -840,7 +840,7 @@ registers straight into a per-thread arena chunk; the draw carries a `ConstRef` 
 Plan, each step builds and passes the sink unit tests (`cargo test --profile play-o2 -p ddruntime --lib ndraw_native`) before it is committed:
 - **S2.1 DONE** `crates/d3d9cmd/src/arena.rs`: `ConstArena::alloc(regs) -> BlockWriter`, `finish() -> ConstRef`, `ConstRef::regs()`, chunk freed when its last ref is dropped.
   Test: `cargo test -p d3d9cmd --lib arena` (3 tests: disjoint/zeroed, chunk rollover, read on another thread). Not wired to anything yet.
-- **S2.2 next** a block layout the backend can copy verbatim: `[floats(F regs)][ints 16 regs][bools 16 regs as vec4]` equal to what ddgpu `backend_data::pack_constants` writes (without the `extra` tail);
+- **S2.2 DONE (a: d3d9cmd, b: ddgpu)** a block layout the backend can copy verbatim: `[floats(F regs)][ints 16 regs][bools 16 regs as vec4]` equal to what ddgpu `backend_data::pack_constants` writes (without the `extra` tail);
   add `DrawCall`-side transport: a new deferred command `DrawArena(DrawCall, [ConstRef; 2])` (do not add a field to `DrawCall`: ~40 struct literals in tests/examples), whose `vs_constants`/`ps_constants` are shared
   empty Arcs; ddgpu `try_draw` takes the block with `ring_fill` + `copy_from_slice` instead of `constants()`/`pack_constants`, comparing `ConstRef::same_block` for the "same as last draw" shortcut.
   Test: a ddgpu test drawing the same scene once with `Constants` and once with `ConstRef` blocks and comparing the output (tests/draw.rs has the pattern).
@@ -848,3 +848,11 @@ Plan, each step builds and passes the sink unit tests (`cargo test --profile pla
   do today, but into the arena slice), keep `LastDraw`/`Uploads` semantics (they need the written-register sets, not `Arc<Constants>`). Gate: `DDDRAW_NATIVE=verify` must report 0 mismatches (compare
   the arena block to the `Constants` the old path builds: add the comparison to `expect`), then `DDRUNTIME_NDRAW_PHASES=1` (constants us/draw) and N=1/N=4 A/B, 3 runs, pinned config.
 - **S2.4** extend to all passes once the shadow pass verifies; then the register file of NDRAW_DIRECT 3.5 can fill the arena in place.
+- **S2.2 log** (commits "S2.2a", "S2.2b"): `arena::{block_len, encode, decode}`; `GraphicsBackend::draw_arena(draw, vs: ConstRef, ps: ConstRef)` with a default that decodes into `Constants`;
+  `DeferredBackend` sends it as `Command::DrawArena` (not batched with `Draws`: order is kept because `command()` flushes first); `ddgpu` overrides it (`arena_blocks` field, `constants_block` copies
+  the block into the uniform ring verbatim, skips a block that `same_block` as the last one). Tests: `cargo test -p d3d9cmd --lib` (21), `cargo test -p ddgpu --test draw an_arena` (draws with
+  empty `Constants` and arena blocks: only the arena can give the 255,51,0 pixels).
+- **S2.3 next**: the sink side (`DDDRAW_ARENA=1`): a `ConstArena` in `Caches`; for 512x1536 draws build the two blocks with `arena::encode`-compatible writes and call
+  `draw_arena` instead of queuing a `DrawCall` with `Arc<Constants>`; how the sink hands `DrawCall`s over today is `g.batch.push(d)` / `send_batch` (ndraw_native.rs `Native::draw`, `Mode::DrawCall` arm);
+  `draw_arena` goes through `crate::d3d9draw` (find the `send_draw`/`backend_unlocked` helper used by `send_batch`). Keep the old path for verify.
+

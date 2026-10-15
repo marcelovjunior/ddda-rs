@@ -1200,3 +1200,26 @@ fn deferred_frame_matches_synchronous_image() {
     assert!(async_threads.iter().all(|id| *id != std::thread::current().id()));
     assert_eq!(async_threads[0], async_threads[1]);
 }
+
+#[test]
+fn an_arena_block_draws_like_the_same_constants() {
+    // L193 S2: draw_arena copies the blocks into the uniform ring; the pixels equal the Constants path's
+    let Some(mut gpu) = ddgpu::WgpuBackend::headless() else { return };
+    let mut c = Constants { f: vec![[0; 4]; 224], ..Default::default() };
+    c.f[0] = [1f32.to_bits(), 0.2f32.to_bits(), 0, 1f32.to_bits()];
+    let vs = Constants { f: vec![[0; 4]; 256], ..Default::default() };
+    let mut arena = d3d9cmd::arena::ConstArena::new(4096);
+    let block = |a: &mut d3d9cmd::arena::ConstArena, k: &Constants| {
+        let mut w = a.alloc(d3d9cmd::arena::block_len(k.f.len()));
+        d3d9cmd::arena::encode(k, w.regs());
+        w.finish()
+    };
+    let (rvs, rps) = (block(&mut arena, &vs), block(&mut arena, &c));
+    gpu.draw_arena(draw(ps_constant(), Constants::default(), vec![]), rvs, rps);
+    assert!(gpu.errors.is_empty(), "{:?}", gpu.errors);
+    gpu.present(&back_buffer());
+    let f = gpu.last_frame.clone().expect("frame");
+    for px in f.rgba.chunks_exact(4) {
+        assert_eq!(px, &[255, 51, 0, 255]);
+    }
+}
