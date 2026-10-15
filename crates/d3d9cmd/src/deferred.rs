@@ -18,6 +18,7 @@ const BATCH: usize = 32;
 enum Command {
     Draw(DrawCall),
     Draws(Vec<DrawCall>),
+    DrawArena(DrawCall, crate::arena::ConstRef, crate::arena::ConstRef),
     Upload(Upload),
     ShaderCreated(Arc<[u32]>),
     Clear(ClearCall),
@@ -36,6 +37,7 @@ impl Command {
         match self {
             Self::Draw(draw) => backend.draw(&draw),
             Self::Draws(draws) => backend.draws(draws),
+            Self::DrawArena(draw, vs, ps) => backend.draw_arena(draw, vs, ps),
             Self::Upload(upload) => backend.upload(upload),
             Self::ShaderCreated(tokens) => backend.shader_created(tokens),
             Self::Clear(clear) => backend.clear(&clear),
@@ -235,6 +237,9 @@ impl GraphicsBackend for DeferredBackend {
     }
     fn draws(&mut self, draws: Vec<DrawCall>) {
         self.command(Command::Draws(draws));
+    }
+    fn draw_arena(&mut self, draw: DrawCall, vs: crate::arena::ConstRef, ps: crate::arena::ConstRef) {
+        self.command(Command::DrawArena(draw, vs, ps));
     }
     fn clear(&mut self, clear: &ClearCall) {
         self.command(Command::Clear(clear.clone()));

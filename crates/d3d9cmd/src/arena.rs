@@ -12,6 +12,7 @@
 //! never overlap, so no byte is written while another reference can read it. A `ConstRef` handed
 //! to another thread is published through the caller's queue (that synchronisation orders the
 //! writes before the reads).
+use crate::Constants;
 use std::cell::UnsafeCell;
 use std::sync::Arc;
 
@@ -100,6 +101,43 @@ impl ConstArena {
     }
 }
 
+// ---- block layout ----------------------------------------------------------------------------
+// A constants block is `floats` float registers, then 16 integer registers (bits of the i32 x4),
+// then 16 boolean registers (the value in lane 0): `floats + 32` registers in all. This is the
+// bytes `ddgpu::backend_data::pack_constants` writes before its `extra` tail, so a backend can
+// copy a block into its uniform ring as it is.
+
+/// Registers in a block of `floats` float registers.
+pub const fn block_len(floats: usize) -> usize {
+    floats + 32
+}
+
+/// Write `c` into `dst` (`block_len(c.f.len())` registers).
+pub fn encode(c: &Constants, dst: &mut [[u32; 4]]) {
+    let floats = c.f.len();
+    assert_eq!(dst.len(), block_len(floats));
+    dst[..floats].copy_from_slice(&c.f);
+    for (out, r) in dst[floats..floats + 16].iter_mut().zip(&c.i) {
+        *out = r.map(|v| v as u32);
+    }
+    for (out, &b) in dst[floats + 16..].iter_mut().zip(&c.b) {
+        *out = [b, 0, 0, 0];
+    }
+}
+
+/// The `Constants` a block stands for (the fallback for a backend without the arena path).
+pub fn decode(block: &[[u32; 4]]) -> Constants {
+    let floats = block.len() - 32;
+    let mut c = Constants { f: block[..floats].to_vec(), ..Default::default() };
+    for (r, v) in c.i.iter_mut().zip(&block[floats..floats + 16]) {
+        *r = v.map(|x| x as i32);
+    }
+    for (b, v) in c.b.iter_mut().zip(&block[floats + 16..]) {
+        *b = v[0];
+    }
+    c
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +171,19 @@ mod tests {
         assert_eq!(new.regs()[5], [0; 4]);
         let big = a.alloc(20).finish(); // larger than a chunk: a chunk of its own
         assert_eq!(big.regs().len(), 20);
+    }
+
+    #[test]
+    fn blocks_round_trip_through_the_constants_layout() {
+        let mut c = Constants { f: vec![[1, 2, 3, 4], [5, 6, 7, 8]], ..Default::default() };
+        c.i[3] = [-1, 2, -3, 4];
+        c.b[15] = 0xDEAD;
+        let mut a = ConstArena::new(64);
+        let mut w = a.alloc(block_len(2));
+        encode(&c, w.regs());
+        let r = w.finish();
+        assert_eq!(r.regs().len(), 34);
+        assert_eq!(decode(r.regs()), c);
     }
 
     #[test]
