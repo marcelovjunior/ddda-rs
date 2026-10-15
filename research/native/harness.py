@@ -14,13 +14,16 @@ signalling NaNs against the CPU itself (ddnative x87 hardware test).
 Reads the user's own exe at run time; nothing from it is committed.
 Run with E:/ddda-re/tools/pyenv/Scripts/python.exe (capstone, unicorn).
 """
+import os
 import struct
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_32, UC_HOOK_CODE, UcError
 from unicorn.x86_const import (UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_ESP,
                                UC_X86_REG_EIP, UC_X86_REG_EBX, UC_X86_REG_ESI, UC_X86_REG_EDI,
                                UC_X86_REG_EBP)
 
-EXE = "E:/ddda-re/bin/DDDA.exe.unpacked.exe"
+# DDDA_EXE overrides the path (e.g. the Steam exe, SHA-256 19facc26...77b8).
+# Unverified: that its .text/.rdata/.data equal the unpacked copy's; check before relying on vectors.
+EXE = os.environ.get("DDDA_EXE", "E:/ddda-re/bin/DDDA.exe.unpacked.exe")
 STACK, STACK_SIZE = 0x0F000000, 0x00100000
 SCRATCH, SCRATCH_SIZE = 0x0E000000, 0x00100000
 RET = 0x0DEAD000
