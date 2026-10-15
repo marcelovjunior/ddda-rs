@@ -1216,6 +1216,9 @@ impl Shadow {
 #[derive(Clone)]
 struct Mirror {
     epoch: u64,
+    /// the draw's shadow is applied already (L193: `draw_call` applies in place instead of cloning the 1.3 KB
+    /// mirror; the epoch is then marked stale until `commit` confirms the draw, so a refused draw reloads)
+    applied: bool,
     rows: [[u32; 14]; 21],
     textures: [u32; 21],
 }
@@ -1244,7 +1247,7 @@ impl Mirror {
                         textures[i] = h;
                     }
                 }
-                Some(Mirror { epoch, rows: std::array::from_fn(|i| s.sampler.row(stage_of(i))), textures })
+                Some(Mirror { epoch, applied: false, rows: std::array::from_fn(|i| s.sampler.row(stage_of(i))), textures })
             }
             _ => None,
         })
@@ -1269,6 +1272,12 @@ impl Mirror {
     fn textures(&self, sh: &Shadow, c: &mut Caches) -> Arc<[TextureBinding]> {
         let mut m = self.clone();
         m.apply(sh);
+        m.textures_applied(c)
+    }
+
+    /// The same for a mirror that already holds the draw's shadow.
+    fn textures_applied(&self, c: &mut Caches) -> Arc<[TextureBinding]> {
+        let m = self;
         // the lists by the bound slots, their textures and sampler states
         // (L180: the draws' texture sets repeat)
         let key = {
@@ -2024,12 +2033,18 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     if c.mirror.as_ref().is_none_or(|m| m.epoch != crate::d3d9state::sampler_epoch()) {
         c.mirror = Some(Mirror::load(info.device).ok_or(Refusal::Device)?);
     }
-    let mirror = c.mirror.take().unwrap();
+    let mut mirror = c.mirror.take().unwrap();
     sh.prune(&g, &mirror);
     let textures = match &c.texture_list {
         Some((epoch, list)) if *epoch == mirror.epoch && sh.is_empty() => list.clone(),
         _ => {
-            let list = mirror.textures(&sh, c);
+            if !sh.is_empty() {
+                // apply in place; stale until commit() confirms the draw (a refused draw makes the next one reload)
+                mirror.apply(&sh);
+                mirror.applied = true;
+                mirror.epoch = u64::MAX;
+            }
+            let list = mirror.textures_applied(c);
             if sh.is_empty() {
                 c.texture_list = Some((mirror.epoch, list.clone()));
             }
@@ -2244,7 +2259,10 @@ pub fn commit(m: &mut dyn Mem, info: &FrameInfo, c: &mut Caches, mut sh: Shadow,
         }
         // the device is what the mirror and the draw's list say now
         if let Some(mirror) = c.mirror.as_mut() {
-            mirror.apply(&sh);
+            if !mirror.applied {
+                mirror.apply(&sh);
+            }
+            mirror.applied = false;
             mirror.epoch = crate::d3d9state::sampler_epoch();
             c.texture_list = Some((mirror.epoch, textures.clone()));
         }
@@ -3458,7 +3476,7 @@ mod tests {
         rows[17][5] = 2;
         let mut textures = [0u32; 21];
         textures[0] = 0xD000;
-        let mirror = Mirror { epoch: 1, rows, textures };
+        let mirror = Mirror { epoch: 1, applied: false, rows, textures };
         let mut sh = Shadow::default();
         // the same value; a change; a change back (stays: it is the last
         // word for the field); a vertex stage; textures likewise
@@ -3568,7 +3586,7 @@ mod tests {
                 a / 4
             }
         }
-        let mirror = Mirror { epoch: 0, rows: [[0; 14]; 21], textures: [0; 21] };
+        let mirror = Mirror { epoch: 0, applied: false, rows: [[0; 14]; 21], textures: [0; 21] };
         let mut seed = 17u32;
         for len in 0..128 {
             for _ in 0..32 {
@@ -3637,7 +3655,7 @@ mod tests {
     #[test]
     fn texture_lists_keep_every_slot_and_the_shadow_overrides() {
         let mut c = Caches::default();
-        let mut mirror = Mirror { epoch: 0, rows: [[0; 14]; 21], textures: [0; 21] };
+        let mut mirror = Mirror { epoch: 0, applied: false, rows: [[0; 14]; 21], textures: [0; 21] };
         for i in 0..21 {
             let h = 0x1000 + i as u32;
             mirror.textures[i] = h;
