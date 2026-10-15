@@ -459,6 +459,9 @@ Ports that are still the hottest owners: `shader_lookup` 3.9% (already a guest-c
 - The native path calls `flush_reads` only when `dirty_count() != 0 && reads_dirty(...)`, as the DrawCall path already did; before it did the D3D
   objects lookup for every read of every draw.
 - The texture-list key hashes two sampler states per step (`Mirror::texture_key`); a lookup hint, confirmed by `same_slots`/`find_kept`.
+- `Shadow::prune` copies the mirror's 1.2 KB sampler-state table only when the draw has sampler states to compare, and the cached `Mirror` (1,272
+  bytes) is boxed, so `draw_call`'s take/put-back per draw moves a pointer. Sizes measured: `DrawCall` 504 bytes (a regrowing `Vec<DrawCall>` copied
+  every pushed call at each doubling), `Decoded` 592, `NativeDraw` 192.
 Not done: `Mirror::textures` row-hash caching (tests write `rows` directly), `native_draw`'s per-draw `streams` slice, `bank.f.resize` for new
 binding parts (needed: the Vec moves into the Arc).
 

@@ -1177,15 +1177,19 @@ impl Shadow {
     /// already holds, context words already holding the value written
     /// last. What stays has the same effect.
     fn prune(&mut self, g: &G, mirror: &Mirror) {
-        let mut rows = mirror.rows;
+        // the 1.2 KB table of sampler states is copied only when there are states to compare (most
+        // draws change a texture, not a sampler state)
+        if !self.sampler_states.is_empty() {
+            let mut rows = mirror.rows;
+            self.sampler_states.retain(|&(t, ty, v)| match (slot_of(t), (ty as usize) < 14) {
+                (Some(i), true) => rows[i][ty as usize] != v && {
+                    rows[i][ty as usize] = v;
+                    true
+                },
+                _ => true,
+            });
+        }
         let mut textures = mirror.textures;
-        self.sampler_states.retain(|&(t, ty, v)| match (slot_of(t), (ty as usize) < 14) {
-            (Some(i), true) => rows[i][ty as usize] != v && {
-                rows[i][ty as usize] = v;
-                true
-            },
-            _ => true,
-        });
         self.textures.retain(|&(t, h)| match slot_of(t) {
             Some(i) => textures[i] != h && {
                 textures[i] = h;
@@ -1620,7 +1624,8 @@ pub struct Caches {
     index_formats: FxMap<u32, Option<u32>>,
     /// the device's sampler states and textures this frame, and its
     /// texture list at an epoch (crate::d3d9state::sampler_epoch)
-    mirror: Option<Mirror>,
+    /// boxed: `draw_call` takes it out of the caches and puts it back for every draw (a 1.3 KB move each way otherwise)
+    mirror: Option<Box<Mirror>>,
     texture_list: Option<(u64, Arc<[TextureBinding]>)>,
     /// the sampler section's buffers, reused
     scratch: Shadow,
@@ -2035,7 +2040,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     // the device as it is (anything else that set a sampler state or a
     // texture since: the default path's applies, moves the epoch)
     if c.mirror.as_ref().is_none_or(|m| m.epoch != crate::d3d9state::sampler_epoch()) {
-        c.mirror = Some(Mirror::load(info.device).ok_or(Refusal::Device)?);
+        c.mirror = Some(Box::new(Mirror::load(info.device).ok_or(Refusal::Device)?));
     }
     let mut mirror = c.mirror.take().unwrap();
     sh.prune(&g, &mirror);
