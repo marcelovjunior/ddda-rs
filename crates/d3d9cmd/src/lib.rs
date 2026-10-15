@@ -3,6 +3,7 @@
 //! draws with their complete state, clears and presents. A separate crate so
 //! that backends (crates/ddgpu, wgpu) do not depend on the runtime.
 
+pub mod arena;
 pub mod bytes;
 mod deferred;
 mod native;
@@ -264,6 +265,13 @@ pub trait GraphicsBackend: Send + std::any::Any {
     /// deferred one) takes it without a copy (L144).
     fn draw_owned(&mut self, draw: DrawCall) {
         self.draw(&draw)
+    }
+    /// A draw whose shader constants are blocks in a constant arena (L193 S2): the default makes the
+    /// `Constants` they stand for; a backend with an arena path copies the blocks as they are.
+    fn draw_arena(&mut self, mut draw: DrawCall, vs: arena::ConstRef, ps: arena::ConstRef) {
+        draw.vs_constants = std::sync::Arc::new(arena::decode(vs.regs()));
+        draw.ps_constants = std::sync::Arc::new(arena::decode(ps.regs()));
+        self.draw_owned(draw)
     }
     /// Draws in order: the same as `draw` for each (a native path's run of
     /// draws, L119; a deferred backend sends them as one command).

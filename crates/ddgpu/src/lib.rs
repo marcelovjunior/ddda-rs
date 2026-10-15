@@ -432,6 +432,10 @@ pub struct WgpuBackend {
     /// vec4s, its uniform ring offset and the ring generation it was
     /// written in (L78)
     last_constants: RefCell<[(std::sync::Arc<d3d9cmd::Constants>, Vec<[u32; 4]>, u32, u64, usize); 2]>,
+    /// L193 S2: the constant blocks of the draw being made by `draw_arena` (pixel, vertex), taken by `try_draw_buffered`
+    arena_blocks: Option<[d3d9cmd::arena::ConstRef; 2]>,
+    /// per stage: the last arena block copied into the ring, its extra vec4s, ring offset, generation, floats
+    last_blocks: RefCell<[(Option<d3d9cmd::arena::ConstRef>, Vec<[u32; 4]>, u32, u64, usize); 2]>,
     uniforms: RefCell<Ring>,
     inline: RefCell<Ring>,
     /// group 0: the constant blocks in the uniform ring (dynamic offsets)
@@ -817,6 +821,8 @@ impl WgpuBackend {
             memo: Default::default(),
             vk_bindings: Default::default(),
             last_constants: RefCell::new([(Default::default(), Vec::new(), 0, u64::MAX, 0), (Default::default(), Vec::new(), 0, u64::MAX, 0)]),
+            arena_blocks: None,
+            last_blocks: RefCell::new([(None, Vec::new(), 0, u64::MAX, 0), (None, Vec::new(), 0, u64::MAX, 0)]),
             uniforms: RefCell::new(uniforms),
             inline: RefCell::new(inline),
             layout0,
@@ -1103,6 +1109,40 @@ impl WgpuBackend {
             backend_data::pack_constants(dst, c, floats, extra);
         }) as u32;
         last.0.clone_from(c);
+        last.1.clear();
+        last.1.extend_from_slice(extra);
+        last.2 = off;
+        last.3 = self.uniforms.borrow().generation;
+        last.4 = floats;
+        off
+    }
+
+    /// L193 S2: a constants block from the arena, copied into the uniform ring as it is (`arena::block_len`
+    /// layout = `pack_constants`' bytes before the extra tail). A block whose float count differs from the
+    /// shader's goes through the `Constants` path.
+    fn constants_block(&self, c: &d3d9cmd::arena::ConstRef, floats: usize, extra: &[[u32; 4]], block: u64, stage: usize) -> u32 {
+        let regs = c.regs();
+        if regs.len() != d3d9cmd::arena::block_len(floats) {
+            return self.constants(&std::sync::Arc::new(d3d9cmd::arena::decode(regs)), floats, extra, block, stage);
+        }
+        let len = 16 * (regs.len() + extra.len());
+        assert!(len as u64 <= block, "constant block of {len} bytes");
+        let generation = self.uniforms.borrow().generation;
+        let mut last = self.last_blocks.borrow_mut();
+        let last = &mut last[stage];
+        if last.3 == generation && last.4 == floats && last.0.as_ref().is_some_and(|l| l.same_block(c)) && last.1[..] == *extra {
+            return last.2;
+        }
+        if !self.uniforms.borrow().fits(block, UNIFORM_ALIGN) {
+            self.flush();
+            self.uniforms.borrow_mut().restart();
+        }
+        let off = self.ring_fill(&self.uniforms, len as u64, UNIFORM_ALIGN, |dst| {
+            let (head, tail) = dst.split_at_mut(16 * regs.len());
+            backend_data::copy_registers(head, regs);
+            backend_data::copy_registers(tail, extra);
+        }) as u32;
+        last.0 = Some(c.clone());
         last.1.clear();
         last.1.extend_from_slice(extra);
         last.2 = off;
@@ -2508,8 +2548,16 @@ impl WgpuBackend {
             self.flush();
             self.uniforms.borrow_mut().restart();
         }
-        let ps_off = self.constants(&d.ps_constants, x.ps_floats, ps_extra, PS_BLOCK, 0);
-        let vs_off = self.constants(&d.vs_constants, x.vs_floats, &[hp], VS_BLOCK, 1);
+        let (ps_off, vs_off) = match self.arena_blocks.take() {
+            Some([vs, ps]) => (
+                self.constants_block(&ps, x.ps_floats, ps_extra, PS_BLOCK, 0),
+                self.constants_block(&vs, x.vs_floats, &[hp], VS_BLOCK, 1),
+            ),
+            None => (
+                self.constants(&d.ps_constants, x.ps_floats, ps_extra, PS_BLOCK, 0),
+                self.constants(&d.vs_constants, x.vs_floats, &[hp], VS_BLOCK, 1),
+            ),
+        };
         self.encode_profile.end(14, timing);
         let timing = self.encode_profile.start();
         // a draw made while guest occlusion queries count gets its own slot
@@ -3067,6 +3115,13 @@ impl GraphicsBackend for WgpuBackend {
                 self.errors.push(e);
             }
         }
+    }
+
+    fn draw_arena(&mut self, draw: DrawCall, vs: d3d9cmd::arena::ConstRef, ps: d3d9cmd::arena::ConstRef) {
+        // the call's own constants are not read: the blocks are (try_draw_buffered takes them)
+        self.arena_blocks = Some([vs, ps]);
+        self.draw(&draw);
+        self.arena_blocks = None;
     }
 
     fn clear(&mut self, c: &ClearCall) {

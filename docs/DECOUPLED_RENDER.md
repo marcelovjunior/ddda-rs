@@ -634,3 +634,250 @@ Caveats: a timestamp between runs is a pipeline bubble (bottom-of-pipe to top), 
 
 Verdict for 240 fps (4.2 ms/frame): at the current workload the GPU alone needs ~6.5 ms/frame at 1080p (~150 fps ceiling), so 240 fps does NOT fit if every frame renders the full scene. Idle is ~4 ms (CPU-bound as known), so GPU is not today's limit, but it becomes the limit above ~150 fps. What would fit: with decoupling, the shadow maps (0.4), the 64x16 pass (0.9) and the small intermediate targets (~0.6) can be reused per sim tick and drop to <= 1/4 of their cost per presented frame, leaving ~4.7 ms: borderline. A fit needs additionally ~15% off the 1080p main passes (2.9 + 0.8 ms; e.g. cheaper draw state, fewer redundant draws, depth pre-pass reuse) or 1440p/1080p DLSS-style internal scaling. Roughly: 240 fps at 1080p is a stretch on the 4060 and should not be promised; 120-165 fps is comfortably within the GPU budget. Not measured: GPU time at 720p/540p (would split pixel-bound vs per-draw-bound main passes; one more run with the 720p config).
 
+## 11. Implementation log (decouple2 agent, 2026-10-14, branch task/L193-decouple off task/L172-replay)
+
+Code: `crates/ddruntime/src/decouple.rs` (one wrapper port on `sMain::vf06` 0x00DBFA90, installed from `dispatch.rs` next to
+`measure::install`; everything off unless an env var is set). Build: play-o2, features `emu,ddruntime/parallel-shadow,ddruntime/stack-window`,
+target `C:/ddda-targets/d1`, exe `C:/ddda-targets/d1/runs/d1a`; runs via `C:/ddda-targets/d1/autorun_d1.sh` (playtest_fast2 env, benchmark save,
+fps = mean of the stage-probe lines at t=46..84 s of the run). Build gotcha: a 6-job build next to two other agents' builds was OOM-killed
+(rustc exit 0xffffffff, 2 GB free of 32); go through `heavy.py`, and launch bash as `C:/Program Files/Git/usr/bin/bash.exe` (plain `bash` is WSL's).
+
+### 11.1 Stage 1: fixed tick (`DDRUNTIME_FIXED_TICK=<hz>`)
+
+Mechanism: after the lifted `sMain::vf06` returns (clock, QPC, frame cap, hitch/limit clamps), `mDeltaTime` (+0x70) is overwritten with
+`30/hz x mGlobalSpeed` (a dt of 0 = paused stays 0). Chosen over a virtual QPC because it is one write at a known place and keeps
+`mTimer`/input repeat/`GetTickCount` consumers on wall time. mMaxFps (150) and the pacer still run, so the tick only holds below 150 fps.
+`DDRUNTIME_FIXED_TICK_PACE=1` additionally holds each frame to 1/hz s of wall time (not used in the measurements). A log line every 600 frames
+reports displayed fps, sim ticks/s and the resulting game speed (displayed fps x dt/30).
+
+Result: 60 Hz x3 runs and 30 Hz x1 run reach gameplay (t=23-26 s, earlier than the baseline's 38 s because boot/loading frames run at dt 0.5/1.0
+instead of the measured value), run 120 s with no `stopped:` and no panic. The machine was loaded by other builds (baseline 39-48 fps instead of
+60); within that noise fixed 60 Hz equals the baseline: baseline 43.0 / 39.4 / 48.1 (median 43.0), tick 60 45.8 / 44.9 / 48.8 (median 45.8),
+tick 30 55.6 (one run; the scene differs, see below). Draws per frame 4.8-5.0k vs 4.9-5.2k.
+
+Caveat: nobody looked at the game (unattended autoplay): "plays normally" = reaches gameplay, runs 2 min, no guest fault, same draw counts.
+
+Frame-rate-dependent behaviour: the game speed is `displayed fps x dt/30`: at 45 fps and a 60 Hz tick the game runs at 0.75x real time (the log line
+shows it); to play at 1x the machine must sustain the tick rate, or use `..._PACE=1` plus a cap at the tick. Boot/loading also use the fixed dt, which
+is why gameplay is reached earlier. The scene state at t=46-84 differs between tick rates (different position/animation phase of the autoplay
+script), so fps between different tick settings carries +-5 fps scene noise on top of the load noise.
+
+### 11.2 Stage 2: simulate every Nth displayed frame (`DDRUNTIME_SIM_EVERY=<n>`, needs the fixed tick)
+
+Mechanism: FRAME.md section 3 documents the original's own freeze: `sMain+0x6c` (mPause) = 1 with the step counter `+0x68` = 0 makes the unit
+passes A/B/C, sAI, sAreaHit, sWorkRate, sRecognition, sObjCollision and the main body of `sGameSys::vf06` return at once. The wrapper sets it on the
+n-1 non-simulating frames (and clears it on the simulating one). Input, effects, camera, sound, weather, network and the whole production half
+(sScene, shadow, sRender, draw jobs, worker) still run on the unchanged sim state. So "re-run production for the same sim state" works with no
+snapshot code at all; the picture on in-between frames is the previous tick's (stutter, no interpolation).
+
+Numbers (fps mean t=46..84 s, 60 Hz tick, same exe, machine loaded; runs listed in order):
+
+| config | runs | median fps | vs tick-60 |
+|---|---|---|---|
+| baseline (variable dt) | 43.0 / 39.4 / 48.1 | 43.0 | |
+| fixed tick 60, every frame sims | 45.8 / 44.9 / 48.8 | 45.8 | 1.00x |
+| sim every 2nd frame | 50.4 / 48.6 / 54.9 | 50.4 | 1.10x |
+| sim every 4th frame | 58.2 / 58.3 / 72.7 / 61.7 (last with DDRUNTIME_MEASURE) | 58.3 | 1.27x |
+
+The N=4 runs reach gameplay only at t=53-56 s, so their window contains 0-10 s of the loading phase at ~150 fps: the N=4 numbers are inflated.
+Using gameplay+10..+45 s instead: N=2 50.0 / 49.1, N=4 54.5 / 39.8 (the second hit a heavy scene), tick-60 46.4 / 44.6.
+So the honest payoff is **N=2: +10%, N=4: about +20-25%**, far below the 2x/3x that skipping 9.5 of 13.3 ms of main-thread sim would suggest.
+
+Why (DDRUNTIME_MEASURE, N=4 run, cumulative incl. boot): main frame 9.85 ms = "sim half" 6.02 + production 3.83. The unit passes dropped (passA 0.58,
+passC 0.28 ms per frame average vs 2.73 / 1.61), but ~6 ms of "sim half" remain: input, effects, camera, sound, weather, network, GUI, AI second
+pass and the per-frame upkeep still run every frame (the pause only gates the pass bodies and a few managers). The worker still decodes the whole
+scene per displayed frame: 969 draws seen at 1080p main view (2.98 ms) + shadow 125 + small targets. The sink (~4-6 ms) and the production half
+(3.8 ms) are untouched by skipping the sim, as the design doc predicted for A1: the ceiling of "skip the sim only" is 1/(production + worker),
+about 60-70 fps under this load. Draws per frame also fall (4.7k at N=2, 3.8k at N=4 vs 4.9k): paused frames spawn/update less effect and unit
+draw work, so part of the gain is fewer draws, not only less sim. Visuals not inspected.
+
+What breaks / observations:
+
+- Loading is sim-driven: with N=4 reaching gameplay takes 53-56 s instead of 25-38 s (streaming/loading state machines advance in the skipped
+  parts). A real implementation must run every frame in full during loading, area change and events.
+- Game speed = `displayed fps / n x dt/30`: N=4 at a 60 Hz tick showed 11-14 ticks/s = 0.2x real time. Keeping 1x needs displayed fps = tick rate x n
+  (240 fps for 60 Hz x 4), or dt scaled by n (a coarser tick, which is not decoupling).
+- Pause side effects not checked: the `sCamera` prev-matrix copy is skipped while paused (section 3.3); `sGameSys` clocks (game time, weather) advance
+  only on sim frames (intended); everything animated in the pass bodies freezes between ticks (stutter of skinning too: no interpolation yet).
+- No crashes (0 `stopped:` in 14 runs): the skip is safe for the game logic. `sGpuParticle` and `uSimSoftBody::vf11` keep stepping on every displayed
+  frame with the tick's dt (cloth/particles run n times too fast): the tick-bound-pass guard of section 4.2 is still required.
+
+### 11.3 Stage 3: interpolation notes from this work
+
+- A1 is cheaper to build than planned but its measured payoff caps near +25%: production (3.8 ms main, ~1.9 ms of it the sRender batch) and the worker
+  sink are paid per displayed frame. Interpolation on top of the skip only removes the stutter; it does not move the cap. The 240 route stays the
+  retained-stream replay (A2) plus the cheaper sink (route C).
+- Snapshot cut: with mPause the pass-driven state (uCoord +0x70 world matrix, uModel +0xB0, joint arrays `uModel+0x364`) is exactly the tick's on the
+  paused frames, so interpolation can be a pure render-side step: at the start of a paused frame write lerp(prev, curr, alpha) into the committed
+  matrices of the drawn units, run production, restore. Two generations per unit keyed by (unit ptr, state-2 generation); snap on any discontinuity
+  (state transition, line change, `sWorldOffset` shift, camera cut). Joint world matrices are still not located (V6): interpolating local joint poses
+  (quat slerp, stride 0xA0) needs the commit 0x00886280 re-run per displayed frame (the pass-C cost again), so prefer interpolating the already
+  committed skin palette in the replay (A2).
+- Camera: step 51 runs on every frame even when paused and its dt-driven springs advance by dt per displayed frame, so the camera moves n times too
+  fast between ticks. Gate it like the units (or give it dt/n); then interpolate the view record (`sCamera+0xC0+i*0x190`) eye/orientation between ticks.
+- Recommended next step: (1) gate the remaining sim-half work on paused frames (camera, effects, GUI, 3D sound) to find how much of the ~6 ms is really
+  needed per displayed frame; (2) force n=1 during loading/events/menus; (3) then the sink/replay work (C + A2), since that is the cap.
+
+### 11.4 Round 2: forced full frames, gates, re-measure (decouple2, exe `C:/ddda-targets/d1/runs/d1c`)
+
+**Forced full frames** (`force_full` in decouple.rs; `DDRUNTIME_FORCE_FULL=0` turns it off): a frame always simulates while (0) no player
+(`*0x018FA4EC` +0x99C == 0: boot, title, loading), (1) an event runs (`*0x018FA4B8` sEventManager +0x20 != 0), (2) bit 57 of the unit group mask
+(`sUnit+0xD34` bit 25) is cleared (events and menus freeze the world with it), (3) `mDeltaTimeLimite` (+0x78) > 2.5 (the 16.0 states), (5) a movie
+sample was requested in the last second (`movies.rs` `LAST_SAMPLE_MS`, stamped in the WMV reader `next`), and for 240 frames after any of these.
+Result: with SIM_EVERY=4 the benchmark reaches gameplay at t=25-28 s, the same as the full-frame tick-60 run (26 s); before the forced frames it was 53-56 s.
+Counters per run (log line `decouple gates`): e.g. noplayer 1276-1903 frames, movie 253-385, hold 119-179, event/mask57/limite 0 (not entered in the
+autoplay path; those three conditions are untested in game).
+
+**Audio:** the head reported choppy audio on the title movie in the round-1 build (movie frames were skipping the sim). Fixes: movies force full
+frames (above), and **the sound gate was removed** (`sound` is never gated, whatever DDRUNTIME_GATE says; sSoundExt keeps its own per-frame cadence;
+it only cost 0.3-0.45 ms). Audio was not listened to by me; the title-movie check is the head's. The fixed tick itself does not touch the mixer.
+
+**Gate costs** (DDRUNTIME_GATE_MEASURE, inclusive ms per displayed frame on full frames, fixed tick 60, several runs): area (sAreaExt 0x419910) 0.66-0.86,
+softbody (uSimSoftBody::vf11 0xF20640, ~12 calls) 1.2, sound 0.30-0.45 (not gated), gpupart9 (0xEB26C0) 0.04-0.12, net 0.03-0.06, weather 0.02-0.03,
+camera 0.01-0.02, item 0.01, prim 0.003-0.006, zone/msg/cockpit/effect/gui ~0. So the whole list is ~2.3 ms of the ~6 ms "sim half" on a
+skipped frame; the other ~3.5 ms is not in these functions (upkeep, the job-system barriers of the passes with their now-empty bodies, input, the
+`sEffectExt` 0x4258F0 and `sUnitExt` 0x4B97C0 tail-jump entries that I did not wrap, `sShader2Ext`, GUI beyond vf10).
+Gated on non-sim frames: effect, prim, gpupart9, gui, area, zone, item, msg, cockpit, weather, net, softbody. Camera is kept (it needs the interpolation
+design first). DDRUNTIME_GATE=all|names selects; default none.
+
+**Measurement (fps mean t=46..84, 60 Hz tick, no cargo/rustc running, lock held for each run; three runs each, in order):**
+
+| config | runs | median |
+|---|---|---|
+| tick 60, all frames sim (t60) | 48.0 / 42.7 / 48.1 | 48.0 |
+| every 2nd, gated (n2g) | 68.3* / 48.9 / 51.4 | 51.4 |
+| every 4th, forced-full only (n4f) | 56.2 / 50.9 / 59.4 | 56.2 |
+| every 4th, forced-full + gates (n4g) | 52.1 / 56.9 / 58.1 | 56.9 |
+
+(*) that run had 2775 draws/frame instead of ~4.6k (a different, lighter scene state); not representative, the median ignores it. Another agent's game
+(`a1/head`) ran for long periods in this session; the runs waited for no ddplay to exist, but the first batch (q2) was discarded because of an overlap.
+Conclusions: skipping the sim gives +7% (N=2) and +17-19% (N=4) over the fixed tick; **the gates add nothing measurable (n4g vs n4f within noise)**
+although they remove ~2.3 ms of main-thread work, so the main thread is not the bound on those frames: the render worker is.
+
+**What remains per displayed frame (the replay target):** production half 3.8 ms main thread (sRender 1.9 of it, the draw jobs) + the worker's decode of
+the whole stream: ~970-1450 main-view draws (3-5.4 ms), 125-206 shadow draws (0.4-0.7 ms), 250 soft-body draws (0.9 ms, now gated away only in the
+main thread's production: the worker still receives them when a stream carries them), + GPU 6.5 ms. A retained-stream replay must therefore take the
+frame from (production 3.8 + worker 5-7.6) to (patch ~0.3 + sink for the main view ~1.5-2.5): i.e. the unchanged parts above, not the sim, are the
+displayed-frame cost, and they cap the displayed rate at roughly 60-70 fps in this build regardless of N.
+
+### 11.5 Config note (head, 2026-10-14)
+The user's live config changed at 04:13 (CameraFov 0 -> 15, JobThread 1 -> 7, RenderingThread OFF -> ON, MaxFPS 150, Grass LOW, Aniso X4). CameraFov=15 roughly
+triples the main-view draw count (~4.5k per frame), so the render worker matters even more than the section 11.4 numbers suggest. All sections 11.1-11.4 numbers
+were taken with the live config of that time (draws/frame 4.4-5.2k); from 11.5 on every run copies the pinned `E:/ddda-re/bench/config.ini` (windowed) and
+restores the benchmark save into the sandbox first; compare only against baselines taken on it (fast2 41.5/41.7, main 41.1/41.4).
+
+### 11.6 Render-worker work (decouple2, 2026-10-14 evening)
+
+**W1/W2 result** (pinned config, 3 runs each, lock held per run; `C:/ddda-targets/d1/seq6.out`): constant banks as a boxed pair (W1) plus a periodic sweep of
+the stream/target part tables instead of a 16384-entry clear (W2): N=1 medians 51.9 (old) vs 51.2 (new) fps, N=4 61.6 vs 62.6 (+1.6%). Not slower; kept.
+On the pinned config the plain build runs 50-51 fps (default) and `DDDRAW_NATIVE=1` 32-34 fps: the handle-based native path is not a quick win.
+
+**Per-phase cost of `draw_call`** (`DDRUNTIME_NDRAW_PHASES=1`, microseconds per decided draw, 5 runs of 120 s, stable to about 0.05):
+
+| phase | shadow atlas 512x1536 | all other passes |
+|---|---|---|
+| target + stream parts | 0.40 | 0.43 |
+| constants (the whole `previous != shader` block) | 1.46-1.75 | 1.52-1.78 |
+| fixed state + render-state list | 0.12 | 0.12 |
+| samplers + textures | 0.35 | 0.70 |
+| assemble the DrawCall | 0.21 | 0.14 |
+| total | about 2.5 | about 2.9 |
+
+Inside constants: `binding_part` 1.0-1.2 (63%), device-bank check 0.25-0.3, meta + skipped registers 0.11-0.15, held registers 0.07.
+Inside `binding_part` (shadow): meta/sampler check 0.05, clear previously written registers + bank resize 0.21, upload loop (guest reads) 0.19,
+content lookup/hash 0.18, creating the part 0.32 (BindingPart + two Constants Arcs + two bank Vecs: five allocations). So the constants phase is
+more than half of every draw, and of that about half is allocating and filling a new part for a binding whose per-object registers changed.
+Tried and measured: run-based clear/compare/hash (`float_runs`): no change beyond noise (1.08 -> 1.01 us); copying the exact-length bank instead of moving the
+scratch: clear 0.21 -> 0.07 but part creation 0.32 -> 0.46, net zero (reverted). The allocation itself, not register iteration, is the cost.
+
+**Consequence for NDRAW_DIRECT stage 1:** the gain has to come from not creating a part per draw (a kept register file that is updated in place and
+published as a pooled block), i.e. the doc's section 3.5, not from caching state objects or textures (fixed state 0.12 and textures 0.35 are small for the
+shadow pass). That is a rewrite of `binding_part`/`held_registers`/`fill_uncovered`/`Uploads` together with `ddgpu`'s block packing and was not started;
+the expected prize is about 1 us of 2.5 us for 518 shadow draws (about 0.5 ms of the worker), and 4.5k draws x ~1 us = 4-5 ms if extended to all passes.
+
+**Verify-mode mismatch to chase** (`DDDRAW_NATIVE=verify`, exe d1m = main bb0a58b2 + L193, pinned config, run `run_m_verify.log`): 1,009,566 draws
+compared, 1,009,565 equal, 1 differing field ("float register"), 13,957 merged by the D3D9 path, 0 not drawn; clears/copies 3,633 of 3,633 equal.
+The two report lines printed (one draw each time the report runs): (a) pixel-shader c3, ours `[40028a29 4001a855 3ffe450a 3f4ccccd]` vs the D3D9 path's
+`[400289be 4001a7e1 3ffe43fc 3f4ccccd]`, record 0x647960d0, binding 0x64796090, decoded for this draw, written VS `7fe` PS `1fe`, uncovered none;
+(b) pixel-shader c4, ours `[4002887a 4001a680 3ffe40c8 3f800000]` vs `[40028810 4001a60d 3ffe3fbc 3f800000]`, record 0x6479b0e0, binding 0x6479b0a0, written PS `1fe`.
+Both are the same kind: a vec3 whose three floats differ in the low mantissa bits by a small relative step (about 2e-5), w equal: a value the main thread is still
+writing (a colour/light vector updated every frame) while the worker executes the previous frame's stream, so the two reads (sink first, D3D9 path later) saw different
+generations. It looks like a verify-time race on live memory, not a decode error; it matches the "constant memory is live" risk R1 of NDRAW_DIRECT.md.
+
+### 11.7 Allocation pooling of binding parts, and why the kept register file does not pay in the sink (decouple2)
+
+**Pooling (tried, not kept).** A ring of recently made `Arc<Constants>` banks, rewritten in place when nothing else holds the oldest one (no allocation, no cross-thread free):
+- sweep every 8 frames: 33% of banks reused, "new part" 0.32 -> 0.52 us/draw (shadow atlas), binding_part 1.08 -> 1.25;
+- sweep every 2 frames and a 32768 ring: 57% reused, "new part" 0.47, binding_part 1.06: no gain over the original 1.08.
+Reused banks are cache-cold; a fresh mimalloc block is hot in the thread's free list, so the allocation is not what costs. Removed again.
+
+**Kept (commit "bindings of a metadata whose content never repeats skip the content table").** Per shader metadata the sink counts content-table lookups and hits; a metadata
+with fewer than 5% hits stops hashing, looking up and inserting (one probe in 64 stays). Shadow atlas: lookup/hash 0.18 -> 0.10 us/draw, nothing else moved; its parts also
+leave with the binding table instead of staying 8-16 frames in the content table.
+Verify (`DDDRAW_NATIVE=verify`, pinned config): **983,487 draws compared, 983,487 equal, 0 mismatches**, clears/copies 3,549 of 3,549 (the 1-in-1M float-register race of 11.6 did not recur).
+fps on the pinned config, 3 runs each, old = W1+W2 exe `d1w2`, new = this exe `d1cs`: N=1 old 46.9 / 47.9 / 50.7, new 44.5 / 48.0 / 35.2 (the 35.2 run is a machine outlier);
+N=4 old 57.7 / 57.6 / 54.6, new 54.7 / 60.6 / (third run pending when this was written). All inside the run-to-run noise (up to 7 fps): the change is about 0.08 us of ~2.5 us a draw
+(about 0.35 ms a frame), too small to show in fps. It is safe (0 mismatches) and not slower in the medians' noise band, so it stays.
+
+**Kept register file (NDRAW_DIRECT 3.5): analysis, not implemented.** What the measurements say about the doc's claim for the shadow pass:
+1. A shadow draw's constants are unique per draw (the world matrix / palette registers change every draw; census: 518 draws, 400 mesh+material groups, 0.4% measured static).
+   Every draw therefore needs its own constant block in the `DrawCall` (`Arc<Constants>` that ddgpu packs). A register file kept in place does not remove that block, it only
+   changes how it is filled; the block's allocation, its copy and the comparison against the previous block are the 0.3-0.5 us measured above.
+2. The remaining pieces the register file would replace (upload loop 0.19, clear 0.07, lookup/hash now 0.10, held/skipped 0.2) add up to about 0.5 us of 2.5 us. The model also
+   has to reproduce `Uploads`/`fill_uncovered`/`held_registers` exactly (the combo39/42/44/46 history), and those fill registers from the device and from the newest pending upload
+   across all passes, so a shadow-only register file still has to publish into the shared log.
+3. The doc's large win (2-3 us -> 0.4-0.7 us decode side) needs the per-draw block to stop being an allocation: a per-frame constant arena written once and referenced by offset
+   from the draw (NDRAW_DIRECT S2: `direct_draw` into ddgpu, `Recorder::update_constant_range`). That is a backend interface change, not a sink-side cache.
+Recommendation: do S2 (arena + handle-based draw into ddgpu, behind its own switch) before the sink-side register file; the register file then fills the arena directly and the
+per-draw `Arc<Constants>`, `BindingPart` allocation and ddgpu `pack_constants` copy disappear together. Without S2 the sink-side work is bounded by about 0.3-0.5 us/draw (1.5-2 ms
+a frame at 4.5k draws) for a rewrite of the constants model, with a verify risk that is the highest in the sink.
+
+### 11.8 S2: constant arena + handle-based draw (DDDRAW_ARENA, work log; resume from here)
+
+Goal (approved by head): a draw's shader constants stop being two `Arc<Constants>` allocations built in the sink and copied again by ddgpu `pack_constants`. The sink writes the
+registers straight into a per-thread arena chunk; the draw carries a `ConstRef` (chunk Arc, offset, length); ddgpu copies the block once into its uniform ring. Measured basis: 11.6/11.7
+(constants phase 1.5-1.75 of ~2.5 us/draw, new-part creation 0.3-0.5, allocation pooling did not help because it is memory traffic, not malloc).
+Plan, each step builds and passes the sink unit tests (`cargo test --profile play-o2 -p ddruntime --lib ndraw_native`) before it is committed:
+- **S2.1 DONE** `crates/d3d9cmd/src/arena.rs`: `ConstArena::alloc(regs) -> BlockWriter`, `finish() -> ConstRef`, `ConstRef::regs()`, chunk freed when its last ref is dropped.
+  Test: `cargo test -p d3d9cmd --lib arena` (3 tests: disjoint/zeroed, chunk rollover, read on another thread). Not wired to anything yet.
+- **S2.2 DONE (a: d3d9cmd, b: ddgpu)** a block layout the backend can copy verbatim: `[floats(F regs)][ints 16 regs][bools 16 regs as vec4]` equal to what ddgpu `backend_data::pack_constants` writes (without the `extra` tail);
+  add `DrawCall`-side transport: a new deferred command `DrawArena(DrawCall, [ConstRef; 2])` (do not add a field to `DrawCall`: ~40 struct literals in tests/examples), whose `vs_constants`/`ps_constants` are shared
+  empty Arcs; ddgpu `try_draw` takes the block with `ring_fill` + `copy_from_slice` instead of `constants()`/`pack_constants`, comparing `ConstRef::same_block` for the "same as last draw" shortcut.
+  Test: a ddgpu test drawing the same scene once with `Constants` and once with `ConstRef` blocks and comparing the output (tests/draw.rs has the pattern).
+- **S2.3** sink (`ndraw_native.rs`, env `DDDRAW_ARENA=1`, shadow atlas 512x1536 only): build the register block in the arena for those draws (fill from uploads/held/device exactly as `binding_part`+`held_registers`+`fill_uncovered`
+  do today, but into the arena slice), keep `LastDraw`/`Uploads` semantics (they need the written-register sets, not `Arc<Constants>`). Gate: `DDDRAW_NATIVE=verify` must report 0 mismatches (compare
+  the arena block to the `Constants` the old path builds: add the comparison to `expect`), then `DDRUNTIME_NDRAW_PHASES=1` (constants us/draw) and N=1/N=4 A/B, 3 runs, pinned config.
+- **S2.4** extend to all passes once the shadow pass verifies; then the register file of NDRAW_DIRECT 3.5 can fill the arena in place.
+- **S2.2 log** (commits "S2.2a", "S2.2b"): `arena::{block_len, encode, decode}`; `GraphicsBackend::draw_arena(draw, vs: ConstRef, ps: ConstRef)` with a default that decodes into `Constants`;
+  `DeferredBackend` sends it as `Command::DrawArena` (not batched with `Draws`: order is kept because `command()` flushes first); `ddgpu` overrides it (`arena_blocks` field, `constants_block` copies
+  the block into the uniform ring verbatim, skips a block that `same_block` as the last one). Tests: `cargo test -p d3d9cmd --lib` (21), `cargo test -p ddgpu --test draw an_arena` (draws with
+  empty `Constants` and arena blocks: only the arena can give the 255,51,0 pixels).
+- **S2.3 next**: the sink side (`DDDRAW_ARENA=1`): a `ConstArena` in `Caches`; for 512x1536 draws build the two blocks with `arena::encode`-compatible writes and call
+  `draw_arena` instead of queuing a `DrawCall` with `Arc<Constants>`; how the sink hands `DrawCall`s over today is `g.batch.push(d)` / `send_batch` (ndraw_native.rs `Native::draw`, `Mode::DrawCall` arm);
+  `draw_arena` goes through `crate::d3d9draw` (find the `send_draw`/`backend_unlocked` helper used by `send_batch`). Keep the old path for verify.
+- **S2.3 DONE (transport only)** commit "S2.3": `DDDRAW_ARENA=1` (ndraw_native `arena_on()`): in the DrawCall-mode arm a 512x1536 draw copies its two decoded `Constants` into `Caches::arena` blocks and is sent with
+  `draw_arena` (batch flushed first, one command per draw); the call's own constants are a shared empty Arc. This still builds the `Arc<Constants>` in `binding_part`, so it saves nothing yet; it proves the
+  path end to end. Test: sink tests pass (25); in game `DDDRAW_ARENA=1` must run clean (A/B in `C:/ddda-targets/d1/seq8.out`, tags a0_n/a1_n: exe `runs/d1ar`).
+- **S2.4 next (the saving)**: let `binding_part`/`held_registers` write the shadow draw's registers directly into an arena block (skip `Arc<Constants>`/`BindingPart` creation for that pass): the sink's
+  `LastDraw.constants`, `Uploads` (`each_last`, `last_writer`) and `fill_uncovered` read `Arc<Constants>`/`BindingPart.constants`, so first add a reader trait over "bank or ConstRef" (or keep a `Constants` only for
+  the registers a later draw may need: `written`). Verify with `DDDRAW_NATIVE=verify` after adding the arena block to `expect` (compare `arena::decode(block)` to the D3D9 path's `Constants`).
+- **S2.3b DONE** `DDDRAW_ARENA=verify` (exe `runs/d1ar2`): same as `=1`, and every block sent is read back (`arena::decode`) and compared with the `Constants` it replaces; the log prints
+  `ndraw arena: N blocks sent, M differ ...` every 600 frames (and up to 5 detail lines). Expected M = 0 now (the block is encoded from that very `Constants`); it becomes the gate for S2.4 when the
+  block is written directly and the old `Constants` is built only as the shadow oracle. Run: `bash locked_run.sh arena_verify EXE_DIR=d1ar2 DDRUNTIME_FIXED_TICK=60 DDDRAW_ARENA=verify` (seq9.out).
+- **S2.4 status: not started, scoped.** About 56 sites read bank contents as `Arc<Constants>`/`Vec<[u32;4]>` (`BindingPart.constants`, `LastDraw.constants`, `Uploads::each_last`/`last_writer`, `held_registers`, `CowBanks`,
+  `copy_registers`, `fill_uncovered`, `same_registers`, `content_key`, `native_draw` arrays). The refactor: introduce `enum Bank { Own(Arc<Constants>), Arena(ConstRef) }` with accessors `f() -> &[[u32;4]]`, `i(n) -> [i32;4]`,
+  `b(n) -> u32` (from the block layout), make those sites use the accessors, then let the new-part branch of `binding_part` encode the scratch banks into an arena block (`Bank::Arena`) instead of `Arc::new(take(banks))`.
+  `CowBanks` (copy-on-write) must copy out of an arena bank into an owned `Constants` only when a register changes. Gate after each site group: 25 sink tests, then `DDDRAW_NATIVE=verify` 0 mismatches, then `DDDRAW_ARENA=verify`.
+  Expected saving: the 5 allocations and the cross-thread frees of a new part (0.3-0.5 us/draw) plus ddgpu's `pack_constants` (a memcpy the ring copy replaces), i.e. 1.5-2.5 ms a frame if extended to every pass.
+- **S2.4 re-scoped by evidence (decouple2):** the bank pooling experiment (11.7) already removed the Constants allocations for 57% of new parts with no change in time, so replacing `Arc<Constants>` by an
+  arena `Bank` would save about the 2 of 5 allocations of a new part, i.e. ~0.1 us/draw, for a 56-site refactor in the riskiest code; not done. The phase table pointed at cheaper things instead:
+  - **`bits_from` (commit "coverage test by word masks")**: the `covered` test of held registers looped 2 x 256 bit tests per draw; as word masks `c:device_banks` went **0.27 -> 0.03 us/draw**, constants phase
+    1.75 -> 1.44 (shadow atlas, 5-run phase tables, `runs/run_ph10.log`); all passes -0.25 us/draw, about 1.1 ms a frame at 4.5k draws. Unit test: `bits_from_matches_the_bit_by_bit_test`.
+  - **`set_register_range`** (commit "register ranges marked a word at a time"): skipped_registers and the binding_part float upload mark a register run with word masks, not one bit per register.
+  - fps (pinned config, 3 runs, medians): N=4 d1cs (content-skip only) 54.7 / 60.6 / 62.3 vs W1+W2 exe 57.7 / 57.6 / 54.6 (57.6 -> 60.6, +5%); N=1 44.5 / 48.0 / 35.2 vs 46.9 / 47.9 / 50.7 (noise).
+    The `bits_from` exe (`d1bf`) and the `set_register_range` exe (`d1bg`) A/B against `d1cs` is queued in `C:/ddda-targets/d1/seq10.out` (tags p1/q1 N=1, p4/q4 N=4, plus `bg_verify`).
+- **STATE at wrap-up (decouple2):** all commits green (27 sink tests). Last: "sampler mirror applied in place per draw" (no 1.3 KB clone; mirror epoch is stale until `commit`). No half-converted group; the `Bank` refactor was NOT started (re-scoped, see above).
+  Unmeasured in game: `bits_from`, `set_register_range`, mirror-in-place (only `bits_from` has a phase table: c:device_banks 0.27 -> 0.03). Queued unattended, results land in `C:/ddda-targets/d1/`:
+  seq8 (arena A/B a0/a1, exe d1ar) -> seq9 (`DDDRAW_ARENA=verify`) -> seq10 (verify + N=1/N=4 A/B of d1bg vs d1cs) -> seq11 (exe d1bh: `DDDRAW_NATIVE=verify` must show 0 mismatches, phase table, N=1/N=4).
+  Next step: read seq10/seq11 out; if `bh_verify` shows mismatches, revert the mirror-in-place commit first; then update the frame-bound.md numbers; then optionally the arena/Bank work only if the phase table still shows new-part cost above 0.3 us.
+

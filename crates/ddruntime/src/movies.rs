@@ -622,7 +622,10 @@ fn attribute(m: &mut dyn Mem, c: &mut Cpu) {
     })();
     finish(m, c, 6, r)
 }
+/// L193: runtime-clock ms (+1) of the last movie sample request; decouple.rs keeps full frames while it is recent.
+pub(crate) static LAST_SAMPLE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 fn next(m: &mut dyn Mem, c: &mut Cpu) {
+    LAST_SAMPLE_MS.store(crate::services::runtime_clock().as_millis() as u64 + 1, std::sync::atomic::Ordering::Relaxed);
     let a: Vec<_> = (0..8).map(|i| arg(m, c, i)).collect();
     let r = (|| {
         out(m, a[2], 0)?;

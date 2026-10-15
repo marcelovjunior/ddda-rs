@@ -552,6 +552,9 @@ pub struct MetaPart {
     uploads: [Vec<Upload>; 2],
     /// the frame it was last checked against the runtime's objects
     checked: std::sync::atomic::AtomicU64,
+    /// (content lookups, hits) of its bindings: a metadata whose bindings never repeat their content (per-object
+    /// constants) stops looking and inserting (L193)
+    content_stats: [std::sync::atomic::AtomicU32; 2],
 }
 
 /// The runtime's shader bytecode and float count, and declaration, of
@@ -593,6 +596,7 @@ fn meta_part(g: &G, metadata: u32, reads_cache: &mut FxMap<usize, (Arc<[u32]>, R
     Ok(MetaPart {
         handles, vs, ps, declaration, floats: [vs_floats, ps_floats], reads: shader_reads, samplers, uploads,
         checked: frame.into(),
+        content_stats: Default::default(),
     })
 }
 
@@ -704,6 +708,7 @@ fn hold_upload(bank: &mut Constants, w: &mut ([u64; 4], u16, u16), u: &Upload, v
 }
 
 fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<BindingPart>>, held: Option<&Held>) -> Result<Arc<BindingPart>, Refusal> {
+    let mut bl = phase_start();
     let flags = g.u32(binding);
     let alpha = if flags & 0x18_0000 == 0x18_0000 {
         let comparison = flags >> 3 & 255;
@@ -727,20 +732,18 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             return Err(Refusal::Missing);
         }
     }
+    phase_lap(&mut bl, c, 9);
     // constants: the binding's registers over zeros (in reused banks)
     // (L180: only the registers the last binding wrote are cleared, not the
     // whole banks)
-    let mut banks = std::mem::take(&mut c.banks);
+    // (a boxed pair taken by pointer: a by-value take/default moved ~1.4 KB twice a draw)
+    let mut banks = c.banks.take().unwrap_or_default();
     for (stage, bank) in banks.iter_mut().enumerate() {
         let (floats, ints, bools) = c.banks_written[stage];
-        for word in 0..4 {
-            let mut m = floats[word];
-            while m != 0 {
-                let n = word * 64 + m.trailing_zeros() as usize;
-                m &= m - 1;
-                if let Some(r) = bank.f.get_mut(n) {
-                    *r = [0; 4];
-                }
+        for (start, end) in float_runs(&floats) {
+            let end = end.min(bank.f.len());
+            if start < end {
+                bank.f[start..end].fill([0; 4]);
             }
         }
         for n in 0..16 {
@@ -753,6 +756,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
         }
         bank.f.resize(meta.floats[stage].min(FLOATS[stage]), [0; 4]);
     }
+    phase_lap(&mut bl, c, 10);
     let mut written = [([0u64; 4], 0u16, 0u16); 2];
     let mut uncovered = [[0u64; 4]; 2];
     for stage in 0..2 {
@@ -782,6 +786,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                     let at = (v & !15).wrapping_add(u.offset * 4);
                     let count = if v & 15 != 0 { u.count.min((v & 15) * 16) } else { u.count };
                     // the registers read 16 at a time (one check a page)
+                    set_register_range(&mut w.0, u.register, count);
                     let mut words = [0u32; 64];
                     let mut i = 0;
                     while i < count {
@@ -790,7 +795,10 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                         for k in 0..n {
                             let r: [u32; 4] = std::array::from_fn(|j| words[(k * 4) as usize + j]);
                             let r = if u.convert { r.map(|x| (x as i32 as f32).to_bits()) } else { r };
-                            set_float(bank, w, u.register + i + k, r);
+                            // (the range is marked written above)
+                            if let Some(x) = bank.f.get_mut((u.register + i + k) as usize) {
+                                *x = r;
+                            }
                         }
                         i += n;
                     }
@@ -830,11 +838,12 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
             None
         };
         if let Some(refusal) = refusal {
-            c.banks = banks;
+            c.banks = Some(banks);
             c.banks_written = written;
             return Err(refusal);
         }
     }
+    phase_lap(&mut bl, c, 11);
     // the same as the binding's part of an earlier frame: that part; else
     // a part of the same content seen lately (L180: the game's bindings
     // move between frames, their content mostly does not), else a new part,
@@ -842,11 +851,29 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
     let part = match previous {
         Some(p) if same_part(p, &meta, alpha, &written, &banks) => p.clone(),
         _ => {
-            let key = content_key(&meta, alpha, &written, &banks);
-            let kept = find_kept(&mut c.by_content, &mut c.by_content_old, key, c.frame, |p| same_part(p, &meta, alpha, &written, &banks));
+            // a metadata whose bindings seldom repeat their content (per-object constants) skips the content
+            // table: no hash, lookup or insert, and its parts leave with the binding table instead of staying 8-16 frames
+            let probe = {
+                use std::sync::atomic::Ordering::Relaxed;
+                let looks = meta.content_stats[0].fetch_add(1, Relaxed);
+                let hits = meta.content_stats[1].load(Relaxed);
+                if looks >= 1 << 16 {
+                    meta.content_stats[0].store(looks / 2, Relaxed);
+                    meta.content_stats[1].store(hits / 2, Relaxed);
+                }
+                looks < 512 || hits as u64 * 20 >= looks as u64 || looks % 64 == 0
+            };
+            let key = if probe { content_key(&meta, alpha, &written, &banks) } else { 0 };
+            let kept = if probe {
+                find_kept(&mut c.by_content, &mut c.by_content_old, key, c.frame, |p| same_part(p, &meta, alpha, &written, &banks))
+            } else {
+                None
+            };
+            phase_lap(&mut bl, c, 12);
             match kept {
                 Some(p) => {
                     c.built[3] += 1;
+                    meta.content_stats[1].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     p
                 }
                 None => {
@@ -865,13 +892,16 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                         native: Default::default(),
                         uncovered,
                     });
-                    c.by_content.insert(key, (c.frame, part.clone()));
+                    phase_lap(&mut bl, c, 13);
+                    if probe {
+                        c.by_content.insert(key, (c.frame, part.clone()));
+                    }
                     part
                 }
             }
         }
     };
-    c.banks = banks;
+    c.banks = Some(banks);
     c.banks_written = written;
     Ok(part)
 }
@@ -887,19 +917,67 @@ fn same_part(p: &BindingPart, meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, w
 /// Two banks over zeros (a part's, the scratch) with the same `written`
 /// registers are equal when those registers are (L180: not the whole
 /// banks).
+/// The runs of set bits in a 256-register mask as (first, end) register pairs: bank compares,
+/// clears and hashes then work on slices instead of one register at a time (L193).
+/// Whether any register at or above `from` is set in a 256-register mask (L193: one mask test per word, not 256 bit tests).
+/// Set registers `first..first + count` (below 256) in a 256-register mask, a word at a time (L193).
+fn set_register_range(mask: &mut [u64; 4], first: u32, count: u32) {
+    let end = first.saturating_add(count).min(256);
+    let mut n = first;
+    while n < end {
+        let word = (n / 64) as usize;
+        let upto = end.min((word as u32 + 1) * 64);
+        let bits = upto - n;
+        let ones = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+        mask[word] |= ones << (n % 64);
+        n = upto;
+    }
+}
+
+fn bits_from(mask: &[u64; 4], from: usize) -> bool {
+    (0..4).any(|w| {
+        let lo = w * 64;
+        if from >= lo + 64 {
+            false
+        } else if from <= lo {
+            mask[w] != 0
+        } else {
+            mask[w] >> (from - lo) != 0
+        }
+    })
+}
+
+fn float_runs(mask: &[u64; 4]) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let mut at = 0usize;
+    std::iter::from_fn(move || {
+        while at < 256 {
+            let w = mask[at / 64] >> (at % 64);
+            if w == 0 {
+                at = (at / 64 + 1) * 64;
+                continue;
+            }
+            let start = at + w.trailing_zeros() as usize;
+            let mut end = start;
+            while end < 256 && mask[end / 64] >> (end % 64) & 1 != 0 {
+                let ones = (!(mask[end / 64] >> (end % 64))).trailing_zeros() as usize;
+                end += ones.min(64 - end % 64);
+            }
+            at = end;
+            return Some((start, end));
+        }
+        None
+    })
+}
+
 fn same_registers(a: &Constants, b: &Constants, written: &([u64; 4], u16, u16)) -> bool {
     let (floats, ints, bools) = *written;
     if a.f.len() != b.f.len() {
         return false;
     }
-    for word in 0..4 {
-        let mut m = floats[word];
-        while m != 0 {
-            let n = word * 64 + m.trailing_zeros() as usize;
-            m &= m - 1;
-            if a.f.get(n) != b.f.get(n) {
-                return false;
-            }
+    for (start, end) in float_runs(&floats) {
+        let end = end.min(a.f.len());
+        if start < end && a.f[start..end] != b.f[start..end] {
+            return false;
         }
     }
     (0..16).all(|n| (ints >> n & 1 == 0 || a.i[n] == b.i[n]) && (bools >> n & 1 == 0 || a.b[n] == b.b[n]))
@@ -914,13 +992,13 @@ fn content_key(meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, written: &[([u64
     h.write_u64(alpha.map_or(u64::MAX, |(f, r)| (f as u64) << 32 | r as u64));
     for (stage, (floats, ints, bools)) in written.iter().enumerate() {
         let bank = &banks[stage];
-        for (word, &mask) in floats.iter().enumerate() {
+        for &mask in floats.iter() {
             h.write_u64(mask);
-            let mut m = mask;
-            while m != 0 {
-                let n = word * 64 + m.trailing_zeros() as usize;
-                m &= m - 1;
-                if let Some(r) = bank.f.get(n) {
+        }
+        for (start, end) in float_runs(floats) {
+            let end = end.min(bank.f.len());
+            if start < end {
+                for r in &bank.f[start..end] {
                     h.write_u64(r[0] as u64 | (r[1] as u64) << 32);
                     h.write_u64(r[2] as u64 | (r[3] as u64) << 32);
                 }
@@ -1138,6 +1216,9 @@ impl Shadow {
 #[derive(Clone)]
 struct Mirror {
     epoch: u64,
+    /// the draw's shadow is applied already (L193: `draw_call` applies in place instead of cloning the 1.3 KB
+    /// mirror; the epoch is then marked stale until `commit` confirms the draw, so a refused draw reloads)
+    applied: bool,
     rows: [[u32; 14]; 21],
     textures: [u32; 21],
 }
@@ -1166,7 +1247,7 @@ impl Mirror {
                         textures[i] = h;
                     }
                 }
-                Some(Mirror { epoch, rows: std::array::from_fn(|i| s.sampler.row(stage_of(i))), textures })
+                Some(Mirror { epoch, applied: false, rows: std::array::from_fn(|i| s.sampler.row(stage_of(i))), textures })
             }
             _ => None,
         })
@@ -1191,6 +1272,12 @@ impl Mirror {
     fn textures(&self, sh: &Shadow, c: &mut Caches) -> Arc<[TextureBinding]> {
         let mut m = self.clone();
         m.apply(sh);
+        m.textures_applied(c)
+    }
+
+    /// The same for a mirror that already holds the draw's shadow.
+    fn textures_applied(&self, c: &mut Caches) -> Arc<[TextureBinding]> {
+        let m = self;
         // the lists by the bound slots, their textures and sampler states
         // (L180: the draws' texture sets repeat)
         let key = {
@@ -1496,8 +1583,14 @@ pub struct Caches {
     bindings: FxMap<u32, (u64, Result<Arc<BindingPart>, Refusal>)>,
     /// the banks a binding's constants are read into, and the registers
     /// written in them (all others are zero)
-    banks: [Constants; 2],
+    banks: Option<Box<[Constants; 2]>>,
     banks_written: [([u64; 4], u16, u16); 2],
+    /// DDRUNTIME_NDRAW_PHASES=1: per phase ns of draw_call, class 0 = the 512x1536 shadow atlas, 1 = the rest
+    phase_ns: [[u64; 14]; 2],
+    phase_n: [u64; 2],
+    phase_class: usize,
+    /// DDDRAW_ARENA=1 (L193 S2): constant blocks of the draws sent through `draw_arena`
+    arena: d3d9cmd::arena::ConstArena,
     /// binding parts by content (`content_key`), with the frame they were
     /// last used in: a binding at a new address with content seen lately
     /// takes that part (no allocation, and no drop later)
@@ -1534,6 +1627,12 @@ impl Caches {
     /// (with the D3D lock held).
     pub fn begin_frame(&mut self, info: &FrameInfo) {
         self.frame += 1;
+        if phases_on() && self.frame % 600 == 0 {
+            phase_report(self);
+        }
+        if arena_on() && self.frame % 600 == 0 {
+            arena_report();
+        }
         self.last = None;
         // bindings unused for three frames go; contents and texture lists
         // unused for a generation (8 to 16 frames) go as a whole, dropped
@@ -1542,6 +1641,8 @@ impl Caches {
         if self.frame % 8 == 0 {
             let frame = self.frame;
             self.bindings.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.streams.retain(|_, (seen, _)| *seen + 3 > frame);
+            self.target_bindings.retain(|_, (seen, _)| *seen + 3 > frame);
             let capacity = self.by_content.len();
             let current = std::mem::replace(&mut self.by_content, FxMap::with_capacity_and_hasher(capacity, Default::default()));
             let parts = std::mem::replace(&mut self.by_content_old, current);
@@ -1716,11 +1817,61 @@ fn kept_part<T: PartialEq>(
 /// `caches.begin_frame` called for this frame; and the sampler section's
 /// effects, to `commit` if the draw is taken. The resources it reads are
 /// `reads_of` it.
+/// DDDRAW_ARENA=1: shadow-atlas draws send their constants as arena blocks (S2.3).
+fn arena_on() -> bool {
+    arena_mode() != 0
+}
+/// 0 off, 1 on, 2 verify (`DDDRAW_ARENA=verify`: on, and every block is read back and compared with the `Constants` it replaces).
+fn arena_mode() -> u8 {
+    static MODE: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("DDDRAW_ARENA").as_deref() {
+        Ok("1") => 1,
+        Ok("verify") => 2,
+        _ => 0,
+    })
+}
+static ARENA_BLOCKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ARENA_BAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+fn arena_report() {
+    eprintln!(
+        "ndraw arena: {} blocks sent, {} differ from the Constants they replace (verify mode only counts)",
+        ARENA_BLOCKS.load(std::sync::atomic::Ordering::Relaxed),
+        ARENA_BAD.load(std::sync::atomic::Ordering::Relaxed)
+    );
+}
+fn phases_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDRUNTIME_NDRAW_PHASES").as_deref() == Ok("1"))
+}
+fn phase_start() -> Option<Instant> {
+    phases_on().then(Instant::now)
+}
+fn phase_lap(lap: &mut Option<Instant>, c: &mut Caches, k: usize) {
+    if let Some(t) = lap {
+        let now = Instant::now();
+        c.phase_ns[c.phase_class][k] += now.duration_since(*t).as_nanos() as u64;
+        *t = now;
+    }
+}
+/// The phase table (per decided draw, microseconds) printed every 600 frames.
+fn phase_report(c: &Caches) {
+    let names = ["parts", "constants", "fixed+states", "samplers+textures", "assemble", "c:meta+skipped", "c:device_banks", "c:binding_part", "c:held_registers", "bp:meta+samplers", "bp:clear", "bp:uploads", "bp:lookup/hash", "bp:new part"];
+    for (class, label) in ["shadow atlas 512x1536", "all other"].iter().enumerate() {
+        let n = c.phase_n[class].max(1) as f64;
+        let mut line = format!("ndraw phases {label}: {} draws, us/draw:", c.phase_n[class]);
+        for (k, name) in names.iter().enumerate() {
+            line += &format!(" {name} {:.2}", c.phase_ns[class][k] as f64 / 1e3 / n);
+        }
+        eprintln!("{line}");
+    }
+}
+
 pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, record: u32, kind: u32) -> Result<Decoded, Refusal> {
     if !c.device.usable {
         return Err(Refusal::Device);
     }
     let g = G::new(m);
+    let mut lap = phase_start();
     let [targets, fixed, shader, streams] = [4u32, 8, 0xC, 0x10].map(|o| g.u32(record.wrapping_add(o)));
     if targets == 0 || fixed == 0 || shader == 0 || streams == 0 {
         return Err(Refusal::NullBinding);
@@ -1741,6 +1892,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     // pixel stage): those registers keep what the device holds. The
     // previous apply: the previous decided draw's (the sink's model of the
     // context), else the context's own (the default path made it).
+    phase_lap(&mut lap, c, 0);
     let last = c.last.take();
     let (previous, shaders) = match &last {
         Some(l) => (l.binding, l.shaders),
@@ -1753,6 +1905,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             // the uploads the apply skips read what the device holds: the
             // previous draw's constants when they have every such register,
             // else the device's (L180)
+            let mut lap2 = phase_start();
             let mut skipped = [([0u64; 4], 0u16, 0u16); 2];
             let mut stages = [false; 2];
             if previous != 0 && previous != shader {
@@ -1762,9 +1915,10 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
                     skipped = skipped_registers(&g, &meta, shader, previous, shaders);
                 }
             }
+            phase_lap(&mut lap2, c, 5);
             let any = skipped.iter().any(|s| *s != ([0; 4], 0, 0));
             let covered = held_constants.as_ref().is_some_and(|h| {
-                (0..2).all(|stage| (0..256).all(|n| skipped[stage].0[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len()))
+                (0..2).all(|stage| !bits_from(&skipped[stage].0, h[stage].f.len()))
             });
             let device_banks = if any && !covered {
                 Some(
@@ -1777,6 +1931,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             } else {
                 None
             };
+            phase_lap(&mut lap2, c, 6);
             let held = match (any, &device_banks, &held_constants) {
                 (false, _, _) => None,
                 (true, Some(d), _) => Some(Held { previous, stages, source: [&d[0], &d[1]] }),
@@ -1795,10 +1950,12 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
                     r?
                 }
             };
+            phase_lap(&mut lap2, c, 7);
             // the context holds it and the sink has no constants of it:
             // everything it writes is what the device holds
             let skipped = if previous == shader { b.written } else { [([0; 4], 0, 0); 2] };
             let (b, constants) = held_registers(b, skipped, held_constants.as_ref(), info.device)?;
+            phase_lap(&mut lap2, c, 8);
             c.built[2] += 1;
             (b, constants, false, true)
         }
@@ -1809,6 +1966,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         part: b.clone(),
         constants: Some(constants.clone()),
     });
+    phase_lap(&mut lap, c, 1);
     // the fixed state: the objects by identity, the dynamic values
     let id = identity_of(&g, fixed);
     if id.blend.address == 0 || id.depth.address == 0 || id.raster.address == 0 {
@@ -1865,6 +2023,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
             l
         }
     };
+    phase_lap(&mut lap, c, 2);
     // samplers and textures: what the apply would do on this context
     let mut sh = std::mem::take(&mut c.scratch);
     sh.clear();
@@ -1874,12 +2033,18 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
     if c.mirror.as_ref().is_none_or(|m| m.epoch != crate::d3d9state::sampler_epoch()) {
         c.mirror = Some(Mirror::load(info.device).ok_or(Refusal::Device)?);
     }
-    let mirror = c.mirror.take().unwrap();
+    let mut mirror = c.mirror.take().unwrap();
     sh.prune(&g, &mirror);
     let textures = match &c.texture_list {
         Some((epoch, list)) if *epoch == mirror.epoch && sh.is_empty() => list.clone(),
         _ => {
-            let list = mirror.textures(&sh, c);
+            if !sh.is_empty() {
+                // apply in place; stale until commit() confirms the draw (a refused draw makes the next one reload)
+                mirror.apply(&sh);
+                mirror.applied = true;
+                mirror.epoch = u64::MAX;
+            }
+            let list = mirror.textures_applied(c);
             if sh.is_empty() {
                 c.texture_list = Some((mirror.epoch, list.clone()));
             }
@@ -1887,6 +2052,7 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         }
     };
     c.mirror = Some(mirror);
+    phase_lap(&mut lap, c, 3);
     // the draw (types 2 and 3: types 0 and 1 drawn instanced)
     let indexed = kind & 1 == 1;
     if indexed && s.indices == 0 {
@@ -1920,6 +2086,10 @@ pub fn draw_call(m: &dyn Mem, info: &FrameInfo, c: &mut Caches, context: u32, re
         targets: t.targets.clone(),
         depth: t.depth.clone(),
     };
+    phase_lap(&mut lap, c, 4);
+    if lap.is_some() {
+        c.phase_n[c.phase_class] += 1;
+    }
     Ok(Decoded { call, shadow: sh, binding: b, rebuilt, filled })
 }
 
@@ -1983,9 +2153,7 @@ fn skipped_registers(g: &G, meta: &MetaPart, binding: u32, previous: u32, shader
                 }
                 0 => {
                     let count = if value & 15 != 0 { u.count.min((value & 15) * 16) } else { u.count };
-                    for i in 0..count {
-                        float(o, u.register + i);
-                    }
+                    set_register_range(&mut o.0, u.register, count);
                 }
                 1 => {
                     for i in 0..u.count {
@@ -2052,7 +2220,7 @@ fn held_registers(
     let covered = held.is_some_and(|h| {
         (0..2).all(|stage| {
             let floats = skipped[stage].0;
-            (0..256).all(|n| floats[n / 64] >> (n % 64) & 1 == 0 || n < h[stage].f.len())
+            !bits_from(&floats, h[stage].f.len())
         })
     });
     match held {
@@ -2091,7 +2259,10 @@ pub fn commit(m: &mut dyn Mem, info: &FrameInfo, c: &mut Caches, mut sh: Shadow,
         }
         // the device is what the mirror and the draw's list say now
         if let Some(mirror) = c.mirror.as_mut() {
-            mirror.apply(&sh);
+            if !mirror.applied {
+                mirror.apply(&sh);
+            }
+            mirror.applied = false;
             mirror.epoch = crate::d3d9state::sampler_epoch();
             c.texture_list = Some((mirror.epoch, textures.clone()));
         }
@@ -2524,6 +2695,9 @@ impl CommandSink for Native {
         if crate::measure::enabled() {
             crate::measure::frame_boundary();
         }
+        if crate::census::enabled() {
+            crate::census::frame_boundary();
+        }
         g.handled = false;
         g.spans.clear();
         if self.mode != Mode::Off {
@@ -2641,6 +2815,9 @@ impl Native {
         if crate::measure::enabled() {
             crate::measure::note_total(size);
         }
+        if crate::census::enabled() {
+            crate::census::note_total(size);
+        }
         if self.mode == Mode::Census {
             f.targets.insert(m.u32(record.wrapping_add(4)));
             f.states.insert(m.u32(record.wrapping_add(8)));
@@ -2660,6 +2837,7 @@ impl Native {
         static TIMING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let started = (*TIMING.get_or_init(|| std::env::var_os("DDRUNTIME_NDRAW_STATS").is_some() || crate::measure::enabled())).then(Instant::now);
         let lock = crate::d3d9dev::device_lock();
+        g.caches.phase_class = (size == (512, 1536)) as usize ^ 1;
         let decoded = draw_call(m, &g.info, &mut g.caches, context, record, kind).and_then(|mut d| {
             if !d.filled {
                 fill_uncovered(&mut d.call, &d.binding, &g.uploads, g.info.device)?;
@@ -2712,6 +2890,38 @@ impl Native {
                 if crate::measure::enabled() {
                     crate::measure::note_draw(size, &d);
                 }
+                if crate::census::enabled() {
+                    crate::census::note_draw(size, &d);
+                }
+                if arena_on() && size == (512, 1536) {
+                    // S2.3: the two constant blocks go to the arena and travel as ConstRefs (the call's own Arcs are shared empties)
+                    let mut block = |c: &Constants| {
+                        let mut w = g.caches.arena.alloc(d3d9cmd::arena::block_len(c.f.len()));
+                        d3d9cmd::arena::encode(c, w.regs());
+                        w.finish()
+                    };
+                    let (vs, ps) = (block(&d.vs_constants), block(&d.ps_constants));
+                    ARENA_BLOCKS.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+                    if arena_mode() == 2 {
+                        for (r, c) in [(&vs, &d.vs_constants), (&ps, &d.ps_constants)] {
+                            if d3d9cmd::arena::decode(r.regs()) != **c {
+                                if ARENA_BAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 5 {
+                                    eprintln!("ndraw arena verify: block differs from its Constants ({} registers)", r.regs().len());
+                                }
+                            }
+                        }
+                    }
+                    static EMPTY: std::sync::OnceLock<Arc<Constants>> = std::sync::OnceLock::new();
+                    let empty = EMPTY.get_or_init(Default::default);
+                    let mut call = d;
+                    call.vs_constants = empty.clone();
+                    call.ps_constants = empty.clone();
+                    send_batch(&mut g.batch);
+                    crate::d3d9draw::backend_unlocked(|b| b.draw_arena(call, vs, ps));
+                    crate::d3d9draw::count_draws(1);
+                    t.taken += 1;
+                    return Taken::Handled;
+                }
                 g.batch.push(d);
                 crate::d3d9draw::count_draws(1);
                 t.taken += 1;
@@ -2748,6 +2958,9 @@ impl Native {
                     crate::d3d9draw::flush_reads(m, reads_of(&d));
                     if crate::measure::enabled() {
                         crate::measure::note_draw(size, &d);
+                    }
+                    if crate::census::enabled() {
+                        crate::census::note_draw(size, &d);
                     }
                     g.pending.push(native, d);
                     t.taken += 1;
@@ -2856,6 +3069,52 @@ fn report(mode: Mode, t: &Totals) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn register_ranges_set_the_same_bits_as_one_at_a_time() {
+        for first in [0u32, 1, 60, 63, 64, 100, 127, 128, 250, 255, 256, 300] {
+            for count in [0u32, 1, 2, 4, 63, 64, 65, 130, 256, 400] {
+                let mut fast = [0u64; 4];
+                super::set_register_range(&mut fast, first, count);
+                let mut slow = [0u64; 4];
+                for n in first..first.saturating_add(count) {
+                    if n < 256 {
+                        slow[n as usize / 64] |= 1 << (n % 64);
+                    }
+                }
+                assert_eq!(fast, slow, "first {first} count {count}");
+            }
+        }
+    }
+
+    #[test]
+    fn bits_from_matches_the_bit_by_bit_test() {
+        for seed in 0..200u64 {
+            let mut m = [0u64; 4];
+            let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            for w in m.iter_mut() {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                *w = if seed % 3 == 0 { x & (x >> 5) & (x >> 9) & (x >> 17) } else { x & (x >> 7) & (x >> 21) & (x >> 33) & (x >> 41) };
+            }
+            for from in [0usize, 1, 63, 64, 65, 100, 127, 128, 200, 224, 255, 256, 300] {
+                let slow = (0..256).any(|n| m[n / 64] >> (n % 64) & 1 != 0 && n >= from);
+                assert_eq!(super::bits_from(&m, from), slow, "{m:?} from {from}");
+            }
+        }
+    }
+
+    #[test]
+    fn float_runs_are_the_runs_of_set_bits() {
+        let mut m = [0u64; 4];
+        for n in [0usize, 1, 2, 5, 63, 64, 65, 130, 255] {
+            m[n / 64] |= 1 << (n % 64);
+        }
+        assert_eq!(super::float_runs(&m).collect::<Vec<_>>(), vec![(0, 3), (5, 6), (63, 66), (130, 131), (255, 256)]);
+        assert_eq!(super::float_runs(&[u64::MAX; 4]).collect::<Vec<_>>(), vec![(0, 256)]);
+        assert_eq!(super::float_runs(&[0; 4]).count(), 0);
+    }
+
     use super::*;
     use std::collections::HashMap;
 
@@ -3190,7 +3449,7 @@ mod tests {
             let (slots, uploads) = descriptors(&g, meta).unwrap();
             let part = MetaPart {
                 handles: [0; 3], vs: Arc::from(vec![]), ps: Arc::from(vec![]), declaration: Arc::from(vec![]),
-                floats: [0; 2], reads: Default::default(), samplers: slots, uploads, checked: 0.into(),
+                floats: [0; 2], reads: Default::default(), samplers: slots, uploads, checked: 0.into(), content_stats: Default::default(),
             };
             let mut sh = Shadow::default();
             shadow_samplers(&g, ctx, binding, &part, &info, &mut sh);
@@ -3217,7 +3476,7 @@ mod tests {
         rows[17][5] = 2;
         let mut textures = [0u32; 21];
         textures[0] = 0xD000;
-        let mirror = Mirror { epoch: 1, rows, textures };
+        let mirror = Mirror { epoch: 1, applied: false, rows, textures };
         let mut sh = Shadow::default();
         // the same value; a change; a change back (stays: it is the last
         // word for the field); a vertex stage; textures likewise
@@ -3327,7 +3586,7 @@ mod tests {
                 a / 4
             }
         }
-        let mirror = Mirror { epoch: 0, rows: [[0; 14]; 21], textures: [0; 21] };
+        let mirror = Mirror { epoch: 0, applied: false, rows: [[0; 14]; 21], textures: [0; 21] };
         let mut seed = 17u32;
         for len in 0..128 {
             for _ in 0..32 {
@@ -3396,7 +3655,7 @@ mod tests {
     #[test]
     fn texture_lists_keep_every_slot_and_the_shadow_overrides() {
         let mut c = Caches::default();
-        let mut mirror = Mirror { epoch: 0, rows: [[0; 14]; 21], textures: [0; 21] };
+        let mut mirror = Mirror { epoch: 0, applied: false, rows: [[0; 14]; 21], textures: [0; 21] };
         for i in 0..21 {
             let h = 0x1000 + i as u32;
             mirror.textures[i] = h;
@@ -3452,12 +3711,13 @@ mod tests {
             }
             let mut c = Caches::default();
             c.metas.insert(0x2000, b.meta.clone());
-            c.banks[0].f.reserve(256);
-            c.banks[1].f.reserve(224);
-            let storage = c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity()));
+            let pair = c.banks.get_or_insert_with(Default::default);
+            pair[0].f.reserve(256);
+            pair[1].f.reserve(224);
+            let storage = c.banks.as_ref().unwrap().each_ref().map(|b| (b.f.as_ptr(), b.f.capacity()));
             for _ in 0..3 {
                 assert!(matches!(binding_part(&G::new(&m), &mut c, 0x1000, None, None), Err(e) if e == expected));
-                assert_eq!(c.banks.each_ref().map(|b| (b.f.as_ptr(), b.f.capacity())), storage);
+                assert_eq!(c.banks.as_ref().unwrap().each_ref().map(|b| (b.f.as_ptr(), b.f.capacity())), storage);
             }
         }
     }
@@ -3478,6 +3738,7 @@ mod tests {
                 handles: [0; 3], vs: Arc::from(vec![]), ps: Arc::from(vec![]), declaration: Arc::from(vec![]),
                 floats: [256, 224], reads: Default::default(), samplers: Default::default(), uploads: Default::default(),
                 checked: 0.into(),
+                content_stats: Default::default(),
             }),
             alpha: None,
             constants: [Arc::new(bank(vs, 256)), Arc::new(bank(ps, 224))],
