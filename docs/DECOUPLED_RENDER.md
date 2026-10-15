@@ -831,3 +831,20 @@ N=4 old 57.7 / 57.6 / 54.6, new 54.7 / 60.6 / (third run pending when this was w
 Recommendation: do S2 (arena + handle-based draw into ddgpu, behind its own switch) before the sink-side register file; the register file then fills the arena directly and the
 per-draw `Arc<Constants>`, `BindingPart` allocation and ddgpu `pack_constants` copy disappear together. Without S2 the sink-side work is bounded by about 0.3-0.5 us/draw (1.5-2 ms
 a frame at 4.5k draws) for a rewrite of the constants model, with a verify risk that is the highest in the sink.
+
+### 11.8 S2: constant arena + handle-based draw (DDDRAW_ARENA, work log; resume from here)
+
+Goal (approved by head): a draw's shader constants stop being two `Arc<Constants>` allocations built in the sink and copied again by ddgpu `pack_constants`. The sink writes the
+registers straight into a per-thread arena chunk; the draw carries a `ConstRef` (chunk Arc, offset, length); ddgpu copies the block once into its uniform ring. Measured basis: 11.6/11.7
+(constants phase 1.5-1.75 of ~2.5 us/draw, new-part creation 0.3-0.5, allocation pooling did not help because it is memory traffic, not malloc).
+Plan, each step builds and passes the sink unit tests (`cargo test --profile play-o2 -p ddruntime --lib ndraw_native`) before it is committed:
+- **S2.1 DONE** `crates/d3d9cmd/src/arena.rs`: `ConstArena::alloc(regs) -> BlockWriter`, `finish() -> ConstRef`, `ConstRef::regs()`, chunk freed when its last ref is dropped.
+  Test: `cargo test -p d3d9cmd --lib arena` (3 tests: disjoint/zeroed, chunk rollover, read on another thread). Not wired to anything yet.
+- **S2.2 next** a block layout the backend can copy verbatim: `[floats(F regs)][ints 16 regs][bools 16 regs as vec4]` equal to what ddgpu `backend_data::pack_constants` writes (without the `extra` tail);
+  add `DrawCall`-side transport: a new deferred command `DrawArena(DrawCall, [ConstRef; 2])` (do not add a field to `DrawCall`: ~40 struct literals in tests/examples), whose `vs_constants`/`ps_constants` are shared
+  empty Arcs; ddgpu `try_draw` takes the block with `ring_fill` + `copy_from_slice` instead of `constants()`/`pack_constants`, comparing `ConstRef::same_block` for the "same as last draw" shortcut.
+  Test: a ddgpu test drawing the same scene once with `Constants` and once with `ConstRef` blocks and comparing the output (tests/draw.rs has the pattern).
+- **S2.3** sink (`ndraw_native.rs`, env `DDDRAW_ARENA=1`, shadow atlas 512x1536 only): build the register block in the arena for those draws (fill from uploads/held/device exactly as `binding_part`+`held_registers`+`fill_uncovered`
+  do today, but into the arena slice), keep `LastDraw`/`Uploads` semantics (they need the written-register sets, not `Arc<Constants>`). Gate: `DDDRAW_NATIVE=verify` must report 0 mismatches (compare
+  the arena block to the `Constants` the old path builds: add the comparison to `expect`), then `DDRUNTIME_NDRAW_PHASES=1` (constants us/draw) and N=1/N=4 A/B, 3 runs, pinned config.
+- **S2.4** extend to all passes once the shadow pass verifies; then the register file of NDRAW_DIRECT 3.5 can fill the arena in place.

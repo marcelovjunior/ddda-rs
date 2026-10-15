@@ -3,6 +3,7 @@
 //! draws with their complete state, clears and presents. A separate crate so
 //! that backends (crates/ddgpu, wgpu) do not depend on the runtime.
 
+pub mod arena;
 pub mod bytes;
 mod deferred;
 mod native;
