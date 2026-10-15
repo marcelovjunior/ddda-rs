@@ -1275,26 +1275,30 @@ impl Mirror {
         m.textures_applied(c)
     }
 
+    /// The hash of the bound slots, their textures and sampler states (a lookup hint: every hit
+    /// is confirmed against the slots). Two words per multiply, so the dependent chain is half
+    /// as long as hashing each of the 14 states of a slot on its own.
+    fn texture_key(&self) -> u64 {
+        use std::hash::Hasher;
+        let mut h = crate::fasthash::FxHasher::default();
+        for i in 0..21 {
+            let t = self.textures[i];
+            if t != 0 {
+                h.write_u64((i as u64) << 32 | t as u64);
+                for pair in self.rows[i].chunks_exact(2) {
+                    h.write_u64(pair[0] as u64 | (pair[1] as u64) << 32);
+                }
+            }
+        }
+        h.finish()
+    }
+
     /// The same for a mirror that already holds the draw's shadow.
     fn textures_applied(&self, c: &mut Caches) -> Arc<[TextureBinding]> {
         let m = self;
         // the lists by the bound slots, their textures and sampler states
         // (L180: the draws' texture sets repeat)
-        let key = {
-            use std::hash::Hasher;
-            let mut h = crate::fasthash::FxHasher::default();
-            for i in 0..21 {
-                let t = m.textures[i];
-                if t != 0 {
-                    h.write_u32(i as u32);
-                    h.write_u32(t);
-                    for &s in &m.rows[i] {
-                        h.write_u32(s);
-                    }
-                }
-            }
-            h.finish()
-        };
+        let key = m.texture_key();
         // this frame's list of the same slots: the same list (a texture's
         // information is fixed within a frame), once the slots confirm it
         if let Some((seen, list)) = c.texture_lists.get(&key) {
@@ -2553,6 +2557,8 @@ pub fn native_draw(
 pub struct Pending {
     passes: Vec<NativePass>,
     calls: Vec<DrawCall>,
+    /// draws in the last pass of the previous job: where the first pass of this one starts
+    pass_hint: usize,
 }
 
 /// Capacity for the next job's vectors, from the size of the last: `take` used to leave empty
@@ -2569,9 +2575,14 @@ impl Pending {
     pub fn push(&mut self, native: NativeDraw, call: DrawCall) {
         match self.passes.last_mut() {
             Some(p) if p.colours == call.targets && p.depth == call.depth => p.draws.push(native),
-            _ => self.passes.push(NativePass {
-                colours: call.targets.clone(), depth: call.depth.clone(), draws: vec![native], ..Default::default()
-            }),
+            _ => {
+                // a pass is about as long as the one before it (shadow cascades, passes of one
+                // view): start with that room instead of growing from one draw by doubling
+                let room = job_capacity(self.passes.last().map_or(self.pass_hint, |p| p.draws.len())).max(1);
+                let mut draws = Vec::with_capacity(room);
+                draws.push(native);
+                self.passes.push(NativePass { colours: call.targets.clone(), depth: call.depth.clone(), draws, ..Default::default() })
+            }
         }
         self.calls.push(call);
     }
@@ -2581,6 +2592,7 @@ impl Pending {
         if self.passes.is_empty() {
             return None;
         }
+        self.pass_hint = self.passes.last().map_or(0, |p| p.draws.len());
         let (passes, calls) = (job_capacity(self.passes.len()), job_capacity(self.calls.len()));
         Some((
             NativeJob { passes: std::mem::replace(&mut self.passes, Vec::with_capacity(passes)) },
@@ -3239,6 +3251,31 @@ mod tests {
     /// Parts kept across frames: the same frame's part from the map; a new
     /// frame builds again and keeps the earlier part (the same Arc) when
     /// equal, a new one when changed; refusals are kept too.
+    #[test]
+    fn the_texture_key_follows_the_bound_slots_and_their_states() {
+        let blank = || Mirror { epoch: 0, applied: false, rows: [[0; 14]; 21], textures: [0; 21] };
+        let mut a = blank();
+        a.textures[3] = 0xD000;
+        a.rows[3] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+        let mut b = a.clone();
+        assert_eq!(a.texture_key(), b.texture_key());
+        // states of an unbound slot do not matter; of a bound one, every word does
+        b.rows[4][0] = 9;
+        assert_eq!(a.texture_key(), b.texture_key());
+        for k in 0..14 {
+            let mut c = a.clone();
+            c.rows[3][k] ^= 0x100;
+            assert_ne!(a.texture_key(), c.texture_key(), "state {k}");
+        }
+        // the same texture in another slot, or another texture in the slot
+        let mut d = blank();
+        d.textures[4] = 0xD000;
+        d.rows[4] = a.rows[3];
+        assert_ne!(a.texture_key(), d.texture_key());
+        b.textures[3] = 0xD004;
+        assert_ne!(a.texture_key(), b.texture_key());
+    }
+
     #[test]
     fn a_taken_job_leaves_room_for_the_next_one_of_the_same_size() {
         let mut p = Pending::default();
