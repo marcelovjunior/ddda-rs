@@ -293,6 +293,13 @@ pub(crate) const WAIT_HELP: u32 = 0x7FFF_0001;
 /// How far below its own stack pointer a task starts its stack.
 const STACK_MARGIN: u32 = 0x400;
 
+/// Whether any task is published (lock-free, conservative: true wherever [`help_due`] could be
+/// true for some wait). For wake predicates, which must not take the window's lock.
+#[inline]
+pub(crate) fn help_pending() -> bool {
+    PENDING.load(SeqCst) > 0
+}
+
 /// Whether a wait on `handles` should stop to run tasks: some are published
 /// and the open window guards the wait.
 #[inline]

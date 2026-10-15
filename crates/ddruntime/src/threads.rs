@@ -200,6 +200,19 @@ struct Sleeper {
     keys: Box<[u64]>,
     woken: bool,
     cv: Arc<Condvar>,
+    /// A wake by key notifies the sleeper only while this holds (a wait for all of several
+    /// events is worth waking once they are all set, not at each one). Read under the state
+    /// mutex: atomics only, never a lock. A wake of every sleeper (None) ignores it.
+    gate: Option<Gate>,
+}
+
+type Gate = Box<dyn Fn() -> bool + Send>;
+
+impl Sleeper {
+    /// Whether a signal for `key` (None: every sleeper) should wake it.
+    fn wakes_on(&self, key: Option<u64>) -> bool {
+        !self.woken && key.is_none_or(|k| self.keys.contains(&k) && self.gate.as_ref().is_none_or(|g| g()))
+    }
 }
 
 /// How long a thread waiting for the guest lock spins before it sleeps.
@@ -849,7 +862,7 @@ fn signal_key_to(key: u64) {
     {
         let mut s = rt.lock.lock();
         for w in s.sleepers.values_mut() {
-            if !w.woken && w.keys.contains(&key) {
+            if w.wakes_on(Some(key)) {
                 w.woken = true;
                 cvs.push(w.cv.clone());
                 stats::woken();
@@ -864,7 +877,7 @@ fn signal_key_to(key: u64) {
 /// Wake the threads waiting for `key` (None: every blocked thread).
 fn wake(s: &mut LockState, key: Option<u64>) {
     for w in s.sleepers.values_mut() {
-        if !w.woken && key.is_none_or(|k| w.keys.contains(&k)) {
+        if w.wakes_on(key) {
             w.woken = true;
             w.cv.notify_one();
             stats::woken();
@@ -892,6 +905,13 @@ pub(crate) fn block_on(keys: &[u64], deadline: Option<Instant>) {
 /// exist (the waiter counts it before checking; see the critical sections
 /// and EventCell).
 pub(crate) fn wait_until(keys: &[u64], deadline: Option<Instant>, cond: impl Fn() -> bool) {
+    wait_until_gated(keys, deadline, cond, None)
+}
+
+/// [`wait_until`] whose signals wake it only while `gate` holds (see [`Sleeper::gate`]). The
+/// gate must hold whenever `cond` does or a thread that makes `cond` true could skip the
+/// wake-up; the caller's own recheck after the wake decides, as for any wake-up.
+fn wait_until_gated(keys: &[u64], deadline: Option<Instant>, cond: impl Fn() -> bool, gate: Option<Gate>) {
     sync_profile::blocking();
     let keys: Box<[u64]> = keys.into();
     let rt = runtime::pin();
@@ -901,7 +921,7 @@ pub(crate) fn wait_until(keys: &[u64], deadline: Option<Instant>, cond: impl Fn(
     let id = s.next_sleeper;
     s.next_sleeper += 1;
     let cv = Arc::new(Condvar::new());
-    s.sleepers.insert(id, Sleeper { keys, woken: false, cv: cv.clone() });
+    s.sleepers.insert(id, Sleeper { keys, woken: false, cv: cv.clone(), gate });
     if cond() {
         s.sleepers.remove(&id);
         return;
@@ -1487,8 +1507,30 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
             Object::Semaphore(e) => Some((o, e.clone())), _ => None,
         }).collect());
     let semaphore_gate = semaphores.first().map(|(_, e)| e.gate.clone());
+    // L196+: a wait for all of several events (the job batch's join on the workers' done events).
+    let cells: Vec<Arc<EventCell>> = if all && semaphores.is_empty() && events.len() == handles.len() && handles.len() > 1 {
+        events.iter().map(|(_, e)| e.clone()).collect()
+    } else {
+        Vec::new()
+    };
     for (_, e) in &events {
         e.waiters.fetch_add(1, SeqCst);
+    }
+    // Spin first, as a wait for one event does: the workers finish within microseconds of the
+    // thread that joins them, and parking costs an OS sleep and wake-up.
+    if !cells.is_empty() && wait_all_spin() && parallel() && !holds_lock() {
+        let start = Instant::now();
+        let mut n = 0u32;
+        loop {
+            if cells.iter().all(|e| e.is_set()) || waits::help_pending() {
+                break;
+            }
+            std::hint::spin_loop();
+            n += 1;
+            if n % 64 == 0 && (start.elapsed() >= event_spin() || deadline.is_some_and(|d| Instant::now() >= d)) {
+                break;
+            }
+        }
     }
     let r = loop {
         // Err: the events taken by a wait for all that lost another (to
@@ -1563,9 +1605,17 @@ pub fn wait(handles: &[u32], all: bool, ms: u32) -> u32 {
                 let keys: Vec<u64> = kernel(|k| handles.iter().filter_map(|&h| k.object_of(h)).map(key::object).collect());
                 // Recheck independent events/semaphores after registration:
                 // releases between the snapshot and parking cannot be lost.
-                wait_until(&keys, deadline, || events.iter().any(|(o, e)| !seen_set.contains(o) && e.is_set())
+                // Events only: a signal of one of them wakes this wait while the others are still
+                // unset, and the recheck then parks it again (up to once per event, each a wake-up
+                // call for the signaller and a kernel lock, three vectors and a sleep for this thread).
+                // The gate holds once every event is set, or a task is published.
+                let gate: Option<Gate> = (!cells.is_empty() && wait_all_gate()).then(|| {
+                    let cells = cells.clone();
+                    Box::new(move || waits::help_pending() || cells.iter().all(|e| e.is_set())) as Gate
+                });
+                wait_until_gated(&keys, deadline, || events.iter().any(|(o, e)| !seen_set.contains(o) && e.is_set())
                     || semaphores.iter().any(|(o, e)| !seen_set.contains(o) && e.ready())
-                    || waits::help_due(handles));
+                    || waits::help_due(handles), gate);
             }
         }
     };
@@ -1788,6 +1838,30 @@ static CS_WAITERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::
 /// How long a contended Enter spins before it waits (a section is held
 /// ~1 us; measured gameplay mean 0.64 us). Unmeasured guess, not tuned.
 const CS_SPIN: Duration = Duration::from_micros(20);
+
+/// Test override of the two wait-for-all knobs below: 1 both on, 2 both off, 0 the environment.
+static WAIT_ALL_FORCE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// `DDRUNTIME_WAIT_ALL_SPIN=1`: a wait for all of several events spins (for `event_spin()`) before it parks.
+fn wait_all_spin() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    match WAIT_ALL_FORCE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => *ON.get_or_init(|| std::env::var("DDRUNTIME_WAIT_ALL_SPIN").is_ok_and(|v| v == "1")),
+    }
+}
+
+/// `DDRUNTIME_WAIT_ALL_GATE=1`: a parked wait for all of several events is woken once they are all set,
+/// not by each event's signal.
+fn wait_all_gate() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    match WAIT_ALL_FORCE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => *ON.get_or_init(|| std::env::var("DDRUNTIME_WAIT_ALL_GATE").is_ok_and(|v| v == "1")),
+    }
+}
 
 /// L196: how long a wait for one event spins before it parks (default CS_SPIN;
 /// DDRUNTIME_EVENT_SPIN_US=N overrides). A SetEvent that finds the waiter still
@@ -3275,5 +3349,61 @@ mod tests {
             }
         }));
         assert_eq!(failures.load(Ordering::SeqCst), 0, "a wait timed out: the wait for all kept the guest lock");
+    }
+
+    /// The job batch's join: one thread starts `workers` threads through their start events and waits
+    /// for all of their done events; the workers finish at staggered moments. With the wait-for-all
+    /// gate and spin forced on, and off, every round must complete (a lost wake-up is a 5 s timeout).
+    fn join_rounds(force: u8, workers: usize, rounds: u32) -> Duration {
+        WAIT_ALL_FORCE.store(force, Ordering::SeqCst);
+        let (rt, m) = sync_runtime();
+        let mut mm = m.share();
+        let start: Vec<u32> = (0..workers).map(|_| create_named(&m, 0, || Object::Event(EventCell::new(false, false)))).collect();
+        let done: Vec<u32> = (0..workers).map(|_| create_named(&m, 0, || Object::Event(EventCell::new(false, false)))).collect();
+        for (i, &d) in done.iter().enumerate() {
+            mm.set_u32(DATA + 0x200 + 4 * i as u32, d);
+        }
+        let r = sync_registry(true);
+        let failures = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let f2 = failures.clone();
+        let (start2, done2) = (start.clone(), done.clone());
+        let t = run_guest_threads(&rt, &r, &m, workers + 1, Arc::new(move |k, g: &mut GuestCaller| {
+            if k == 0 {
+                for _ in 0..rounds {
+                    for &s in &start2 {
+                        g.call(S_SET, &[s]);
+                    }
+                    if g.call(S_WAITN, &[workers as u32, DATA + 0x200, 1, 5_000]) != WAIT_OBJECT_0 {
+                        f2.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    }
+                }
+            } else {
+                for round in 0..rounds {
+                    if g.call(S_WAIT1, &[start2[k - 1], 5_000]) != WAIT_OBJECT_0 {
+                        f2.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    }
+                    // staggered finishes: some immediate, some after a few yields
+                    for _ in 0..((round as usize * 7 + k * 13) % 5) * 20 {
+                        std::thread::yield_now();
+                    }
+                    g.call(S_SET, &[done2[k - 1]]);
+                }
+            }
+        }));
+        WAIT_ALL_FORCE.store(0, Ordering::SeqCst);
+        assert_eq!(failures.load(Ordering::SeqCst), 0, "a join timed out (force {force})");
+        t
+    }
+
+    #[test]
+    fn a_join_on_several_events_completes_with_the_gate_and_spin_on_or_off() {
+        // guest threads of another test must not run while a window test has its window open
+        let _serial = WINDOW_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        for force in [2u8, 1] {
+            let t = join_rounds(force, 6, 600);
+            eprintln!("join of 6 workers x 600 rounds, force {force}: {t:?}");
+        }
     }
 }

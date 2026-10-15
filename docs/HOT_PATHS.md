@@ -471,3 +471,16 @@ default / `DDRUNTIME_JOB_WAKE_FIT=1` on the pinned config, and `DDRUNTIME_JOB_ST
 
 **Oracle note.** The Steam exe (`reference/DDDA.exe`, SHA-256 19facc26...77b8) can serve as the Unicorn oracle: `DDDA_EXE=reference/DDDA.exe` with
 `research/native/record_*.py`; the six L191 ports pass against vectors recorded from it. Its `.text` is not encrypted (only `.bind`).
+
+**Join wake-ups (`DDRUNTIME_WAIT_ALL_GATE=1`, `DDRUNTIME_WAIT_ALL_SPIN=1`, both off by default).** `DBE560` joins the workers with a
+`WaitForMultipleObjects(all)` on their done events. Each worker's `SetEvent` signalled the waiter's key, so the joining thread woke up to once
+per worker (a wake-up call for the signaller, then the kernel lock, three vectors and a new sleep for the waiter) before the last one completed
+the set. `ddruntime::threads`: a `Sleeper` can carry a `gate` (atomics only, checked under the state mutex); a wait for all of several events
+installs "every event is set, or a task is published (`waits::help_pending`)", so only the last signal wakes it. `_SPIN` makes the same wait
+spin for `event_spin()` (20 us) first, as a wait for one event already does. Test `a_join_on_several_events_completes_with_the_gate_and_spin_on_or_off`
+(6 workers, 600 rounds, real guest threads, a lost wake-up is a 5 s timeout): 5,200 -> 4,150 wake-ups and 8-10% less wall time with both on (3 runs; a 4-core
+cloud box, not the game). A/B in game with `DDRUNTIME_WAIT_ALL_GATE=1 DDRUNTIME_WAIT_ALL_SPIN=1`, separately and together.
+
+**Known flaky test (not from these changes).** `threads::tests::an_abort_inside_the_window_releases_the_gated_threads` fails ~20% of full
+`cargo test -p ddruntime --lib` runs (2 of 10 on `e942c46f`, before the join changes; it also failed on the first run after merging L196). Window
+tests are process-global: any other test that runs guest threads must hold `WINDOW_TESTS` (the new join test does).
