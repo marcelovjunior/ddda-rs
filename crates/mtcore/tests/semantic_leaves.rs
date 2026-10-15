@@ -173,3 +173,45 @@ fn look_bits_matches_original() {
 fn dominant_row_matches_original() {
     check("dominant_row.json", mtcore::semantic_leaves::dominant_row, false);
 }
+
+// verifies 0x004241F0 (register argument EAX; the image float triples are read from memory)
+#[test]
+fn init_node_matches_original() {
+    check("init_node.json", mtcore::semantic_leaves::init_node, true);
+}
+
+// verifies 0x005F1F90 (register argument ECX; flags not reproduced)
+#[test]
+fn flag_to_index_matches_original() {
+    check("flag_to_index.json", mtcore::semantic_leaves::flag_to_index, false);
+}
+
+// verifies 0x00DE5CC0
+#[test]
+fn init_record_c_matches_original() {
+    check("init_record_c.json", mtcore::semantic_leaves::init_record_c, true);
+}
+
+// verifies 0x00B76580
+#[test]
+fn update_flag_bit4_matches_original() {
+    check("update_flag_bit4.json", mtcore::semantic_leaves::update_flag_bit4, true);
+}
+
+// verifies 0x00850410 (flags not reproduced)
+#[test]
+fn clear_entry_flags_matches_original() {
+    check("clear_entry_flag.json", mtcore::semantic_leaves::clear_entry_flags, false);
+}
+
+// verifies 0x00B85F70
+#[test]
+fn select_constant_matches_original() {
+    check("select_constant.json", mtcore::semantic_leaves::select_constant, true);
+}
+
+// verifies 0x004CA510 (flags not reproduced)
+#[test]
+fn init_vtables_matches_original() {
+    check("init_vtables.json", mtcore::semantic_leaves::init_vtables, false);
+}

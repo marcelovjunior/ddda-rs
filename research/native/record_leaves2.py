@@ -37,7 +37,7 @@ def regs_for(r, **fixed):
 
 
 def look_bits(out, count):
-    table = h.code(MASKS, 33 * 4)
+    table = h.code(MASKS, 48 * 4)
     oracle = Oracle(0x01328F30, 0x9F, {}, [(REGION, 0x1000), (MASKS & ~0xFFF, 0x2000), STACK])
     cases = []
     for seed in range(count):
@@ -51,7 +51,7 @@ def look_bits(out, count):
         uc.mem_write(data, bytes(r.randrange(256) for _ in range(64)))
         for off, v in ((0, endbyte), (4, endbit), (0xC, data + endbyte), (0x10, storage)):
             uc.mem_write(reader + off, struct.pack('<I', v))
-        bits = r.choice((0, 1, 7, 8, 9, 15, 16, 17, 24, 25, 31, 32, r.randrange(33)))
+        bits = r.choice((0, 1, 7, 8, 9, 15, 16, 17, 24, 25, 31, 32, 33, 36, 40, r.randrange(33), r.randrange(41)))
         regs = regs_for(r)
         cases.append(run_flags(oracle, seed, regs, SP - 0x20 - 4 * r.randrange(4), [reader, bits]))
     finish(out, '0x01328F30', cases)
@@ -75,11 +75,23 @@ def dominant_row(out, count):
         rows = [[val() for _ in range(4)] for _ in range(3)]
         if r.random() < 0.3:
             rows[1] = list(rows[0])
+            rows[1][3] = val()          # equal products, different rows (lane 3 is not part of a product)
         if r.random() < 0.3:
             rows[2] = list(rows[r.randrange(2)])
+            rows[2][3] = val()
+        vec_override = None
+        if r.random() < 0.25:
+            # rounding order: with v = (1, 1, 1), row 0 sums as (y + x) + z while row 1 holds exactly y + (x + z)
+            x, y, z = r.choice(((1e8, 1.0, -1e8), (1e8, 3.0, -1e8), (16777216.0, 1.0, 1.0), (1e10, 1.0, -1e10)))
+            if r.random() < 0.5:
+                x, y, z = y, x, z
+            alt = struct.unpack('<f', struct.pack('<f', y + struct.unpack('<f', struct.pack('<f', x + z))[0]))[0]
+            rows[0] = [x, y, z, val()]
+            rows[1] = [alt, 0.0, 0.0, val()]
+            vec_override = [1.0, 1.0, 1.0, val()]
         for i, row in enumerate(rows):
             uc.mem_write(matrix + 0x10 * (i + 1), b''.join(struct.pack('<f', v) if v == v else struct.pack('<I', 0x7FC00000) for v in row))
-        vec = [val() for _ in range(4)]
+        vec = vec_override or [val() for _ in range(4)]
         uc.mem_write(vector, b''.join(struct.pack('<f', v) if v == v else struct.pack('<I', 0x7FC00000) for v in vec))
         uc.mem_write(dest, bytes(r.randrange(256) for _ in range(16)))
         regs = regs_for(r)

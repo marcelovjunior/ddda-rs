@@ -246,6 +246,13 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x0110_5ef0, mtcore::semantic_leaves::set_float_if_changed),
             (0x0132_8f30, mtcore::semantic_leaves::look_bits),
             (0x011a_e1f0, mtcore::semantic_leaves::dominant_row),
+            (0x0042_41f0, mtcore::semantic_leaves::init_node),
+            (0x005f_1f90, mtcore::semantic_leaves::flag_to_index),
+            (0x00de_5cc0, mtcore::semantic_leaves::init_record_c),
+            (0x00b7_6580, mtcore::semantic_leaves::update_flag_bit4),
+            (0x0085_0410, mtcore::semantic_leaves::clear_entry_flags),
+            (0x00b8_5f70, mtcore::semantic_leaves::select_constant),
+            (0x004c_a510, mtcore::semantic_leaves::init_vtables),
         ] {
             if !semantic_selected(a) {
                 continue;
