@@ -231,6 +231,21 @@ pub fn ports() -> Vec<(u32, LiftFn)> {
             (0x00b8_a770, mtcore::semantic_l190::prepare_part_blocks),
             // sound engine leaf (record_filter_bank.py vectors)
             (0x00dc_dde0, mtcore::semantic_sound::filter_bank),
+            // small leaves (record_leaves.py vectors)
+            (0x005a_65e0, mtcore::semantic_leaves::clear_grid),
+            (0x0076_7b40, mtcore::semantic_leaves::lanes_in_range),
+            (0x004e_a200, mtcore::semantic_leaves::find_record),
+            (0x0132_8fd0, mtcore::semantic_leaves::advance_bits),
+            (0x00d0_0690, mtcore::semantic_leaves::xorshift_step),
+            (0x00ff_9a20, mtcore::semantic_leaves::table_entry_or_default),
+            (0x0042_1ed0, mtcore::semantic_leaves::table_entry_or_null),
+            (0x005d_8eb0, mtcore::semantic_leaves::promote_state),
+            (0x00e0_a4e0, mtcore::semantic_leaves::find_entry_by_key),
+            (0x00de_5bd0, mtcore::semantic_leaves::init_record_a),
+            (0x00de_0aa0, mtcore::semantic_leaves::init_record_b),
+            (0x0110_5ef0, mtcore::semantic_leaves::set_float_if_changed),
+            (0x0132_8f30, mtcore::semantic_leaves::look_bits),
+            (0x011a_e1f0, mtcore::semantic_leaves::dominant_row),
         ] {
             if !semantic_selected(a) {
                 continue;
