@@ -2555,6 +2555,15 @@ pub struct Pending {
     calls: Vec<DrawCall>,
 }
 
+/// Capacity for the next job's vectors, from the size of the last: `take` used to leave empty
+/// vectors, so every job regrew `calls` (a DrawCall is ~250 bytes) by repeated doubling, each step
+/// a reallocation and a copy of everything pushed so far (a quarter of the render worker's
+/// allocation time in the 2026-10-15 gameplay profile). Bounded, so one huge job does not keep
+/// its memory reserved.
+fn job_capacity(last: usize) -> usize {
+    last.min(8192)
+}
+
 impl Pending {
     /// Add a draw: to the last pass if it renders into the same targets.
     pub fn push(&mut self, native: NativeDraw, call: DrawCall) {
@@ -2572,7 +2581,11 @@ impl Pending {
         if self.passes.is_empty() {
             return None;
         }
-        Some((NativeJob { passes: std::mem::take(&mut self.passes) }, std::mem::take(&mut self.calls)))
+        let (passes, calls) = (job_capacity(self.passes.len()), job_capacity(self.calls.len()));
+        Some((
+            NativeJob { passes: std::mem::replace(&mut self.passes, Vec::with_capacity(passes)) },
+            std::mem::replace(&mut self.calls, Vec::with_capacity(calls)),
+        ))
     }
 
     /// Send the job, with its draws' DrawCalls: the backend makes those
@@ -2772,7 +2785,7 @@ fn reads_dirty(copy: &mut (u64, Vec<u32>), d: &DrawCall) -> bool {
 /// Send the taken draws not sent yet, as one backend command.
 fn send_batch(batch: &mut Vec<DrawCall>) {
     if !batch.is_empty() {
-        let draws = std::mem::replace(batch, Vec::with_capacity(64));
+        let draws = std::mem::replace(batch, Vec::with_capacity(job_capacity(batch.len()).max(64)));
         crate::d3d9draw::backend_unlocked(|b| b.draws(draws));
     }
 }
@@ -3219,6 +3232,22 @@ mod tests {
     /// Parts kept across frames: the same frame's part from the map; a new
     /// frame builds again and keeps the earlier part (the same Arc) when
     /// equal, a new one when changed; refusals are kept too.
+    #[test]
+    fn a_taken_job_leaves_room_for_the_next_one_of_the_same_size() {
+        let mut p = Pending::default();
+        for _ in 0..40 {
+            p.passes.push(NativePass::default());
+        }
+        let (job, _) = p.take().unwrap();
+        assert_eq!(job.passes.len(), 40);
+        assert!(p.passes.is_empty() && p.passes.capacity() >= 40);
+        assert_eq!(job_capacity(100_000), 8192);
+        assert_eq!(job_capacity(0), 0);
+        // nothing pending: nothing taken, nothing reserved
+        let mut q = Pending::default();
+        assert!(q.take().is_none() && q.passes.capacity() == 0);
+    }
+
     #[test]
     fn kept_parts_are_rebuilt_each_frame_and_reused_when_unchanged() {
         let mut map: FxMap<u32, (u64, Result<Arc<u32>, Refusal>)> = FxMap::default();
