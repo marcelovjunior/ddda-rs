@@ -786,6 +786,7 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                     let at = (v & !15).wrapping_add(u.offset * 4);
                     let count = if v & 15 != 0 { u.count.min((v & 15) * 16) } else { u.count };
                     // the registers read 16 at a time (one check a page)
+                    set_register_range(&mut w.0, u.register, count);
                     let mut words = [0u32; 64];
                     let mut i = 0;
                     while i < count {
@@ -794,7 +795,10 @@ fn binding_part(g: &G, c: &mut Caches, binding: u32, previous: Option<&Arc<Bindi
                         for k in 0..n {
                             let r: [u32; 4] = std::array::from_fn(|j| words[(k * 4) as usize + j]);
                             let r = if u.convert { r.map(|x| (x as i32 as f32).to_bits()) } else { r };
-                            set_float(bank, w, u.register + i + k, r);
+                            // (the range is marked written above)
+                            if let Some(x) = bank.f.get_mut((u.register + i + k) as usize) {
+                                *x = r;
+                            }
                         }
                         i += n;
                     }
@@ -916,6 +920,20 @@ fn same_part(p: &BindingPart, meta: &Arc<MetaPart>, alpha: Option<(u32, u32)>, w
 /// The runs of set bits in a 256-register mask as (first, end) register pairs: bank compares,
 /// clears and hashes then work on slices instead of one register at a time (L193).
 /// Whether any register at or above `from` is set in a 256-register mask (L193: one mask test per word, not 256 bit tests).
+/// Set registers `first..first + count` (below 256) in a 256-register mask, a word at a time (L193).
+fn set_register_range(mask: &mut [u64; 4], first: u32, count: u32) {
+    let end = first.saturating_add(count).min(256);
+    let mut n = first;
+    while n < end {
+        let word = (n / 64) as usize;
+        let upto = end.min((word as u32 + 1) * 64);
+        let bits = upto - n;
+        let ones = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+        mask[word] |= ones << (n % 64);
+        n = upto;
+    }
+}
+
 fn bits_from(mask: &[u64; 4], from: usize) -> bool {
     (0..4).any(|w| {
         let lo = w * 64;
@@ -2120,9 +2138,7 @@ fn skipped_registers(g: &G, meta: &MetaPart, binding: u32, previous: u32, shader
                 }
                 0 => {
                     let count = if value & 15 != 0 { u.count.min((value & 15) * 16) } else { u.count };
-                    for i in 0..count {
-                        float(o, u.register + i);
-                    }
+                    set_register_range(&mut o.0, u.register, count);
                 }
                 1 => {
                     for i in 0..u.count {
@@ -3035,6 +3051,23 @@ fn report(mode: Mode, t: &Totals) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn register_ranges_set_the_same_bits_as_one_at_a_time() {
+        for first in [0u32, 1, 60, 63, 64, 100, 127, 128, 250, 255, 256, 300] {
+            for count in [0u32, 1, 2, 4, 63, 64, 65, 130, 256, 400] {
+                let mut fast = [0u64; 4];
+                super::set_register_range(&mut fast, first, count);
+                let mut slow = [0u64; 4];
+                for n in first..first.saturating_add(count) {
+                    if n < 256 {
+                        slow[n as usize / 64] |= 1 << (n % 64);
+                    }
+                }
+                assert_eq!(fast, slow, "first {first} count {count}");
+            }
+        }
+    }
+
     #[test]
     fn bits_from_matches_the_bit_by_bit_test() {
         for seed in 0..200u64 {
