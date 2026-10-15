@@ -440,3 +440,34 @@ Findings: (1) the main thread spends ~17% of its busy time waking workers (a sys
 - Rejected: a helper "waker" thread doing the notifies (40.0/38.5/42.5 vs 38.6/42.1/41.5, no gain).
 
 **Next**: make `inline-helpers` a default play feature after the second gate half (mtcore ports with the feature; was running) passes; try `inline-access` (forwarded by ddruntime) on top; cache `page_table()` in Cpu (2.4% of workers); reduce DBE560 wake count.
+
+## 14. Gameplay profile 2026-10-15 (cloud session) and what changed
+
+**Capture** (`stacks_b1_prof.json`, 30 s, ~34 fps, ~5,000 draws/frame; saved outside the repo): render worker `0x1034` 72% CPU (the busiest
+guest thread; 99.7% of its busy samples under `mtdraw::executor::execute` -> `ndraw_native::draw_call`); job workers 0x1070-0x1088 25-37% each;
+main thread 48% CPU but 26 busy samples of 778 (the rest is spin/wait inside the DBE560 join, so sync/wake is its cost, not game logic).
+
+**Job workers are flat.** Nearest-lifted ranking over 1,199 busy samples: no unported lifted function above 3.3% (`DBDC90` itself, the job loop);
+`01174730` 1.3% (BVH traversal with a vtable allocator call and indirect leaf callbacks: not worth a port), `00860AC0` 1.2%, `005CECA0` 1.0%.
+Ports that are still the hottest owners: `shader_lookup` 3.9% (already a guest-call-free port; what remains is the serial FNV hash and CRC),
+`commit_primitive_state` 3.3%, `set_pass_at` 3.0%. Conclusion: more ports of single functions will each pay under 1%.
+
+**Render worker allocation churn (~8-10%).** `grow_one<DrawCall>`, `finish_grow`, `realloc` and the VCRUNTIME memcpy under them. Changes
+(all in `ndraw_native.rs`, tested, not measured in game):
+- `Pending::take` and `send_batch` keep the previous job's capacity (`job_capacity`, capped at 8192) instead of leaving empty vectors.
+- A new `NativePass` starts with the previous pass's draw count (`pass_hint`), not one draw grown by doubling.
+- The native path calls `flush_reads` only when `dirty_count() != 0 && reads_dirty(...)`, as the DrawCall path already did; before it did the D3D
+  objects lookup for every read of every draw.
+- The texture-list key hashes two sampler states per step (`Mirror::texture_key`); a lookup hint, confirmed by `same_slots`/`find_kept`.
+Not done: `Mirror::textures` row-hash caching (tests write `rows` directly), `native_draw`'s per-draw `streams` slice, `bank.f.resize` for new
+binding parts (needed: the Vec moves into the Arc).
+
+**Wake fitting (`DDRUNTIME_JOB_WAKE_FIT=1`, off by default).** `DBE560` (read from the Steam exe) wakes every enabled worker slot 1..P-1 for any batch of
+2 or more jobs and then `WaitForMultipleObjects`-joins all of them; the slot flag (`S+0x18`) is set to 1 only by `DBDF30`/`DBDFE0` and read only by
+`DBE560`; workers (`DBDC90`) never read the participants word `+0x98`. So lowering `+0x98` to `min(P, jobs)` for a top-level batch (the mechanism
+`DDRUNTIME_JOB_INLINE` already uses with 1, and `DBE560` itself uses for a one-job batch) skips the surplus wakes and joins while every job keeps a
+participant. Round 3 measured `JOB_INLINE=3` neutral and `=8` harmful (it removes parallelism); this keeps it. **Needs an A/B**: 3 runs each of
+default / `DDRUNTIME_JOB_WAKE_FIT=1` on the pinned config, and `DDRUNTIME_JOB_STATS=1` for the batch-size histogram that says how often it applies.
+
+**Oracle note.** The Steam exe (`reference/DDDA.exe`, SHA-256 19facc26...77b8) can serve as the Unicorn oracle: `DDDA_EXE=reference/DDDA.exe` with
+`research/native/record_*.py`; the six L191 ports pass against vectors recorded from it. Its `.text` is not encrypted (only `.bind`).

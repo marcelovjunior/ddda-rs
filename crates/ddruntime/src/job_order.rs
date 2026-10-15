@@ -13,7 +13,31 @@ static BODY: OnceLock<LiftFn> = OnceLock::new();
 const SHADOW_VTABLE: u32 = 0x0160_df98;
 
 pub(crate) fn enabled() -> bool {
-    std::env::var("DDRUNTIME_JOB_SHADOW_FIRST").as_deref() == Ok("1") || stats() || inline_max() > 0
+    std::env::var("DDRUNTIME_JOB_SHADOW_FIRST").as_deref() == Ok("1") || stats() || inline_max() > 0 || wake_fit()
+}
+
+/// `DDRUNTIME_JOB_WAKE_FIT=1`: a top-level batch of `n` jobs (2 or more) runs with `min(participants, n)`
+/// participants (the participants word lowered for its duration, as `DDRUNTIME_JOB_INLINE` does with 1), so
+/// DBE560 wakes and joins only the workers there are jobs for: every job still has a participant of its own,
+/// but a batch of 3 no longer sets and waits on seven worker events (the main thread spent ~17% of its busy time
+/// in those wake-ups in the 2026-10-15 gameplay profile). Workers claim jobs from one shared counter, so which
+/// workers take part changes nothing a job can see. Unmeasured in game: A/B it against
+/// `DDRUNTIME_JOB_INLINE` and the default.
+fn wake_fit() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DDRUNTIME_JOB_WAKE_FIT").as_deref() == Ok("1"))
+}
+
+/// The participants word to run a top-level batch with, or None to leave it: `inline` is
+/// `DDRUNTIME_JOB_INLINE`, `fit` is `DDRUNTIME_JOB_WAKE_FIT`.
+fn participants_for(count: u32, participants: u32, inline: u32, fit: bool) -> Option<u32> {
+    if participants <= 1 || count < 2 {
+        return None;
+    }
+    if count <= inline {
+        return Some(1);
+    }
+    (fit && participants > count).then_some(count)
 }
 
 /// `DDRUNTIME_JOB_INLINE=N`: a top-level batch of 2..=N jobs runs on the calling
@@ -44,15 +68,13 @@ pub(crate) fn install(ports: &mut Vec<(u32, LiftFn)>, bodies: &[(u32, LiftFn)]) 
 }
 
 fn batch(m: &mut dyn Mem, cpu: &mut Cpu) {
-    let limit = inline_max();
-    if limit > 0 && m.u8(0x018d0bb0) == 0 {
+    let (limit, fit) = (inline_max(), wake_fit());
+    if (limit > 0 || fit) && m.u8(0x018d0bb0) == 0 {
         let scheduler = cpu.ecx;
         let count = m.u32(scheduler + 0x8c);
         let participants = m.u32(scheduler + 0x98);
-        if (2..=limit).contains(&count) && participants > 1 && m.u8(scheduler + 0x6d) != 0 {
-            m.set_u32(scheduler + 0x98, 1);
-            let stats_on = stats();
-            let _ = stats_on;
+        if let (Some(run_with), true) = (participants_for(count, participants, limit, fit), m.u8(scheduler + 0x6d) != 0) {
+            m.set_u32(scheduler + 0x98, run_with);
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| batch_body(m, cpu)));
             m.set_u32(scheduler + 0x98, participants);
             if let Err(p) = r {
@@ -113,4 +135,29 @@ fn batch_body(m: &mut dyn Mem, cpu: &mut Cpu) {
         return;
     }
     BODY.get().unwrap()(m, cpu);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::participants_for;
+
+    #[test]
+    fn the_participants_of_a_batch() {
+        // nothing set: left alone
+        assert_eq!(participants_for(5, 8, 0, false), None);
+        // inline: batches of 2..=limit run on the caller
+        assert_eq!(participants_for(3, 8, 3, false), Some(1));
+        assert_eq!(participants_for(4, 8, 3, false), None);
+        // fit: as many participants as jobs, never more than configured
+        assert_eq!(participants_for(3, 8, 0, true), Some(3));
+        assert_eq!(participants_for(8, 8, 0, true), None);
+        assert_eq!(participants_for(100, 8, 0, true), None);
+        // inline wins for the batches it covers
+        assert_eq!(participants_for(2, 8, 3, true), Some(1));
+        assert_eq!(participants_for(5, 8, 3, true), Some(5));
+        // a single job, an empty batch or a single participant: the original's own paths
+        assert_eq!(participants_for(1, 8, 3, true), None);
+        assert_eq!(participants_for(0, 8, 3, true), None);
+        assert_eq!(participants_for(5, 1, 3, true), None);
+    }
 }
