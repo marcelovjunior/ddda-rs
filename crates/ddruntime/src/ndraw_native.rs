@@ -2968,7 +2968,14 @@ impl Native {
         }
                         return Taken::Handled;
                     }
-                    crate::d3d9draw::flush_reads(m, reads_of(&d));
+                    // as the DrawCall path above: flush_reads only acts on
+                    // resources in the dirty index, so with none of this
+                    // draw's reads in it (the usual case) the D3D objects
+                    // lookup per draw is skipped (the render worker's profile
+                    // of 2026-10-15 had flush_reads at ~5%)
+                    if crate::d3d9dev::dirty_count() != 0 && reads_dirty(&mut g.caches.dirty, &d) {
+                        crate::d3d9draw::flush_reads(m, reads_of(&d));
+                    }
                     if crate::measure::enabled() {
                         crate::measure::note_draw(size, &d);
                     }
